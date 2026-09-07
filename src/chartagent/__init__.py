@@ -7,5 +7,7 @@ lives in this package yet.
 
 from .conversation import Conversation
 from .tools import Tool, ToolRegistry, dispatch, to_mcp_tools
+from .tools.builtin import register_builtins
 
-__all__ = ["Conversation", "Tool", "ToolRegistry", "dispatch", "to_mcp_tools"]
+__all__ = ["Conversation", "Tool", "ToolRegistry", "dispatch",
+           "to_mcp_tools", "register_builtins"]
