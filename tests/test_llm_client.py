@@ -96,6 +96,25 @@ def test_normalize_streaming_tool_calls():
     assert res.tool_calls[0].arguments == '{"a":1}'
 
 
+def test_normalize_streaming_multiple_tool_calls_ordered_by_index():
+    # 两个 tool_calls 的分片交错到达，index 分别为 0 和 1。
+    deltas = [
+        [SimpleNamespace(index=1, id="call_2", function=SimpleNamespace(name="read_file", arguments='{"path":'))],
+        [SimpleNamespace(index=0, id="call_1", function=SimpleNamespace(name="list_dir", arguments='{"path":'))],
+        [
+            SimpleNamespace(index=1, id=None, function=SimpleNamespace(name=None, arguments='"a.txt"}')),
+            SimpleNamespace(index=0, id=None, function=SimpleNamespace(name=None, arguments='"/"}')),
+        ],
+    ]
+    res = _collect_streaming_deltas(streaming_with_tool_calls(deltas))
+    assert len(res.tool_calls) == 2
+    # 无论分片到达顺序如何，结果都按 index 升序排列。
+    assert res.tool_calls[0].name == "list_dir"
+    assert res.tool_calls[0].arguments == '{"path":"/"}'
+    assert res.tool_calls[1].name == "read_file"
+    assert res.tool_calls[1].arguments == '{"path":"a.txt"}'
+
+
 # --- client end-to-end via fake transport ------------------------------------- #
 def test_client_chat_normalizes(backend_factory):
     client, _ = backend_factory([lambda _: non_streaming("hi")])

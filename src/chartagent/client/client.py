@@ -121,9 +121,10 @@ def _collect_streaming_deltas(stream: Any) -> NormalizedResult:
         if getattr(chunk.choices[0], "finish_reason", None):
             finish_reason = chunk.choices[0].finish_reason
 
+    ordered = [e for _, e in sorted(tool_calls.items(), key=lambda kv: kv[0])]
     tool_calls_list = [
         ToolCall(id=e["id"], name=e["name"], arguments=e["arguments"])
-        for e in sorted(tool_calls.values(), key=lambda x: tool_calls)
+        for e in ordered
     ]
     return NormalizedResult(
         content="".join(content_parts),
