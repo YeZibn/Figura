@@ -106,8 +106,13 @@ class Agent:
         if self._system is not None:
             self._messages.append({"role": "system", "content": self._system})  # type: ignore[arg-type]
 
-    def run(self, user_input: str) -> str:
-        """Drive one user turn to completion (final answer or budget cap)."""
+    def run(self, user_input: str | list[dict]) -> str:
+        """Drive one user turn to completion (final answer or budget cap).
+
+        ``user_input`` is a plain string or an OpenAI multimodal content list
+        (e.g. from ``build_user_content``); it is appended to history and
+        forwarded to the client unchanged.
+        """
         self._messages.append({"role": "user", "content": user_input})  # type: ignore[arg-type]
         tools = registry_tools(self.registry)
 

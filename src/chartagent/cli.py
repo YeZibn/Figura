@@ -2,18 +2,32 @@
 
 Simple read-a-line → reply → repeat loop; history stays in memory. Two
 interaction modes: the default ``Conversation`` chat REPL, and a tool-capable
-``Agent`` ReAct REPL selected via ``--agent``.
+``Agent`` ReAct REPL selected via ``--agent``. In the agent REPL, an ``@path``
+token attaches a local image to that turn as multimodal content.
 """
 
 from __future__ import annotations
 
+import re
 import sys
 
 from .agent import Agent
 from .conversation import Conversation
 from .client import LLMClient, load_environment
+from .multimodal import build_user_content
 from .tools import ToolRegistry
 from .tools.builtin import register_builtins
+from .tools.chart import register_chart_tools
+
+_IMAGE_REF = re.compile(r"@(\S+)")
+
+
+def extract_image_refs(line: str) -> tuple[str, list[str]]:
+    """Split an input line into (text without @tokens, image paths in order)."""
+    paths = _IMAGE_REF.findall(line)
+    text = _IMAGE_REF.sub("", line)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text, paths
 
 
 def run_repl(
@@ -60,6 +74,7 @@ def run_agent_repl(
     client = LLMClient()
     registry = ToolRegistry()
     register_builtins(registry)
+    register_chart_tools(registry)
     agent = Agent(client, registry, system=system, model=model)
 
     print("Agent session (built-in tools enabled; blank line or Ctrl-D to exit).")
@@ -71,9 +86,15 @@ def run_agent_repl(
             return 0
         if not line.strip():
             return 0
+        stripped = line.strip()
+        text, image_paths = extract_image_refs(stripped)
         try:
-            reply = agent.run(line.strip())
-        except Exception as exc:  # keep the loop alive on transient errors
+            if image_paths:
+                turn = build_user_content(text, image_paths)
+            else:
+                turn = stripped  # no @: byte-identical to the old behavior
+            reply = agent.run(turn)
+        except Exception as exc:  # bad @path or transient error: keep session
             print(f"agent> [error] {exc}")
             continue
         print(f"agent> {reply}")

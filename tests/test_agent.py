@@ -22,7 +22,11 @@ class ScriptedClient:
         self.calls: List[Dict[str, Any]] = []
 
     def chat(self, messages, **kwargs):
-        self.calls.append({"n_messages": len(messages), "tools": kwargs.get("tools")})
+        self.calls.append({
+            "n_messages": len(messages),
+            "messages": list(messages),
+            "tools": kwargs.get("tools"),
+        })
         assert self.script, "script exhausted"
         return self.script.pop(0)
 
@@ -108,3 +112,19 @@ def test_registry_tools_lists_openai_schema():
     assert len(tools) == 4
     assert tools[0]["type"] == "function"
     assert "name" in tools[0]["function"]
+
+
+def test_multimodal_input_passes_through_unchanged():
+    content = [
+        {"type": "text", "text": "read this chart"},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+    ]
+    client = ScriptedClient([_final("a bar chart")])
+    agent = Agent(client, ToolRegistry(), system="sys")
+    assert agent.run(content) == "a bar chart"
+    # history: system + user(content list), unchanged
+    user_entries = [m for m in agent.messages if m["role"] == "user"]
+    assert user_entries[0]["content"] == content
+    # the client received the same list verbatim on the first turn
+    sent = client.calls[0]["messages"]
+    assert [m for m in sent if m["role"] == "user"][0]["content"] == content

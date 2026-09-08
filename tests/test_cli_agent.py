@@ -26,6 +26,7 @@ def _patch_constructors(monkeypatch, agent=None):
     monkeypatch.setattr(cli_mod, "ToolRegistry", lambda: object())
     monkeypatch.setattr(cli_mod, "Agent", lambda *a, **k: agent or _FakeAgent())
     monkeypatch.setattr(cli_mod, "register_builtins", lambda reg: None)
+    monkeypatch.setattr(cli_mod, "register_chart_tools", lambda reg: None)
 
 
 def test_cli_default_uses_conversation(monkeypatch):
@@ -71,3 +72,77 @@ def test_run_agent_repl_runs_line(monkeypatch, capsys):
     assert agent.seen == ["hello"]
     out = capsys.readouterr().out
     assert "replied:hello" in out
+
+
+def test_plain_text_without_at_unchanged(monkeypatch):
+    """No @ token -> the agent gets the original stripped string, not a list."""
+    agent = _FakeAgent()
+    _patch_constructors(monkeypatch, agent=agent)
+    lines = iter(["just a question", ""])
+    monkeypatch.setattr(builtins, "input", lambda prompt="": next(lines))
+    cli_mod.run_agent_repl()
+    assert agent.seen == ["just a question"]
+
+
+def test_single_at_path_attaches_image_part(monkeypatch, tmp_path):
+    agent = _FakeAgent()
+    _patch_constructors(monkeypatch, agent=agent)
+    img = tmp_path / "chart.png"
+    img.write_bytes(b"\x89PNG\r\n\x1a\n" + b"0" * 12)
+    lines = iter([f"read this chart @{img}", ""])
+    monkeypatch.setattr(builtins, "input", lambda prompt="": next(lines))
+    cli_mod.run_agent_repl()
+    turn = agent.seen[0]
+    assert isinstance(turn, list)
+    assert turn[0] == {"type": "text", "text": "read this chart"}
+    assert turn[1]["type"] == "image_url"
+    assert turn[1]["image_url"]["url"].startswith("data:image/png;base64,")
+
+
+def test_nonexistent_at_path_errors_without_calling_agent(monkeypatch, capsys):
+    class _ExplodingAgent:
+        def __init__(self, *a, **k):
+            pass
+
+        def run(self, _turn):
+            raise AssertionError("agent must not be called on bad @path")
+
+    monkeypatch.setattr(cli_mod, "load_environment", lambda *a, **k: None)
+    monkeypatch.setattr(cli_mod, "LLMClient", lambda *a, **k: object())
+    monkeypatch.setattr(cli_mod, "ToolRegistry", lambda: object())
+    monkeypatch.setattr(cli_mod, "Agent", _ExplodingAgent)
+    monkeypatch.setattr(cli_mod, "register_builtins", lambda reg: None)
+    monkeypatch.setattr(cli_mod, "register_chart_tools", lambda reg: None)
+    lines = iter(["look @/definitely/missing/xyz.png", ""])
+    monkeypatch.setattr(builtins, "input", lambda prompt="": next(lines))
+    assert cli_mod.run_agent_repl() == 0  # session survives, exits on blank
+    out = capsys.readouterr().out
+    assert "[error]" in out
+
+
+def test_agent_repl_registers_builtin_and_chart_tools(monkeypatch):
+    captured = {}
+
+    class _CapturingAgent:
+        def __init__(self, _client, registry, **_kwargs):
+            captured["names"] = [tool.name for tool in registry.list()]
+
+        def run(self, _turn):
+            raise AssertionError("blank input must exit before running the agent")
+
+    monkeypatch.setattr(cli_mod, "load_environment", lambda *a, **k: None)
+    monkeypatch.setattr(cli_mod, "LLMClient", lambda *a, **k: object())
+    monkeypatch.setattr(cli_mod, "Agent", _CapturingAgent)
+    monkeypatch.setattr(builtins, "input", lambda prompt="": "")
+
+    assert cli_mod.run_agent_repl() == 0
+    assert set(captured["names"]) == {
+        "read_file",
+        "list_dir",
+        "parse_json",
+        "read_json_file",
+        "extract_text",
+        "measure_bars",
+        "assemble_spec",
+        "validate_spec",
+    }

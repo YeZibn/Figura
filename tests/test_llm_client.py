@@ -164,7 +164,11 @@ def test_observation_sink_emitted_without_secrets(backend_factory):
     assert "api_key" not in entry
 
 
-def test_missing_api_key_raises():
+def test_missing_api_key_raises(monkeypatch):
+    # Isolate: ambient plugins (deepeval/langsmith) or a real shell may have
+    # loaded DASHSCOPE_API_KEY into os.environ; the test asserts the key is
+    # absent from all sources.
+    monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
     with pytest.raises(ValueError, match="API key"):
         LLMClient(api_key=None, base_url="http://x")
 
