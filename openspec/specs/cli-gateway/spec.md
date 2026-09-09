@@ -117,3 +117,33 @@ reasoning is retained in model history or sent back to the provider.
 - **WHEN** trace mode is enabled without the reasoning display option
 - **THEN** tool and execution events remain visible while provider reasoning
   is omitted
+
+### Requirement: Agent CLI manages opt-in named sessions
+
+The Agent CLI SHALL support explicit create/resume, fresh-create, list, and
+confirmed-delete operations for named sessions. These options SHALL apply only
+to Agent mode; omitting them SHALL preserve ephemeral behavior. Listing and
+deletion SHALL work without starting the model.
+
+#### Scenario: Session lifecycle operations
+
+- **WHEN** the user supplies session, new-session, list, or delete options
+- **THEN** the CLI performs the requested bounded local operation, rejects
+  conflicting options, and never overwrites an existing session on fresh-create
+
+#### Scenario: Session deletion is source-safe
+
+- **WHEN** the user confirms deletion of a named session
+- **THEN** stored runs and attachment references are removed while source image
+  files remain unchanged
+
+### Requirement: Agent CLI registers attachment-loading capability
+
+The Agent CLI SHALL register load_image alongside built-in and chart tools and
+SHALL describe registered attachment IDs with safe metadata without arbitrary
+local paths or eager image data.
+
+#### Scenario: Agent REPL exposes load_image
+
+- **WHEN** the Agent REPL starts
+- **THEN** its registry contains load_image bound to the active attachment scope

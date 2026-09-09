@@ -84,9 +84,11 @@ validate a visual observation.
 
 ### Requirement: Agent owns its message history in memory
 
-The system SHALL keep the running message history inside the agent instance for
-the duration of a run, and SHALL allow a fresh run or reset to start a new
-history.
+ The system SHALL manage Agent history through a session-memory boundary. The
+ default implementation SHALL retain running history only in memory, while an
+ explicitly selected named session MAY durably restore completed prior runs.
+ In both modes, the Agent SHALL send only valid bounded context produced by that
+ boundary and SHALL allow reset or a new session to start without prior context.
 
 #### Scenario: History accumulates across steps
 
@@ -98,6 +100,12 @@ history.
 
 - **WHEN** the agent is reset or built anew
 - **THEN** its history restarts and later runs no longer share prior messages
+
+#### Scenario: Named memory supplies bounded prior context
+
+- **WHEN** an Agent is connected to a resumed named session
+- **THEN** it receives valid bounded context from completed runs without taking
+  direct responsibility for database storage or binary attachment persistence
 
 ### Requirement: Keeps assistant tool calls in history
 

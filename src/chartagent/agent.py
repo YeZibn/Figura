@@ -18,6 +18,7 @@ matching the client's ``append_to_history`` contract.
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, List, Optional
 
 from openai.types.chat import ChatCompletionMessageParam
@@ -35,6 +36,7 @@ from .trace import (
     summarize_result,
 )
 from .tools.registry import ToolRegistry, dispatch_observation
+from .memory import AgentMemory, InMemoryAgentMemory, RunStatus
 
 # Sentinel returned when the step budget is exhausted.
 _BUDGET_MSG = "*stopped: max_steps reached*"
@@ -99,6 +101,9 @@ class Agent:
         trace_sink: Optional[TraceSink] = None,
         trace_reasoning: bool = False,
         trace_run_id: Optional[str] = None,
+        memory: Optional[AgentMemory] = None,
+        attachments: Any = None,
+        context_budget: int = 24000,
         **chat_kwargs: Any,
     ) -> None:
         self.client = client
@@ -109,7 +114,11 @@ class Agent:
         self._trace_sink = trace if trace is not None else trace_sink
         self._trace_reasoning = trace_reasoning
         self._trace_run_id = trace_run_id
+        self.memory = memory or InMemoryAgentMemory(context_budget=context_budget)
+        self.attachments = attachments
+        self.context_budget = context_budget
         self._messages: List[ChatCompletionMessageParam] = []
+        self._current_messages: List[ChatCompletionMessageParam] = []
         if system is not None:
             self._messages.append({"role": "system", "content": system})  # type: ignore[arg-type]
 
@@ -121,12 +130,17 @@ class Agent:
     def reset(self) -> None:
         """Clear history, keeping only the system prompt."""
         self._messages = []
-        if self._system is not None:
-            self._messages.append({"role": "system", "content": self._system})  # type: ignore[arg-type]
+        self._current_messages = []
+        reset = getattr(self.memory, "reset", None)
+        if callable(reset):
+            reset()
 
     def close(self) -> None:
         """Release retained conversation content, including generated images."""
         self.reset()
+        close = getattr(self.memory, "close", None)
+        if callable(close):
+            close()
 
     def run(self, user_input: str | list[dict]) -> str:
         """Drive one user turn to completion (final answer or budget cap).
@@ -135,7 +149,17 @@ class Agent:
         (e.g. from ``build_user_content``); it is appended to history and
         forwarded to the client unchanged.
         """
-        self._messages.append({"role": "user", "content": user_input})  # type: ignore[arg-type]
+        run = self.memory.begin_run()
+        self._messages = []
+        self._current_messages = []
+        user_message = {"role": "user", "content": user_input}
+        self.memory.append(run, "user", {"message": user_message, "text": user_input if isinstance(user_input, str) else "[image attachment turn]"})
+        if isinstance(user_input, str):
+            for ordinal, attachment_id in enumerate(re.findall(r"\batt_[A-Za-z0-9]+\b", user_input), start=1):
+                self.memory.append(run, "attachment", {"attachment_id": attachment_id, "ordinal": ordinal})
+                if self.attachments is not None:
+                    self.attachments.bind_run(attachment_id, run.id)
+        self._current_messages.append(user_message)  # type: ignore[arg-type]
         tools = registry_tools(self.registry)
         emitter = (
             TraceEmitter(self._trace_sink, run_id=self._trace_run_id or new_run_id())
@@ -145,6 +169,8 @@ class Agent:
 
         for step in range(self.max_steps):
             turn = step + 1
+            system_message = {"role": "system", "content": self._system} if self._system else None
+            self._messages = self.memory.context(run, system_message, self.context_budget, current_messages=self._current_messages)
             if emitter is not None and not isinstance(self.client, LLMClient):
                 emitter.emit(
                     "model_started",
@@ -163,6 +189,8 @@ class Agent:
             try:
                 result = self.client.chat(self._messages, tools=tools, **chat_kwargs)
             except Exception as exc:
+                self.memory.append(run, "error", {"text": str(exc)})
+                self.memory.finish(run, RunStatus.FAILED, "error")
                 if emitter is not None and not isinstance(self.client, LLMClient):
                     emitter.emit(
                         "model_completed",
@@ -191,7 +219,12 @@ class Agent:
                 )
 
             if not result.tool_calls:
-                self._messages.append(_assistant_entry(result))
+                assistant_message = _assistant_entry(result)
+                self._current_messages.append(assistant_message)
+                self._messages.append(assistant_message)
+                self.memory.append(run, "assistant", {"message": assistant_message})
+                self.memory.append(run, "final", {"answer": result.content, "finish_reason": result.finish_reason})
+                self.memory.finish(run, RunStatus.COMPLETED, "final")
                 if emitter is not None:
                     emitter.emit(
                         "final_answer",
@@ -201,7 +234,10 @@ class Agent:
                     )
                 return result.content
 
-            self._messages.append(_assistant_entry(result))
+            assistant_message = _assistant_entry(result)
+            self._current_messages.append(assistant_message)
+            self._messages.append(assistant_message)
+            self.memory.append(run, "assistant", {"message": assistant_message})
             visual_evidence: list[ToolVisualEvidence] = []
             for call in result.tool_calls:
                 if emitter is not None:
@@ -215,7 +251,10 @@ class Agent:
                 observation = dispatch_observation(
                     self.registry, call.name, call.arguments
                 )
-                self._messages.append(_tool_entry(call, observation.content))
+                tool_message = _tool_entry(call, observation.content)
+                self._current_messages.append(tool_message)
+                self._messages.append(tool_message)
+                self.memory.append(run, "tool", {"message": tool_message, "tool_name": call.name, "status": _observation_status(observation.content)})
                 if emitter is not None:
                     emitter.emit(
                         "tool_result",
@@ -239,11 +278,21 @@ class Agent:
                     for generated in observation.images
                 )
             if visual_evidence:
-                self._messages.append(
+                visual_message = {
+                    "role": "user",
+                    "content": build_tool_observation_content(visual_evidence),
+                }
+                self._current_messages.append(visual_message)  # type: ignore[arg-type]
+                self._messages.append(visual_message)  # type: ignore[arg-type]
+                self.memory.append(
+                    run,
+                    "visual_metadata",
                     {
-                        "role": "user",
-                        "content": build_tool_observation_content(visual_evidence),
-                    }  # type: ignore[arg-type]
+                        "tool_count": len(visual_evidence),
+                        "tools": [item.tool_name for item in visual_evidence],
+                        "call_ids": [item.tool_call_id for item in visual_evidence],
+                        "image_count": len(visual_evidence),
+                    },
                 )
 
         if emitter is not None:
@@ -253,6 +302,8 @@ class Agent:
                 max_steps=self.max_steps,
                 answer=_BUDGET_MSG,
             )
+        self.memory.append(run, "terminal", {"answer": _BUDGET_MSG, "max_steps": self.max_steps})
+        self.memory.finish(run, RunStatus.COMPLETED, "budget")
         return _BUDGET_MSG
 
 

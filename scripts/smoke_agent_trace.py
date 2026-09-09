@@ -20,7 +20,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from chartagent import Agent, ToolRegistry, build_attachment_turn  # noqa: E402
+from chartagent import Agent, ToolRegistry  # noqa: E402
+from chartagent.attachments import AttachmentRegistry  # noqa: E402
+from chartagent.multimodal import build_registered_attachment_turn  # noqa: E402
 from chartagent.cli import AGENT_SYSTEM_PROMPT  # noqa: E402
 from chartagent.client import LLMClient, load_environment  # noqa: E402
 from chartagent.trace import JsonlTraceRenderer, TraceEvent  # noqa: E402
@@ -57,8 +59,10 @@ def main() -> int:
         print(f"SKIP: {exc}")
         return 0
 
+    attachments = AttachmentRegistry()
     registry = ToolRegistry()
-    register_chart_tools(registry)
+    registry.register(attachments.load_tool())
+    register_chart_tools(registry, attachments=attachments)
     trace = _RecordingJsonlTrace()
     chat_kwargs = {"model": args.model} if args.model else {}
     agent = Agent(
@@ -83,7 +87,8 @@ def main() -> int:
             "Choose useful tools freely and use generated visual evidence when useful."
         )
         try:
-            answer = agent.run(build_attachment_turn(prompt, [str(chart_path)]))
+            attachment = attachments.register(str(chart_path))
+            answer = agent.run(build_registered_attachment_turn(prompt, [attachment.metadata()]))
         except Exception as exc:  # noqa: BLE001 - smoke reports provider failures
             print(f"FAIL: provider call failed: {exc}")
             return 1

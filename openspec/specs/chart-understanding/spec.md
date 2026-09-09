@@ -156,3 +156,23 @@ observations, structured errors).
 - **WHEN** the `--agent` REPL starts
 - **THEN** the tool registry contains `extract_text`, `measure_bars`,
   `assemble_spec`, and `validate_spec` in addition to the built-ins
+
+### Requirement: Chart sensors use authorized attachments
+
+In the Agent tool registry, extract_text and measure_bars SHALL accept an
+authorized attachment ID resolved through the active session boundary and SHALL
+not expose arbitrary local paths in their model-facing schemas or results.
+Direct Python path-based sensor compatibility MAY remain available. Attachment
+failures SHALL be bounded structured errors without visual artifacts.
+
+#### Scenario: Authorized sensor call
+
+- **WHEN** a registered chart sensor receives a valid attachment ID
+- **THEN** it resolves the internal source image, returns its structured result,
+  and preserves any source-sized visual overlay
+
+#### Scenario: Unauthorized sensor call
+
+- **WHEN** a sensor receives an unknown, cross-session, missing, or changed ID
+- **THEN** it returns a structured error without revealing the source path or
+  producing an overlay

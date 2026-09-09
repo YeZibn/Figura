@@ -17,7 +17,9 @@ from typing import IO, Optional
 from .agent import Agent
 from .conversation import Conversation
 from .client import LLMClient, load_environment
-from .multimodal import build_attachment_turn
+from .multimodal import build_registered_attachment_turn
+from .attachments import AttachmentRegistry
+from .memory import SQLiteAgentMemory
 from .trace import JsonlTraceRenderer, TextTraceRenderer, TraceSink
 from .tools import ToolRegistry
 from .tools.builtin import register_builtins
@@ -30,6 +32,9 @@ measure bar geometry, assemble_spec can construct a ChartSpec, and validate_spec
 can check one. Decide freely whether to call tools, which tools to call, and in
 what order based on the user's request and the available evidence. Answer
 naturally unless the user asks for structured output; a ChartSpec is optional.
+User image references are registered as opaque attachment IDs. Use load_image
+with an attachment_id when visual inspection is useful; chart sensors accept the
+same authorized ID. Image loading is optional and under your control.
 When a tool provides a generated visual observation, inspect it together with
 the structured result when useful. You may accept it, retry with different
 arguments, switch tools, ignore irrelevant evidence, or answer directly; no
@@ -85,6 +90,7 @@ def run_agent_repl(
     trace_reasoning: bool = False,
     trace_format: str = "text",
     trace_stream: Optional[IO[str]] = None,
+    session_name: str | None = None,
 ) -> int:
     """Run an interactive ReAct agent shell against the configured endpoint.
 
@@ -98,9 +104,20 @@ def run_agent_repl(
 
     load_environment()
     client = LLMClient()
+    memory = SQLiteAgentMemory(session_name) if session_name else None
+    attachments = AttachmentRegistry(
+        session_id=memory.session.id if memory else None,
+        save=memory.save_attachment if memory else None,
+        load=memory.get_attachment if memory else None,
+    )
     registry = ToolRegistry()
     register_builtins(registry)
-    register_chart_tools(registry)
+    if hasattr(registry, "register"):
+        registry.register(attachments.load_tool())
+        register_chart_tools(registry, attachments=attachments)
+    else:
+        # Keep lightweight constructor stubs usable in offline callers/tests.
+        register_chart_tools(registry)
     trace_sink: Optional[TraceSink] = None
     if trace:
         renderer = (
@@ -112,6 +129,9 @@ def run_agent_repl(
     agent_kwargs = {"system": system, "model": model}
     if trace_sink is not None:
         agent_kwargs.update(trace=trace_sink, trace_reasoning=trace_reasoning)
+    if memory is not None:
+        agent_kwargs["memory"] = memory
+    agent_kwargs["attachments"] = attachments
     agent = Agent(client, registry, **agent_kwargs)
 
     print("Agent session (built-in tools enabled; blank line or Ctrl-D to exit).")
@@ -127,7 +147,8 @@ def run_agent_repl(
         text, image_paths = extract_image_refs(stripped)
         try:
             if image_paths:
-                turn = build_attachment_turn(text, image_paths)
+                metadata = [attachments.register(path).metadata() for path in image_paths]
+                turn = build_registered_attachment_turn(text, metadata)
             else:
                 turn = stripped  # no @: byte-identical to the old behavior
             reply = agent.run(turn)
@@ -154,6 +175,10 @@ def cli(argv: list[str] | None = None) -> int:
         default="text",
         help="Agent trace renderer (text or JSONL)",
     )
+    parser.add_argument("--session", default=None, help="resume or create a named Agent session")
+    parser.add_argument("--new-session", default=None, help="create a fresh named Agent session")
+    parser.add_argument("--list-sessions", action="store_true", help="list named Agent sessions and exit")
+    parser.add_argument("--delete-session", default=None, help="delete a named Agent session after confirmation")
     try:
         args = parser.parse_args(argv)
     except SystemExit as exc:
@@ -169,11 +194,38 @@ def cli(argv: list[str] | None = None) -> int:
     if args.trace_format != "text" and not args.trace:
         print("error: --trace-format requires --trace", file=sys.stderr)
         return 2
+    requested = [args.session, args.new_session, args.delete_session]
+    if args.list_sessions or any(value is not None for value in requested):
+        if not args.agent:
+            print("error: session options require --agent", file=sys.stderr)
+            return 2
+        if sum(value is not None for value in requested) + int(args.list_sessions) > 1:
+            print("error: session options are mutually exclusive", file=sys.stderr)
+            return 2
+        if args.list_sessions:
+            for item in SQLiteAgentMemory.list_sessions():
+                print(f"{item.name}\t{item.updated_at}")
+            return 0
+        if args.delete_session is not None:
+            answer = input(f"Delete session {args.delete_session!r}? [y/N] ")
+            if answer.strip().lower() not in {"y", "yes"}:
+                return 0
+            return 0 if SQLiteAgentMemory.delete_session(args.delete_session) else 1
+        if args.new_session is not None:
+            if any(item.name == args.new_session for item in SQLiteAgentMemory.list_sessions()):
+                print(f"error: session already exists: {args.new_session}", file=sys.stderr)
+                return 2
+            session_name = args.new_session
+        else:
+            session_name = args.session
+    else:
+        session_name = None
     if args.agent:
         return run_agent_repl(
             model=args.model,
             trace=args.trace,
             trace_reasoning=args.trace_reasoning,
             trace_format=args.trace_format,
+            **({"session_name": session_name} if session_name is not None else {}),
         )
     return run_repl(model=args.model)

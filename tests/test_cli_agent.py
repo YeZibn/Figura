@@ -174,7 +174,7 @@ def test_extract_image_refs_leaves_unterminated_quote_as_text():
     assert cli_mod.extract_image_refs(line) == (line, [])
 
 
-def test_single_at_path_attaches_image_part(monkeypatch, tmp_path):
+def test_single_at_path_registers_opaque_attachment(monkeypatch, tmp_path):
     agent = _FakeAgent()
     _patch_constructors(monkeypatch, agent=agent)
     img = tmp_path / "chart.png"
@@ -183,20 +183,14 @@ def test_single_at_path_attaches_image_part(monkeypatch, tmp_path):
     monkeypatch.setattr(builtins, "input", lambda prompt="": next(lines))
     cli_mod.run_agent_repl()
     turn = agent.seen[0]
-    assert isinstance(turn, list)
-    assert turn[0] == {
-        "type": "text",
-        "text": (
-            "read this chart\n\n"
-            "Attached local image paths (matching image order):\n"
-            f"1. {img}"
-        ),
-    }
-    assert turn[1]["type"] == "image_url"
-    assert turn[1]["image_url"]["url"].startswith("data:image/png;base64,")
+    assert isinstance(turn, str)
+    assert "Registered image attachments" in turn
+    assert "attachment_id=att_" in turn
+    assert str(img) not in turn
+    assert "data:image" not in turn
 
 
-def test_mixed_quoted_and_unquoted_paths_forward_in_order(monkeypatch, tmp_path):
+def test_mixed_quoted_and_unquoted_paths_register_in_order(monkeypatch, tmp_path):
     agent = _FakeAgent()
     _patch_constructors(monkeypatch, agent=agent)
     first = tmp_path / "chart one.png"
@@ -209,14 +203,12 @@ def test_mixed_quoted_and_unquoted_paths_forward_in_order(monkeypatch, tmp_path)
     cli_mod.run_agent_repl()
 
     turn = agent.seen[0]
-    assert turn[0]["text"] == (
-        "compare with\n\n"
-        "Attached local image paths (matching image order):\n"
-        f"1. {first}\n"
-        f"2. {second}"
-    )
-    assert turn[1]["image_url"]["url"].endswith("Zmlyc3Q=")
-    assert turn[2]["image_url"]["url"].endswith("c2Vjb25k")
+    assert isinstance(turn, str)
+    assert turn.startswith("compare with\n\nRegistered image attachments")
+    assert turn.index("filename=chart one.png") < turn.index("filename=two.png")
+    assert str(first) not in turn
+    assert str(second) not in turn
+    assert "data:image" not in turn
 
 
 def test_nonexistent_at_path_errors_without_calling_agent(monkeypatch, capsys):
@@ -265,6 +257,7 @@ def test_agent_repl_registers_builtin_and_chart_tools(monkeypatch):
         "measure_bars",
         "assemble_spec",
         "validate_spec",
+        "load_image",
     }
 
 

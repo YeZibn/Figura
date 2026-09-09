@@ -48,18 +48,19 @@ raising uncaught exceptions into the caller's turn.
 
 ### Requirement: CLI attaches images with @path references
 
-The agent REPL SHALL parse unquoted `@<path>` tokens and quoted
-`@"<path with spaces>"` tokens in the input line. Each referenced image SHALL
-be attached to that user turn as an image content part, and the model-visible
-text SHALL contain the remaining user text plus the resolved local image paths
-in matching order so image tools can address them. Input without an attachment
-reference MUST behave exactly as before as a plain string user turn.
+ The agent REPL SHALL parse unquoted `@<path>` tokens and quoted
+ `@"<path with spaces>"` tokens in the input line. Each reference SHALL be
+ registered as a session-scoped attachment in matching order. The first
+ model-visible turn SHALL contain only remaining text, opaque attachment IDs,
+ and safe metadata; it SHALL NOT eagerly include image bytes, data URLs, or
+ arbitrary local paths. Input without an attachment reference MUST behave
+ exactly as before as a plain string user turn.
 
 #### Scenario: Single image reference
 
 - **WHEN** the user enters `read this chart @/tmp/sales.png` in the agent REPL
-- **THEN** the agent receives a multimodal content list containing the user text,
-  the local path `/tmp/sales.png`, and the corresponding image
+- **THEN** the agent receives the user text and one opaque attachment ID, while
+  the first model request contains no image bytes or local path
 
 #### Scenario: Plain text unchanged
 
@@ -70,8 +71,8 @@ reference MUST behave exactly as before as a plain string user turn.
 #### Scenario: Multiple image references
 
 - **WHEN** the user enters a line with two image attachment references
-- **THEN** the model-visible paths and image content parts appear in the same
-  order as their references
+- **THEN** two attachment IDs and safe metadata appear in the same order without
+  eager image content
 
 #### Scenario: Quoted image path containing spaces
 

@@ -7,9 +7,11 @@ lives in this package yet.
 
 from .agent import Agent, registry_tools
 from .conversation import Conversation
+from .attachments import AttachmentRegistry
 from .multimodal import (
     ToolVisualEvidence,
     build_attachment_turn,
+    build_registered_attachment_turn,
     build_tool_observation_content,
     build_user_content,
 )
@@ -36,7 +38,9 @@ __all__ = [
     "Agent",
     "registry_tools",
     "Conversation",
+    "AttachmentRegistry",
     "build_attachment_turn",
+    "build_registered_attachment_turn",
     "build_tool_observation_content",
     "build_user_content",
     "ToolVisualEvidence",

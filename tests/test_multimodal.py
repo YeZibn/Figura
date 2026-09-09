@@ -15,6 +15,7 @@ from chartagent import (
     GeneratedImage,
     ToolVisualEvidence,
     build_attachment_turn,
+    build_registered_attachment_turn,
     build_tool_observation_content,
     build_user_content,
 )
@@ -109,6 +110,17 @@ def test_raw_builder_text_contract_is_unchanged(tmp_path):
     content = build_user_content("raw text", [path])
 
     assert content[0] == {"type": "text", "text": "raw text"}
+
+
+def test_registered_attachment_turn_contains_safe_metadata_only():
+    content = build_registered_attachment_turn(
+        "inspect",
+        [{"attachment_id": "att_demo", "filename": "chart.png", "media_type": "image/png", "byte_count": 42}],
+    )
+    assert "att_demo" in content
+    assert "chart.png" in content
+    assert "image/png" in content
+    assert "data:" not in content
 
 
 def test_tool_observation_content_encodes_generated_bytes_with_attribution():

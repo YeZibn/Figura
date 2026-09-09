@@ -94,6 +94,18 @@ def build_attachment_turn(text: str, image_paths: Sequence[str]) -> list[dict]:
     return build_user_content(turn_text, paths)
 
 
+def build_registered_attachment_turn(text: str, attachments: Sequence[dict]) -> str:
+    """Describe registered attachments without uploading bytes or local paths."""
+    lines = ["Registered image attachments (load with load_image when useful):"]
+    for index, item in enumerate(attachments, start=1):
+        lines.append(
+            f"{index}. attachment_id={item['attachment_id']}, filename={item['filename']}, "
+            f"media_type={item['media_type']}, byte_count={item['byte_count']}"
+        )
+    metadata = "\n".join(lines)
+    return f"{text}\n\n{metadata}" if text else metadata
+
+
 def build_tool_observation_content(
     evidence: Sequence[ToolVisualEvidence],
 ) -> list[dict]:

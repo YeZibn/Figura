@@ -17,7 +17,9 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from chartagent import Agent, ToolRegistry, build_attachment_turn  # noqa: E402
+from chartagent import Agent, ToolRegistry  # noqa: E402
+from chartagent.attachments import AttachmentRegistry  # noqa: E402
+from chartagent.multimodal import build_registered_attachment_turn  # noqa: E402
 from chartagent.cli import AGENT_SYSTEM_PROMPT  # noqa: E402
 from chartagent.client import LLMClient, load_environment  # noqa: E402
 from chartagent.tools.chart import register_chart_tools  # noqa: E402
@@ -57,8 +59,10 @@ def _case(
     )
     image_path.write_bytes(png_bytes)
 
+    attachments = AttachmentRegistry()
     registry = ToolRegistry()
-    register_chart_tools(registry)
+    registry.register(attachments.load_tool())
+    register_chart_tools(registry, attachments=attachments)
     chat_kwargs: dict[str, Any] = {}
     if model:
         chat_kwargs["model"] = model
@@ -71,9 +75,13 @@ def _case(
     )
     prompt = (
         "Restore the underlying data from this annotated bar chart as a valid "
-        "ChartSpec JSON object."
+        "ChartSpec JSON object. The response must include metadata with the "
+        "required chart_type field (use bar), axes with x/y labels when "
+        "applicable, and the complete dataset; use the assemble_spec tool if "
+        "helpful and validate the final object before answering."
     )
-    answer = agent.run(build_attachment_turn(prompt, [str(image_path)]))
+    attachment = attachments.register(str(image_path))
+    answer = agent.run(build_registered_attachment_turn(prompt, [attachment.metadata()]))
 
     called = [
         call["function"]["name"]
