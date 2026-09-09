@@ -1,8 +1,10 @@
 """Tests for the CLI agent REPL and `--agent` dispatch (no real LLM)."""
 
 import builtins
+from io import StringIO
 
 from chartagent import cli as cli_mod
+from chartagent.trace import TraceEvent
 
 
 class _FakeAgent:
@@ -55,6 +57,68 @@ def test_cli_agent_model_forwarded(monkeypatch):
     monkeypatch.setattr(cli_mod, "run_agent_repl", lambda **k: seen.update(k) or 0)
     cli_mod.cli(["--agent", "--model", "qwen-3"])
     assert seen["model"] == "qwen-3"
+
+
+def test_cli_trace_options_forwarded_to_agent_repl(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(cli_mod, "run_agent_repl", lambda **k: seen.update(k) or 0)
+
+    assert cli_mod.cli(
+        ["--agent", "--trace", "--trace-reasoning", "--trace-format", "jsonl"]
+    ) == 0
+    assert seen == {
+        "model": None,
+        "trace": True,
+        "trace_reasoning": True,
+        "trace_format": "jsonl",
+    }
+
+
+def test_cli_rejects_trace_without_agent(capsys):
+    assert cli_mod.cli(["--trace"]) == 2
+    assert "require --agent" in capsys.readouterr().err
+
+
+def test_cli_rejects_reasoning_without_trace(capsys):
+    assert cli_mod.cli(["--agent", "--trace-reasoning"]) == 2
+    assert "requires --trace" in capsys.readouterr().err
+
+
+def test_cli_rejects_non_text_format_without_trace(capsys):
+    assert cli_mod.cli(["--agent", "--trace-format", "jsonl"]) == 2
+    assert "--trace-format requires --trace" in capsys.readouterr().err
+
+
+def test_agent_repl_trace_sink_is_jsonl_and_final_answer_stays_stdout(monkeypatch, capsys):
+    captured = {}
+
+    class _CapturingAgent:
+        def __init__(self, _client, _registry, **kwargs):
+            captured.update(kwargs)
+
+        def run(self, _turn):
+            return "answer"
+
+    monkeypatch.setattr(cli_mod, "load_environment", lambda: None)
+    monkeypatch.setattr(cli_mod, "LLMClient", lambda: object())
+    monkeypatch.setattr(cli_mod, "ToolRegistry", lambda: object())
+    monkeypatch.setattr(cli_mod, "register_builtins", lambda _registry: None)
+    monkeypatch.setattr(cli_mod, "register_chart_tools", lambda _registry: None)
+    monkeypatch.setattr(cli_mod, "Agent", _CapturingAgent)
+    trace_stream = StringIO()
+    lines = iter(["hello", ""])
+    monkeypatch.setattr(builtins, "input", lambda prompt="": next(lines))
+
+    assert cli_mod.run_agent_repl(
+        trace=True,
+        trace_reasoning=True,
+        trace_format="jsonl",
+        trace_stream=trace_stream,
+    ) == 0
+    captured["trace"](TraceEvent("final_answer", run_id="r", turn=1, payload={"answer": "answer"}))
+    assert '"kind":"final_answer"' in trace_stream.getvalue()
+    assert "answer" in capsys.readouterr().out
+    assert captured["trace_reasoning"] is True
 
 
 def test_run_agent_repl_empty_line_exits(monkeypatch):

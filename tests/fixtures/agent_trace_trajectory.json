@@ -1,0 +1,11 @@
+{
+  "name": "ocr-bar-retry",
+  "prompt": "Read this chart and retry the bar measurement if the first region is ambiguous.",
+  "model_turns": [
+    "extract_text",
+    "measure_bars(full)",
+    "measure_bars(plot)",
+    "final_answer"
+  ],
+  "final_answer": "The chart contains three bars: 8, 16, and 24."
+}

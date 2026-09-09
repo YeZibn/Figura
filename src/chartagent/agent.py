@@ -17,6 +17,7 @@ matching the client's ``append_to_history`` contract.
 
 from __future__ import annotations
 
+import json
 from typing import Any, List, Optional
 
 from openai.types.chat import ChatCompletionMessageParam
@@ -24,6 +25,15 @@ from openai.types.chat import ChatCompletionMessageParam
 from .client.client import LLMClient
 from .client.models import NormalizedResult, ToolCall
 from .multimodal import ToolVisualEvidence, build_tool_observation_content
+from .trace import (
+    TraceEmitter,
+    TraceSink,
+    bounded_reasoning,
+    new_run_id,
+    summarize_arguments,
+    summarize_images,
+    summarize_result,
+)
 from .tools.registry import ToolRegistry, dispatch_observation
 
 # Sentinel returned when the step budget is exhausted.
@@ -85,6 +95,10 @@ class Agent:
         *,
         system: Optional[str] = None,
         max_steps: int = 10,
+        trace: Optional[TraceSink] = None,
+        trace_sink: Optional[TraceSink] = None,
+        trace_reasoning: bool = False,
+        trace_run_id: Optional[str] = None,
         **chat_kwargs: Any,
     ) -> None:
         self.client = client
@@ -92,6 +106,9 @@ class Agent:
         self._system = system
         self.max_steps = max_steps
         self._chat_kwargs = chat_kwargs
+        self._trace_sink = trace if trace is not None else trace_sink
+        self._trace_reasoning = trace_reasoning
+        self._trace_run_id = trace_run_id
         self._messages: List[ChatCompletionMessageParam] = []
         if system is not None:
             self._messages.append({"role": "system", "content": system})  # type: ignore[arg-type]
@@ -120,25 +137,103 @@ class Agent:
         """
         self._messages.append({"role": "user", "content": user_input})  # type: ignore[arg-type]
         tools = registry_tools(self.registry)
+        emitter = (
+            TraceEmitter(self._trace_sink, run_id=self._trace_run_id or new_run_id())
+            if self._trace_sink is not None
+            else None
+        )
 
-        for _ in range(self.max_steps):
-            result = self.client.chat(
-                self._messages,
-                tools=tools,
-                **self._chat_kwargs,
-            )
+        for step in range(self.max_steps):
+            turn = step + 1
+            if emitter is not None and not isinstance(self.client, LLMClient):
+                emitter.emit(
+                    "model_started",
+                    turn=turn,
+                    model=self._chat_kwargs.get("model"),
+                    message_count=len(self._messages),
+                    tool_count=len(tools),
+                )
+            chat_kwargs = dict(self._chat_kwargs)
+            if emitter is not None and isinstance(self.client, LLMClient):
+                chat_kwargs.update(
+                    trace_sink=emitter,
+                    trace_run_id=emitter.run_id,
+                    trace_turn=turn,
+                )
+            try:
+                result = self.client.chat(self._messages, tools=tools, **chat_kwargs)
+            except Exception as exc:
+                if emitter is not None and not isinstance(self.client, LLMClient):
+                    emitter.emit(
+                        "model_completed",
+                        turn=turn,
+                        status="error",
+                        error=str(exc),
+                    )
+                raise
+
+            if emitter is not None and not isinstance(self.client, LLMClient):
+                emitter.emit(
+                    "model_completed",
+                    turn=turn,
+                    status="ok",
+                    content_length=len(result.content),
+                    reasoning_available=bool(result.reasoning),
+                    tool_calls=len(result.tool_calls),
+                    finish_reason=result.finish_reason,
+                )
+            if emitter is not None and self._trace_reasoning:
+                emitter.emit(
+                    "reasoning",
+                    turn=turn,
+                    status="available" if result.reasoning else "unavailable",
+                    reasoning=bounded_reasoning(result.reasoning),
+                )
 
             if not result.tool_calls:
                 self._messages.append(_assistant_entry(result))
+                if emitter is not None:
+                    emitter.emit(
+                        "final_answer",
+                        turn=turn,
+                        answer=result.content,
+                        finish_reason=result.finish_reason,
+                    )
                 return result.content
 
             self._messages.append(_assistant_entry(result))
             visual_evidence: list[ToolVisualEvidence] = []
             for call in result.tool_calls:
+                if emitter is not None:
+                    emitter.emit(
+                        "tool_call",
+                        turn=turn,
+                        tool_name=call.name,
+                        call_id=call.id,
+                        arguments=summarize_arguments(call.arguments),
+                    )
                 observation = dispatch_observation(
                     self.registry, call.name, call.arguments
                 )
                 self._messages.append(_tool_entry(call, observation.content))
+                if emitter is not None:
+                    emitter.emit(
+                        "tool_result",
+                        turn=turn,
+                        tool_name=call.name,
+                        call_id=call.id,
+                        status=_observation_status(observation.content),
+                        result=summarize_result(observation.content),
+                        image_count=len(observation.images),
+                    )
+                    if observation.images:
+                        emitter.emit(
+                            "visual_observation",
+                            turn=turn,
+                            tool_name=call.name,
+                            call_id=call.id,
+                            images=summarize_images(observation.images),
+                        )
                 visual_evidence.extend(
                     ToolVisualEvidence(call.name, call.id, generated)
                     for generated in observation.images
@@ -151,4 +246,20 @@ class Agent:
                     }  # type: ignore[arg-type]
                 )
 
+        if emitter is not None:
+            emitter.emit(
+                "budget_exhausted",
+                turn=self.max_steps,
+                max_steps=self.max_steps,
+                answer=_BUDGET_MSG,
+            )
         return _BUDGET_MSG
+
+
+def _observation_status(content: str) -> str:
+    """Classify the registry's structured success/error boundary for tracing."""
+    try:
+        parsed = json.loads(content)
+    except (TypeError, json.JSONDecodeError):
+        return "success"
+    return "error" if isinstance(parsed, dict) and "error" in parsed else "success"

@@ -13,6 +13,13 @@ from .multimodal import (
     build_tool_observation_content,
     build_user_content,
 )
+from .trace import (
+    JsonlTraceRenderer,
+    TextTraceRenderer,
+    TraceEmitter,
+    TraceEvent,
+    TraceLimits,
+)
 from .tools import (
     DispatchedObservation,
     GeneratedImage,
@@ -33,6 +40,11 @@ __all__ = [
     "build_tool_observation_content",
     "build_user_content",
     "ToolVisualEvidence",
+    "TraceEvent",
+    "TraceEmitter",
+    "TraceLimits",
+    "TextTraceRenderer",
+    "JsonlTraceRenderer",
     "Tool",
     "ToolRegistry",
     "GeneratedImage",

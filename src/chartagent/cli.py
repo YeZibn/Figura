@@ -9,13 +9,16 @@ multimodal content.
 
 from __future__ import annotations
 
+import argparse
 import re
 import sys
+from typing import IO, Optional
 
 from .agent import Agent
 from .conversation import Conversation
 from .client import LLMClient, load_environment
 from .multimodal import build_attachment_turn
+from .trace import JsonlTraceRenderer, TextTraceRenderer, TraceSink
 from .tools import ToolRegistry
 from .tools.builtin import register_builtins
 from .tools.chart import register_chart_tools
@@ -78,18 +81,38 @@ def run_agent_repl(
     *,
     model: str | None = None,
     system: str = AGENT_SYSTEM_PROMPT,
+    trace: bool = False,
+    trace_reasoning: bool = False,
+    trace_format: str = "text",
+    trace_stream: Optional[IO[str]] = None,
 ) -> int:
     """Run an interactive ReAct agent shell against the configured endpoint.
 
     Registers built-in read-only tools so the model can call them. Returns
     process exit code. Exits on empty line or Ctrl-D.
     """
+    if trace_reasoning and not trace:
+        raise ValueError("--trace-reasoning requires --trace")
+    if trace_format not in {"text", "json", "jsonl"}:
+        raise ValueError("trace_format must be text, json, or jsonl")
+
     load_environment()
     client = LLMClient()
     registry = ToolRegistry()
     register_builtins(registry)
     register_chart_tools(registry)
-    agent = Agent(client, registry, system=system, model=model)
+    trace_sink: Optional[TraceSink] = None
+    if trace:
+        renderer = (
+            JsonlTraceRenderer(trace_stream)
+            if trace_format in {"json", "jsonl"}
+            else TextTraceRenderer(trace_stream)
+        )
+        trace_sink = renderer
+    agent_kwargs = {"system": system, "model": model}
+    if trace_sink is not None:
+        agent_kwargs.update(trace=trace_sink, trace_reasoning=trace_reasoning)
+    agent = Agent(client, registry, **agent_kwargs)
 
     print("Agent session (built-in tools enabled; blank line or Ctrl-D to exit).")
     while True:
@@ -116,12 +139,41 @@ def run_agent_repl(
 
 def cli(argv: list[str] | None = None) -> int:
     argv = argv if argv is not None else sys.argv[1:]
-    model = None
-    use_agent = False
-    if "--model" in argv:
-        model = argv[argv.index("--model") + 1]
-    if "--agent" in argv:
-        use_agent = True
-    if use_agent:
-        return run_agent_repl(model=model)
-    return run_repl(model=model)
+    parser = argparse.ArgumentParser(prog="python -m chartagent")
+    parser.add_argument("--agent", action="store_true", help="use the tool-capable Agent REPL")
+    parser.add_argument("--model", default=None)
+    parser.add_argument("--trace", action="store_true", help="show Agent execution trace")
+    parser.add_argument(
+        "--trace-reasoning",
+        action="store_true",
+        help="show provider-returned reasoning in the Agent trace",
+    )
+    parser.add_argument(
+        "--trace-format",
+        choices=("text", "json", "jsonl"),
+        default="text",
+        help="Agent trace renderer (text or JSONL)",
+    )
+    try:
+        args = parser.parse_args(argv)
+    except SystemExit as exc:
+        return int(exc.code)
+
+    trace_flags_used = args.trace or args.trace_reasoning or args.trace_format != "text"
+    if trace_flags_used and not args.agent:
+        print("error: trace options require --agent", file=sys.stderr)
+        return 2
+    if args.trace_reasoning and not args.trace:
+        print("error: --trace-reasoning requires --trace", file=sys.stderr)
+        return 2
+    if args.trace_format != "text" and not args.trace:
+        print("error: --trace-format requires --trace", file=sys.stderr)
+        return 2
+    if args.agent:
+        return run_agent_repl(
+            model=args.model,
+            trace=args.trace,
+            trace_reasoning=args.trace_reasoning,
+            trace_format=args.trace_format,
+        )
+    return run_repl(model=args.model)

@@ -19,6 +19,7 @@ from openai.types.chat import ChatCompletionMessageParam
 
 from .config import ClientConfig, resolve_config
 from .models import NormalizedResult, ToolCall
+from ..trace import TraceEmitter, TraceSink
 
 logger = logging.getLogger(__name__)
 
@@ -147,6 +148,8 @@ class LLMClient:
         config: Optional[ClientConfig] = None,
         *,
         observe: Optional[ObservationSink] = None,
+        trace_sink: Optional[TraceSink] = None,
+        trace_run_id: Optional[str] = None,
         **overrides: Any,
     ) -> None:
         resolved = resolve_config(**overrides) if overrides else (config or resolve_config())
@@ -154,6 +157,11 @@ class LLMClient:
         if not self.config.api_key:
             raise ValueError("An API key is required (explicit or DASHSCOPE_API_KEY).")
         self._observe = observe or _default_observation_sink
+        self._trace = (
+            TraceEmitter(trace_sink, run_id=trace_run_id)
+            if trace_sink is not None
+            else None
+        )
         self._sdk = _connect_sdk(self.config, _openai_factory)
 
     # -- calls -------------------------------------------------------------- #
@@ -167,6 +175,9 @@ class LLMClient:
         enable_thinking: Optional[bool] = None,
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
+        trace_sink: Optional[TraceSink] = None,
+        trace_run_id: Optional[str] = None,
+        trace_turn: Optional[int] = None,
     ) -> NormalizedResult:
         cfg = self.config
         use_model = model or cfg.model
@@ -193,11 +204,53 @@ class LLMClient:
         if knob is not None:
             request["extra_body"] = {"enable_thinking": knob}
 
+        trace = self._trace
+        if trace_sink is not None:
+            trace = (
+                trace_sink
+                if isinstance(trace_sink, TraceEmitter)
+                else TraceEmitter(trace_sink, run_id=trace_run_id)
+            )
+        if trace is not None:
+            trace.emit(
+                "model_started",
+                turn=trace_turn,
+                model=use_model,
+                message_count=len(messages),
+                tool_count=len(tools or ()),
+                stream=stream,
+            )
+
         started = time.monotonic()
-        completion = self._sdk.chat.completions.create(**request)
+        try:
+            completion = self._sdk.chat.completions.create(**request)
+        except Exception as exc:
+            if trace is not None:
+                trace.emit(
+                    "model_completed",
+                    turn=trace_turn,
+                    model=use_model,
+                    status="error",
+                    elapsed_ms=int((time.monotonic() - started) * 1000),
+                    error=str(exc),
+                )
+            raise
         result = _collect_streaming_deltas(completion) if stream else normalize_non_streaming(completion)
         elapsed_ms = int((time.monotonic() - started) * 1000)
         self._emit_observation(result, use_model, elapsed_ms)
+        if trace is not None:
+            trace.emit(
+                "model_completed",
+                turn=trace_turn,
+                model=use_model,
+                status="ok",
+                elapsed_ms=elapsed_ms,
+                finish_reason=result.finish_reason,
+                content_length=len(result.content),
+                reasoning_available=bool(result.reasoning),
+                tool_calls=len(result.tool_calls),
+                usage_available=result.usage is not None,
+            )
         return result
 
     # -- observation -------------------------------------------------------- #
