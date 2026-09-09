@@ -1,0 +1,9 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "ChartAgent",
+  "version": "0.1.0",
+  "identifier": "com.chartagent.desktop",
+  "build": { "beforeDevCommand": "npm run dev", "devUrl": "http://localhost:1420", "beforeBuildCommand": "npm run build", "frontendDist": "../frontend/dist" },
+  "app": { "windows": [{ "title": "ChartAgent", "width": 1440, "height": 900, "minWidth": 960, "minHeight": 620, "resizable": true }], "security": { "csp": null } },
+  "bundle": { "active": true, "targets": "all", "icon": [] }
+}

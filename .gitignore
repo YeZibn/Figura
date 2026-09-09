@@ -12,3 +12,19 @@ __pycache__/
 venv/
 build/
 dist/
+
+# JavaScript / frontend
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Tauri / Rust build output
+target/
+
+# Test and coverage output
+coverage/
+
+# Local operating-system files
+.DS_Store

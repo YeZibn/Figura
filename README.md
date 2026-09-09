@@ -7,6 +7,18 @@ conda run -n agent python -m pytest -q
 conda run -n agent python -m chartagent --agent
 ```
 
+## Desktop client
+
+The desktop client is a Tauri 2 shell around a React + TypeScript + Vite workspace. During UI development, start the browser client from the frontend directory:
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+The Vite app is available at http://127.0.0.1:1420/. To run the Tauri development window after installing the Rust toolchain, use `npm run tauri:dev` from `frontend/`. The first milestone uses mock data and does not start a Python sidecar.
+
 ## Agent sessions
 
 Without `--session`, Agent history and attachment references are process-local. Named sessions are opt-in and stored in SQLite at `$CHARTAGENT_DATA_DIR/sessions.db`, or at `~/.chartagent/sessions.db` when the variable is unset.
