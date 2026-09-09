@@ -7,7 +7,22 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
+from ..result import GeneratedImage, ToolResult
 from ..tool import Tool
+from .overlays import render_bar_overlay
+
+
+def _empty_result(chart_image: Image.Image) -> ToolResult:
+    return ToolResult(
+        {"bars": [], "baseline_y": None},
+        (
+            GeneratedImage(
+                render_bar_overlay(chart_image, [], None),
+                "image/png",
+                "No bars or baseline detected",
+            ),
+        ),
+    )
 
 
 def _dominant_chart_color(rgb: np.ndarray) -> np.ndarray | None:
@@ -31,21 +46,22 @@ def _contiguous_groups(indices: np.ndarray) -> list[tuple[int, int]]:
     return [(int(indices[start]), int(indices[end])) for start, end in zip(starts, ends)]
 
 
-def measure_bars(image_path: str) -> dict:
-    """Detect bars and report bounding boxes, heights, and normalized ratios."""
+def measure_bars(image_path: str) -> ToolResult | dict:
+    """Detect bars and return measurements plus a model-readable overlay."""
     path = Path(image_path)
     if not path.is_file():
         return {"error": f"image not found: {image_path}"}
 
     try:
         with Image.open(path) as image:
-            rgb = np.asarray(image.convert("RGB"))
+            chart_image = image.convert("RGB")
+        rgb = np.asarray(chart_image)
     except Exception as exc:  # noqa: BLE001 - tool boundary
         return {"error": f"measure_bars failed for {image_path}: {exc}"}
 
     dominant = _dominant_chart_color(rgb)
     if dominant is None:
-        return {"bars": [], "baseline_y": None}
+        return _empty_result(chart_image)
 
     distance = np.max(np.abs(rgb.astype(np.int16) - dominant), axis=2)
     mask = distance <= 16
@@ -75,24 +91,35 @@ def measure_bars(image_path: str) -> dict:
         )
 
     if not candidates:
-        return {"bars": [], "baseline_y": None}
+        return _empty_result(chart_image)
 
     baseline = int(round(float(np.median([bar["_bottom"] for bar in candidates]))))
     aligned = [bar for bar in candidates if abs(bar["_bottom"] - baseline) <= 2]
     if not aligned:
-        return {"bars": [], "baseline_y": None}
+        return _empty_result(chart_image)
 
     heights = [bar["h_px"] for bar in aligned]
     shortest = min(heights)
     bars = [
         {
+            "id": index,
             "bbox": bar["bbox"],
             "h_px": bar["h_px"],
             "ratio": bar["h_px"] / shortest,
         }
-        for bar in aligned
+        for index, bar in enumerate(aligned, start=1)
     ]
-    return {"bars": bars, "baseline_y": baseline}
+    data = {"bars": bars, "baseline_y": baseline}
+    return ToolResult(
+        data,
+        (
+            GeneratedImage(
+                render_bar_overlay(chart_image, bars, baseline),
+                "image/png",
+                "Detected bars with stable IDs, top edges, and baseline",
+            ),
+        ),
+    )
 
 
 MEASURE_BARS = Tool(

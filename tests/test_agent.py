@@ -7,9 +7,17 @@ history shape — is verified offline.
 
 from __future__ import annotations
 
+import json
 from typing import Any, Dict, List
 
-from chartagent import Agent, ToolRegistry, register_builtins
+from chartagent import (
+    Agent,
+    GeneratedImage,
+    Tool,
+    ToolRegistry,
+    ToolResult,
+    register_builtins,
+)
 from chartagent.agent import _assistant_entry, registry_tools
 from chartagent.client.models import NormalizedResult, ToolCall
 
@@ -29,6 +37,18 @@ class ScriptedClient:
         })
         assert self.script, "script exhausted"
         return self.script.pop(0)
+
+
+class RecordingObservationClient(ScriptedClient):
+    """Record full request payloads while driving a one-tool observation."""
+
+    def __init__(self, script: List[NormalizedResult]) -> None:
+        super().__init__(script)
+        self.requests: List[List[Dict[str, Any]]] = []
+
+    def chat(self, messages, **kwargs):
+        self.requests.append(list(messages))
+        return super().chat(messages, **kwargs)
 
 
 def _final(text: str = "done") -> NormalizedResult:
@@ -128,3 +148,197 @@ def test_multimodal_input_passes_through_unchanged():
     # the client received the same list verbatim on the first turn
     sent = client.calls[0]["messages"]
     assert [m for m in sent if m["role"] == "user"][0]["content"] == content
+
+
+def _visual_registry(*, invalid: bool = False):
+    registry = ToolRegistry()
+    image = GeneratedImage(
+        b"" if invalid else b"generated-image",
+        "image/png",
+        "Detected regions",
+    )
+    registry.register(
+        Tool(
+            "visual",
+            "return visual evidence",
+            {"type": "object"},
+            lambda: ToolResult({"count": 2}, [image]),
+        )
+    )
+    return registry
+
+
+def test_visual_tool_result_adds_attributed_multimodal_observation():
+    client = ScriptedClient([_call("visual", "{}", "visual-1"), _final("accepted")])
+    agent = Agent(client, _visual_registry())
+
+    assert agent.run("inspect") == "accepted"
+
+    messages = client.calls[1]["messages"]
+    assert [message["role"] for message in messages] == [
+        "user",
+        "assistant",
+        "tool",
+        "user",
+    ]
+    assert json.loads(messages[2]["content"])["data"] == {"count": 2}
+    evidence = messages[3]["content"]
+    assert evidence[1]["text"] == (
+        "Tool: visual\nTool call ID: visual-1\nCaption: Detected regions"
+    )
+    assert evidence[2]["image_url"]["url"].startswith("data:image/png;base64,")
+
+
+def test_multiple_tools_append_all_tool_messages_before_visual_observation():
+    registry = ToolRegistry()
+    registry.register(
+        Tool(
+            "first",
+            "first visual",
+            {"type": "object"},
+            lambda: ToolResult(
+                {"first": True}, [GeneratedImage(b"one", "image/png", "First")]
+            ),
+        )
+    )
+    registry.register(
+        Tool(
+            "second",
+            "second visual",
+            {"type": "object"},
+            lambda: ToolResult(
+                {"second": True}, [GeneratedImage(b"two", "image/png", "Second")]
+            ),
+        )
+    )
+    calls = NormalizedResult(
+        tool_calls=[
+            ToolCall("call-1", "first", "{}"),
+            ToolCall("call-2", "second", "{}"),
+        ]
+    )
+    client = ScriptedClient([calls, _final("done")])
+
+    assert Agent(client, registry).run("inspect both") == "done"
+
+    messages = client.calls[1]["messages"]
+    assert [message["role"] for message in messages] == [
+        "user",
+        "assistant",
+        "tool",
+        "tool",
+        "user",
+    ]
+    evidence = messages[-1]["content"]
+    assert "Tool call ID: call-1" in evidence[1]["text"]
+    assert "Tool call ID: call-2" in evidence[3]["text"]
+
+
+def test_invalid_generated_image_does_not_add_multimodal_turn():
+    client = ScriptedClient([_call("visual", "{}"), _final("used JSON")])
+    agent = Agent(client, _visual_registry(invalid=True))
+
+    assert agent.run("inspect") == "used JSON"
+
+    messages = client.calls[1]["messages"]
+    assert [message["role"] for message in messages] == ["user", "assistant", "tool"]
+    assert "content is empty" in messages[-1]["content"]
+
+
+def test_json_only_history_shape_remains_unchanged():
+    client = ScriptedClient([_call("parse_json", '{"text":"{\\"n\\":3}"}'), _final("done")])
+    agent = Agent(client, _registry())
+
+    agent.run("parse")
+
+    messages = client.calls[1]["messages"]
+    assert [message["role"] for message in messages] == ["user", "assistant", "tool"]
+    assert messages[-1]["content"] == '{"n": 3}'
+
+
+def test_reset_and_close_release_generated_observation_history(tmp_path):
+    source = tmp_path / "source.png"
+    source.write_bytes(b"source")
+    client = ScriptedClient(
+        [
+            _call("visual", "{}", "visual-1"),
+            _final("done"),
+            _call("visual", "{}", "visual-2"),
+            _final("done again"),
+        ]
+    )
+    agent = Agent(client, _visual_registry())
+
+    agent.run("inspect")
+    assert any(message["role"] == "user" and isinstance(message["content"], list) for message in agent.messages)
+    agent.reset()
+    assert agent.messages == []
+    assert source.read_bytes() == b"source"
+    agent.run("inspect again")
+    agent.close()
+    assert agent.messages == []
+    assert source.read_bytes() == b"source"
+
+
+def test_recording_client_receives_source_json_and_generated_overlay(tmp_path):
+    source = tmp_path / "chart.png"
+    source.write_bytes(b"original-chart-bytes")
+    registry = _visual_registry()
+    client = RecordingObservationClient(
+        [_call("visual", "{}", "visual-1"), _final("accepted")]
+    )
+    agent = Agent(client, registry)
+
+    source_turn = [
+        {"type": "text", "text": "inspect"},
+        {
+            "type": "image_url",
+            "image_url": {"url": "data:image/png;base64,c291cmNl"},
+        },
+    ]
+    assert agent.run(source_turn) == "accepted"
+
+    next_turn = client.requests[1]
+    assert next_turn[0]["role"] == "user"
+    assert next_turn[0]["content"] == source_turn
+    assert next_turn[2]["role"] == "tool"
+    assert json.loads(next_turn[2]["content"])["data"] == {"count": 2}
+    evidence = next_turn[3]["content"]
+    assert evidence[0]["type"] == "text"
+    assert evidence[1]["text"].startswith("Tool: visual\nTool call ID: visual-1")
+    assert evidence[2]["image_url"]["url"].endswith("Z2VuZXJhdGVkLWltYWdl")
+
+
+def test_visual_observation_can_be_rejected_and_recovered_with_new_tool_call():
+    registry = ToolRegistry()
+    observations = iter(
+        [
+            ToolResult({"axis": "unclear"}, [GeneratedImage(b"first", "image/png", "First pass")]),
+            ToolResult({"axis": "clear"}, [GeneratedImage(b"second", "image/png", "Second pass")]),
+        ]
+    )
+    registry.register(
+        Tool(
+            "inspect_axis",
+            "inspect chart axis",
+            {"type": "object", "properties": {"crop": {"type": "string"}}},
+            lambda **_kwargs: next(observations),
+        )
+    )
+    client = ScriptedClient(
+        [
+            _call("inspect_axis", '{"crop":"full"}', "axis-1"),
+            _call("inspect_axis", '{"crop":"axis-label"}', "axis-2"),
+            _final("axis confirmed"),
+        ]
+    )
+    agent = Agent(client, registry)
+
+    assert agent.run("read the axis") == "axis confirmed"
+    assert len(client.calls) == 3
+    first_observation = json.loads(client.calls[1]["messages"][2]["content"])
+    second_observation = json.loads(client.calls[2]["messages"][5]["content"])
+    assert first_observation["data"] == {"axis": "unclear"}
+    assert second_observation["data"] == {"axis": "clear"}
+    assert "Tool call ID: axis-1" in client.calls[1]["messages"][3]["content"][1]["text"]
+    assert "Tool call ID: axis-2" in client.calls[2]["messages"][6]["content"][1]["text"]

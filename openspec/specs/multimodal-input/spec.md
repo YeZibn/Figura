@@ -48,24 +48,33 @@ raising uncaught exceptions into the caller's turn.
 
 ### Requirement: CLI attaches images with @path references
 
-The agent REPL SHALL parse `@<path>` tokens in the input line: each referenced
-image is attached to that user turn as an image content part, and the remaining
-text forms the text part. Input without `@` MUST behave exactly as before
-(string user turn).
+The agent REPL SHALL parse unquoted `@<path>` tokens and quoted
+`@"<path with spaces>"` tokens in the input line. Each referenced image SHALL
+be attached to that user turn as an image content part, and the model-visible
+text SHALL contain the remaining user text plus the resolved local image paths
+in matching order so image tools can address them. Input without an attachment
+reference MUST behave exactly as before as a plain string user turn.
 
 #### Scenario: Single image reference
 
 - **WHEN** the user enters `read this chart @/tmp/sales.png` in the agent REPL
-- **THEN** the agent receives a multimodal content list containing the text
-  `read this chart` and the image at `/tmp/sales.png`
+- **THEN** the agent receives a multimodal content list containing the user text,
+  the local path `/tmp/sales.png`, and the corresponding image
 
 #### Scenario: Plain text unchanged
 
-- **WHEN** the user enters a line containing no `@` token
-- **THEN** the agent receives the plain string exactly as today
+- **WHEN** the user enters a line containing no attachment reference
+- **THEN** the agent receives the original plain string without attachment
+  metadata or multimodal conversion
 
 #### Scenario: Multiple image references
 
-- **WHEN** the user enters a line with two `@<path>` tokens
-- **THEN** the content list carries the text part followed by both image parts
-  in reference order
+- **WHEN** the user enters a line with two image attachment references
+- **THEN** the model-visible paths and image content parts appear in the same
+  order as their references
+
+#### Scenario: Quoted image path containing spaces
+
+- **WHEN** the user enters `compare @"/tmp/chart one.png" with @/tmp/two.png`
+- **THEN** the first attachment resolves to `/tmp/chart one.png`, the second
+  resolves to `/tmp/two.png`, and the remaining user text is `compare with`

@@ -3,7 +3,8 @@
 Simple read-a-line → reply → repeat loop; history stays in memory. Two
 interaction modes: the default ``Conversation`` chat REPL, and a tool-capable
 ``Agent`` ReAct REPL selected via ``--agent``. In the agent REPL, an ``@path``
-token attaches a local image to that turn as multimodal content.
+or ``@"path with spaces"`` token attaches a local image to that turn as
+multimodal content.
 """
 
 from __future__ import annotations
@@ -14,17 +15,30 @@ import sys
 from .agent import Agent
 from .conversation import Conversation
 from .client import LLMClient, load_environment
-from .multimodal import build_user_content
+from .multimodal import build_attachment_turn
 from .tools import ToolRegistry
 from .tools.builtin import register_builtins
 from .tools.chart import register_chart_tools
 
-_IMAGE_REF = re.compile(r"@(\S+)")
+AGENT_SYSTEM_PROMPT = """You are ChartAgent, a general-purpose assistant that can
+inspect attached images visually and use tools when they are useful. For chart
+work, extract_text can read visible labels and annotations, measure_bars can
+measure bar geometry, assemble_spec can construct a ChartSpec, and validate_spec
+can check one. Decide freely whether to call tools, which tools to call, and in
+what order based on the user's request and the available evidence. Answer
+naturally unless the user asks for structured output; a ChartSpec is optional.
+When a tool provides a generated visual observation, inspect it together with
+the structured result when useful. You may accept it, retry with different
+arguments, switch tools, ignore irrelevant evidence, or answer directly; no
+fixed validation sequence or numeric acceptance threshold is required.
+"""
+
+_IMAGE_REF = re.compile(r'@"([^"\r\n]+)"|@(?!")(\S+)')
 
 
 def extract_image_refs(line: str) -> tuple[str, list[str]]:
-    """Split an input line into (text without @tokens, image paths in order)."""
-    paths = _IMAGE_REF.findall(line)
+    """Split input into normalized text and quoted/unquoted image paths."""
+    paths = [match.group(1) or match.group(2) for match in _IMAGE_REF.finditer(line)]
     text = _IMAGE_REF.sub("", line)
     text = re.sub(r"\s+", " ", text).strip()
     return text, paths
@@ -63,7 +77,7 @@ def run_repl(
 def run_agent_repl(
     *,
     model: str | None = None,
-    system: str = "You are a helpful assistant.",
+    system: str = AGENT_SYSTEM_PROMPT,
 ) -> int:
     """Run an interactive ReAct agent shell against the configured endpoint.
 
@@ -90,7 +104,7 @@ def run_agent_repl(
         text, image_paths = extract_image_refs(stripped)
         try:
             if image_paths:
-                turn = build_user_content(text, image_paths)
+                turn = build_attachment_turn(text, image_paths)
             else:
                 turn = stripped  # no @: byte-identical to the old behavior
             reply = agent.run(turn)

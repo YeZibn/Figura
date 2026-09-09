@@ -23,7 +23,8 @@ from openai.types.chat import ChatCompletionMessageParam
 
 from .client.client import LLMClient
 from .client.models import NormalizedResult, ToolCall
-from .tools.registry import ToolRegistry, dispatch
+from .multimodal import ToolVisualEvidence, build_tool_observation_content
+from .tools.registry import ToolRegistry, dispatch_observation
 
 # Sentinel returned when the step budget is exhausted.
 _BUDGET_MSG = "*stopped: max_steps reached*"
@@ -106,6 +107,10 @@ class Agent:
         if self._system is not None:
             self._messages.append({"role": "system", "content": self._system})  # type: ignore[arg-type]
 
+    def close(self) -> None:
+        """Release retained conversation content, including generated images."""
+        self.reset()
+
     def run(self, user_input: str | list[dict]) -> str:
         """Drive one user turn to completion (final answer or budget cap).
 
@@ -128,8 +133,22 @@ class Agent:
                 return result.content
 
             self._messages.append(_assistant_entry(result))
+            visual_evidence: list[ToolVisualEvidence] = []
             for call in result.tool_calls:
-                observation = dispatch(self.registry, call.name, call.arguments)
-                self._messages.append(_tool_entry(call, observation))
+                observation = dispatch_observation(
+                    self.registry, call.name, call.arguments
+                )
+                self._messages.append(_tool_entry(call, observation.content))
+                visual_evidence.extend(
+                    ToolVisualEvidence(call.name, call.id, generated)
+                    for generated in observation.images
+                )
+            if visual_evidence:
+                self._messages.append(
+                    {
+                        "role": "user",
+                        "content": build_tool_observation_content(visual_evidence),
+                    }  # type: ignore[arg-type]
+                )
 
         return _BUDGET_MSG

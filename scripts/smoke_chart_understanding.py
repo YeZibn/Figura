@@ -2,7 +2,7 @@
 """Live U0 acceptance smoke for annotated bar-chart understanding.
 
 Generates two clean charts, sends each image to the configured multimodal model,
-and requires the Agent to use OCR, geometry, assembly, and validation tools.
+and checks freely planned restoration against each chart's ground-truth dataset.
 """
 
 from __future__ import annotations
@@ -17,23 +17,12 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from chartagent import Agent, ToolRegistry, build_user_content  # noqa: E402
+from chartagent import Agent, ToolRegistry, build_attachment_turn  # noqa: E402
+from chartagent.cli import AGENT_SYSTEM_PROMPT  # noqa: E402
 from chartagent.client import LLMClient, load_environment  # noqa: E402
 from chartagent.tools.chart import register_chart_tools  # noqa: E402
 from chartagent.tools.chart.spec_tools import validate_spec  # noqa: E402
 from tests.chart_fixtures import annotated_bar_chart  # noqa: E402
-
-SYSTEM_PROMPT = """You restore clean annotated bar charts to ChartSpec JSON.
-For every image, you MUST follow this order:
-1. Call extract_text with the exact local image path from the user prompt.
-2. Call measure_bars with that same path.
-3. Compare printed annotation values with the bar-height ratios. Use the values
-   consistent with both evidence channels.
-4. Call assemble_spec. Never hand-write the intermediate spec.
-5. Call validate_spec with the assembled spec. If invalid, fix and validate it.
-After validation succeeds, answer with exactly the assembled ChartSpec JSON and
-no markdown or explanation.
-"""
 
 
 def _json_object(text: str) -> dict:
@@ -76,27 +65,30 @@ def _case(
     agent = Agent(
         client,
         registry,
-        system=SYSTEM_PROMPT,
+        system=AGENT_SYSTEM_PROMPT,
         max_steps=8,
         **chat_kwargs,
     )
     prompt = (
-        f"Restore this annotated bar chart. Its local image path is {image_path}."
+        "Restore the underlying data from this annotated bar chart as a valid "
+        "ChartSpec JSON object."
     )
-    answer = agent.run(build_user_content(prompt, [str(image_path)]))
-    actual = _json_object(answer)
+    answer = agent.run(build_attachment_turn(prompt, [str(image_path)]))
 
     called = [
         call["function"]["name"]
         for message in agent.messages
         for call in message.get("tool_calls", [])
     ]
-    required = ["extract_text", "measure_bars", "assemble_spec", "validate_spec"]
-    positions = [called.index(name) for name in required if name in called]
-    if len(positions) != len(required) or positions != sorted(positions):
-        return False, f"required tool order missing; called={called!r}"
+    try:
+        actual = _json_object(answer)
+    except ValueError as exc:
+        return False, f"{exc}; tools={called!r}; answer={answer!r}"
 
     validation = validate_spec(actual)
+    if not validation["ok"]:
+        return False, f"validation={validation!r}\ntools={called!r}"
+
     expected_dataset = [
         (point["category"], float(point["value"]))
         for point in expected["dataset"]
@@ -105,11 +97,12 @@ def _case(
         (point.get("category"), float(point["value"]))
         for point in actual.get("dataset", [])
     ]
-    if not validation["ok"] or actual_dataset != expected_dataset:
+    if actual_dataset != expected_dataset:
         return False, (
             f"validation={validation!r}\n"
             f"expected_dataset={expected_dataset!r}\n"
-            f"actual_dataset={actual_dataset!r}"
+            f"actual_dataset={actual_dataset!r}\n"
+            f"tools={called!r}"
         )
     return True, f"dataset={actual_dataset!r}; tools={called!r}"
 

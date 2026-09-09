@@ -1,5 +1,13 @@
 schema: spec-driven
 
+context: |
+  Runtime environment: use the Conda environment named `agent` for all project
+  Python commands, tests, scripts, and dependency operations. Prefer
+  `conda run -n agent <command>` in non-interactive workflows, or activate the
+  environment explicitly before running commands. Do not silently use the
+  system Python interpreter or create another environment unless the user
+  explicitly requests it.
+
 # Project context (optional)
 # This is shown to AI when creating artifacts.
 # Add your tech stack, conventions, style guides, domain knowledge, etc.

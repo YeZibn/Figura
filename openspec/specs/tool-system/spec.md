@@ -60,20 +60,39 @@ the case of an unknown tool name.
 
 ### Requirement: Structured result and serialization
 
-The system SHALL serialize a tool result as a JSON string fit to enter message
-history, and SHALL represent a failed call as a structured error object, so the
-LLM or an external host can read success and failure through the same shape.
+The system SHALL normalize tool execution into structured data, zero or more
+generated image payloads with captions, and zero or more non-fatal warnings.
+The structured portion SHALL serialize as a JSON string fit to enter message
+history, while generated images remain separate from JSON serialization. Tools
+that return existing JSON-serializable values SHALL continue to produce the
+same structured observation with no images or warnings. A failed call SHALL be
+represented as a structured error object so the LLM or an external host can
+read success and failure through the same observation contract.
 
 #### Scenario: Successful result is JSON-serialized
 
 - **WHEN** a tool call succeeds and the callable returns a value
-- **THEN** the result returns as a JSON string and can enter history
+- **THEN** the result returns as a JSON string and can enter history, with no
+  generated images or warnings for a legacy JSON-serializable value
+
+#### Scenario: Enriched result separates data from images
+
+- **WHEN** a tool succeeds and returns structured data plus generated images
+- **THEN** the structured data and image metadata are JSON-serializable while
+  the image payloads are exposed separately for multimodal transport
 
 #### Scenario: Failure becomes a structured error
 
 - **WHEN** a tool call raises, or its result cannot be JSON-serialized
 - **THEN** the result is a `{"error": ...}` structure rather than an unhandled
   exception or un-serializable object
+
+#### Scenario: Invalid image does not invalidate structured data
+
+- **WHEN** a tool returns serializable structured data alongside an invalid
+  generated image
+- **THEN** the structured observation remains successful and reports the image
+  problem as a non-fatal warning
 
 ### Requirement: Convertible to an MCP tool surface
 

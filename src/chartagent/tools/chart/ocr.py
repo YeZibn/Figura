@@ -5,7 +5,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from PIL import Image
+
+from ..result import GeneratedImage, ToolResult
 from ..tool import Tool
+from .overlays import render_ocr_overlay
 
 _engine: Any = None
 
@@ -32,27 +36,44 @@ def _bbox(points: Any) -> list[int]:
     ]
 
 
-def extract_text(image_path: str) -> list[dict] | dict:
-    """Return all recognized snippets with bounding boxes and confidence."""
+def extract_text(image_path: str) -> ToolResult | dict:
+    """Return OCR snippets plus a model-readable detection overlay."""
     path = Path(image_path)
     if not path.is_file():
         return {"error": f"image not found: {image_path}"}
 
     try:
+        with Image.open(path) as source:
+            chart_image = source.convert("RGB")
         result = _get_engine()(path)
         boxes = getattr(result, "boxes", None)
         texts = getattr(result, "txts", None)
         scores = getattr(result, "scores", None)
         if boxes is None or texts is None or scores is None:
-            return []
-        return [
-            {
-                "text": str(text),
-                "bbox": _bbox(box),
-                "confidence": max(0.0, min(1.0, float(score))),
-            }
-            for box, text, score in zip(boxes, texts, scores)
-        ]
+            snippets: list[dict] = []
+        else:
+            snippets = [
+                {
+                    "id": index,
+                    "text": str(text),
+                    "bbox": _bbox(box),
+                    "confidence": max(0.0, min(1.0, float(score))),
+                }
+                for index, (box, text, score) in enumerate(
+                    zip(boxes, texts, scores), start=1
+                )
+            ]
+        overlay = render_ocr_overlay(chart_image, snippets)
+        return ToolResult(
+            data=snippets,
+            images=(
+                GeneratedImage(
+                    overlay,
+                    "image/png",
+                    "OCR detections with stable IDs, bounding boxes, and confidence labels",
+                ),
+            ),
+        )
     except Exception as exc:  # noqa: BLE001 - tool boundary
         return {"error": f"extract_text failed for {image_path}: {exc}"}
 

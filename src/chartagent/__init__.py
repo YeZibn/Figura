@@ -7,9 +7,39 @@ lives in this package yet.
 
 from .agent import Agent, registry_tools
 from .conversation import Conversation
-from .multimodal import build_user_content
-from .tools import Tool, ToolRegistry, dispatch, to_mcp_tools
+from .multimodal import (
+    ToolVisualEvidence,
+    build_attachment_turn,
+    build_tool_observation_content,
+    build_user_content,
+)
+from .tools import (
+    DispatchedObservation,
+    GeneratedImage,
+    Tool,
+    ToolRegistry,
+    ToolResult,
+    dispatch,
+    dispatch_observation,
+    to_mcp_tools,
+)
 from .tools.builtin import register_builtins
 
-__all__ = ["Agent", "registry_tools", "Conversation", "build_user_content",
-           "Tool", "ToolRegistry", "dispatch", "to_mcp_tools", "register_builtins"]
+__all__ = [
+    "Agent",
+    "registry_tools",
+    "Conversation",
+    "build_attachment_turn",
+    "build_tool_observation_content",
+    "build_user_content",
+    "ToolVisualEvidence",
+    "Tool",
+    "ToolRegistry",
+    "GeneratedImage",
+    "ToolResult",
+    "DispatchedObservation",
+    "dispatch",
+    "dispatch_observation",
+    "to_mcp_tools",
+    "register_builtins",
+]

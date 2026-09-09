@@ -3,9 +3,11 @@
 from io import BytesIO
 
 import pytest
-from PIL import Image
+from PIL import Image, ImageChops
 
 from chartagent.spec import ChartSpec
+from chartagent.tools import ToolResult
+from chartagent.tools.chart import overlays
 from chartagent.tools.chart.geometry import measure_bars
 from chartagent.tools.chart.ocr import extract_text
 from chartagent.tools.chart.spec_tools import assemble_spec, validate_spec
@@ -32,15 +34,53 @@ def annotated_chart_path(tmp_path):
     return path
 
 
-def test_extract_text_contains_annotations(annotated_chart_path):
-    snippets = extract_text(str(annotated_chart_path))
+def test_extract_text_contains_annotations(annotated_chart_path, monkeypatch):
+    labels = []
+    original_tag = overlays._tag
 
+    def recording_tag(draw, xy, text, *, image_size):
+        labels.append(text)
+        original_tag(draw, xy, text, image_size=image_size)
+
+    monkeypatch.setattr(overlays, "_tag", recording_tag)
+    result = extract_text(str(annotated_chart_path))
+
+    assert isinstance(result, ToolResult)
+    snippets = result.data
     assert isinstance(snippets, list)
     assert {"10", "20", "30"} <= {snippet["text"] for snippet in snippets}
+    assert [snippet["id"] for snippet in snippets] == list(range(1, len(snippets) + 1))
     for snippet in snippets:
         assert len(snippet["bbox"]) == 4
         assert all(isinstance(value, int) for value in snippet["bbox"])
         assert 0.0 <= snippet["confidence"] <= 1.0
+    assert len(result.images) == 1
+    with Image.open(annotated_chart_path) as source, Image.open(
+        BytesIO(result.images[0].content)
+    ) as overlay:
+        assert overlay.size == (720, 480)
+        assert ImageChops.difference(source.convert("RGB"), overlay).getbbox()
+    assert labels == [
+        f'{snippet["id"]} {snippet["confidence"]:.2f}' for snippet in snippets
+    ]
+
+
+def test_extract_text_no_detections_returns_source_sized_overlay(
+    annotated_chart_path, monkeypatch
+):
+    class _EmptyResult:
+        boxes = None
+        txts = None
+        scores = None
+
+    monkeypatch.setattr("chartagent.tools.chart.ocr._engine", lambda _path: _EmptyResult())
+
+    result = extract_text(str(annotated_chart_path))
+
+    assert isinstance(result, ToolResult)
+    assert result.data == []
+    with Image.open(BytesIO(result.images[0].content)) as overlay:
+        assert overlay.size == (720, 480)
 
 
 def test_extract_text_missing_file_is_structured_error(tmp_path):
@@ -49,15 +89,42 @@ def test_extract_text_missing_file_is_structured_error(tmp_path):
     assert extract_text(str(missing)) == {"error": f"image not found: {missing}"}
 
 
-def test_measure_bars_matches_true_ratios(annotated_chart_path):
+def test_extract_text_unreadable_file_is_structured_error(tmp_path):
+    unreadable = tmp_path / "unreadable.png"
+    unreadable.write_bytes(b"not an image")
+
+    result = extract_text(str(unreadable))
+
+    assert "error" in result
+    assert str(unreadable) in result["error"]
+
+
+def test_measure_bars_matches_true_ratios(annotated_chart_path, monkeypatch):
+    labels = []
+    original_tag = overlays._tag
+
+    def recording_tag(draw, xy, text, *, image_size):
+        labels.append(text)
+        original_tag(draw, xy, text, image_size=image_size)
+
+    monkeypatch.setattr(overlays, "_tag", recording_tag)
     result = measure_bars(str(annotated_chart_path))
 
-    assert result["baseline_y"] is not None
-    assert len(result["bars"]) == 3
-    assert [bar["ratio"] for bar in result["bars"]] == pytest.approx(
+    assert isinstance(result, ToolResult)
+    data = result.data
+    assert data["baseline_y"] is not None
+    assert len(data["bars"]) == 3
+    assert [bar["id"] for bar in data["bars"]] == [1, 2, 3]
+    assert [bar["ratio"] for bar in data["bars"]] == pytest.approx(
         [1.0, 2.0, 3.0], rel=0.1
     )
-    assert all(bar["h_px"] > 0 and len(bar["bbox"]) == 4 for bar in result["bars"])
+    assert all(bar["h_px"] > 0 and len(bar["bbox"]) == 4 for bar in data["bars"])
+    with Image.open(annotated_chart_path) as source, Image.open(
+        BytesIO(result.images[0].content)
+    ) as overlay:
+        assert overlay.size == source.size
+        assert ImageChops.difference(source.convert("RGB"), overlay.convert("RGB")).getbbox()
+    assert labels == ["BASELINE", *[str(bar["id"]) for bar in data["bars"]]]
 
 
 def test_measure_bars_missing_file_is_structured_error(tmp_path):
@@ -66,11 +133,27 @@ def test_measure_bars_missing_file_is_structured_error(tmp_path):
     assert measure_bars(str(missing)) == {"error": f"image not found: {missing}"}
 
 
+def test_measure_bars_unreadable_file_is_structured_error(tmp_path):
+    unreadable = tmp_path / "unreadable.png"
+    unreadable.write_bytes(b"not an image")
+
+    result = measure_bars(str(unreadable))
+
+    assert "error" in result
+    assert str(unreadable) in result["error"]
+
+
 def test_measure_bars_blank_image_returns_empty(tmp_path):
     blank = tmp_path / "blank.png"
     Image.new("RGB", (320, 200), "white").save(blank)
 
-    assert measure_bars(str(blank)) == {"bars": [], "baseline_y": None}
+    result = measure_bars(str(blank))
+
+    assert isinstance(result, ToolResult)
+    assert result.data == {"bars": [], "baseline_y": None}
+    with Image.open(BytesIO(result.images[0].content)) as overlay:
+        assert overlay.size == (320, 200)
+        assert ImageChops.difference(Image.new("RGB", overlay.size, "white"), overlay).getbbox()
 
 
 @pytest.mark.parametrize(

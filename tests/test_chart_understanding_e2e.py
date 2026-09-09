@@ -40,20 +40,26 @@ class _UnderstandingClient:
             "validate_spec",
         }
 
+        def last_tool_data() -> object:
+            tool_messages = [message for message in messages if message["role"] == "tool"]
+            assert tool_messages
+            payload = json.loads(tool_messages[-1]["content"])
+            return payload.get("data", payload)
+
         if self.stage == 0:
             user_content = messages[-1]["content"]
             assert isinstance(user_content, list)
             assert user_content[1]["type"] == "image_url"
             result = _call("ocr", "extract_text", {"image_path": self.image_path})
         elif self.stage == 1:
-            snippets = json.loads(messages[-1]["content"])
+            snippets = last_tool_data()
             expected = {
                 f'{point["value"]:g}' for point in self.ground_truth["dataset"]
             }
             assert expected <= {snippet["text"] for snippet in snippets}
             result = _call("geometry", "measure_bars", {"image_path": self.image_path})
         elif self.stage == 2:
-            geometry = json.loads(messages[-1]["content"])
+            geometry = last_tool_data()
             values = [point["value"] for point in self.ground_truth["dataset"]]
             expected_ratios = [value / min(values) for value in values]
             measured_ratios = [bar["ratio"] for bar in geometry["bars"]]
@@ -74,11 +80,11 @@ class _UnderstandingClient:
                 },
             )
         elif self.stage == 3:
-            self.assembled = json.loads(messages[-1]["content"])
+            self.assembled = last_tool_data()
             assert self.assembled == self.ground_truth
             result = _call("validate", "validate_spec", {"spec": self.assembled})
         elif self.stage == 4:
-            validation = json.loads(messages[-1]["content"])
+            validation = last_tool_data()
             assert validation == {"ok": True, "issues": []}
             result = NormalizedResult(content=json.dumps(self.assembled))
         else:

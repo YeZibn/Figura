@@ -84,6 +84,32 @@ def test_plain_text_without_at_unchanged(monkeypatch):
     assert agent.seen == ["just a question"]
 
 
+def test_plain_text_preserves_internal_whitespace(monkeypatch):
+    agent = _FakeAgent()
+    _patch_constructors(monkeypatch, agent=agent)
+    lines = iter(["  keep   my spacing  ", ""])
+    monkeypatch.setattr(builtins, "input", lambda prompt="": next(lines))
+
+    cli_mod.run_agent_repl()
+
+    assert agent.seen == ["keep   my spacing"]
+
+
+def test_extract_image_refs_supports_quoted_and_mixed_paths():
+    text, paths = cli_mod.extract_image_refs(
+        'compare @"/tmp/chart one.png" with @/tmp/two.png'
+    )
+
+    assert text == "compare with"
+    assert paths == ["/tmp/chart one.png", "/tmp/two.png"]
+
+
+def test_extract_image_refs_leaves_unterminated_quote_as_text():
+    line = 'inspect @"/tmp/chart one.png'
+
+    assert cli_mod.extract_image_refs(line) == (line, [])
+
+
 def test_single_at_path_attaches_image_part(monkeypatch, tmp_path):
     agent = _FakeAgent()
     _patch_constructors(monkeypatch, agent=agent)
@@ -94,9 +120,39 @@ def test_single_at_path_attaches_image_part(monkeypatch, tmp_path):
     cli_mod.run_agent_repl()
     turn = agent.seen[0]
     assert isinstance(turn, list)
-    assert turn[0] == {"type": "text", "text": "read this chart"}
+    assert turn[0] == {
+        "type": "text",
+        "text": (
+            "read this chart\n\n"
+            "Attached local image paths (matching image order):\n"
+            f"1. {img}"
+        ),
+    }
     assert turn[1]["type"] == "image_url"
     assert turn[1]["image_url"]["url"].startswith("data:image/png;base64,")
+
+
+def test_mixed_quoted_and_unquoted_paths_forward_in_order(monkeypatch, tmp_path):
+    agent = _FakeAgent()
+    _patch_constructors(monkeypatch, agent=agent)
+    first = tmp_path / "chart one.png"
+    second = tmp_path / "two.png"
+    first.write_bytes(b"first")
+    second.write_bytes(b"second")
+    lines = iter([f'compare @"{first}"   with @{second}', ""])
+    monkeypatch.setattr(builtins, "input", lambda prompt="": next(lines))
+
+    cli_mod.run_agent_repl()
+
+    turn = agent.seen[0]
+    assert turn[0]["text"] == (
+        "compare with\n\n"
+        "Attached local image paths (matching image order):\n"
+        f"1. {first}\n"
+        f"2. {second}"
+    )
+    assert turn[1]["image_url"]["url"].endswith("Zmlyc3Q=")
+    assert turn[2]["image_url"]["url"].endswith("c2Vjb25k")
 
 
 def test_nonexistent_at_path_errors_without_calling_agent(monkeypatch, capsys):
@@ -146,3 +202,66 @@ def test_agent_repl_registers_builtin_and_chart_tools(monkeypatch):
         "assemble_spec",
         "validate_spec",
     }
+
+
+def test_agent_repl_uses_advisory_chart_default(monkeypatch):
+    captured = {}
+
+    class _CapturingAgent:
+        def __init__(self, _client, _registry, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(cli_mod, "load_environment", lambda: None)
+    monkeypatch.setattr(cli_mod, "LLMClient", lambda: object())
+    monkeypatch.setattr(cli_mod, "ToolRegistry", lambda: object())
+    monkeypatch.setattr(cli_mod, "register_builtins", lambda _registry: None)
+    monkeypatch.setattr(cli_mod, "register_chart_tools", lambda _registry: None)
+    monkeypatch.setattr(cli_mod, "Agent", _CapturingAgent)
+    monkeypatch.setattr(builtins, "input", lambda prompt="": "")
+
+    assert cli_mod.run_agent_repl() == 0
+    assert captured["system"] == cli_mod.AGENT_SYSTEM_PROMPT
+    for capability in (
+        "extract_text",
+        "measure_bars",
+        "assemble_spec",
+        "validate_spec",
+    ):
+        assert capability in captured["system"]
+    assert "Decide freely" in captured["system"]
+    assert "ChartSpec is optional" in captured["system"]
+
+
+def test_agent_repl_accepts_explicit_system_override(monkeypatch):
+    captured = {}
+
+    class _CapturingAgent:
+        def __init__(self, _client, _registry, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(cli_mod, "load_environment", lambda: None)
+    monkeypatch.setattr(cli_mod, "LLMClient", lambda: object())
+    monkeypatch.setattr(cli_mod, "ToolRegistry", lambda: object())
+    monkeypatch.setattr(cli_mod, "register_builtins", lambda _registry: None)
+    monkeypatch.setattr(cli_mod, "register_chart_tools", lambda _registry: None)
+    monkeypatch.setattr(cli_mod, "Agent", _CapturingAgent)
+    monkeypatch.setattr(builtins, "input", lambda prompt="": "")
+
+    assert cli_mod.run_agent_repl(system="custom agent") == 0
+    assert captured["system"] == "custom agent"
+
+
+def test_conversation_repl_keeps_general_default(monkeypatch):
+    captured = {}
+
+    class _CapturingConversation:
+        def __init__(self, _client, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(cli_mod, "load_environment", lambda: None)
+    monkeypatch.setattr(cli_mod, "LLMClient", lambda: object())
+    monkeypatch.setattr(cli_mod, "Conversation", _CapturingConversation)
+    monkeypatch.setattr(builtins, "input", lambda prompt="": "")
+
+    assert cli_mod.run_repl() == 0
+    assert captured["system"] == "You are a helpful assistant."

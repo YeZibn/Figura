@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 from typing import Dict, List
 
+from .result import DispatchedObservation, ToolResult, normalize_tool_result
 from .tool import Tool
 
 
@@ -53,24 +54,33 @@ def dispatch(registry: ToolRegistry, name: str, arguments_json: str) -> str:
     Unknown names, exceptions raised by the callable, and un-serializable
     results all yield a structured error string rather than an exception.
     """
+    return dispatch_observation(registry, name, arguments_json).content
+
+
+def dispatch_observation(
+    registry: ToolRegistry,
+    name: str,
+    arguments_json: str,
+) -> DispatchedObservation:
+    """Dispatch a call with optional validated, in-memory image evidence."""
     tool = registry.get(name)
     if tool is None:
-        return _error(f"Unknown tool: {name!r}")
+        return DispatchedObservation(_error(f"Unknown tool: {name!r}"))
 
     try:
         args = json.loads(arguments_json) if arguments_json.strip() else {}
     except json.JSONDecodeError as exc:  # pragma: no cover - defensive boundary
-        return _error(f"Invalid arguments JSON for {name!r}: {exc}")
+        return DispatchedObservation(_error(f"Invalid arguments JSON for {name!r}: {exc}"))
 
     if not isinstance(args, dict):
-        return _error(f"Tool {name!r} expects an object of arguments.")
+        return DispatchedObservation(_error(f"Tool {name!r} expects an object of arguments."))
 
     try:
         result = tool.fn(**args)
     except Exception as exc:  # noqa: BLE001 - boundary; route to model
-        return _error(f"Tool {name!r} failed: {exc}")
+        return DispatchedObservation(_error(f"Tool {name!r} failed: {exc}"))
 
     try:
-        return json.dumps(result, ensure_ascii=False)
+        return normalize_tool_result(result)
     except Exception:  # pragma: no cover - un-serializable result guard
-        return _error(f"Tool {name!r} result could not be serialized.")
+        return DispatchedObservation(_error(f"Tool {name!r} result could not be serialized."))
