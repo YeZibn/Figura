@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
 const root = resolve(import.meta.dirname, '..')
-const required = ['src/App.tsx', 'src/api/client.ts', 'src/api/mockClient.ts', 'src/api/gatewayClient.ts', 'src/types/protocol.ts', 'src/runtime.ts', 'src/styles/global.css', 'index.html', 'scripts/dev-gateway.mjs', 'scripts/tauri-dev-gateway.mjs', 'scripts/launcher-smoke.mjs']
+const required = ['src/App.tsx', 'src/api/client.ts', 'src/api/mockClient.ts', 'src/api/gatewayClient.ts', 'src/types/protocol.ts', 'src/runtime.ts', 'src/styles/global.css', 'index.html', 'scripts/dev-gateway.mjs', 'scripts/tauri-dev-gateway.mjs', 'scripts/launcher-smoke.mjs', 'scripts/launcher-lifecycle-smoke.mjs']
 for (const file of required) {
   if (!existsSync(resolve(root, file))) throw new Error('missing frontend file: ' + file)
 }

@@ -55,7 +55,7 @@ Development and test startup paths that execute Python project code SHALL use th
 
 ### Requirement: Development provides one-step Gateway client startup
 
-The development workspace SHALL provide one documented command that starts the Gateway-mode client and its local Python Gateway as one supervised workflow. Startup SHALL wait for a compatible Gateway health response before reporting the client ready, SHALL use the `agent` Conda environment by default, and SHALL clean up only processes created by that workflow when it exits.
+The development workspace SHALL provide one documented command that starts the Gateway-mode client and its local Python Gateway as one supervised workflow. Startup SHALL wait for a compatible Gateway health response before reporting the client ready, SHALL use the `agent` Conda environment by default, and SHALL clean up only processes created by that workflow when it exits. After a termination signal or a child startup failure, the workflow SHALL signal all processes it owns, wait for their bounded termination, and SHALL NOT exit while an owned child process remains running.
 
 #### Scenario: Unified browser development startup
 
@@ -69,8 +69,13 @@ The development workspace SHALL provide one documented command that starts the G
 
 #### Scenario: Unified startup exits
 
-- **WHEN** the developer stops the unified development workflow
-- **THEN** the launcher stops the Gateway and client processes it created without terminating an unrelated process using the configured port
+- **WHEN** the developer stops the unified development workflow with `Ctrl-C` or the workflow receives a termination signal
+- **THEN** the launcher signals the Gateway and client processes it created, waits for both process groups to terminate, and leaves their configured ports available without terminating an unrelated process
+
+#### Scenario: Client startup fails after Gateway readiness
+
+- **WHEN** the Gateway becomes ready but the client cannot bind its configured frontend port
+- **THEN** the launcher reports the client startup failure, terminates the Gateway process it created, and preserves any unrelated service that occupied the port
 
 #### Scenario: Tauri Gateway development alias
 

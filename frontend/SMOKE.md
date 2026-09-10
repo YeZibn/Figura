@@ -5,6 +5,7 @@ Run the automated contract check and production build from `frontend/`:
 ```bash
 npm run smoke
 npm run build
+npm run smoke:launcher
 ```
 
 The browser client uses mock data by default. To start the local Python Gateway
@@ -29,4 +30,5 @@ For repeatable browser verification, run `npm run dev`, open `http://127.0.0.1:1
 7. An empty session shows the start-analysis empty state; an empty attachment list shows its own empty state.
 8. Narrowing the window keeps the composer usable and stacks the secondary panel below the conversation.
 9. In Gateway mode, creating a session and submitting text use the local Python service; stopping the service shows a Chinese connection error and does not switch to mock data.
-10. Stopping `npm run dev:gateway` cleans up its Gateway and Vite children without terminating an unrelated process on the configured port.
+10. Stopping `npm run dev:gateway` with `Ctrl-C` cleans up both its Gateway and Vite process groups before the launcher exits, without terminating an unrelated process on the configured port.
+11. `npm run smoke:launcher` repeats the npm signal lifecycle, frontend bind failure, port release, and external-listener protection checks on isolated ports.

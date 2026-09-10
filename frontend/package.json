@@ -12,7 +12,8 @@
     "tauri:dev": "tauri dev --config ../src-tauri/tauri.conf.json",
     "tauri:dev:gateway": "node scripts/tauri-dev-gateway.mjs",
     "tauri:info": "tauri info",
-    "smoke": "node scripts/smoke.mjs && node scripts/launcher-smoke.mjs"
+    "smoke": "node scripts/smoke.mjs && node scripts/launcher-smoke.mjs",
+    "smoke:launcher": "node scripts/launcher-lifecycle-smoke.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.8.0",

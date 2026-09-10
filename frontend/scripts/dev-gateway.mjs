@@ -77,10 +77,21 @@ function npmExecutable() {
 }
 
 function processGroupAlive(child) {
-  if (!child || !child.pid) return child && child.exitCode === null && child.signalCode === null
+  if (!child || !child.pid) return false
   if (process.platform === 'win32') return child.exitCode === null && child.signalCode === null
   try {
     process.kill(-child.pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function signalChild(child, signal) {
+  if (!child || !child.pid) return false
+  try {
+    if (process.platform === 'win32' || !child.pid) child.kill(signal)
+    else process.kill(-child.pid, signal)
     return true
   } catch {
     return false
@@ -97,26 +108,22 @@ function waitForExit(child) {
   })
 }
 
-async function stopChild(child, timeout) {
-  if (!child || child.exitCode !== null || child.signalCode !== null) return
+async function stopChild(child, timeout, label) {
+  if (!child || !child.pid) return true
   const exit = waitForExit(child)
-  try {
-    if (process.platform === 'win32' || !child.pid) child.kill('SIGTERM')
-    else process.kill(-child.pid, 'SIGTERM')
-  } catch {
-    return
-  }
+  signalChild(child, 'SIGTERM')
+  if (!processGroupAlive(child)) return true
   const finished = await Promise.race([exit, sleep(timeout).then(() => null)])
-  if (finished && !processGroupAlive(child)) return
-  if (!processGroupAlive(child)) return
-  try {
-    if (process.platform === 'win32' || !child.pid) child.kill('SIGKILL')
-    else process.kill(-child.pid, 'SIGKILL')
-  } catch {
-    // The child may have exited between the status check and the kill call.
-  }
+  if (finished && !processGroupAlive(child)) return true
+  if (!processGroupAlive(child)) return true
+  signalChild(child, 'SIGKILL')
   const deadline = Date.now() + timeout
   while (processGroupAlive(child) && Date.now() < deadline) await sleep(25)
+  if (processGroupAlive(child)) {
+    console.error(`${label || 'Child'} process group did not stop within ${timeout * 2}ms.`)
+    return false
+  }
+  return true
 }
 
 async function waitForHealth(config, gatewayProcess) {
@@ -153,22 +160,24 @@ export async function run(environment = process.env) {
   }
   let gatewayProcess
   let clientProcess
-  let stopping = false
+  let cleanupPromise
 
   const cleanup = async () => {
-    if (stopping) return
-    stopping = true
-    await stopChild(clientProcess, config.shutdownTimeout)
-    await stopChild(gatewayProcess, config.shutdownTimeout)
+    if (cleanupPromise) return cleanupPromise
+    cleanupPromise = Promise.all([
+      stopChild(clientProcess, config.shutdownTimeout, 'Frontend'),
+      stopChild(gatewayProcess, config.shutdownTimeout, 'Gateway'),
+    ]).then((results) => results.every(Boolean))
+    return cleanupPromise
   }
 
   const handleSignal = async (signal) => {
     console.log(`Received ${signal}; stopping local ChartAgent services.`)
     await cleanup()
-    process.exitCode = 130
+    process.exitCode = signal === 'SIGTERM' ? 143 : 130
   }
-  process.once('SIGINT', handleSignal)
-  process.once('SIGTERM', handleSignal)
+  process.on('SIGINT', handleSignal)
+  process.on('SIGTERM', handleSignal)
 
   try {
     gatewayProcess = spawn(config.condaExecutable, buildGatewayArgs(config), spawnOptions(gatewayEnvironment))

@@ -30,10 +30,16 @@ npm run dev:gateway
 ```
 
 The launcher uses `conda run -n agent python -m chartagent.gateway`, waits for
-`/api/v1/health`, starts Vite in explicit Gateway mode, and stops only the two
-processes it created when you press Ctrl-C. Plain `npm run dev` remains the
-offline mock/frontend-only workflow. From the repository root, the equivalent
+`/api/v1/health`, starts Vite in explicit Gateway mode, and stops both process
+groups it created when you press Ctrl-C before the launcher exits. A frontend
+bind failure also cleans up the Gateway created for that attempt without
+terminating an unrelated listener. Plain `npm run dev` remains the offline
+mock/frontend-only workflow. From the repository root, the equivalent
 one-line command is `npm --prefix frontend run dev:gateway`.
+
+To verify the complete npm signal and port-release lifecycle, run
+`npm run smoke:launcher` from `frontend/`. This uses isolated ports and does
+not replace the regular static `npm run smoke` checks.
 
 The service listens on `127.0.0.1` and exposes versioned routes under `/api/v1`.
 The desktop panel can select PNG, JPEG, GIF, and WebP images, preview them
