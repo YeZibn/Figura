@@ -1,7 +1,18 @@
 import type { ChartAgentClient } from './client'
-import type { Session, SessionData } from '../types/protocol'
+import type { Attachment, Session, SessionData } from '../types/protocol'
+import { mediaTypeForFile } from '../attachments'
 
 type GatewaySessionList = { sessions: Session[] }
+type GatewayAttachment = {
+  attachment_id: string
+  filename: string
+  media_type: string
+  byte_count: number
+  sha256?: string
+  status?: Attachment['status']
+  preview_available?: boolean
+}
+type GatewaySessionData = Omit<SessionData, 'attachments'> & { attachments: GatewayAttachment[] }
 
 export class GatewayClientError extends Error {
   readonly code: string
@@ -44,6 +55,23 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return payload
 }
 
+function mapAttachment(item: GatewayAttachment): Attachment {
+  return {
+    id: item.attachment_id,
+    filename: item.filename,
+    mediaType: item.media_type,
+    byteCount: item.byte_count,
+    sha256: item.sha256,
+    status: item.status || 'registered',
+    previewAvailable: item.preview_available || false,
+    previewUrl: '',
+  }
+}
+
+function mapSessionData(payload: GatewaySessionData): SessionData {
+  return { ...payload, attachments: payload.attachments.map(mapAttachment) }
+}
+
 export const gatewayClient: ChartAgentClient = {
   async listSessions() {
     const payload = await request<GatewaySessionList>('/sessions')
@@ -51,20 +79,41 @@ export const gatewayClient: ChartAgentClient = {
   },
 
   async getSession(id) {
-    return request<SessionData>(`/sessions/${encodeURIComponent(id)}`)
+    return mapSessionData(await request<GatewaySessionData>(`/sessions/${encodeURIComponent(id)}`))
   },
 
   async createSession(name) {
-    return request<SessionData>('/sessions', {
+    return mapSessionData(await request<GatewaySessionData>('/sessions', {
       method: 'POST',
       body: JSON.stringify({ name }),
-    })
+    }))
   },
 
-  async submitMessage(sessionId, text) {
-    return request<SessionData>(`/sessions/${encodeURIComponent(sessionId)}/messages`, {
+  async listAttachments(sessionId) {
+    const payload = await request<{ attachments: GatewayAttachment[] }>(`/sessions/${encodeURIComponent(sessionId)}/attachments`)
+    return payload.attachments.map(mapAttachment)
+  },
+
+  async uploadAttachment(sessionId, file) {
+    const mediaType = mediaTypeForFile(file)
+    const payload = await request<{ attachment: GatewayAttachment }>(
+      `/sessions/${encodeURIComponent(sessionId)}/attachments?filename=${encodeURIComponent(file.name)}`,
+      {
+        method: 'POST',
+        body: file,
+        headers: {
+          'Content-Type': 'application/octet-stream',
+          'X-ChartAgent-Media-Type': mediaType,
+        },
+      },
+    )
+    return mapAttachment(payload.attachment)
+  },
+
+  async submitMessage(sessionId, text, attachmentIds = []) {
+    return mapSessionData(await request<GatewaySessionData>(`/sessions/${encodeURIComponent(sessionId)}/messages`, {
       method: 'POST',
-      body: JSON.stringify({ text }),
-    })
+      body: JSON.stringify({ text, attachmentIds }),
+    }))
   },
 }

@@ -262,5 +262,27 @@ class SQLiteAgentMemory:
                           row["canonical_path"], row["filename"], row["media_type"],
                           row["byte_count"], row["sha256"], row["created_at"])
 
+    def list_attachments(self) -> list[Attachment]:
+        """Return all attachment references owned by this session."""
+        rows = self.connection.execute(
+            "SELECT * FROM attachments WHERE session_id = ? ORDER BY ordinal, created_at",
+            (self.session.id,),
+        ).fetchall()
+        return [
+            Attachment(
+                row["id"],
+                row["session_id"],
+                row["run_id"],
+                row["ordinal"],
+                row["canonical_path"],
+                row["filename"],
+                row["media_type"],
+                row["byte_count"],
+                row["sha256"],
+                row["created_at"],
+            )
+            for row in rows
+        ]
+
     def close(self) -> None:
         self.connection.close()

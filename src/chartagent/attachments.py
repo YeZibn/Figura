@@ -25,7 +25,14 @@ class AttachmentRegistry:
         self._load = load
         self._items: dict[str, Attachment] = {}
 
-    def register(self, raw_path: str, *, run_id: str | None = None, ordinal: int = 1) -> Attachment:
+    def register(
+        self,
+        raw_path: str,
+        *,
+        run_id: str | None = None,
+        ordinal: int = 1,
+        filename: str | None = None,
+    ) -> Attachment:
         path = Path(raw_path).expanduser().resolve(strict=True)
         if not path.is_file():
             raise ValueError("attachment is not a file")
@@ -39,7 +46,17 @@ class AttachmentRegistry:
         with path.open("rb") as stream:
             while chunk := stream.read(1024 * 1024):
                 digest.update(chunk)
-        item = Attachment(f"att_{uuid4().hex}", self.session_id, run_id, ordinal, str(path), path.name, media_type, size, digest.hexdigest())
+        item = Attachment(
+            f"att_{uuid4().hex}",
+            self.session_id,
+            run_id,
+            ordinal,
+            str(path),
+            filename or path.name,
+            media_type,
+            size,
+            digest.hexdigest(),
+        )
         self._items[item.id] = item
         if self._save:
             self._save(item)

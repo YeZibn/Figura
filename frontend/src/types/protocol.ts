@@ -5,15 +5,18 @@ export type Session = {
   runCount: number
 }
 
-export type AttachmentStatus = 'registered' | 'loaded' | 'observation'
+export type AttachmentStatus = 'pending' | 'uploading' | 'registered' | 'unavailable' | 'loaded' | 'observation' | 'error'
 
 export type Attachment = {
   id: string
   filename: string
   mediaType: string
   byteCount: number
-  previewUrl: string
+  sha256?: string
+  previewUrl?: string
   status: AttachmentStatus
+  previewAvailable?: boolean
+  error?: string
 }
 
 export type ConversationItem =

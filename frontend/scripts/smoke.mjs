@@ -10,8 +10,10 @@ for (const file of required) {
 const app = readFileSync(resolve(root, 'src/App.tsx'), 'utf8')
 const gateway = readFileSync(resolve(root, 'src/api/gatewayClient.ts'), 'utf8')
 const stylesheet = readFileSync(resolve(root, 'src/styles/global.css'), 'utf8')
-const source = app + gateway + stylesheet
-const checks = [['session selection', 'onSelect'], ['new session action', 'onCreate'], ['message submission', 'onSubmit'], ['execution details', 'aria-expanded'], ['attachment display', 'AttachmentPanel'], ['responsive layout', '@media'], ['gateway requests', 'fetch(gatewayBaseUrl'], ['explicit gateway mode', 'VITE_CHARTAGENT_MODE'], ['gateway errors', 'GatewayClientError']]
+const client = readFileSync(resolve(root, 'src/api/client.ts'), 'utf8')
+const attachmentHelpers = readFileSync(resolve(root, 'src/attachments.ts'), 'utf8')
+const source = app + gateway + client + attachmentHelpers + stylesheet
+const checks = [['session selection', 'onSelect'], ['new session action', 'onCreate'], ['message submission', 'onSubmit'], ['execution details', 'aria-expanded'], ['attachment display', 'AttachmentPanel'], ['attachment picker', 'type="file"'], ['attachment upload', 'uploadAttachment'], ['attachment IDs', 'attachmentIds'], ['local preview cleanup', 'revokeObjectURL'], ['client image validation', 'validateImageFile'], ['responsive layout', '@media'], ['gateway requests', 'fetch(gatewayBaseUrl'], ['explicit gateway mode', 'VITE_CHARTAGENT_MODE'], ['gateway errors', 'GatewayClientError']]
 for (const [label, token] of checks) {
   if (!source.includes(token)) throw new Error('missing UI contract: ' + label)
 }

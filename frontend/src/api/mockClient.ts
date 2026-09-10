@@ -27,5 +27,13 @@ export const mockClient: ChartAgentClient = {
   async listSessions() { await wait(120); return Object.values(data).map((entry) => clone(entry.session)) },
   async getSession(id) { await wait(160); return clone(data[id]) },
   async createSession(name) { await wait(160); const id = 'session-' + Date.now(); const session: Session = { id, name, updatedAt: '刚刚', runCount: 0 }; data[id] = { session, messages: [], attachments: [] }; return clone(data[id]) },
-  async submitMessage(sessionId, text) { await wait(700); const target = data[sessionId]; target.messages.push({ id: 'user-' + Date.now(), kind: 'user', text, timestamp: '10:42' }); target.messages.push({ id: 'assistant-' + Date.now(), kind: 'assistant', text: '模拟回复：已收到你的请求。下一阶段将由 Python Agent gateway 替换当前 mock adapter。', timestamp: '10:42' }); target.session = { ...target.session, updatedAt: '刚刚', runCount: target.session.runCount + 1 }; return clone(target) },
+  async listAttachments(sessionId) { await wait(80); return clone(data[sessionId]?.attachments ?? []) },
+  async uploadAttachment(sessionId, file) {
+    await wait(240)
+    const target = data[sessionId]
+    const attachment: Attachment = { id: 'att_mock_' + Date.now(), filename: file.name, mediaType: file.type || 'image/png', byteCount: file.size, previewUrl: URL.createObjectURL(file), status: 'registered', previewAvailable: true }
+    target.attachments.push(attachment)
+    return clone(attachment)
+  },
+  async submitMessage(sessionId, text, attachmentIds = []) { await wait(700); const target = data[sessionId]; target.messages.push({ id: 'user-' + Date.now(), kind: 'user', text, timestamp: '10:42', attachmentIds: attachmentIds.length ? attachmentIds : undefined }); target.messages.push({ id: 'assistant-' + Date.now(), kind: 'assistant', text: '模拟回复：已收到你的请求。下一阶段将由 Python Agent gateway 替换当前 mock adapter。', timestamp: '10:42' }); target.session = { ...target.session, updatedAt: '刚刚', runCount: target.session.runCount + 1 }; return clone(target) },
 }

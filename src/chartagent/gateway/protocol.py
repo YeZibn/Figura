@@ -9,6 +9,8 @@ GATEWAY_VERSION = "v1"
 MAX_SESSION_NAME = 128
 MAX_MESSAGE_TEXT = 12000
 MAX_ERROR_MESSAGE = 240
+MAX_ATTACHMENT_IDS = 16
+MAX_ATTACHMENT_ID = 128
 
 
 class GatewayFault(Exception):
@@ -51,20 +53,41 @@ def validate_message_text(value: object) -> str:
     return _validate_text(value, field="text", limit=MAX_MESSAGE_TEXT)
 
 
+def validate_attachment_ids(value: object) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, list) or len(value) > MAX_ATTACHMENT_IDS:
+        raise GatewayFault("invalid_request", 400, "attachmentIds must be a bounded list")
+    result: list[str] = []
+    for item in value:
+        if not isinstance(item, str) or not item.startswith("att_") or len(item) > MAX_ATTACHMENT_ID:
+            raise GatewayFault("invalid_request", 400, "attachmentIds contains an invalid ID")
+        if any(char not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_" for char in item):
+            raise GatewayFault("invalid_request", 400, "attachmentIds contains an invalid ID")
+        if item in result:
+            raise GatewayFault("invalid_request", 400, "attachmentIds contains duplicate IDs")
+        result.append(item)
+    return tuple(result)
+
+
 @dataclass(frozen=True)
 class ConversationText:
     id: str
     kind: str
     text: str
     timestamp: str
+    attachment_ids: tuple[str, ...] = ()
 
-    def to_dict(self) -> dict[str, str]:
-        return {
+    def to_dict(self) -> dict[str, Any]:
+        result: dict[str, Any] = {
             "id": self.id,
             "kind": self.kind,
             "text": self.text,
             "timestamp": self.timestamp,
         }
+        if self.attachment_ids:
+            result["attachmentIds"] = list(self.attachment_ids)
+        return result
 
 
 @dataclass(frozen=True)
@@ -80,6 +103,30 @@ class SessionSummary:
             "name": self.name,
             "updatedAt": self.updated_at,
             "runCount": self.run_count,
+        }
+
+
+@dataclass(frozen=True)
+class AttachmentSummary:
+    """Safe attachment metadata exposed by the gateway protocol."""
+
+    attachment_id: str
+    filename: str
+    media_type: str
+    byte_count: int
+    sha256: str
+    status: str
+    preview_available: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "attachment_id": self.attachment_id,
+            "filename": self.filename,
+            "media_type": self.media_type,
+            "byte_count": self.byte_count,
+            "sha256": self.sha256,
+            "status": self.status,
+            "preview_available": self.preview_available,
         }
 
 

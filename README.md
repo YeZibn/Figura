@@ -31,10 +31,15 @@ cd frontend
 VITE_CHARTAGENT_MODE=gateway npm run dev
 ```
 
-The service listens on `127.0.0.1` and exposes versioned JSON routes under
-`/api/v1`. Gateway mode currently handles session lifecycle and synchronous text
-runs. Attachment upload, runtime event streaming, and Tauri-managed Python
-processes remain later milestones.
+The service listens on `127.0.0.1` and exposes versioned routes under `/api/v1`.
+The desktop panel can select PNG, JPEG, GIF, and WebP images, preview them
+locally, upload them to the active session, and select registered IDs for the
+next message. The Gateway keeps uploaded bytes in a temporary, process-owned
+directory and SQLite stores only safe attachment metadata and references. A
+Gateway restart can make the source unavailable; upload the image again in that
+case. Registration does not send image bytes to the model. The Agent decides
+whether to call `load_image` when visual inspection is useful. Runtime event
+streaming and Tauri-managed Python processes remain later milestones.
 
 ## Agent sessions
 

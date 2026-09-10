@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 import http.client
+import hashlib
+import io
 import json
 import threading
 from pathlib import Path
+from urllib.parse import quote
 
 import pytest
+from PIL import Image
 
 from chartagent.attachments import AttachmentRegistry
+from chartagent.gateway.attachments import AttachmentStoreError, EphemeralAttachmentStore
 from chartagent.gateway.protocol import GatewayFault, validate_message_text, validate_session_name
 from chartagent.gateway.projection import project_completed_runs
 from chartagent.gateway.server import GatewayHTTPServer, serve
@@ -27,6 +32,12 @@ def _completed_run(run_id: str, text: str = "问题", answer: str = "答案") ->
         Record("final", {"answer": answer}, created_at="2026-09-10T10:00:01+00:00"),
     ]
     return run
+
+
+def _png_bytes() -> bytes:
+    output = io.BytesIO()
+    Image.new("RGB", (4, 3), (35, 140, 131)).save(output, format="PNG")
+    return output.getvalue()
 
 
 def test_gateway_input_validation_is_bounded():
@@ -50,6 +61,21 @@ def test_completed_projection_omits_partial_runs_and_sensitive_records(tmp_path)
     assert transcript.messages[1].text == "答案"
     assert "/private/chart.png" not in json.dumps(transcript.to_dict())
     assert "credentials" not in json.dumps(transcript.to_dict())
+
+
+def test_completed_projection_keeps_safe_attachment_ids_and_clean_user_text(tmp_path):
+    session = SQLiteAgentMemory("demo", database=tmp_path / "sessions.db").session
+    run = _completed_run(
+        "complete",
+        "请看图\n\nRegistered image attachments (load with load_image when useful):\n1. attachment_id=att_demo, filename=chart.png",
+    )
+    run.session_id = session.id
+    run.records.insert(1, Record("attachment", {"attachment_id": "att_demo", "ordinal": 1}))
+    transcript = project_completed_runs(session, [run])
+
+    message = transcript.messages[0].to_dict()
+    assert message["text"] == "请看图"
+    assert message["attachmentIds"] == ["att_demo"]
 
 
 def test_gateway_service_lifecycle_and_message(tmp_path):
@@ -103,6 +129,122 @@ def test_gateway_service_maps_unavailable_agent_and_preserves_history(tmp_path):
     assert service.get_session(session_id)["messages"] == []
 
 
+def test_attachment_upload_projects_safe_metadata_and_cleans_on_restart(tmp_path):
+    database = tmp_path / "sessions.db"
+    attachment_root = tmp_path / "attachments"
+    service = GatewayService(database=database, attachment_root=attachment_root)
+    session_id = service.create_session("demo")["session"]["id"]
+    content = _png_bytes()
+
+    result = service.upload_attachment(session_id, "季度销售.png", "image/png", content)
+    metadata = result["attachment"]
+    encoded = json.dumps(result, ensure_ascii=False)
+    assert metadata["attachment_id"].startswith("att_")
+    assert metadata["filename"] == "季度销售.png"
+    assert metadata["byte_count"] == len(content)
+    assert metadata["sha256"] == hashlib.sha256(content).hexdigest()
+    assert metadata["status"] == "registered"
+    assert "canonical_path" not in encoded
+    assert str(attachment_root) not in encoded
+    assert content.decode("latin1") not in encoded
+    assert service.get_session(session_id)["attachments"][0]["status"] == "registered"
+
+    # A new Gateway process owns a fresh temporary root. SQLite keeps the safe
+    # reference, while the source becomes unavailable and can be re-uploaded.
+    restarted = GatewayService(database=database, attachment_root=attachment_root)
+    assert restarted.get_session(session_id)["attachments"][0]["status"] == "unavailable"
+
+
+def test_attachment_store_rejects_bad_content_and_enforces_limits(tmp_path):
+    store = EphemeralAttachmentStore(tmp_path / "attachments", max_bytes=64)
+    with pytest.raises(AttachmentStoreError) as media_error:
+        store.stage("session", "chart.png", "image/svg+xml", _png_bytes())
+    assert getattr(media_error.value, "code", None) == "unsupported_media_type"
+
+    with pytest.raises(AttachmentStoreError) as image_error:
+        store.stage("session", "chart.png", "image/png", b"not an image")
+    assert getattr(image_error.value, "code", None) == "invalid_image"
+
+    large_store = EphemeralAttachmentStore(tmp_path / "large", max_bytes=64)
+    with pytest.raises(AttachmentStoreError) as size_error:
+        large_store.stage("session", "chart.png", "image/png", _png_bytes())
+    assert getattr(size_error.value, "code", None) == "attachment_too_large"
+
+    content = _png_bytes()
+    aggregate_store = EphemeralAttachmentStore(
+        tmp_path / "aggregate",
+        max_session_bytes=len(content),
+    )
+    aggregate_store.stage("session", "first.png", "image/png", content)
+    with pytest.raises(AttachmentStoreError) as aggregate_error:
+        aggregate_store.stage("session", "second.png", "image/png", content)
+    assert aggregate_error.value.code == "attachment_storage_limit"
+
+
+def test_attachment_ids_are_session_scoped_and_message_stays_lazy(tmp_path):
+    database = tmp_path / "sessions.db"
+    service = GatewayService(database=database, attachment_root=tmp_path / "attachments")
+    first_id = service.create_session("first")["session"]["id"]
+    second_id = service.create_session("second")["session"]["id"]
+    attachment_id = service.upload_attachment(first_id, "chart.png", "image/png", _png_bytes())["attachment"]["attachment_id"]
+
+    with pytest.raises(GatewayFault) as isolated:
+        service.submit_message(second_id, "inspect", [attachment_id])
+    assert isolated.value.code == "attachment_not_found"
+
+    calls = []
+
+    class FakeAgent:
+        def __init__(self, memory):
+            self.memory = memory
+
+        def run(self, prompt):
+            calls.append(prompt)
+            run = self.memory.begin_run()
+            self.memory.append(run, "user", {"text": prompt})
+            self.memory.append(run, "final", {"answer": "已收到"})
+            self.memory.finish(run, RunStatus.COMPLETED, "final")
+            return "已收到"
+
+    class FakeRuntime:
+        def __init__(self, memory):
+            self.agent = FakeAgent(memory)
+
+        def close(self):
+            self.agent.memory.close()
+
+    service = GatewayService(
+        database=database,
+        attachment_root=tmp_path / "attachments-2",
+        runtime_factory=lambda name: FakeRuntime(SQLiteAgentMemory(name, database=database, create=False)),
+    )
+    # The fresh service deliberately loses the upload bytes; re-upload into the
+    # active service to test message construction independently.
+    attachment_id = service.upload_attachment(first_id, "chart.png", "image/png", _png_bytes())["attachment"]["attachment_id"]
+    result = service.submit_message(first_id, "请看图", [attachment_id])
+    assert result["answer"] == "已收到"
+    assert "attachment_id=" + attachment_id in calls[0]
+    assert "load_image" in calls[0]
+    assert "data:image" not in calls[0]
+
+
+def _binary_request(port: int, path: str, content: bytes, *, filename: str, media_type: str):
+    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=3)
+    connection.request(
+        "POST",
+        path + "?filename=" + quote(filename),
+        body=content,
+        headers={
+            "Content-Type": "application/octet-stream",
+            "X-ChartAgent-Media-Type": media_type,
+        },
+    )
+    response = connection.getresponse()
+    raw = response.read()
+    connection.close()
+    return response.status, json.loads(raw) if raw else None
+
+
 def _request(port: int, method: str, path: str, payload=None, *, origin=None):
     connection = http.client.HTTPConnection("127.0.0.1", port, timeout=3)
     body = None
@@ -137,6 +279,35 @@ def test_gateway_http_routes_and_bounded_errors(tmp_path):
         status, detail, _ = _request(port, "GET", f"/api/v1/sessions/{session_id}")
         assert status == 200
         assert detail["session"]["name"] == "demo"
+
+        status, uploaded = _binary_request(
+            port,
+            f"/api/v1/sessions/{session_id}/attachments",
+            _png_bytes(),
+            filename="chart.png",
+            media_type="image/png",
+        )
+        assert status == 200
+        attachment_id = uploaded["attachment"]["attachment_id"]
+        status, listed, _ = _request(port, "GET", f"/api/v1/sessions/{session_id}/attachments")
+        assert status == 200
+        assert listed["attachments"][0]["attachment_id"] == attachment_id
+        assert "canonical_path" not in json.dumps(listed)
+
+        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=3)
+        connection.request(
+            "POST",
+            f"/api/v1/sessions/{session_id}/attachments?filename=bad.png",
+            body=b"not-json",
+            headers={
+                "Content-Type": "application/json",
+                "X-ChartAgent-Media-Type": "image/png",
+            },
+        )
+        response = connection.getresponse()
+        response.read()
+        connection.close()
+        assert response.status == 415
 
         status, duplicate, _ = _request(port, "POST", "/api/v1/sessions", {"name": "demo"})
         assert status == 409

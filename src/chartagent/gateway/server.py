@@ -9,8 +9,9 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Iterable
-from urllib.parse import unquote, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
+from ..attachments import DEFAULT_MAX_ATTACHMENT_BYTES
 from .protocol import GatewayFault, GATEWAY_VERSION, success
 from .service import GatewayService
 
@@ -18,6 +19,7 @@ API_PREFIX = "/api/v1"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
 MAX_REQUEST_BYTES = 1024 * 1024
+MAX_BINARY_REQUEST_BYTES = DEFAULT_MAX_ATTACHMENT_BYTES
 DEFAULT_ALLOWED_ORIGINS = frozenset({"http://127.0.0.1:1420", "http://localhost:1420"})
 
 
@@ -65,6 +67,8 @@ class GatewayRequestHandler(BaseHTTPRequestHandler):
                 payload = self.gateway.health()
             elif path == f"{API_PREFIX}/sessions":
                 payload = self.gateway.list_sessions()
+            elif (session_id := self._subresource_session_id(path, "attachments")) is not None:
+                payload = self.gateway.list_attachments(session_id)
             else:
                 session_id = self._session_id(path)
                 session_prefix = f"{API_PREFIX}/sessions/"
@@ -80,14 +84,27 @@ class GatewayRequestHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802 - stdlib handler API
         try:
             path = self._path()
-            body = self._read_json()
             if path == f"{API_PREFIX}/sessions":
+                body = self._read_json()
                 payload = self.gateway.create_session(body.get("name"))
+            elif (session_id := self._subresource_session_id(path, "attachments")) is not None:
+                filename, media_type = self._attachment_headers()
+                payload = self.gateway.upload_attachment(
+                    session_id,
+                    filename,
+                    media_type,
+                    self._read_binary(),
+                )
             else:
                 session_id = self._session_id(path)
                 if session_id is None or not path.endswith("/messages"):
                     raise GatewayFault("not_found", 404, "Route was not found")
-                payload = self.gateway.submit_message(session_id, body.get("text"))
+                body = self._read_json()
+                payload = self.gateway.submit_message(
+                    session_id,
+                    body.get("text"),
+                    body.get("attachmentIds"),
+                )
             self._send_json(HTTPStatus.OK, payload)
         except GatewayFault as exc:
             self._send_fault(exc)
@@ -125,6 +142,26 @@ class GatewayRequestHandler(BaseHTTPRequestHandler):
             return unquote(parts[0])
         return None
 
+    @staticmethod
+    def _subresource_session_id(path: str, resource: str) -> str | None:
+        prefix = f"{API_PREFIX}/sessions/"
+        if not path.startswith(prefix):
+            return None
+        remainder = path[len(prefix):]
+        parts = remainder.split("/")
+        if len(parts) == 2 and parts[1] == resource:
+            return unquote(parts[0])
+        return None
+
+    def _attachment_headers(self) -> tuple[str, str]:
+        query = parse_qs(urlsplit(self.path).query, keep_blank_values=True)
+        filenames = query.get("filename", [])
+        filename = filenames[0] if len(filenames) == 1 else ""
+        media_type = self.headers.get("X-ChartAgent-Media-Type", "")
+        if not filename or not media_type:
+            raise GatewayFault("invalid_request", 400, "Attachment filename and media type are required")
+        return filename, media_type
+
     def _read_json(self) -> dict[str, Any]:
         content_type = self.headers.get("Content-Type", "")
         if not content_type.lower().startswith("application/json"):
@@ -147,6 +184,22 @@ class GatewayRequestHandler(BaseHTTPRequestHandler):
             raise GatewayFault("invalid_request", 400, "Request body must be a JSON object")
         return value
 
+    def _read_binary(self) -> bytes:
+        content_type = self.headers.get("Content-Type", "")
+        if not content_type.lower().startswith("application/octet-stream"):
+            raise GatewayFault("unsupported_media_type", 415, "Binary attachment content is required")
+        raw_length = self.headers.get("Content-Length")
+        try:
+            length = int(raw_length or "-1")
+        except ValueError as exc:
+            raise GatewayFault("invalid_request", 400, "Content length is invalid") from exc
+        if length < 0 or length > MAX_BINARY_REQUEST_BYTES:
+            raise GatewayFault("request_too_large", 413, "Attachment body is too large")
+        raw = self.rfile.read(length)
+        if len(raw) != length:
+            raise GatewayFault("invalid_request", 400, "Attachment body is incomplete")
+        return raw
+
     def _method_not_allowed(self) -> None:
         self._send_fault(GatewayFault("method_not_allowed", 405, "HTTP method is not supported"))
 
@@ -164,7 +217,7 @@ class GatewayRequestHandler(BaseHTTPRequestHandler):
         if origin and origin in allowed:
             self.send_header("Access-Control-Allow-Origin", origin)
             self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-            self.send_header("Access-Control-Allow-Headers", "Content-Type")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type, X-ChartAgent-Media-Type")
             self.send_header("Vary", "Origin")
         self.end_headers()
         if encoded:
