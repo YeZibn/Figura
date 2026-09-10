@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Sequence
 
 from ..attachments import AttachmentRegistry
 from ..memory import SQLiteAgentMemory
 from ..multimodal import build_registered_attachment_turn
 from ..runtime import AgentRuntime, create_agent_runtime
+from ..tools.result import GeneratedImage
+from ..trace import TraceSink
 from .attachments import AttachmentStoreError, EphemeralAttachmentStore
 from .projection import project_completed_runs, session_summary
+from .runs import ManagedRun, RunManager
 from .protocol import (
     AttachmentSummary,
     GatewayFault,
@@ -35,21 +39,31 @@ class GatewayService:
         runtime_factory: Callable[[str], AgentRuntime] | None = None,
         attachment_store: EphemeralAttachmentStore | None = None,
         attachment_root: str | Path | None = None,
+        run_manager: RunManager | None = None,
     ) -> None:
         self.database = database
         self.model = model
         self._memory_factory = memory_factory or self._open_memory
         self._runtime_factory = runtime_factory or self._build_runtime
         self._attachment_store = attachment_store or EphemeralAttachmentStore(attachment_root)
+        self._runs = run_manager or RunManager()
 
     def _open_memory(self, name: str, *, create: bool = True) -> SQLiteAgentMemory:
         return SQLiteAgentMemory(name, database=self.database, create=create)
 
-    def _build_runtime(self, name: str) -> AgentRuntime:
+    def _build_runtime(
+        self,
+        name: str,
+        *,
+        trace_sink: TraceSink | None = None,
+        visual_observation_sink: Callable[[str, str, Sequence[GeneratedImage]], Sequence[dict[str, Any]]] | None = None,
+    ) -> AgentRuntime:
         return create_agent_runtime(
             session_name=name,
             database=self.database,
             model=self.model,
+            trace_sink=trace_sink,
+            visual_observation_sink=visual_observation_sink,
         )
 
     def health(self) -> dict[str, Any]:
@@ -89,6 +103,76 @@ class GatewayService:
         raw_text: object,
         raw_attachment_ids: object = None,
     ) -> dict[str, Any]:
+        run = self._start_managed_run(session_id, raw_text, raw_attachment_ids)
+        if not run.wait_terminal(timeout=3600):
+            run.fail("run_timeout", 504, "Agent run timed out")
+        if run.status.value == "failed":
+            raise GatewayFault(
+                run.error_code or "agent_failed",
+                run.error_status,
+                run.error_message or "Agent run failed",
+            )
+        session = self._resolve_session(session_id)
+        transcript = self._load_transcript(session)
+        payload = transcript.to_dict()
+        payload["answer"] = str(run.answer or "")
+        payload["runId"] = run.run_id
+        return payload
+
+    def start_run(
+        self,
+        session_id: object,
+        raw_text: object,
+        raw_attachment_ids: object = None,
+    ) -> dict[str, Any]:
+        run = self._start_managed_run(session_id, raw_text, raw_attachment_ids)
+        return success({"run": run.accepted.to_dict()})
+
+    def get_run(self, session_id: object, run_id: object) -> ManagedRun:
+        session = self._resolve_session(session_id)
+        if not isinstance(run_id, str) or not run_id.strip():
+            raise GatewayFault("invalid_request", 400, "Run ID is required")
+        run = self._runs.get(run_id)
+        if run is None or run.session_id != session.id:
+            raise GatewayFault("run_not_found", 404, "Run was not found")
+        return run
+
+    def get_observation(
+        self,
+        session_id: object,
+        run_id: object,
+        observation_id: object,
+    ) -> tuple[bytes, str]:
+        session = self._resolve_session(session_id)
+        run = self.get_run(session.id, run_id)
+        if not isinstance(observation_id, str) or not observation_id.strip():
+            raise GatewayFault("invalid_request", 400, "Observation ID is required")
+        item = self._runs.observations.get(run.run_id, session.id, observation_id)
+        if item is None:
+            raise GatewayFault("observation_not_found", 404, "Observation was not found")
+        return item
+
+    def _start_managed_run(
+        self,
+        session_id: object,
+        raw_text: object,
+        raw_attachment_ids: object,
+    ) -> ManagedRun:
+        session, prompt = self._prepare_prompt(session_id, raw_text, raw_attachment_ids)
+        try:
+            return self._runs.start(
+                session.id,
+                lambda run: self._execute_run(run, session.name, prompt),
+            )
+        except RuntimeError as exc:
+            raise GatewayFault("run_limit", 429, "Too many Agent runs are active") from exc
+
+    def _prepare_prompt(
+        self,
+        session_id: object,
+        raw_text: object,
+        raw_attachment_ids: object,
+    ) -> tuple[Any, str]:
         text = validate_message_text(raw_text)
         session = self._resolve_session(session_id)
         attachment_ids = validate_attachment_ids(raw_attachment_ids)
@@ -109,26 +193,69 @@ class GatewayService:
             finally:
                 memory.close()
         prompt = build_registered_attachment_turn(text, attachment_metadata) if attachment_metadata else text
+        return session, prompt
+
+    def _execute_run(self, run: ManagedRun, session_name: str, prompt: str) -> None:
+        visual_sink = lambda tool_name, call_id, images: self._store_observations(
+            run,
+            images,
+        )
         try:
-            runtime = self._runtime_factory(session.name)
+            runtime = self._build_runtime_for_run(run, session_name, visual_sink)
         except Exception as exc:  # provider setup errors are a safe gateway fault
-            raise GatewayFault(
-                "agent_unavailable",
-                503,
-                "Agent service is unavailable",
-            ) from exc
+            run.publish("run_failed", {"code": "agent_unavailable", "message": "Agent service is unavailable"})
+            run.fail("agent_unavailable", 503, "Agent service is unavailable")
+            return
         try:
             try:
                 answer = runtime.agent.run(prompt)
             except Exception as exc:
-                raise GatewayFault("agent_failed", 502, "Agent run failed") from exc
+                run.publish("run_failed", {"code": "agent_failed", "message": "Agent run failed"})
+                run.fail("agent_failed", 502, "Agent run failed")
+                return
         finally:
             runtime.close()
 
-        transcript = self._load_transcript(session)
-        payload = transcript.to_dict()
-        payload["answer"] = str(answer)
-        return payload
+        if not run.has_event("final_answer"):
+            run.publish("final_answer", {"answer": str(answer)})
+        run.complete(str(answer))
+
+    def _build_runtime_for_run(
+        self,
+        run: ManagedRun,
+        session_name: str,
+        visual_sink: Callable[[str, str, Sequence[GeneratedImage]], Sequence[dict[str, Any]]],
+    ) -> AgentRuntime:
+        factory = self._runtime_factory
+        kwargs: dict[str, Any] = {
+            "trace_sink": run.publish_trace,
+            "visual_observation_sink": visual_sink,
+        }
+        try:
+            parameters = inspect.signature(factory).parameters.values()
+            accepts_kwargs = any(item.kind is inspect.Parameter.VAR_KEYWORD for item in parameters)
+            supported = {
+                item.name
+                for item in parameters
+                if item.kind in {inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY}
+            }
+            if not accepts_kwargs:
+                kwargs = {key: value for key, value in kwargs.items() if key in supported}
+        except (TypeError, ValueError):
+            kwargs = {}
+        return factory(session_name, **kwargs)
+
+    def _store_observations(
+        self,
+        run: ManagedRun,
+        images: Sequence[GeneratedImage],
+    ) -> list[dict[str, Any]]:
+        references = []
+        for image in images:
+            reference = self._runs.observations.add(run.run_id, run.session_id, image)
+            if reference is not None:
+                references.append(reference.to_dict())
+        return references
 
     def upload_attachment(
         self,
@@ -228,3 +355,6 @@ class GatewayService:
             status="unavailable" if error else "registered",
             preview_available=False,
         )
+
+    def close(self) -> None:
+        self._runs.close()

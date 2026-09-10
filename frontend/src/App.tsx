@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { BarChart3, Check, ChevronDown, ChevronRight, FileImage, LoaderCircle, MessageSquare, Paperclip, Plus, RefreshCw, Send, Sparkles, Terminal, X } from 'lucide-react'
 import { GatewayClientError, gatewayClient } from './api/gatewayClient'
-import type { ChartAgentClient } from './api/client'
+import type { ChartAgentClient, RunSubscription } from './api/client'
 import { mockClient } from './api/mockClient'
 import { formatBytes, mediaTypeForFile, validateImageFile } from './attachments'
-import type { Attachment, AttachmentStatus, ConversationItem, Session, SessionData } from './types/protocol'
+import { getGatewayRuntimeStatus, type GatewayRuntimeStatus } from './runtime'
+import type { AgentRunEvent, Attachment, AttachmentStatus, ConversationItem, RunState, Session, SessionData } from './types/protocol'
 import './styles/global.css'
 import './styles/error.css'
 
@@ -32,12 +33,57 @@ function toolStatusLabel(status: 'success' | 'running' | 'error'): string {
   return '失败'
 }
 
-function SessionSidebar(props: { sessions: Session[]; activeId: string; onSelect: (id: string) => void; onCreate: () => void; mode: 'mock' | 'gateway' }) {
+function runStateLabel(state: RunState): string {
+  if (state === 'connecting') return '正在连接'
+  if (state === 'running') return '运行中'
+  if (state === 'completed') return '已完成'
+  if (state === 'failed') return '运行失败'
+  if (state === 'unavailable') return '服务不可用'
+  return '准备就绪'
+}
+
+function currentTime(): string {
+  return new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit' }).format(new Date())
+}
+
+function eventPayload(event: AgentRunEvent): Record<string, unknown> {
+  return event.payload || {}
+}
+
+function textDetail(value: unknown): string {
+  if (typeof value === 'string') return value
+  try { return JSON.stringify(value, null, 2) } catch { return '事件内容不可显示' }
+}
+
+function conversationItemsForEvent(event: AgentRunEvent): ConversationItem[] {
+  const payload = eventPayload(event)
+  const timestamp = event.timestamp ? new Date(event.timestamp).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : currentTime()
+  if (event.kind === 'tool_call') {
+    return [{ id: `${event.runId}-${event.sequence}`, kind: 'tool_call', toolName: String(payload.tool_name || '未知工具'), status: 'running', detail: textDetail(payload.arguments), timestamp }]
+  }
+  if (event.kind === 'tool_result') {
+    return [{ id: `${event.runId}-${event.sequence}`, kind: 'tool_result', toolName: String(payload.tool_name || '未知工具'), status: payload.status === 'error' ? 'error' : 'success', detail: textDetail(payload.result), timestamp }]
+  }
+  if (event.kind === 'visual_observation') {
+    const observations = Array.isArray(payload.observations) ? payload.observations : []
+    return observations.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object')).map((item, index) => ({
+      id: `${event.runId}-${event.sequence}-${index}`,
+      kind: 'visual_observation',
+      toolName: String(payload.tool_name || '视觉工具'),
+      caption: String(item.caption || '视觉观察'),
+      imageUrl: typeof item.imageUrl === 'string' ? item.imageUrl : undefined,
+      timestamp,
+    }))
+  }
+  return []
+}
+
+function SessionSidebar(props: { sessions: Session[]; activeId: string; onSelect: (id: string) => void; onCreate: () => void; mode: 'mock' | 'gateway'; runtimeStatus: GatewayRuntimeStatus | null }) {
   return <aside className="sidebar panel">
     <div className="brand"><div className="brand-mark"><BarChart3 size={19} /></div><div><strong>ChartAgent</strong><span>桌面工作台</span></div></div>
     <div className="section-heading"><span>会话</span><button className="icon-button" onClick={props.onCreate} title="新建会话"><Plus size={16} /></button></div>
     <div className="session-list">{props.sessions.map((session) => <button key={session.id} className={'session-item ' + (session.id === props.activeId ? 'selected' : '')} onClick={() => props.onSelect(session.id)}><span className="session-dot" /><span className="session-copy"><strong>{session.name}</strong><small>{session.updatedAt}</small></span><span className="session-count">{session.runCount}</span></button>)}</div>
-    <div className="sidebar-footer"><span className="status-dot" />{props.mode === 'gateway' ? 'Gateway 模式' : '模拟模式'} <span className="muted">·</span> {props.mode === 'gateway' ? '本地服务' : '可离线使用'}</div>
+    <div className="sidebar-footer"><span className={'status-dot ' + (props.runtimeStatus?.state === 'unavailable' ? 'status-error' : '')} />{props.mode === 'gateway' ? 'Gateway 模式' : '模拟模式'} <span className="muted">·</span> {props.mode === 'gateway' ? (props.runtimeStatus?.state === 'ready' ? '本地服务已就绪' : props.runtimeStatus?.state === 'unavailable' ? '本地服务不可用' : '本地服务') : '可离线使用'}</div>
   </aside>
 }
 
@@ -45,22 +91,23 @@ function Message(props: { item: ConversationItem; expanded: boolean; onToggle: (
   const item = props.item
   if (item.kind === 'user') return <div className="message-row user-row"><div className="avatar user-avatar">我</div><div className="message-body"><div className="message-meta"><strong>你</strong><time>{item.timestamp}</time></div><div className="bubble user-bubble">{item.text}{item.attachmentIds?.length ? <div className="inline-attachment"><Paperclip size={13} /> {item.attachmentIds.length} 个附件</div> : null}</div></div></div>
   if (item.kind === 'assistant') return <div className="message-row"><div className="avatar agent-avatar"><Sparkles size={15} /></div><div className="message-body"><div className="message-meta"><strong>ChartAgent</strong><time>{item.timestamp}</time></div><div className="bubble assistant-bubble">{item.text}</div></div></div>
-  if (item.kind === 'visual_observation') return <div className="visual-observation"><div className="observation-label"><FileImage size={14} /> 视觉观察 <span>{item.toolName}</span></div><img src={item.imageUrl} alt={item.caption} /><small>{item.caption}</small></div>
+  if (item.kind === 'visual_observation') return <div className="visual-observation"><div className="observation-label"><FileImage size={14} /> 视觉观察 <span>{item.toolName}</span></div>{item.imageUrl ? <img src={item.imageUrl} alt={item.caption} /> : <div className="observation-placeholder">临时视觉证据不可用</div>}<small>{item.caption}</small></div>
   if (item.kind === 'error') return <div className="error-banner">{item.text}</div>
   const label = item.kind === 'tool_call' ? '工具调用' : '工具结果'
   return <div className={'execution-item ' + (props.expanded ? 'expanded' : '')}><button className="execution-header" onClick={() => props.onToggle(item.id)} aria-expanded={props.expanded}><span className="execution-icon"><Terminal size={14} /></span><span><strong>{label}</strong><b>{item.toolName}</b></span><span className={'execution-status ' + item.status}>{toolStatusLabel(item.status)}</span>{props.expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}</button>{props.expanded && <div className="execution-detail">{item.detail}</div>}</div>
 }
 
-function ConversationPanel(props: { data: SessionData | null; selectedAttachmentIds: string[]; onSubmit: (text: string, attachmentIds: string[]) => Promise<boolean>; loading: boolean; loadingSession: boolean; error: string | null }) {
+function ConversationPanel(props: { data: SessionData | null; liveItems: ConversationItem[]; runState: RunState; selectedAttachmentIds: string[]; onSubmit: (text: string, attachmentIds: string[]) => Promise<boolean>; loading: boolean; loadingSession: boolean; error: string | null }) {
   const [text, setText] = useState('')
   const [expanded, setExpanded] = useState<string | null>(null)
+  const items = [...(props.data?.messages ?? []), ...props.liveItems]
   const send = async () => {
     const value = text.trim()
     if (!value || props.loading) return
     const submitted = await props.onSubmit(value, props.selectedAttachmentIds)
     if (submitted) setText('')
   }
-  return <main className="conversation panel"><header className="conversation-header"><div><span className="eyebrow">当前会话</span><h1>{props.data?.session.name ?? (props.loadingSession ? '正在加载会话' : '暂无活动会话')}</h1></div><span className="run-chip"><span className="status-dot" />{props.data?.session.runCount ?? 0} 次运行</span></header><div className="message-scroll">{props.loadingSession ? <div className="loading-state"><span className="spinner" />正在加载会话...</div> : props.error && !props.data ? <div className="error-state"><div className="empty-icon"><MessageSquare size={22} /></div><h2>无法连接本地服务</h2><p>{props.error}</p></div> : !props.data ? <div className="empty-conversation"><div className="empty-icon"><MessageSquare size={22} /></div><h2>创建第一个会话</h2><p>请从左侧新建会话，开始使用 ChartAgent。</p></div> : props.data.messages.length === 0 ? <div className="empty-conversation"><div className="empty-icon"><MessageSquare size={22} /></div><h2>开始新的分析</h2><p>提出问题或添加图片，开始使用 ChartAgent。</p></div> : props.data.messages.map((item) => <Message key={item.id} item={item} expanded={expanded === item.id} onToggle={(id) => setExpanded(expanded === id ? null : id)} />)}{props.loading && <div className="typing"><span /><span /><span /> Agent 正在思考</div>}{props.error && props.data && <div className="error-banner" role="alert">{props.error}</div>}</div><div className="composer"><textarea value={text} onChange={(event) => setText(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void send() } }} placeholder="询问 ChartAgent 关于图表的问题..." rows={1} /><div className="composer-actions"><span className="composer-hint">Enter 发送 · Shift + Enter 换行</span><button className="send-button" onClick={() => void send()} disabled={!text.trim() || props.loading || props.loadingSession} title="发送消息"><Send size={16} /></button></div></div></main>
+  return <main className="conversation panel"><header className="conversation-header"><div><span className="eyebrow">当前会话</span><h1>{props.data?.session.name ?? (props.loadingSession ? '正在加载会话' : '暂无活动会话')}</h1></div><span className={'run-chip ' + props.runState}><span className="status-dot" />{runStateLabel(props.runState)} · {props.data?.session.runCount ?? 0} 次运行</span></header><div className="message-scroll">{props.loadingSession ? <div className="loading-state"><span className="spinner" />正在加载会话...</div> : props.error && !props.data && items.length === 0 ? <div className="error-state"><div className="empty-icon"><MessageSquare size={22} /></div><h2>无法连接本地服务</h2><p>{props.error}</p></div> : !props.data && items.length === 0 ? <div className="empty-conversation"><div className="empty-icon"><MessageSquare size={22} /></div><h2>创建第一个会话</h2><p>请从左侧新建会话，开始使用 ChartAgent。</p></div> : items.length === 0 ? <div className="empty-conversation"><div className="empty-icon"><MessageSquare size={22} /></div><h2>开始新的分析</h2><p>提出问题或添加图片，开始使用 ChartAgent。</p></div> : items.map((item) => <Message key={item.id} item={item} expanded={expanded === item.id} onToggle={(id) => setExpanded(expanded === id ? null : id)} />)}{props.loading && <div className="typing"><span /><span /><span /> Agent 正在思考</div>}{props.error && <div className="error-banner" role="alert">{props.error}</div>}</div><div className="composer"><textarea value={text} onChange={(event) => setText(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void send() } }} placeholder="询问 ChartAgent 关于图表的问题..." rows={1} /><div className="composer-actions"><span className="composer-hint">Enter 发送 · Shift + Enter 换行</span><button className="send-button" onClick={() => void send()} disabled={!text.trim() || props.loading || props.loadingSession} title="发送消息"><Send size={16} /></button></div></div></main>
 }
 
 function AttachmentPreview({ attachment }: { attachment: Attachment }) {
@@ -75,11 +122,14 @@ function AttachmentPanel(props: { attachments: Attachment[]; pending: PendingAtt
 export default function App() {
   const mode = import.meta.env.VITE_CHARTAGENT_MODE === 'gateway' ? 'gateway' : 'mock'
   const client: ChartAgentClient = mode === 'gateway' ? gatewayClient : mockClient
+  const [runtimeStatus, setRuntimeStatus] = useState<GatewayRuntimeStatus | null>(null)
   const [sessions, setSessions] = useState<Session[]>([])
   const [activeId, setActiveId] = useState('')
   const [data, setData] = useState<SessionData | null>(null)
   const [pending, setPending] = useState<PendingAttachment[]>([])
   const [selectedIds, setSelectedIds] = useState<string[]>([])
+  const [liveItems, setLiveItems] = useState<ConversationItem[]>([])
+  const [runState, setRunState] = useState<RunState>('idle')
   const [loading, setLoading] = useState(false)
   const [loadingSession, setLoadingSession] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -88,9 +138,11 @@ export default function App() {
   const [newSessionName, setNewSessionName] = useState('')
   const activeIdRef = useRef(activeId)
   const localPreviews = useRef(new Map<string, string>())
+  const subscriptionRef = useRef<RunSubscription | null>(null)
 
   useEffect(() => { activeIdRef.current = activeId }, [activeId])
-  useEffect(() => () => { localPreviews.current.forEach((url) => URL.revokeObjectURL(url)); localPreviews.current.clear() }, [])
+  useEffect(() => () => { subscriptionRef.current?.close(); localPreviews.current.forEach((url) => URL.revokeObjectURL(url)); localPreviews.current.clear() }, [])
+  useEffect(() => { if (mode !== 'gateway') return; let current = true; void getGatewayRuntimeStatus().then((status) => { if (current) setRuntimeStatus(status) }); return () => { current = false } }, [mode])
 
   const withLocalPreviews = (value: SessionData): SessionData => ({ ...value, attachments: value.attachments.map((attachment) => ({ ...attachment, previewUrl: attachment.previewUrl || localPreviews.current.get(attachment.id) || '' })) })
 
@@ -98,9 +150,9 @@ export default function App() {
   useEffect(() => { if (!activeId) { setData(null); return }; setData(null); setLoadingSession(true); client.getSession(activeId).then((value) => setData(withLocalPreviews(value))).catch((reason) => setError(toUserMessage(reason))).finally(() => setLoadingSession(false)) }, [activeId, client])
 
   const clearPending = () => { pending.forEach((item) => URL.revokeObjectURL(item.previewUrl)); setPending([]) }
-  const selectSession = (id: string) => { clearPending(); setSelectedIds([]); setAttachmentError(null); setError(null); setActiveId(id) }
+  const selectSession = (id: string) => { subscriptionRef.current?.close(); subscriptionRef.current = null; clearPending(); setSelectedIds([]); setLiveItems([]); setRunState('idle'); setAttachmentError(null); setError(null); setActiveId(id) }
   const create = async () => { setNewSessionName(''); setCreatingSession(true) }
-  const confirmCreate = async (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); const name = newSessionName.trim(); if (!name) return; setError(null); try { const created = await client.createSession(name); setSessions(await client.listSessions()); setActiveId(created.session.id); setCreatingSession(false) } catch (reason) { setError(toUserMessage(reason)) } }
+  const confirmCreate = async (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); const name = newSessionName.trim(); if (!name) return; setError(null); try { subscriptionRef.current?.close(); subscriptionRef.current = null; clearPending(); setSelectedIds([]); setLiveItems([]); setRunState('idle'); const created = await client.createSession(name); setSessions(await client.listSessions()); setActiveId(created.session.id); setCreatingSession(false) } catch (reason) { setError(toUserMessage(reason)) } }
 
   const uploadPending = async (target: PendingAttachment) => {
     const sessionId = activeIdRef.current
@@ -135,9 +187,68 @@ export default function App() {
   const removePending = (key: string) => { const item = pending.find((candidate) => candidate.key === key); if (item) URL.revokeObjectURL(item.previewUrl); setPending((items) => items.filter((candidate) => candidate.key !== key)) }
   const toggleAttachment = (id: string) => setSelectedIds((ids) => ids.includes(id) ? ids.filter((item) => item !== id) : [...ids, id])
 
-  const submit = async (text: string, attachmentIds: string[]): Promise<boolean> => { if (!activeId) return false; setLoading(true); setError(null); try { const updated = await client.submitMessage(activeId, text, attachmentIds); setData(withLocalPreviews(updated)); setSessions(await client.listSessions()); setSelectedIds([]); return true } catch (reason) { setError(toUserMessage(reason)); return false } finally { setLoading(false) } }
+  const submit = async (text: string, attachmentIds: string[]): Promise<boolean> => {
+    if (!activeId) return false
+    const sessionId = activeId
+    subscriptionRef.current?.close()
+    setLoading(true)
+    setRunState('connecting')
+    setError(null)
+    setSelectedIds([])
+    setLiveItems([{ id: `pending-${Date.now()}`, kind: 'user', text, timestamp: currentTime(), attachmentIds: attachmentIds.length ? attachmentIds : undefined }])
+    try {
+      const handle = await client.startRun(sessionId, text, attachmentIds)
+      if (activeIdRef.current !== sessionId) return false
+      setRunState('running')
+      let terminalFailure = false
+      subscriptionRef.current = client.subscribeRun(sessionId, handle.runId, {
+        onEvent(event) {
+          if (activeIdRef.current !== sessionId) return
+          if (event.kind === 'run_failed') {
+            terminalFailure = true
+            setRunState('failed')
+            setLoading(false)
+            setError(toUserMessage(new GatewayClientError(String(event.payload.code || 'agent_failed'), String(event.payload.message || 'Agent 执行失败'), 502)))
+          } else if (event.kind !== 'run_started') {
+            setRunState('running')
+          }
+          const items = conversationItemsForEvent(event)
+          if (items.length) setLiveItems((current) => [...current, ...items])
+        },
+        onError(reason) {
+          if (activeIdRef.current !== sessionId) return
+          setRunState('unavailable')
+          setLoading(false)
+          setError(toUserMessage(reason))
+        },
+        onComplete() {
+          subscriptionRef.current = null
+          if (activeIdRef.current !== sessionId) return
+          if (terminalFailure) return
+          void client.getSession(sessionId).then((updated) => {
+            if (activeIdRef.current !== sessionId) return
+            setData(withLocalPreviews(updated))
+            setSessions((current) => current.map((item) => item.id === updated.session.id ? updated.session : item))
+            setLiveItems((current) => current.filter((item) => item.kind !== 'user' && item.kind !== 'assistant'))
+            setRunState('completed')
+            setLoading(false)
+          }).catch((reason) => {
+            setRunState('failed')
+            setLoading(false)
+            setError(toUserMessage(reason))
+          })
+        },
+      })
+      return true
+    } catch (reason) {
+      setRunState('unavailable')
+      setError(toUserMessage(reason))
+      setLoading(false)
+      return false
+    }
+  }
 
-  return <><div className="app-shell"><SessionSidebar sessions={sessions} activeId={activeId} onSelect={selectSession} onCreate={create} mode={mode} /><ConversationPanel data={data} selectedAttachmentIds={selectedIds} onSubmit={submit} loading={loading} loadingSession={loadingSession} error={error} /><AttachmentPanel attachments={data?.attachments ?? []} pending={pending} selectedIds={selectedIds} error={attachmentError} onAdd={addFiles} onToggle={toggleAttachment} onRemovePending={removePending} onRetryPending={(item) => void uploadPending(item)} /></div>{creatingSession && <div className="dialog-backdrop"><form className="session-dialog" onSubmit={(event) => void confirmCreate(event)}><h2>新建会话</h2><label htmlFor="session-name">会话名称</label><input id="session-name" value={newSessionName} onChange={(event) => setNewSessionName(event.target.value)} placeholder="例如：季度销售分析" autoFocus /><div className="dialog-actions"><button type="button" className="dialog-secondary" onClick={() => setCreatingSession(false)}>取消</button><button type="submit" className="dialog-primary" disabled={!newSessionName.trim()}>创建会话</button></div></form></div>}</>
+  return <><div className="app-shell"><SessionSidebar sessions={sessions} activeId={activeId} onSelect={selectSession} onCreate={create} mode={mode} runtimeStatus={runtimeStatus} /><ConversationPanel data={data} liveItems={liveItems} runState={runState} selectedAttachmentIds={selectedIds} onSubmit={submit} loading={loading} loadingSession={loadingSession} error={error} /><AttachmentPanel attachments={data?.attachments ?? []} pending={pending} selectedIds={selectedIds} error={attachmentError} onAdd={addFiles} onToggle={toggleAttachment} onRemovePending={removePending} onRetryPending={(item) => void uploadPending(item)} /></div>{creatingSession && <div className="dialog-backdrop"><form className="session-dialog" onSubmit={(event) => void confirmCreate(event)}><h2>新建会话</h2><label htmlFor="session-name">会话名称</label><input id="session-name" value={newSessionName} onChange={(event) => setNewSessionName(event.target.value)} placeholder="例如：季度销售分析" autoFocus /><div className="dialog-actions"><button type="button" className="dialog-secondary" onClick={() => setCreatingSession(false)}>取消</button><button type="submit" className="dialog-primary" disabled={!newSessionName.trim()}>创建会话</button></div></form></div>}</>
 }
 
 function toUserMessage(error: unknown): string {

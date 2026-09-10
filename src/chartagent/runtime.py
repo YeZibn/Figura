@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, IO, Optional
+from typing import Any, Callable, IO, Optional, Sequence
 
 from .agent import Agent
 from .attachments import AttachmentRegistry
 from .client import LLMClient, load_environment
 from .memory import SQLiteAgentMemory
 from .trace import TraceSink
+from .tools.result import GeneratedImage
 from .tools import ToolRegistry
 from .tools.builtin import register_builtins
 from .tools.chart import register_chart_tools
@@ -30,6 +31,8 @@ the structured result when useful. You may accept it, retry with different
 arguments, switch tools, ignore irrelevant evidence, or answer directly; no
 fixed validation sequence or numeric acceptance threshold is required.
 """
+
+VisualObservationSink = Callable[[str, str, Sequence[GeneratedImage]], Sequence[dict[str, Any]]]
 
 
 @dataclass
@@ -51,6 +54,7 @@ def create_agent_runtime(
     system: str = AGENT_SYSTEM_PROMPT,
     trace_sink: Optional[TraceSink] = None,
     trace_reasoning: bool = False,
+    visual_observation_sink: Optional[VisualObservationSink] = None,
     session_name: str | None = None,
     database: str | Path | None = None,
     client: Any = None,
@@ -86,6 +90,8 @@ def create_agent_runtime(
     agent_kwargs: dict[str, Any] = {"system": system, "model": model}
     if trace_sink is not None:
         agent_kwargs.update(trace=trace_sink, trace_reasoning=trace_reasoning)
+    if visual_observation_sink is not None:
+        agent_kwargs["visual_observation_sink"] = visual_observation_sink
     if memory is not None:
         agent_kwargs["memory"] = memory
     agent_kwargs["attachments"] = attachments

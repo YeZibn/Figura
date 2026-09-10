@@ -22,14 +22,18 @@ The Vite app is available at http://127.0.0.1:1420/. To run the Tauri developmen
 ### Local Python Gateway
 
 The second desktop milestone adds a loopback Python Gateway for named sessions
-and completed text runs. Start it with the Conda `agent` environment, then run
-the browser client in Gateway mode:
+and completed text runs. Start the Gateway and the Gateway-mode browser client
+together from `frontend/`:
 
 ```bash
-conda run -n agent python -m chartagent.gateway --port 8765
-cd frontend
-VITE_CHARTAGENT_MODE=gateway npm run dev
+npm run dev:gateway
 ```
+
+The launcher uses `conda run -n agent python -m chartagent.gateway`, waits for
+`/api/v1/health`, starts Vite in explicit Gateway mode, and stops only the two
+processes it created when you press Ctrl-C. Plain `npm run dev` remains the
+offline mock/frontend-only workflow. From the repository root, the equivalent
+one-line command is `npm --prefix frontend run dev:gateway`.
 
 The service listens on `127.0.0.1` and exposes versioned routes under `/api/v1`.
 The desktop panel can select PNG, JPEG, GIF, and WebP images, preview them
@@ -38,8 +42,40 @@ next message. The Gateway keeps uploaded bytes in a temporary, process-owned
 directory and SQLite stores only safe attachment metadata and references. A
 Gateway restart can make the source unavailable; upload the image again in that
 case. Registration does not send image bytes to the model. The Agent decides
-whether to call `load_image` when visual inspection is useful. Runtime event
-streaming and Tauri-managed Python processes remain later milestones.
+whether to call `load_image` when visual inspection is useful.
+
+When running the Tauri client in Gateway mode, use the dedicated alias. Tauri
+owns the local Gateway child process and waits for `/api/v1/health` before
+exposing the workspace:
+
+```bash
+npm run tauri:dev:gateway
+```
+
+The alias sets `CHARTAGENT_MODE=gateway` and `VITE_CHARTAGENT_MODE=gateway`.
+The development launcher uses `conda run -n agent python -m chartagent.gateway`
+without hard-coding a machine-specific Python path. Do not run both launchers
+against the same port. A pre-existing compatible
+Gateway can be used with `CHARTAGENT_GATEWAY_EXTERNAL=1`; the Tauri client will
+not terminate that process. For a packaged or custom runtime, set
+`CHARTAGENT_GATEWAY_EXECUTABLE` and provide a JSON string array in
+`CHARTAGENT_GATEWAY_ARGS`.
+
+The Gateway keeps the synchronous `POST /api/v1/sessions/{id}/messages`
+operation for compatibility. The desktop live-run path uses:
+
+```text
+POST /api/v1/sessions/{session_id}/runs
+GET  /api/v1/sessions/{session_id}/runs/{run_id}/events
+GET  /api/v1/sessions/{session_id}/runs/{run_id}/observations/{observation_id}
+```
+
+The event stream is bounded SSE and includes model turns, tool calls, tool
+results, visual-observation metadata, final answers, and failures. Generated
+visual evidence is available only through short-lived opaque observation IDs;
+event JSON and durable session memory never contain image bytes, credentials,
+provider raw responses, or unbounded trace content. Run cancellation is not
+part of this milestone.
 
 ## Agent sessions
 

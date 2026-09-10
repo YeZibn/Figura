@@ -7,13 +7,16 @@ npm run smoke
 npm run build
 ```
 
-The browser client uses mock data by default. To use the local Python Gateway,
-start it in another terminal and set the explicit frontend mode:
+The browser client uses mock data by default. To start the local Python Gateway
+and Gateway-mode client together, run:
 
 ```bash
-conda run -n agent python -m chartagent.gateway --port 8765
-VITE_CHARTAGENT_MODE=gateway npm run dev
+npm run dev:gateway
 ```
+
+The equivalent repository-root command is `npm --prefix frontend run
+dev:gateway`. To start the Tauri window with Gateway mode, run
+`npm run tauri:dev:gateway`; Tauri owns the Gateway child in that workflow.
 
 For repeatable browser verification, run `npm run dev`, open `http://127.0.0.1:1420/`, and check:
 
@@ -26,3 +29,4 @@ For repeatable browser verification, run `npm run dev`, open `http://127.0.0.1:1
 7. An empty session shows the start-analysis empty state; an empty attachment list shows its own empty state.
 8. Narrowing the window keeps the composer usable and stacks the secondary panel below the conversation.
 9. In Gateway mode, creating a session and submitting text use the local Python service; stopping the service shows a Chinese connection error and does not switch to mock data.
+10. Stopping `npm run dev:gateway` cleans up its Gateway and Vite children without terminating an unrelated process on the configured port.

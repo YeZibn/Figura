@@ -1,5 +1,5 @@
-import type { ChartAgentClient } from './client'
-import type { Attachment, Session, SessionData } from '../types/protocol'
+import type { ChartAgentClient, RunEventCallbacks, RunSubscription } from './client'
+import type { AgentRunEvent, Attachment, ObservationReference, RunHandle, Session, SessionData } from '../types/protocol'
 import { mediaTypeForFile } from '../attachments'
 
 type GatewaySessionList = { sessions: Session[] }
@@ -13,6 +13,8 @@ type GatewayAttachment = {
   preview_available?: boolean
 }
 type GatewaySessionData = Omit<SessionData, 'attachments'> & { attachments: GatewayAttachment[] }
+type GatewayRunResponse = { run: { runId: string; sessionId: string; status: 'running' } }
+type GatewayRunEvent = { runId: string; sequence: number; kind: string; timestamp: string; payload?: Record<string, unknown> }
 
 export class GatewayClientError extends Error {
   readonly code: string
@@ -72,6 +74,40 @@ function mapSessionData(payload: GatewaySessionData): SessionData {
   return { ...payload, attachments: payload.attachments.map(mapAttachment) }
 }
 
+function mapRun(payload: GatewayRunResponse): RunHandle {
+  return payload.run
+}
+
+function mapRunEvent(event: GatewayRunEvent, sessionId: string): AgentRunEvent {
+  const payload = { ...(event.payload || {}) }
+  if (event.kind === 'visual_observation' && Array.isArray(payload.observations)) {
+    payload.observations = payload.observations.map((item) => {
+      if (!item || typeof item !== 'object') return item
+      const reference = item as Partial<ObservationReference>
+      if (!reference.observationId) return item
+      return {
+        ...reference,
+        imageUrl: `${gatewayBaseUrl}/sessions/${encodeURIComponent(sessionId)}/runs/${encodeURIComponent(event.runId)}/observations/${encodeURIComponent(reference.observationId)}`,
+      }
+    })
+  }
+  return { runId: event.runId, sequence: event.sequence, kind: event.kind, timestamp: event.timestamp, payload }
+}
+
+const terminalEventKinds = new Set(['final_answer', 'run_failed'])
+const streamEventKinds = [
+  'run_started',
+  'model_started',
+  'model_completed',
+  'tool_call',
+  'tool_result',
+  'visual_observation',
+  'reasoning',
+  'budget_exhausted',
+  'final_answer',
+  'run_failed',
+]
+
 export const gatewayClient: ChartAgentClient = {
   async listSessions() {
     const payload = await request<GatewaySessionList>('/sessions')
@@ -108,6 +144,52 @@ export const gatewayClient: ChartAgentClient = {
       },
     )
     return mapAttachment(payload.attachment)
+  },
+
+  async startRun(sessionId, text, attachmentIds = []) {
+    return mapRun(await request<GatewayRunResponse>(`/sessions/${encodeURIComponent(sessionId)}/runs`, {
+      method: 'POST',
+      body: JSON.stringify({ text, attachmentIds }),
+    }))
+  },
+
+  subscribeRun(sessionId, runId, callbacks: RunEventCallbacks): RunSubscription {
+    const source = new EventSource(`${gatewayBaseUrl}/sessions/${encodeURIComponent(sessionId)}/runs/${encodeURIComponent(runId)}/events`)
+    let closed = false
+    let connectionErrors = 0
+    const receive = (raw: Event) => {
+      if (closed) return
+      try {
+        const event = mapRunEvent(JSON.parse((raw as MessageEvent<string>).data) as GatewayRunEvent, sessionId)
+        connectionErrors = 0
+        callbacks.onEvent(event)
+        if (terminalEventKinds.has(event.kind)) {
+          closed = true
+          source.close()
+          callbacks.onComplete()
+        }
+      } catch {
+        closed = true
+        source.close()
+        callbacks.onError(new GatewayClientError('invalid_gateway_event', 'Gateway 返回了无效执行事件', 502))
+      }
+    }
+    streamEventKinds.forEach((kind) => source.addEventListener(kind, receive))
+    source.onerror = () => {
+      if (closed) return
+      connectionErrors += 1
+      if (source.readyState === EventSource.CLOSED || connectionErrors >= 3) {
+        closed = true
+        source.close()
+        callbacks.onError(new GatewayClientError('gateway_stream_unavailable', '执行事件流已断开', 0))
+      }
+    }
+    return {
+      close() {
+        closed = true
+        source.close()
+      },
+    }
   },
 
   async submitMessage(sessionId, text, attachmentIds = []) {

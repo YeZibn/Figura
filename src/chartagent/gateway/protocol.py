@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from enum import Enum
 from typing import Any, Mapping
+
+from ..trace import sanitize_payload, truncate_text
 
 GATEWAY_VERSION = "v1"
 MAX_SESSION_NAME = 128
@@ -11,6 +16,9 @@ MAX_MESSAGE_TEXT = 12000
 MAX_ERROR_MESSAGE = 240
 MAX_ATTACHMENT_IDS = 16
 MAX_ATTACHMENT_ID = 128
+MAX_RUN_ID = 128
+MAX_EVENT_KIND = 64
+MAX_EVENT_PAYLOAD = 12000
 
 
 class GatewayFault(Exception):
@@ -30,6 +38,87 @@ class GatewayFault(Exception):
                 "message": self.message,
             },
         }
+
+
+class RunStatus(str, Enum):
+    """External lifecycle states for an in-memory Gateway run."""
+
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+def utc_timestamp() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+@dataclass(frozen=True)
+class RunAccepted:
+    """Bounded response returned before an asynchronous run completes."""
+
+    run_id: str
+    session_id: str
+    status: RunStatus = RunStatus.RUNNING
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "runId": self.run_id,
+            "sessionId": self.session_id,
+            "status": self.status.value,
+        }
+
+
+@dataclass(frozen=True)
+class ObservationReference:
+    """Safe metadata for a temporary generated visual observation."""
+
+    observation_id: str
+    media_type: str
+    caption: str
+    byte_count: int
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "observationId": self.observation_id,
+            "mediaType": self.media_type,
+            "caption": truncate_text(self.caption, 500),
+            "byteCount": self.byte_count,
+        }
+
+
+@dataclass(frozen=True)
+class RunEvent:
+    """A bounded event envelope shared by JSON and SSE transports."""
+
+    run_id: str
+    sequence: int
+    kind: str
+    payload: Mapping[str, Any] = None  # type: ignore[assignment]
+    timestamp: str = ""
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "kind", truncate_text(self.kind, MAX_EVENT_KIND))
+        payload = sanitize_payload(self.payload or {})
+        encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        if len(encoded) > MAX_EVENT_PAYLOAD:
+            payload = {
+                "truncated": True,
+                "preview": truncate_text(encoded, MAX_EVENT_PAYLOAD // 2),
+            }
+        object.__setattr__(self, "payload", payload)
+        object.__setattr__(self, "timestamp", self.timestamp or utc_timestamp())
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "runId": self.run_id,
+            "sequence": self.sequence,
+            "kind": self.kind,
+            "timestamp": self.timestamp,
+            "payload": dict(self.payload),
+        }
+
+    def to_json(self) -> str:
+        return json.dumps(self.to_dict(), ensure_ascii=False, separators=(",", ":"))
 
 
 def _validate_text(value: object, *, field: str, limit: int) -> str:

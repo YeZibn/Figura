@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, List, Optional
+from typing import Any, Callable, List, Optional, Sequence
 
 from openai.types.chat import ChatCompletionMessageParam
 
@@ -37,9 +37,12 @@ from .trace import (
 )
 from .tools.registry import ToolRegistry, dispatch_observation
 from .memory import AgentMemory, InMemoryAgentMemory, RunStatus
+from .tools.result import GeneratedImage
 
 # Sentinel returned when the step budget is exhausted.
 _BUDGET_MSG = "*stopped: max_steps reached*"
+
+VisualObservationSink = Callable[[str, str, Sequence[GeneratedImage]], Sequence[dict[str, Any]]]
 
 
 def tool_to_openai_schema(tool: Any) -> dict:
@@ -101,6 +104,7 @@ class Agent:
         trace_sink: Optional[TraceSink] = None,
         trace_reasoning: bool = False,
         trace_run_id: Optional[str] = None,
+        visual_observation_sink: Optional[VisualObservationSink] = None,
         memory: Optional[AgentMemory] = None,
         attachments: Any = None,
         context_budget: int = 24000,
@@ -114,6 +118,7 @@ class Agent:
         self._trace_sink = trace if trace is not None else trace_sink
         self._trace_reasoning = trace_reasoning
         self._trace_run_id = trace_run_id
+        self._visual_observation_sink = visual_observation_sink
         self.memory = memory or InMemoryAgentMemory(context_budget=context_budget)
         self.attachments = attachments
         self.context_budget = context_budget
@@ -256,6 +261,19 @@ class Agent:
                 self._messages.append(tool_message)
                 self.memory.append(run, "tool", {"message": tool_message, "tool_name": call.name, "status": _observation_status(observation.content)})
                 if emitter is not None:
+                    observation_refs: Sequence[dict[str, Any]] = ()
+                    if self._visual_observation_sink is not None and observation.images:
+                        try:
+                            observation_refs = self._visual_observation_sink(
+                                call.name,
+                                call.id,
+                                observation.images,
+                            )
+                        except Exception:  # noqa: BLE001 - observation diagnostics cannot abort the Agent
+                            observation_refs = ()
+                    image_payload = {"images": summarize_images(observation.images)}
+                    if observation_refs:
+                        image_payload["observations"] = list(observation_refs)
                     emitter.emit(
                         "tool_result",
                         turn=turn,
@@ -271,7 +289,7 @@ class Agent:
                             turn=turn,
                             tool_name=call.name,
                             call_id=call.id,
-                            images=summarize_images(observation.images),
+                            **image_payload,
                         )
                 visual_evidence.extend(
                     ToolVisualEvidence(call.name, call.id, generated)

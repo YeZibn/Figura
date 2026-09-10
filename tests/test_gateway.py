@@ -15,13 +15,16 @@ from PIL import Image
 
 from chartagent.attachments import AttachmentRegistry
 from chartagent.gateway.attachments import AttachmentStoreError, EphemeralAttachmentStore
-from chartagent.gateway.protocol import GatewayFault, validate_message_text, validate_session_name
+from chartagent.gateway.protocol import GatewayFault, RunEvent, validate_message_text, validate_session_name
 from chartagent.gateway.projection import project_completed_runs
 from chartagent.gateway.server import GatewayHTTPServer, serve
 from chartagent.gateway.service import GatewayService
+from chartagent.gateway.runs import ObservationStore, RunManager
 from chartagent.memory import SQLiteAgentMemory, RunStatus
 from chartagent.memory.models import Record, Run
 from chartagent.runtime import AgentRuntime
+from chartagent.tools.result import GeneratedImage
+from chartagent.trace import TraceEvent
 
 
 def _completed_run(run_id: str, text: str = "问题", answer: str = "答案") -> Run:
@@ -337,3 +340,141 @@ def test_gateway_http_routes_and_bounded_errors(tmp_path):
 def test_gateway_rejects_non_loopback_server_host(tmp_path):
     with pytest.raises(ValueError, match="loopback"):
         serve(host="0.0.0.0", port=0, database=tmp_path / "sessions.db")
+
+
+def test_run_manager_replays_ordered_events_and_expires_observations():
+    manager = RunManager(retention_seconds=0.01)
+    run = manager.create("session-1")
+    run.publish("tool_call", {"tool_name": "measure_bars"})
+    run.complete("done")
+    events = list(run.iter_events())
+    assert [event.kind for event in events] == ["run_started", "tool_call"]
+    assert [event.sequence for event in events] == [1, 2]
+    assert [event.kind for event in run.iter_events(1)] == ["tool_call"]
+    bounded = RunEvent("run-1", 1, "tool_result", {"result": "x" * 20000})
+    assert "truncated" in bounded.to_json()
+    assert len(bounded.to_json()) < 13000
+
+    observation_store = ObservationStore(retention_seconds=0)
+    reference = observation_store.add(
+        "run-1",
+        "session-1",
+        GeneratedImage(b"overlay", "image/png", "overlay"),
+    )
+    assert reference is not None
+    assert observation_store.get("run-1", "session-1", reference.observation_id) is None
+    manager.close()
+
+
+def test_async_gateway_run_streams_trace_and_scoped_visual_observation(tmp_path):
+    database = tmp_path / "sessions.db"
+
+    class FakeAgent:
+        def __init__(self, memory, trace_sink, visual_observation_sink):
+            self.memory = memory
+            self.trace_sink = trace_sink
+            self.visual_observation_sink = visual_observation_sink
+
+        def run(self, prompt):
+            run = self.memory.begin_run()
+            self.memory.append(run, "user", {"text": prompt})
+            self.trace_sink(TraceEvent("tool_call", run_id="agent", turn=1, payload={"tool_name": "inspect", "call_id": "c1"}))
+            image = GeneratedImage(b"overlay", "image/png", "检测结果")
+            refs = self.visual_observation_sink("inspect", "c1", [image])
+            self.trace_sink(TraceEvent("visual_observation", run_id="agent", turn=1, payload={"observations": refs}))
+            self.memory.append(run, "final", {"answer": "已完成"})
+            self.memory.finish(run, RunStatus.COMPLETED, "final")
+            return "已完成"
+
+    class FakeRuntime:
+        def __init__(self, memory, trace_sink, visual_observation_sink):
+            self.agent = FakeAgent(memory, trace_sink, visual_observation_sink)
+
+        def close(self):
+            self.agent.memory.close()
+
+    def runtime_factory(name, *, trace_sink=None, visual_observation_sink=None):
+        return FakeRuntime(
+            SQLiteAgentMemory(name, database=database, create=False),
+            trace_sink,
+            visual_observation_sink,
+        )
+
+    service = GatewayService(database=database, runtime_factory=runtime_factory)
+    first_id = service.create_session("first")["session"]["id"]
+    second_id = service.create_session("second")["session"]["id"]
+    accepted = service.start_run(first_id, "检查图表")
+    run_id = accepted["run"]["runId"]
+    run = service.get_run(first_id, run_id)
+    assert run.wait_terminal(timeout=2)
+    events = list(run.iter_events())
+    assert [event.kind for event in events] == [
+        "run_started",
+        "tool_call",
+        "visual_observation",
+        "final_answer",
+    ]
+    observation_id = events[2].payload["observations"][0]["observationId"]
+    assert service.get_observation(first_id, run_id, observation_id) == (b"overlay", "image/png")
+    with pytest.raises(GatewayFault) as isolated:
+        service.get_observation(second_id, run_id, observation_id)
+    assert isolated.value.code == "run_not_found"
+    assert [event.kind for event in run.iter_events(1)] == ["tool_call", "visual_observation", "final_answer"]
+    service.close()
+
+
+def test_http_async_run_returns_sse_stream(tmp_path):
+    database = tmp_path / "sessions.db"
+
+    class FakeAgent:
+        def __init__(self, memory):
+            self.memory = memory
+
+        def run(self, prompt):
+            run = self.memory.begin_run()
+            self.memory.append(run, "user", {"text": prompt})
+            self.memory.append(run, "final", {"answer": "流式完成"})
+            self.memory.finish(run, RunStatus.COMPLETED, "final")
+            return "流式完成"
+
+    class FakeRuntime:
+        def __init__(self, memory):
+            self.agent = FakeAgent(memory)
+
+        def close(self):
+            self.agent.memory.close()
+
+    service = GatewayService(
+        database=database,
+        runtime_factory=lambda name: FakeRuntime(SQLiteAgentMemory(name, database=database, create=False)),
+    )
+    server = GatewayHTTPServer(("127.0.0.1", 0), service)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    try:
+        status, created, _ = _request(port, "POST", "/api/v1/sessions", {"name": "demo"})
+        assert status == 200
+        session_id = created["session"]["id"]
+        status, accepted, _ = _request(
+            port,
+            "POST",
+            f"/api/v1/sessions/{session_id}/runs",
+            {"text": "开始"},
+        )
+        assert status == 202
+        run_id = accepted["run"]["runId"]
+
+        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=3)
+        connection.request("GET", f"/api/v1/sessions/{session_id}/runs/{run_id}/events")
+        response = connection.getresponse()
+        raw = response.read().decode("utf-8")
+        connection.close()
+        assert response.status == 200
+        assert "event: run_started" in raw
+        assert "event: final_answer" in raw
+        assert '"answer":"流式完成"' in raw
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=3)

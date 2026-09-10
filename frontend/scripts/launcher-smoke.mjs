@@ -1,0 +1,26 @@
+import assert from 'node:assert/strict'
+import { buildGatewayArgs, buildGatewayEnvironment, gatewayBaseUrl, isCompatibleHealth, readConfig } from './dev-gateway.mjs'
+import { gatewayTauriEnvironment } from './tauri-dev-gateway.mjs'
+
+const environment = {
+  CHARTAGENT_GATEWAY_HOST: '127.0.0.1',
+  CHARTAGENT_GATEWAY_PORT: '9876',
+  CHARTAGENT_CONDA_ENV: 'agent',
+  CHARTAGENT_GATEWAY_ORIGINS: 'http://localhost:1420',
+  VITE_DEV_PORT: '1421',
+}
+const config = readConfig(environment)
+
+assert.equal(config.condaEnvironment, 'agent')
+assert.equal(gatewayBaseUrl(config), 'http://127.0.0.1:9876/api/v1')
+assert.deepEqual(buildGatewayArgs(config), [
+  'run', '-n', 'agent', 'python', '-m', 'chartagent.gateway',
+  '--host', '127.0.0.1', '--port', '9876',
+])
+assert.equal(isCompatibleHealth({ version: 'v1', status: 'ok' }), true)
+assert.equal(isCompatibleHealth({ version: 'v1', status: 'error' }), false)
+assert.match(buildGatewayEnvironment(environment, config).CHARTAGENT_GATEWAY_ORIGINS, /127\.0\.0\.1:1421/)
+assert.equal(gatewayTauriEnvironment({ VITE_CHARTAGENT_MODE: 'mock' }).VITE_CHARTAGENT_MODE, 'gateway')
+assert.equal(gatewayTauriEnvironment({}).CHARTAGENT_MODE, 'gateway')
+
+console.log('launcher smoke passed (configuration, health, environment, and process contracts)')
