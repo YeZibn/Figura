@@ -1,0 +1,21 @@
+.error-state {
+  height: 100%;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  color: #8b999c;
+  text-align: center;
+}
+
+.error-state h2 {
+  margin: 0;
+  color: #9a5b55;
+  font-size: 16px;
+}
+
+.error-state p {
+  max-width: 300px;
+  margin: 8px 0;
+  font-size: 12px;
+  line-height: 1.6;
+}

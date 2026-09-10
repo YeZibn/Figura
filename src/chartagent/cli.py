@@ -18,28 +18,12 @@ from .agent import Agent
 from .conversation import Conversation
 from .client import LLMClient, load_environment
 from .multimodal import build_registered_attachment_turn
-from .attachments import AttachmentRegistry
 from .memory import SQLiteAgentMemory
+from .runtime import AGENT_SYSTEM_PROMPT, AgentRuntime, create_agent_runtime
 from .trace import JsonlTraceRenderer, TextTraceRenderer, TraceSink
 from .tools import ToolRegistry
 from .tools.builtin import register_builtins
 from .tools.chart import register_chart_tools
-
-AGENT_SYSTEM_PROMPT = """You are ChartAgent, a general-purpose assistant that can
-inspect attached images visually and use tools when they are useful. For chart
-work, extract_text can read visible labels and annotations, measure_bars can
-measure bar geometry, assemble_spec can construct a ChartSpec, and validate_spec
-can check one. Decide freely whether to call tools, which tools to call, and in
-what order based on the user's request and the available evidence. Answer
-naturally unless the user asks for structured output; a ChartSpec is optional.
-User image references are registered as opaque attachment IDs. Use load_image
-with an attachment_id when visual inspection is useful; chart sensors accept the
-same authorized ID. Image loading is optional and under your control.
-When a tool provides a generated visual observation, inspect it together with
-the structured result when useful. You may accept it, retry with different
-arguments, switch tools, ignore irrelevant evidence, or answer directly; no
-fixed validation sequence or numeric acceptance threshold is required.
-"""
 
 _IMAGE_REF = re.compile(r'@"([^"\r\n]+)"|@(?!")(\S+)')
 
@@ -102,22 +86,6 @@ def run_agent_repl(
     if trace_format not in {"text", "json", "jsonl"}:
         raise ValueError("trace_format must be text, json, or jsonl")
 
-    load_environment()
-    client = LLMClient()
-    memory = SQLiteAgentMemory(session_name) if session_name else None
-    attachments = AttachmentRegistry(
-        session_id=memory.session.id if memory else None,
-        save=memory.save_attachment if memory else None,
-        load=memory.get_attachment if memory else None,
-    )
-    registry = ToolRegistry()
-    register_builtins(registry)
-    if hasattr(registry, "register"):
-        registry.register(attachments.load_tool())
-        register_chart_tools(registry, attachments=attachments)
-    else:
-        # Keep lightweight constructor stubs usable in offline callers/tests.
-        register_chart_tools(registry)
     trace_sink: Optional[TraceSink] = None
     if trace:
         renderer = (
@@ -126,13 +94,21 @@ def run_agent_repl(
             else TextTraceRenderer(trace_stream)
         )
         trace_sink = renderer
-    agent_kwargs = {"system": system, "model": model}
-    if trace_sink is not None:
-        agent_kwargs.update(trace=trace_sink, trace_reasoning=trace_reasoning)
-    if memory is not None:
-        agent_kwargs["memory"] = memory
-    agent_kwargs["attachments"] = attachments
-    agent = Agent(client, registry, **agent_kwargs)
+    runtime = create_agent_runtime(
+        model=model,
+        system=system,
+        trace_sink=trace_sink,
+        trace_reasoning=trace_reasoning,
+        session_name=session_name,
+        load_env=load_environment,
+        llm_client_cls=LLMClient,
+        agent_cls=Agent,
+        registry_cls=ToolRegistry,
+        register_builtins_fn=register_builtins,
+        register_chart_tools_fn=register_chart_tools,
+    )
+    agent = runtime.agent
+    attachments = runtime.attachments
 
     print("Agent session (built-in tools enabled; blank line or Ctrl-D to exit).")
     while True:

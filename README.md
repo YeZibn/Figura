@@ -17,7 +17,24 @@ npm install
 npm run dev
 ```
 
-The Vite app is available at http://127.0.0.1:1420/. To run the Tauri development window after installing the Rust toolchain, use `npm run tauri:dev` from `frontend/`. The first milestone uses mock data and does not start a Python sidecar.
+The Vite app is available at http://127.0.0.1:1420/. To run the Tauri development window after installing the Rust toolchain, use `npm run tauri:dev` from `frontend/`. The desktop client uses mock data by default and does not silently fall back to mock data when Gateway mode is explicitly enabled.
+
+### Local Python Gateway
+
+The second desktop milestone adds a loopback Python Gateway for named sessions
+and completed text runs. Start it with the Conda `agent` environment, then run
+the browser client in Gateway mode:
+
+```bash
+conda run -n agent python -m chartagent.gateway --port 8765
+cd frontend
+VITE_CHARTAGENT_MODE=gateway npm run dev
+```
+
+The service listens on `127.0.0.1` and exposes versioned JSON routes under
+`/api/v1`. Gateway mode currently handles session lifecycle and synchronous text
+runs. Attachment upload, runtime event streaming, and Tauri-managed Python
+processes remain later milestones.
 
 ## Agent sessions
 

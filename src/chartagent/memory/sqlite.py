@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from .context import build_context, sanitize_payload
-from .models import Attachment, Record, Run, RunStatus, Session, bounded, utc_now
+from .models import Attachment, Record, Run, RunStatus, Session, SessionStats, bounded, utc_now
 
 SCHEMA_VERSION = 1
 
@@ -105,6 +105,77 @@ class SQLiteAgentMemory:
             conn.close()
 
     @classmethod
+    def list_session_stats(cls, *, database: str | Path | None = None) -> list[SessionStats]:
+        """Return bounded session metadata without exposing SQLite rows."""
+        path = Path(database) if database else default_database_path()
+        if not path.exists():
+            return []
+        conn = sqlite3.connect(path)
+        try:
+            rows = conn.execute(
+                """
+                SELECT s.id, s.name, s.created_at, s.updated_at,
+                       COALESCE(SUM(CASE WHEN r.status = ? THEN 1 ELSE 0 END), 0)
+                  FROM sessions AS s
+             LEFT JOIN runs AS r ON r.session_id = s.id
+              GROUP BY s.id, s.name, s.created_at, s.updated_at
+              ORDER BY s.updated_at DESC
+                """,
+                (RunStatus.COMPLETED.value,),
+            ).fetchall()
+            return [
+                SessionStats(
+                    Session(row[0], row[1], row[2], row[3]),
+                    int(row[4]),
+                )
+                for row in rows
+            ]
+        finally:
+            conn.close()
+
+    @classmethod
+    def get_session_by_id(
+        cls,
+        session_id: str,
+        *,
+        database: str | Path | None = None,
+    ) -> Session | None:
+        """Resolve an opaque session ID to safe session metadata."""
+        path = Path(database) if database else default_database_path()
+        if not path.exists():
+            return None
+        conn = sqlite3.connect(path)
+        try:
+            row = conn.execute(
+                "SELECT id, name, created_at, updated_at FROM sessions WHERE id = ?",
+                (session_id,),
+            ).fetchone()
+            return Session(row[0], row[1], row[2], row[3]) if row else None
+        finally:
+            conn.close()
+
+    @classmethod
+    def get_session_by_name(
+        cls,
+        name: str,
+        *,
+        database: str | Path | None = None,
+    ) -> Session | None:
+        """Resolve a display name without creating or opening a session."""
+        path = Path(database) if database else default_database_path()
+        if not path.exists():
+            return None
+        conn = sqlite3.connect(path)
+        try:
+            row = conn.execute(
+                "SELECT id, name, created_at, updated_at FROM sessions WHERE name = ?",
+                (name,),
+            ).fetchone()
+            return Session(row[0], row[1], row[2], row[3]) if row else None
+        finally:
+            conn.close()
+
+    @classmethod
     def delete_session(cls, name: str, *, database: str | Path | None = None) -> bool:
         path = Path(database) if database else default_database_path()
         if not path.exists():
@@ -155,6 +226,10 @@ class SQLiteAgentMemory:
             run.records = [Record(item["kind"], json.loads(item["payload_json"]), item["sequence"], item["created_at"]) for item in records]
             runs.append(run)
         return runs
+
+    def completed_runs(self) -> list[Run]:
+        """Return only completed runs for this session."""
+        return [run for run in self._load_runs() if run.status == RunStatus.COMPLETED]
 
     def context(self, run: Run, system: dict[str, Any] | None = None, budget: int = 24000, current_messages: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
         all_runs = [item for item in self._load_runs() if item.id != run.id]

@@ -40,6 +40,14 @@ class Session:
         bounded(self.name, MAX_SESSION_NAME, "session name")
 
 
+@dataclass(frozen=True)
+class SessionStats:
+    """Safe session metadata used by bounded external projections."""
+
+    session: Session
+    completed_run_count: int
+
+
 @dataclass
 class Run:
     id: str
