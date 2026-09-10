@@ -9,30 +9,47 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Mapping, Optional
 
 from dotenv import load_dotenv
 
-# Default target: the Alibaba compatible-mode (OpenAI-compatible) deployment.
-DEFAULT_BASE_URL = "https://ws-6x14ipx7f4c4rnqb.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
+# Default target: the official OpenAI-compatible Chat Completions endpoint.
+DEFAULT_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_TIMEOUT = 60.0
 DEFAULT_MAX_RETRIES = 2
 
-_ENV_API_KEY = "DASHSCOPE_API_KEY"
-_ENV_BASE_URL = "DASHSCOPE_BASE_URL"
-_ENV_MODEL = "DASH_MODEL"
+_ENV_API_KEY = "OPENAI_API_KEY"
+_ENV_BASE_URL = "OPENAI_BASE_URL"
+_ENV_MODEL = "OPENAI_MODEL"
+_LEGACY_ENV_API_KEY = "DASHSCOPE_API_KEY"
+_LEGACY_ENV_BASE_URL = "DASHSCOPE_BASE_URL"
+_LEGACY_ENV_MODEL = "DASH_MODEL"
 _ENV_TIMEOUT = "OPENAI_TIMEOUT"
 _ENV_MAX_RETRIES = "OPENAI_MAX_RETRIES"
+_ENV_FILE = "CHARTAGENT_ENV_FILE"
 
 
-def load_environment(env_file: str = ".env") -> None:
-    """Load key/base_url/model from a `.env` file into the environment.
+def _default_environment_files() -> tuple[Path, ...]:
+    """Return local development candidates without depending on the caller cwd."""
+    project_root = Path(__file__).resolve().parents[3]
+    return (Path.cwd() / ".env", project_root / ".env")
+
+
+def load_environment(env_file: str | os.PathLike[str] | None = None) -> None:
+    """Load configuration from an explicit or stable local environment file.
 
     Uses ``python-dotenv``; existing environment variables take precedence over
-    values in the file. Call this once before ``resolve_config()`` when you want
-    configuration from `.env`.
+    values in the file. An explicit path takes precedence over
+    ``CHARTAGENT_ENV_FILE``; otherwise the current directory and source-tree
+    project root are checked without requiring a duplicate ``frontend/.env``.
     """
-    load_dotenv(env_file, override=False)
+    configured = env_file if env_file is not None else os.environ.get(_ENV_FILE)
+    candidates = (Path(configured),) if configured else _default_environment_files()
+    for candidate in candidates:
+        if candidate.is_file():
+            load_dotenv(candidate, override=False)
+            return
 
 
 @dataclass
@@ -48,7 +65,7 @@ class ClientConfig:
     model: str = ""
     timeout: float = DEFAULT_TIMEOUT
     max_retries: int = DEFAULT_MAX_RETRIES
-    enable_thinking: Optional[bool] = None  # provider-specific thinking toggle
+    reasoning_effort: Optional[str] = None
 
 
 def resolve_config(
@@ -57,7 +74,7 @@ def resolve_config(
     model: Optional[str] = None,
     timeout: Optional[float] = None,
     max_retries: Optional[int] = None,
-    enable_thinking: Optional[bool] = None,
+    reasoning_effort: Optional[str] = None,
     env: Optional[Mapping[str, str]] = None,
 ) -> ClientConfig:
     """Merge explicit params > env > defaults into a single ClientConfig.
@@ -66,25 +83,50 @@ def resolve_config(
     """
     env = env if env is not None else os.environ
 
+    def _env_value(*names: str) -> Optional[str]:
+        for name in names:
+            value = env.get(name)
+            if value is not None and value != "":
+                return value
+        return None
+
     def _env_float(name: str) -> Optional[float]:
         raw = env.get(name)
-        return float(raw) if raw else None
+        return float(raw) if raw is not None and raw != "" else None
 
     def _env_int(name: str) -> Optional[int]:
         raw = env.get(name)
-        return int(raw) if raw else None
+        return int(raw) if raw is not None and raw != "" else None
 
+    env_timeout = _env_float(_ENV_TIMEOUT)
+    env_max_retries = _env_int(_ENV_MAX_RETRIES)
     return ClientConfig(
-        api_key=api_key if api_key is not None else env.get(_ENV_API_KEY),
-        base_url=base_url if base_url is not None else env.get(_ENV_BASE_URL) or DEFAULT_BASE_URL,
-        model=model or env.get(_ENV_MODEL) or "",
-        timeout=timeout if timeout is not None else _env_float(_ENV_TIMEOUT) or DEFAULT_TIMEOUT,
+        api_key=(
+            api_key
+            if api_key is not None
+            else _env_value(_ENV_API_KEY, _LEGACY_ENV_API_KEY)
+        ),
+        base_url=(
+            base_url
+            if base_url is not None
+            else _env_value(_ENV_BASE_URL, _LEGACY_ENV_BASE_URL) or DEFAULT_BASE_URL
+        ),
+        model=(
+            model
+            if model is not None
+            else _env_value(_ENV_MODEL, _LEGACY_ENV_MODEL) or ""
+        ),
+        timeout=(
+            timeout
+            if timeout is not None
+            else (env_timeout if env_timeout is not None else DEFAULT_TIMEOUT)
+        ),
         max_retries=(
             max_retries
             if max_retries is not None
-            else _env_int(_ENV_MAX_RETRIES) or DEFAULT_MAX_RETRIES
+            else (env_max_retries if env_max_retries is not None else DEFAULT_MAX_RETRIES)
         ),
-        enable_thinking=enable_thinking,
+        reasoning_effort=reasoning_effort,
     )
 
 

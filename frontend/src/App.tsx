@@ -5,7 +5,7 @@ import type { ChartAgentClient, RunSubscription } from './api/client'
 import { mockClient } from './api/mockClient'
 import { formatBytes, mediaTypeForFile, validateImageFile } from './attachments'
 import { getGatewayRuntimeStatus, type GatewayRuntimeStatus } from './runtime'
-import type { AgentRunEvent, Attachment, AttachmentStatus, ConversationItem, RunState, Session, SessionData } from './types/protocol'
+import type { AgentRunEvent, Attachment, AttachmentStatus, ConversationItem, GatewayHealth, RunState, Session, SessionData } from './types/protocol'
 import './styles/global.css'
 import './styles/error.css'
 
@@ -78,12 +78,24 @@ function conversationItemsForEvent(event: AgentRunEvent): ConversationItem[] {
   return []
 }
 
-function SessionSidebar(props: { sessions: Session[]; activeId: string; onSelect: (id: string) => void; onCreate: () => void; mode: 'mock' | 'gateway'; runtimeStatus: GatewayRuntimeStatus | null }) {
+function gatewayStatusText(mode: 'mock' | 'gateway', runtimeStatus: GatewayRuntimeStatus | null, health: GatewayHealth | null): string {
+  if (mode === 'mock') return '可离线使用'
+  if (runtimeStatus?.state === 'unavailable') return '本地服务不可用'
+  const agentState = runtimeStatus?.agentState || health?.agent?.status
+  if (agentState === 'unavailable') return 'Agent 配置不可用'
+  if (agentState === 'ready') return 'Agent 已就绪'
+  if (agentState === 'starting') return 'Agent 正在启动'
+  if (runtimeStatus?.state === 'ready') return '本地服务已就绪'
+  return '本地服务连接中'
+}
+
+function SessionSidebar(props: { sessions: Session[]; activeId: string; onSelect: (id: string) => void; onCreate: () => void; mode: 'mock' | 'gateway'; runtimeStatus: GatewayRuntimeStatus | null; health: GatewayHealth | null }) {
+  const statusUnavailable = props.runtimeStatus?.state === 'unavailable' || props.runtimeStatus?.agentState === 'unavailable' || props.health?.agent?.status === 'unavailable'
   return <aside className="sidebar panel">
     <div className="brand"><div className="brand-mark"><BarChart3 size={19} /></div><div><strong>ChartAgent</strong><span>桌面工作台</span></div></div>
     <div className="section-heading"><span>会话</span><button className="icon-button" onClick={props.onCreate} title="新建会话"><Plus size={16} /></button></div>
     <div className="session-list">{props.sessions.map((session) => <button key={session.id} className={'session-item ' + (session.id === props.activeId ? 'selected' : '')} onClick={() => props.onSelect(session.id)}><span className="session-dot" /><span className="session-copy"><strong>{session.name}</strong><small>{session.updatedAt}</small></span><span className="session-count">{session.runCount}</span></button>)}</div>
-    <div className="sidebar-footer"><span className={'status-dot ' + (props.runtimeStatus?.state === 'unavailable' ? 'status-error' : '')} />{props.mode === 'gateway' ? 'Gateway 模式' : '模拟模式'} <span className="muted">·</span> {props.mode === 'gateway' ? (props.runtimeStatus?.state === 'ready' ? '本地服务已就绪' : props.runtimeStatus?.state === 'unavailable' ? '本地服务不可用' : '本地服务') : '可离线使用'}</div>
+    <div className="sidebar-footer"><span className={'status-dot ' + (statusUnavailable ? 'status-error' : '')} />{props.mode === 'gateway' ? 'Gateway 模式' : '模拟模式'} <span className="muted">·</span> {gatewayStatusText(props.mode, props.runtimeStatus, props.health)}</div>
   </aside>
 }
 
@@ -123,6 +135,7 @@ export default function App() {
   const mode = import.meta.env.VITE_CHARTAGENT_MODE === 'gateway' ? 'gateway' : 'mock'
   const client: ChartAgentClient = mode === 'gateway' ? gatewayClient : mockClient
   const [runtimeStatus, setRuntimeStatus] = useState<GatewayRuntimeStatus | null>(null)
+  const [gatewayHealth, setGatewayHealth] = useState<GatewayHealth | null>(null)
   const [sessions, setSessions] = useState<Session[]>([])
   const [activeId, setActiveId] = useState('')
   const [data, setData] = useState<SessionData | null>(null)
@@ -142,7 +155,19 @@ export default function App() {
 
   useEffect(() => { activeIdRef.current = activeId }, [activeId])
   useEffect(() => () => { subscriptionRef.current?.close(); localPreviews.current.forEach((url) => URL.revokeObjectURL(url)); localPreviews.current.clear() }, [])
-  useEffect(() => { if (mode !== 'gateway') return; let current = true; void getGatewayRuntimeStatus().then((status) => { if (current) setRuntimeStatus(status) }); return () => { current = false } }, [mode])
+  useEffect(() => {
+    if (mode !== 'gateway') return
+    let current = true
+    void getGatewayRuntimeStatus().then((status) => { if (current) setRuntimeStatus(status) })
+    void gatewayClient.getHealth().then((health) => {
+      if (!current) return
+      setGatewayHealth(health)
+      if (health.agent?.status === 'unavailable') {
+        setError(toUserMessage(new GatewayClientError('agent_unavailable', 'Agent service is unavailable', 503, health.agent.reason)))
+      }
+    }).catch((reason) => { if (current) setError(toUserMessage(reason)) })
+    return () => { current = false }
+  }, [mode])
 
   const withLocalPreviews = (value: SessionData): SessionData => ({ ...value, attachments: value.attachments.map((attachment) => ({ ...attachment, previewUrl: attachment.previewUrl || localPreviews.current.get(attachment.id) || '' })) })
 
@@ -208,7 +233,7 @@ export default function App() {
             terminalFailure = true
             setRunState('failed')
             setLoading(false)
-            setError(toUserMessage(new GatewayClientError(String(event.payload.code || 'agent_failed'), String(event.payload.message || 'Agent 执行失败'), 502)))
+            setError(toUserMessage(new GatewayClientError(String(event.payload.code || 'agent_failed'), String(event.payload.message || 'Agent 执行失败'), 502, typeof event.payload.reason === 'string' ? event.payload.reason : undefined)))
           } else if (event.kind !== 'run_started') {
             setRunState('running')
           }
@@ -248,13 +273,15 @@ export default function App() {
     }
   }
 
-  return <><div className="app-shell"><SessionSidebar sessions={sessions} activeId={activeId} onSelect={selectSession} onCreate={create} mode={mode} runtimeStatus={runtimeStatus} /><ConversationPanel data={data} liveItems={liveItems} runState={runState} selectedAttachmentIds={selectedIds} onSubmit={submit} loading={loading} loadingSession={loadingSession} error={error} /><AttachmentPanel attachments={data?.attachments ?? []} pending={pending} selectedIds={selectedIds} error={attachmentError} onAdd={addFiles} onToggle={toggleAttachment} onRemovePending={removePending} onRetryPending={(item) => void uploadPending(item)} /></div>{creatingSession && <div className="dialog-backdrop"><form className="session-dialog" onSubmit={(event) => void confirmCreate(event)}><h2>新建会话</h2><label htmlFor="session-name">会话名称</label><input id="session-name" value={newSessionName} onChange={(event) => setNewSessionName(event.target.value)} placeholder="例如：季度销售分析" autoFocus /><div className="dialog-actions"><button type="button" className="dialog-secondary" onClick={() => setCreatingSession(false)}>取消</button><button type="submit" className="dialog-primary" disabled={!newSessionName.trim()}>创建会话</button></div></form></div>}</>
+  return <><div className="app-shell"><SessionSidebar sessions={sessions} activeId={activeId} onSelect={selectSession} onCreate={create} mode={mode} runtimeStatus={runtimeStatus} health={gatewayHealth} /><ConversationPanel data={data} liveItems={liveItems} runState={runState} selectedAttachmentIds={selectedIds} onSubmit={submit} loading={loading} loadingSession={loadingSession} error={error} /><AttachmentPanel attachments={data?.attachments ?? []} pending={pending} selectedIds={selectedIds} error={attachmentError} onAdd={addFiles} onToggle={toggleAttachment} onRemovePending={removePending} onRetryPending={(item) => void uploadPending(item)} /></div>{creatingSession && <div className="dialog-backdrop"><form className="session-dialog" onSubmit={(event) => void confirmCreate(event)}><h2>新建会话</h2><label htmlFor="session-name">会话名称</label><input id="session-name" value={newSessionName} onChange={(event) => setNewSessionName(event.target.value)} placeholder="例如：季度销售分析" autoFocus /><div className="dialog-actions"><button type="button" className="dialog-secondary" onClick={() => setCreatingSession(false)}>取消</button><button type="submit" className="dialog-primary" disabled={!newSessionName.trim()}>创建会话</button></div></form></div>}</>
 }
 
 function toUserMessage(error: unknown): string {
   if (error instanceof GatewayClientError) {
     if (error.code === 'gateway_unavailable') return '无法连接到本地 Gateway，请先启动 Python 服务。'
-    if (error.code === 'agent_unavailable') return 'Agent 当前不可用，请检查模型配置。'
+    if (error.code === 'agent_unavailable' && error.reason === 'missing_configuration') return 'Agent 未配置，请检查项目根目录 .env 中的模型配置。'
+    if (error.code === 'agent_unavailable' && error.reason === 'invalid_configuration') return 'Agent 配置无效，请检查模型地址和参数。'
+    if (error.code === 'agent_unavailable') return 'Agent 当前不可用，请稍后重试。'
     if (error.code === 'session_not_found') return '会话不存在，可能已被删除。'
     if (error.code === 'session_exists') return '会话名称已存在，请换一个名称。'
     if (error.code === 'attachment_not_found') return '附件不存在或不属于当前会话。'

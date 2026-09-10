@@ -6,7 +6,7 @@ Runs the three acceptance paths from change add-llm-client task 7.2:
   (b) tool-defined call with tool_calls resolved and passed back,
   (c) deep-thinking model streaming with reasoning/content collected separately.
 
-Requires DASHSCOPE_API_KEY (or --api-key). When no credential is available it
+Requires OPENAI_API_KEY (or --api-key). When no credential is available it
 prints a hint and exits without error so it can be wired into CI safely.
 
 Usage:
@@ -22,7 +22,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from chartagent.client import LLMClient, append_to_history, load_environment  # noqa: E402
+from chartagent.client import LLMClient, load_environment  # noqa: E402
 
 
 def _client(args: argparse.Namespace) -> LLMClient | None:
@@ -36,7 +36,7 @@ def _client(args: argparse.Namespace) -> LLMClient | None:
         return LLMClient(**overrides)
     except ValueError as e:
         print(f"SKIP: no credential available -> {e}")
-        print("  Set DASHSCOPE_API_KEY (or .env) and re-run; pass --api-key as fallback.")
+        print("  Set OPENAI_API_KEY (or .env) and re-run; pass --api-key as fallback.")
         return None
 
 
@@ -75,7 +75,20 @@ def _smoke_tools(client: LLMClient, args: argparse.Namespace) -> None:
         # Feed a synthetic tool result back into a follow-up to prove roundtrip.
         tool_result = {"role": "tool", "tool_call_id": res.tool_calls[0].id, "content": '{"temp": 18, "condition": "sunny"}'}
         follow = list(messages)
-        append_to_history(follow, res)  # content-only assistant entry
+        follow.append(
+            {
+                "role": "assistant",
+                "content": res.content,
+                "tool_calls": [
+                    {
+                        "id": call.id,
+                        "type": "function",
+                        "function": {"name": call.name, "arguments": call.arguments},
+                    }
+                    for call in res.tool_calls
+                ],
+            }
+        )
         follow.append(tool_result)
         res2 = client.chat(follow, model=model, tools=tools)
         assert res2.content, "follow-up after tool result produced no content"
@@ -87,7 +100,7 @@ def _smoke_thinking(client: LLMClient, args: argparse.Namespace) -> None:
     res = client.chat(
         [{"role": "user", "content": "23 和 17 的乘积是多少？请逐步思考。"}],
         model=model,
-        enable_thinking=True,
+        reasoning_effort="medium",
     )
     print(f"(c) thinking  : reasoning_len={len(res.reasoning)} content={res.content[:60]!r}")
     # reasoning must never leak into assistant history entries
@@ -101,8 +114,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-url", default=None, help="Override endpoint base_url.")
     parser.add_argument("--api-key", default=None, help="Override API key.")
-    parser.add_argument("--model", default=None, help="Model for (a) and (b); defaults to DASH_MODEL/.env")
-    parser.add_argument("--thinking-model", default=None, help="Deep-thinking model for (c); defaults to DASH_MODEL/.env")
+    parser.add_argument("--model", default=None, help="Model for (a) and (b); defaults to OPENAI_MODEL/.env")
+    parser.add_argument("--thinking-model", default=None, help="Reasoning model for (c); defaults to OPENAI_MODEL/.env")
     args = parser.parse_args()
 
     client = _client(args)

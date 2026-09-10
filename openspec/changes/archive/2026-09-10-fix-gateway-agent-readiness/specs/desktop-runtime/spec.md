@@ -1,10 +1,4 @@
-# desktop-runtime Specification
-
-## Purpose
-
-Provide a Tauri-owned local runtime boundary that starts and supervises the Python Gateway for the desktop workspace, reports readiness clearly, and shuts down only the process owned by the current desktop instance.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Tauri manages the local Gateway lifecycle
 
@@ -29,20 +23,6 @@ The desktop runtime SHALL start the configured local Python Gateway when the wor
 
 - **WHEN** the desktop client starts in mock mode
 - **THEN** it remains usable without a Python process, provider credentials, or a running Gateway
-
-### Requirement: Desktop shutdown is scoped to the owned Gateway
-
-When the desktop application closes, the runtime SHALL request graceful shutdown of the Gateway process it started and SHALL NOT terminate an unrelated Gateway or process using the same machine.
-
-#### Scenario: Application closes after starting Gateway
-
-- **WHEN** the user closes a desktop instance that owns a Gateway process
-- **THEN** the runtime releases the process it owns and the next desktop launch can bind the configured local endpoint without a stale child process
-
-#### Scenario: Application connects to an externally managed Gateway
-
-- **WHEN** the desktop client is configured to use an already running compatible Gateway it did not start
-- **THEN** application shutdown leaves that external process running
 
 ### Requirement: Development runtime honors the agent environment contract
 

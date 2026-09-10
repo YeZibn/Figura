@@ -16,7 +16,9 @@ npm run dev:gateway
 ```
 
 The equivalent repository-root command is `npm --prefix frontend run
-dev:gateway`. To start the Tauri window with Gateway mode, run
+dev:gateway`. The launcher passes the repository-root `.env` path to the
+Python process through `CHARTAGENT_ENV_FILE`, so a duplicate `frontend/.env`
+is not required; process environment variables still take precedence. To start the Tauri window with Gateway mode, run
 `npm run tauri:dev:gateway`; Tauri owns the Gateway child in that workflow.
 
 For repeatable browser verification, run `npm run dev`, open `http://127.0.0.1:1420/`, and check:

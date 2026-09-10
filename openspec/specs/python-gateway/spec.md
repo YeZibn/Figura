@@ -8,12 +8,17 @@ Provide a local, browser-compatible gateway that lets the ChartAgent desktop cli
 
 ### Requirement: Gateway is available only as a local HTTP service
 
-The system SHALL provide a versioned HTTP/JSON gateway bound to a loopback interface. It SHALL expose a health response and SHALL reject malformed JSON, unsupported methods, and unsupported routes with JSON error responses. The gateway MUST NOT bind to a non-loopback address by default.
+The system SHALL provide a versioned HTTP/JSON gateway bound to a loopback interface. It SHALL expose a health response that identifies HTTP Gateway availability and a bounded Agent readiness status without exposing credentials or provider payloads. It SHALL reject malformed JSON, unsupported methods, and unsupported routes with JSON error responses. The gateway MUST NOT bind to a non-loopback address by default.
 
-#### Scenario: Local client verifies gateway availability
+#### Scenario: Local client verifies gateway and Agent availability
 
 - **WHEN** a local desktop or browser client requests the gateway health endpoint
-- **THEN** it receives a successful JSON response identifying a compatible gateway version
+- **THEN** it receives a successful JSON response identifying a compatible gateway version, HTTP service status, and a safe Agent readiness state
+
+#### Scenario: Agent configuration is missing
+
+- **WHEN** the Gateway is running but required provider configuration is unavailable
+- **THEN** the health response remains usable for diagnosing the local service, reports Agent readiness as unavailable with a stable safe reason code, and contains no credential value or raw exception
 
 #### Scenario: Unsupported request is bounded
 
@@ -63,10 +68,15 @@ The gateway SHALL accept a non-empty text message and optional authorized attach
 - **WHEN** an accepted run reaches a final answer
 - **THEN** the run emits a terminal success event and the session transcript becomes readable with the completed user and assistant records
 
-#### Scenario: Run failure is isolated
+#### Scenario: Agent configuration failure is isolated and safe
 
-- **WHEN** provider setup or Agent execution fails for a submitted message
-- **THEN** the Gateway emits or returns a bounded failure, marks the run unsuccessful, and keeps prior completed session history readable
+- **WHEN** provider setup fails because the Agent configuration is missing or invalid
+- **THEN** the Gateway emits or returns a bounded `agent_unavailable` failure with a stable safe reason code, does not include credentials or raw exception text, marks the run unsuccessful, and keeps prior completed session history readable
+
+#### Scenario: Agent execution failure is isolated
+
+- **WHEN** the configured Agent fails while executing a provider request or tool-capable run
+- **THEN** the Gateway emits or returns a bounded Agent execution failure, marks the run unsuccessful, and keeps prior completed session history readable
 
 #### Scenario: Empty message is rejected before execution
 

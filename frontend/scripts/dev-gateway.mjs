@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process'
+import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import process from 'node:process'
 
@@ -8,6 +9,7 @@ const DEFAULT_FRONTEND_HOST = '127.0.0.1'
 const DEFAULT_FRONTEND_PORT = 1420
 const DEFAULT_STARTUP_TIMEOUT_MS = 15000
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 2000
+const DEFAULT_ENV_FILE = resolve(import.meta.dirname, '../../.env')
 
 const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds))
 
@@ -25,7 +27,8 @@ export function readConfig(environment = process.env) {
   const shutdownTimeout = numericEnv(environment, 'CHARTAGENT_GATEWAY_SHUTDOWN_MS', DEFAULT_SHUTDOWN_TIMEOUT_MS, 100, 10000)
   const condaEnvironment = environment.CHARTAGENT_CONDA_ENV || 'agent'
   const condaExecutable = environment.CHARTAGENT_CONDA_EXECUTABLE || 'conda'
-  return { gatewayHost, gatewayPort, frontendHost, frontendPort, startupTimeout, shutdownTimeout, condaEnvironment, condaExecutable }
+  const environmentFile = environment.CHARTAGENT_ENV_FILE || DEFAULT_ENV_FILE
+  return { gatewayHost, gatewayPort, frontendHost, frontendPort, startupTimeout, shutdownTimeout, condaEnvironment, condaExecutable, environmentFile }
 }
 
 export function buildGatewayArgs(config) {
@@ -61,6 +64,7 @@ export function buildGatewayEnvironment(environment, config) {
   return {
     ...environment,
     CHARTAGENT_GATEWAY_ORIGINS: origins.join(','),
+    CHARTAGENT_ENV_FILE: environment.CHARTAGENT_ENV_FILE || config.environmentFile,
   }
 }
 

@@ -83,7 +83,7 @@ def _answer_mentions_fixture(answer: str) -> bool:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model", default=None, help="Override DASH_MODEL.")
+    parser.add_argument("--model", default=None, help="Override OPENAI_MODEL.")
     args = parser.parse_args()
 
     load_environment()

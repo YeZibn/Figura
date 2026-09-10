@@ -1,4 +1,4 @@
-import type { AgentRunEvent, Attachment, RunHandle, Session, SessionData } from '../types/protocol'
+import type { AgentRunEvent, Attachment, GatewayHealth, RunHandle, Session, SessionData } from '../types/protocol'
 
 export type RunSubscription = { close(): void }
 
@@ -9,6 +9,7 @@ export type RunEventCallbacks = {
 }
 
 export type ChartAgentClient = {
+  getHealth(): Promise<GatewayHealth>
   listSessions(): Promise<Session[]>
   getSession(id: string): Promise<SessionData>
   createSession(name: string): Promise<SessionData>

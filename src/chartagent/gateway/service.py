@@ -9,7 +9,7 @@ from typing import Any, Callable, Sequence
 from ..attachments import AttachmentRegistry
 from ..memory import SQLiteAgentMemory
 from ..multimodal import build_registered_attachment_turn
-from ..runtime import AgentRuntime, create_agent_runtime
+from ..runtime import AgentRuntime, create_agent_runtime, probe_agent_readiness
 from ..tools.result import GeneratedImage
 from ..trace import TraceSink
 from .attachments import AttachmentStoreError, EphemeralAttachmentStore
@@ -40,6 +40,7 @@ class GatewayService:
         attachment_store: EphemeralAttachmentStore | None = None,
         attachment_root: str | Path | None = None,
         run_manager: RunManager | None = None,
+        readiness_probe: Callable[[], dict[str, str]] | None = None,
     ) -> None:
         self.database = database
         self.model = model
@@ -47,6 +48,7 @@ class GatewayService:
         self._runtime_factory = runtime_factory or self._build_runtime
         self._attachment_store = attachment_store or EphemeralAttachmentStore(attachment_root)
         self._runs = run_manager or RunManager()
+        self._readiness_probe = readiness_probe or (lambda: probe_agent_readiness(model=self.model))
 
     def _open_memory(self, name: str, *, create: bool = True) -> SQLiteAgentMemory:
         return SQLiteAgentMemory(name, database=self.database, create=create)
@@ -67,7 +69,19 @@ class GatewayService:
         )
 
     def health(self) -> dict[str, Any]:
-        return success({"status": "ok", "service": "ChartAgent Gateway"})
+        try:
+            readiness = self._readiness_probe()
+        except Exception:
+            readiness = {"status": "unavailable", "reason": "initialization_failed"}
+        status = "ready" if readiness.get("status") == "ready" else "unavailable"
+        agent: dict[str, str] = {"status": status}
+        if status != "ready":
+            reason = readiness.get("reason")
+            if reason in {"missing_configuration", "invalid_configuration", "initialization_failed"}:
+                agent["reason"] = reason
+            else:
+                agent["reason"] = "initialization_failed"
+        return success({"status": "ok", "service": "ChartAgent Gateway", "agent": agent})
 
     def list_sessions(self) -> dict[str, Any]:
         sessions = [session_summary(item).to_dict() for item in SQLiteAgentMemory.list_session_stats(database=self.database)]
@@ -111,6 +125,7 @@ class GatewayService:
                 run.error_code or "agent_failed",
                 run.error_status,
                 run.error_message or "Agent run failed",
+                run.error_reason,
             )
         session = self._resolve_session(session_id)
         transcript = self._load_transcript(session)
@@ -203,8 +218,16 @@ class GatewayService:
         try:
             runtime = self._build_runtime_for_run(run, session_name, visual_sink)
         except Exception as exc:  # provider setup errors are a safe gateway fault
-            run.publish("run_failed", {"code": "agent_unavailable", "message": "Agent service is unavailable"})
-            run.fail("agent_unavailable", 503, "Agent service is unavailable")
+            reason = self._agent_setup_failure_reason(exc)
+            run.publish(
+                "run_failed",
+                {
+                    "code": "agent_unavailable",
+                    "reason": reason,
+                    "message": "Agent service is unavailable",
+                },
+            )
+            run.fail("agent_unavailable", 503, "Agent service is unavailable", reason)
             return
         try:
             try:
@@ -219,6 +242,14 @@ class GatewayService:
         if not run.has_event("final_answer"):
             run.publish("final_answer", {"answer": str(answer)})
         run.complete(str(answer))
+
+    @staticmethod
+    def _agent_setup_failure_reason(error: Exception) -> str:
+        if isinstance(error, ValueError):
+            if "API key" in str(error):
+                return "missing_configuration"
+            return "invalid_configuration"
+        return "initialization_failed"
 
     def _build_runtime_for_run(
         self,

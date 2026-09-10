@@ -25,6 +25,10 @@ const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 const clone = <T,>(value: T): T => structuredClone(value)
 
 export const mockClient: ChartAgentClient = {
+  async getHealth() {
+    return { version: 'v1', status: 'ok', service: 'ChartAgent Mock', agent: { status: 'ready' as const } }
+  },
+
   async listSessions() { await wait(120); return Object.values(data).map((entry) => clone(entry.session)) },
   async getSession(id) { await wait(160); return clone(data[id]) },
   async createSession(name) { await wait(160); const id = 'session-' + Date.now(); const session: Session = { id, name, updatedAt: '刚刚', runCount: 0 }; data[id] = { session, messages: [], attachments: [] }; return clone(data[id]) },

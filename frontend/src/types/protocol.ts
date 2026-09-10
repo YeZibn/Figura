@@ -51,3 +51,15 @@ export type AgentRunEvent = {
   timestamp: string
   payload: Record<string, unknown>
 }
+
+export type GatewayAgentStatus = {
+  status: 'ready' | 'unavailable' | 'unknown'
+  reason?: string
+}
+
+export type GatewayHealth = {
+  version: 'v1'
+  status: 'ok'
+  service: string
+  agent?: GatewayAgentStatus
+}

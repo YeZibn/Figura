@@ -54,6 +54,36 @@ def test_gateway_input_validation_is_bounded():
     assert "x" * 500 not in text_error.value.message
 
 
+def test_gateway_health_separates_http_and_agent_readiness():
+    ready = GatewayService(readiness_probe=lambda: {"status": "ready"})
+    assert ready.health() == {
+        "version": "v1",
+        "status": "ok",
+        "service": "ChartAgent Gateway",
+        "agent": {"status": "ready"},
+    }
+
+    unavailable = GatewayService(
+        readiness_probe=lambda: {"status": "unavailable", "reason": "missing_configuration"}
+    )
+    health = unavailable.health()
+    assert health["status"] == "ok"
+    assert health["agent"] == {"status": "unavailable", "reason": "missing_configuration"}
+    assert "secret" not in json.dumps(health).lower()
+
+
+def test_gateway_health_redacts_unknown_readiness_reason():
+    service = GatewayService(
+        readiness_probe=lambda: {
+            "status": "unavailable",
+            "reason": "DASHSCOPE_API_KEY=secret-value",
+        }
+    )
+    health = service.health()
+    assert health["agent"] == {"status": "unavailable", "reason": "initialization_failed"}
+    assert "secret-value" not in json.dumps(health)
+
+
 def test_completed_projection_omits_partial_runs_and_sensitive_records(tmp_path):
     session = SQLiteAgentMemory("demo", database=tmp_path / "sessions.db").session
     partial = Run("partial", session.id, 2, RunStatus.INTERRUPTED)
@@ -128,8 +158,19 @@ def test_gateway_service_maps_unavailable_agent_and_preserves_history(tmp_path):
     with pytest.raises(GatewayFault) as error:
         service.submit_message(session_id, "run")
     assert error.value.code == "agent_unavailable"
+    assert error.value.reason == "missing_configuration"
     assert "secret-key" not in error.value.message
     assert service.get_session(session_id)["messages"] == []
+
+    accepted = service.start_run(session_id, "run again")
+    run = service.get_run(session_id, accepted["run"]["runId"])
+    assert run.wait_terminal(timeout=2)
+    failure = next(event for event in run.iter_events() if event.kind == "run_failed")
+    assert failure.payload == {
+        "code": "agent_unavailable",
+        "reason": "missing_configuration",
+        "message": "Agent service is unavailable",
+    }
 
 
 def test_attachment_upload_projects_safe_metadata_and_cleans_on_restart(tmp_path):

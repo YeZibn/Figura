@@ -140,6 +140,7 @@ class ManagedRun:
         self.error_code: str | None = None
         self.error_status: int = 502
         self.error_message: str | None = None
+        self.error_reason: str | None = None
         self.created_at = utc_timestamp()
         self.finished_at: float | None = None
         self.retention_seconds = retention_seconds
@@ -196,13 +197,14 @@ class ManagedRun:
             self.finished_at = time.monotonic()
             self._condition.notify_all()
 
-    def fail(self, code: str, status: int, message: str) -> None:
+    def fail(self, code: str, status: int, message: str, reason: str | None = None) -> None:
         with self._condition:
             if self.terminal:
                 return
             self.error_code = code
             self.error_status = status
             self.error_message = message
+            self.error_reason = reason
             self.status = RunStatus.FAILED
             self.finished_at = time.monotonic()
             self._condition.notify_all()

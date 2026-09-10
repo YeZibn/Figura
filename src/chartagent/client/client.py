@@ -4,7 +4,7 @@ Responsibilities (all provider quirk handling is owned here, never by callers):
 - Normalize every call into a single :class:`NormalizedResult`.
 - Capture non-standard reasoning into ``reasoning`` but keep it out of history.
 - Build assistant history entries containing only ``content`` (never reasoning).
-- Compile explicit knobs (e.g. thinking toggle) into provider ``extra_body``.
+- Send standard Chat Completions knobs such as ``reasoning_effort``.
 - Honor explicit retry/timeout and emit one structured observation per call.
 """
 
@@ -75,8 +75,38 @@ def _non_streaming_tool_calls(message: Any) -> List[ToolCall]:
 
 
 def _reasoning_of(msg: Any) -> str:
-    # Qwen deep-thinking exposes reasoning as the provider-specific attr.
+    # Some compatible services expose this optional, non-standard field.
     return getattr(msg, "reasoning_content", None) or ""
+
+
+def _usage_value(usage: Any, name: str) -> Any:
+    if isinstance(usage, Mapping):
+        return usage.get(name)
+    return getattr(usage, name, None)
+
+
+def _numeric_usage_value(value: Any) -> int | float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return value
+
+
+def _usage_summary(usage: Any) -> Optional[dict[str, int | float]]:
+    """Keep only bounded numeric token counters for observation logs."""
+    if usage is None:
+        return None
+    summary: dict[str, int | float] = {}
+    for name in ("prompt_tokens", "completion_tokens", "total_tokens"):
+        value = _numeric_usage_value(_usage_value(usage, name))
+        if value is not None:
+            summary[name] = value
+    details = _usage_value(usage, "completion_tokens_details")
+    reasoning_tokens = _numeric_usage_value(
+        _usage_value(details, "reasoning_tokens") if details is not None else None
+    )
+    if reasoning_tokens is not None:
+        summary["reasoning_tokens"] = reasoning_tokens
+    return summary
 
 
 def normalize_non_streaming(completion: Any) -> NormalizedResult:
@@ -155,7 +185,7 @@ class LLMClient:
         resolved = resolve_config(**overrides) if overrides else (config or resolve_config())
         self.config = resolved
         if not self.config.api_key:
-            raise ValueError("An API key is required (explicit or DASHSCOPE_API_KEY).")
+            raise ValueError("An API key is required (explicit or OPENAI_API_KEY).")
         self._observe = observe or _default_observation_sink
         self._trace = (
             TraceEmitter(trace_sink, run_id=trace_run_id)
@@ -172,8 +202,8 @@ class LLMClient:
         model: Optional[str] = None,
         tools: Optional[Sequence[Any]] = None,
         stream: bool = True,
-        enable_thinking: Optional[bool] = None,
-        max_tokens: Optional[int] = None,
+        reasoning_effort: Optional[str] = None,
+        max_completion_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
         trace_sink: Optional[TraceSink] = None,
         trace_run_id: Optional[str] = None,
@@ -184,7 +214,7 @@ class LLMClient:
         if not use_model:
             raise ValueError("A model must be specified (call-time or config).")
 
-        request = {
+        request: dict[str, Any] = {
             "model": use_model,
             "messages": list(messages),
             "stream": stream,
@@ -194,15 +224,13 @@ class LLMClient:
             request["stream_options"] = {"include_usage": True}
         if tools:
             request["tools"] = tools
-        if max_tokens is not None:
-            request["max_tokens"] = max_tokens
+        if max_completion_tokens is not None:
+            request["max_completion_tokens"] = max_completion_tokens
         if temperature is not None:
             request["temperature"] = temperature
-
-        # Explicit knob → provider extension field.
-        knob = enable_thinking if enable_thinking is not None else cfg.enable_thinking
-        if knob is not None:
-            request["extra_body"] = {"enable_thinking": knob}
+        effort = reasoning_effort if reasoning_effort is not None else cfg.reasoning_effort
+        if effort is not None:
+            request["reasoning_effort"] = effort
 
         trace = self._trace
         if trace_sink is not None:
@@ -267,7 +295,7 @@ class LLMClient:
             "content_len": len(result.content),
             "reasoning_len": len(result.reasoning),
             "tool_calls": len(result.tool_calls),
-            # usage object is recorded as-is; never log api_key / raw auth.
+            "usage": _usage_summary(result.usage),
             "usage_available": result.usage is not None,
         }
         self._observe(entry)

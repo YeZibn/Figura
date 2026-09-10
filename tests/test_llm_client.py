@@ -13,7 +13,7 @@ import pytest
 import chartagent.client as client_mod
 from chartagent.client import LLMClient, append_to_history, assistant_history_entry, resolve_config
 from chartagent.client.client import normalize_non_streaming, _collect_streaming_deltas
-from chartagent.client.config import DEFAULT_BASE_URL, DEFAULT_MAX_RETRIES, DEFAULT_TIMEOUT
+from chartagent.client.config import DEFAULT_BASE_URL, DEFAULT_MAX_RETRIES, DEFAULT_TIMEOUT, load_environment
 from .conftest import non_streaming, streaming, streaming_with_tool_calls, tool_call
 
 
@@ -24,6 +24,22 @@ def test_config_explicit_beats_env_beats_default():
     assert cfg.api_key == "explicit"
     assert cfg.base_url == "http://env"  # env fills the key omitted explicitly
     assert cfg.timeout == DEFAULT_TIMEOUT  # default fills the rest
+
+
+def test_config_canonical_openai_env_beats_legacy_env():
+    cfg = resolve_config(
+        env={
+            "OPENAI_API_KEY": "openai-key",
+            "OPENAI_BASE_URL": "http://openai",
+            "OPENAI_MODEL": "openai-model",
+            "DASHSCOPE_API_KEY": "legacy-key",
+            "DASHSCOPE_BASE_URL": "http://legacy",
+            "DASH_MODEL": "legacy-model",
+        }
+    )
+    assert cfg.api_key == "openai-key"
+    assert cfg.base_url == "http://openai"
+    assert cfg.model == "openai-model"
 
 
 def test_config_all_from_env():
@@ -43,6 +59,16 @@ def test_config_all_from_env():
     assert cfg.max_retries == 7
 
 
+def test_config_zero_numeric_values_are_preserved():
+    cfg = resolve_config(env={"OPENAI_TIMEOUT": "0", "OPENAI_MAX_RETRIES": "0"})
+    assert cfg.timeout == 0.0
+    assert cfg.max_retries == 0
+
+    explicit = resolve_config(timeout=0, max_retries=0, env={"OPENAI_TIMEOUT": "9", "OPENAI_MAX_RETRIES": "7"})
+    assert explicit.timeout == 0
+    assert explicit.max_retries == 0
+
+
 def test_config_model_from_env_default():
     cfg = resolve_config(env={})
     assert cfg.model == ""
@@ -56,6 +82,38 @@ def test_config_defaults_when_nothing_set():
     assert cfg.max_retries == DEFAULT_MAX_RETRIES
 
 
+def test_environment_file_contract_is_stable_across_launch_directories(tmp_path, monkeypatch):
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "DASHSCOPE_API_KEY=file-key\nDASHSCOPE_BASE_URL=http://file\nDASH_MODEL=file-model\n",
+        encoding="utf-8",
+    )
+    for directory in (tmp_path, tmp_path / "frontend"):
+        directory.mkdir(exist_ok=True)
+        for name in ("DASHSCOPE_API_KEY", "DASHSCOPE_BASE_URL", "DASH_MODEL"):
+            monkeypatch.delenv(name, raising=False)
+        monkeypatch.setenv("CHARTAGENT_ENV_FILE", str(env_file))
+        monkeypatch.chdir(directory)
+        load_environment()
+        config = resolve_config()
+        assert config.api_key == "file-key"
+        assert config.base_url == "http://file"
+        assert config.model == "file-model"
+
+
+def test_process_environment_beats_environment_file(tmp_path, monkeypatch):
+    env_file = tmp_path / ".env"
+    env_file.write_text("DASHSCOPE_API_KEY=file-key\nDASHSCOPE_BASE_URL=http://file\n", encoding="utf-8")
+    for name in ("DASHSCOPE_API_KEY", "DASHSCOPE_BASE_URL", "DASH_MODEL"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("CHARTAGENT_ENV_FILE", str(env_file))
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "process-key")
+    load_environment()
+    config = resolve_config()
+    assert config.api_key == "process-key"
+    assert config.base_url == "http://file"
+
+
 # --- 3. normalization --------------------------------------------------------- #
 def test_normalize_plain_non_streaming():
     res = normalize_non_streaming(non_streaming(content="hello", reasoning="r"))
@@ -65,6 +123,22 @@ def test_normalize_plain_non_streaming():
     assert res.finish_reason == "stop"
     assert res.usage.total_tokens == 15
     assert res.raw is not None  # raw always preserved
+
+
+def test_normalize_standard_reply_without_textual_reasoning():
+    completion = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(content="hello", tool_calls=None),
+                finish_reason="stop",
+            )
+        ],
+        usage=SimpleNamespace(prompt_tokens=2, completion_tokens=1, total_tokens=3),
+    )
+    res = normalize_non_streaming(completion)
+    assert res.content == "hello"
+    assert res.reasoning == ""
+    assert res.usage.total_tokens == 3
 
 
 def test_normalize_tool_calls_non_streaming():
@@ -122,16 +196,33 @@ def test_client_chat_normalizes(backend_factory):
     assert res.content == "hi"
 
 
-def test_thinking_toggle_call_time_compiles_to_extra_body(backend_factory):
+def test_standard_reasoning_and_completion_limit_propagate(backend_factory):
     client, backend = backend_factory([lambda _: non_streaming("ok")])
-    client.chat([{"role": "user", "content": "x"}], stream=False, model="m", enable_thinking=True)
-    assert backend.calls[0]["extra_body"] == {"enable_thinking": True}
+    client.chat(
+        [{"role": "user", "content": "x"}],
+        stream=False,
+        model="m",
+        reasoning_effort="medium",
+        max_completion_tokens=123,
+    )
+    assert backend.calls[0]["reasoning_effort"] == "medium"
+    assert backend.calls[0]["max_completion_tokens"] == 123
+    assert "extra_body" not in backend.calls[0]
+    assert "max_tokens" not in backend.calls[0]
 
 
-def test_thinking_toggle_from_config_when_call_omits(backend_factory):
-    client, backend = backend_factory([lambda _: non_streaming("ok")], enable_thinking=True)
+def test_reasoning_effort_from_config_when_call_omits(backend_factory):
+    client, backend = backend_factory([lambda _: non_streaming("ok")], reasoning_effort="high")
     client.chat([{"role": "user", "content": "x"}], stream=False, model="m")
-    assert backend.calls[0]["extra_body"] == {"enable_thinking": True}
+    assert backend.calls[0]["reasoning_effort"] == "high"
+    assert "extra_body" not in backend.calls[0]
+
+
+def test_streaming_request_requests_usage(backend_factory):
+    client, backend = backend_factory([lambda _: streaming(["ok"])])
+    client.chat([{"role": "user", "content": "x"}], model="m")
+    assert backend.calls[0]["stream"] is True
+    assert backend.calls[0]["stream_options"] == {"include_usage": True}
 
 
 def test_tool_definitions_propagate(backend_factory):
@@ -161,13 +252,13 @@ def test_observation_sink_emitted_without_secrets(backend_factory):
     assert entry["model"] == "m"
     assert entry["content_len"] == 2
     assert entry["reasoning_len"] == 1
+    assert entry["usage"] == {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
     assert "api_key" not in entry
 
 
 def test_missing_api_key_raises(monkeypatch):
-    # Isolate: ambient plugins (deepeval/langsmith) or a real shell may have
-    # loaded DASHSCOPE_API_KEY into os.environ; the test asserts the key is
-    # absent from all sources.
+    # Isolate ambient credentials from both canonical and legacy sources.
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
     with pytest.raises(ValueError, match="API key"):
         LLMClient(api_key=None, base_url="http://x")

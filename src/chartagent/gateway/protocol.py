@@ -24,20 +24,24 @@ MAX_EVENT_PAYLOAD = 12000
 class GatewayFault(Exception):
     """An expected failure that can be represented safely over HTTP."""
 
-    def __init__(self, code: str, status: int, message: str) -> None:
+    def __init__(self, code: str, status: int, message: str, reason: str | None = None) -> None:
         super().__init__(message)
         self.code = code
         self.status = status
         self.message = message[:MAX_ERROR_MESSAGE]
+        self.reason = reason
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        error = {
             "version": GATEWAY_VERSION,
             "error": {
                 "code": self.code,
                 "message": self.message,
             },
         }
+        if self.reason:
+            error["error"]["reason"] = self.reason
+        return error
 
 
 class RunStatus(str, Enum):

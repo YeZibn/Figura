@@ -1,75 +1,43 @@
-# llm-client Specification
-
-## Purpose
-
-Provides a controllable, observable LLM invocation layer over the Alibaba
-Cloud compatible-mode endpoint (an OpenAI-compatible deployment). It
-normalizes provider responses, isolates reasoning output from multi-turn
-history, exposes explicit configuration knobs, emits per-call observation
-logs, and loads its environment (key, base_url, default model) from `.env` via
-`python-dotenv`.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: OpenAI-compatible endpoint configuration layering
 
 The client SHALL resolve each connection and behavior setting with the
-precedence: explicit call or constructor parameter > process environment
-variable > canonical or legacy values loaded from an explicitly supplied
-runtime environment file or stable project fallback > built-in default. The
-canonical credential, endpoint, and model variables SHALL be
-`OPENAI_API_KEY`, `OPENAI_BASE_URL`, and `OPENAI_MODEL`. For migration
-compatibility, `DASHSCOPE_API_KEY`, `DASHSCOPE_BASE_URL`, and `DASH_MODEL`
-SHALL remain accepted only as lower-priority fallbacks. The default endpoint
-SHALL be the standard OpenAI API base URL, and an explicit `base_url` SHALL
-override every environment or default value. A configured model SHALL be
-usable when a call omits `model`. Environment loading MUST produce the same
-result when the Gateway is launched from the repository root or the
-`frontend` directory, and MUST NOT log credential values.
+precedence: explicit call or constructor parameter > canonical environment
+variable loaded from `.env` via `python-dotenv` > legacy DashScope environment
+variable > built-in default. The canonical credential, endpoint, and model
+variables SHALL be `OPENAI_API_KEY`, `OPENAI_BASE_URL`, and `OPENAI_MODEL`.
+For migration compatibility, `DASHSCOPE_API_KEY`, `DASHSCOPE_BASE_URL`, and
+`DASH_MODEL` SHALL remain accepted only as lower-priority fallbacks. The
+default endpoint SHALL be the standard OpenAI API base URL, and an explicit
+`base_url` SHALL override every environment or default value. A configured
+model SHALL be usable when a call omits `model`.
 
-#### Scenario: Explicit parameters take precedence over environment variables
+#### Scenario: Explicit parameters take precedence over canonical and legacy environment variables
 
-- **WHEN** a caller supplies an explicit endpoint and API key while the
-  corresponding environment variables are also set
-- **THEN** the client uses the explicit values and issues calls against the
-  explicit endpoint / credential
+- **WHEN** a caller supplies an explicit endpoint and API key while both
+  `OPENAI_*` and `DASHSCOPE_*` values are present
+- **THEN** the client uses the explicit values for the connection
 
 #### Scenario: Canonical OpenAI environment variables are preferred
 
 - **WHEN** no explicit endpoint, credential, or model is supplied and both
-  canonical and legacy variables are available
+  canonical and legacy variables are set
 - **THEN** the client uses `OPENAI_API_KEY`, `OPENAI_BASE_URL`, and
   `OPENAI_MODEL`
-
-#### Scenario: Process environment takes precedence over the runtime environment file
-
-- **WHEN** a runtime environment file contains provider settings and the same
-  setting is already present in the process environment
-- **THEN** the process environment value wins and the file value is not used
-  for that key
 
 #### Scenario: Legacy variables remain a migration fallback
 
 - **WHEN** no canonical variable is set but the corresponding DashScope
-  variable is present in the process environment or runtime environment file
+  variable is present
 - **THEN** the client derives that setting from the legacy variable and can
   construct the configured call target
 
-#### Scenario: Runtime configuration is stable across launch directories
+#### Scenario: Defaults are used when nothing is configured
 
-- **WHEN** the Gateway is launched from the repository root or the
-  `frontend` directory with the documented runtime configuration contract
-- **THEN** the client resolves the same provider key, endpoint, and model values
-  without requiring a duplicate `frontend/.env` file
-
-#### Scenario: Defaults used when nothing is configured
-
-- **WHEN** no explicit parameter and no relevant environment variable or
-  environment file value is set
-- **THEN** the client falls back to the built-in standard OpenAI endpoint and
-  default timeout/retry values, and reports missing credentials through the
-  existing bounded configuration error when an authenticated client is
-  constructed
+- **WHEN** no explicit parameter and no relevant environment variable is set
+- **THEN** the client uses the built-in standard OpenAI endpoint and default
+  timeout/retry values, while requiring a credential before a real call
 
 ### Requirement: OpenAI Chat Completions request contract
 

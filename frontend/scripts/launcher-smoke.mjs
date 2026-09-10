@@ -19,8 +19,11 @@ assert.deepEqual(buildGatewayArgs(config), [
 ])
 assert.equal(isCompatibleHealth({ version: 'v1', status: 'ok' }), true)
 assert.equal(isCompatibleHealth({ version: 'v1', status: 'error' }), false)
-assert.match(buildGatewayEnvironment(environment, config).CHARTAGENT_GATEWAY_ORIGINS, /127\.0\.0\.1:1421/)
+const gatewayEnvironment = buildGatewayEnvironment(environment, config)
+assert.match(gatewayEnvironment.CHARTAGENT_GATEWAY_ORIGINS, /127\.0\.0\.1:1421/)
+assert.equal(gatewayEnvironment.CHARTAGENT_ENV_FILE, config.environmentFile)
 assert.equal(gatewayTauriEnvironment({ VITE_CHARTAGENT_MODE: 'mock' }).VITE_CHARTAGENT_MODE, 'gateway')
 assert.equal(gatewayTauriEnvironment({}).CHARTAGENT_MODE, 'gateway')
+assert.match(gatewayTauriEnvironment({}).CHARTAGENT_ENV_FILE, /\.env$/)
 
 console.log('launcher smoke passed (configuration, health, environment, and process contracts)')

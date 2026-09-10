@@ -1,5 +1,5 @@
 import type { ChartAgentClient, RunEventCallbacks, RunSubscription } from './client'
-import type { AgentRunEvent, Attachment, ObservationReference, RunHandle, Session, SessionData } from '../types/protocol'
+import type { AgentRunEvent, Attachment, GatewayHealth, ObservationReference, RunHandle, Session, SessionData } from '../types/protocol'
 import { mediaTypeForFile } from '../attachments'
 
 type GatewaySessionList = { sessions: Session[] }
@@ -15,16 +15,19 @@ type GatewayAttachment = {
 type GatewaySessionData = Omit<SessionData, 'attachments'> & { attachments: GatewayAttachment[] }
 type GatewayRunResponse = { run: { runId: string; sessionId: string; status: 'running' } }
 type GatewayRunEvent = { runId: string; sequence: number; kind: string; timestamp: string; payload?: Record<string, unknown> }
+type GatewayHealthResponse = GatewayHealth
 
 export class GatewayClientError extends Error {
   readonly code: string
   readonly status: number
+  readonly reason?: string
 
-  constructor(code: string, message: string, status: number) {
+  constructor(code: string, message: string, status: number, reason?: string) {
     super(message)
     this.name = 'GatewayClientError'
     this.code = code
     this.status = status
+    this.reason = reason
   }
 }
 
@@ -41,7 +44,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     throw new GatewayClientError('gateway_unavailable', '无法连接到本地 Gateway', 0)
   }
 
-  let payload: { error?: { code?: string; message?: string } } & T
+  let payload: { error?: { code?: string; message?: string; reason?: string } } & T
   try {
     payload = await response.json()
   } catch {
@@ -52,6 +55,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       payload.error?.code || 'gateway_error',
       payload.error?.message || 'Gateway 请求失败',
       response.status,
+      payload.error?.reason,
     )
   }
   return payload
@@ -109,6 +113,10 @@ const streamEventKinds = [
 ]
 
 export const gatewayClient: ChartAgentClient = {
+  async getHealth() {
+    return request<GatewayHealthResponse>('/health')
+  },
+
   async listSessions() {
     const payload = await request<GatewaySessionList>('/sessions')
     return payload.sessions

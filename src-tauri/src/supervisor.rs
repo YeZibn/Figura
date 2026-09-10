@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::env;
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpStream, ToSocketAddrs};
@@ -19,6 +19,26 @@ pub struct GatewayStatus {
     pub url: String,
     pub owned: bool,
     pub error: Option<String>,
+    pub agent_state: String,
+    pub agent_reason: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct HealthResponse {
+    version: String,
+    status: String,
+    agent: Option<AgentHealthResponse>,
+}
+
+#[derive(Deserialize)]
+struct AgentHealthResponse {
+    status: String,
+    reason: Option<String>,
+}
+
+struct HealthSnapshot {
+    agent_state: String,
+    agent_reason: Option<String>,
 }
 
 struct GatewayConfig {
@@ -105,6 +125,8 @@ impl GatewaySupervisor {
                 url,
                 owned: false,
                 error: None,
+                agent_state: if enabled { "starting" } else { "stopped" }.to_string(),
+                agent_reason: None,
             },
         }
     }
@@ -112,9 +134,10 @@ impl GatewaySupervisor {
     pub fn status(&mut self) -> GatewayStatus {
         self.reap_exited_child();
         if self.config.enabled && self.status.state == "ready" && !self.config.external {
-            if !health_ok(&self.config.host, self.config.port) {
-                self.status.state = "unavailable".to_string();
-                self.status.error = Some("Gateway health check failed".to_string());
+            if let Some(snapshot) = health_snapshot(&self.config.host, self.config.port) {
+                self.apply_health(snapshot);
+            } else {
+                self.mark_gateway_unavailable("Gateway health check failed", "gateway_health_failed");
             }
         }
         self.status.clone()
@@ -125,22 +148,28 @@ impl GatewaySupervisor {
             self.status.state = "stopped".to_string();
             self.status.owned = false;
             self.status.error = None;
+            self.status.agent_state = "stopped".to_string();
+            self.status.agent_reason = None;
             return self.status();
         }
         self.status.state = "starting".to_string();
         self.status.error = None;
+        self.status.agent_state = "starting".to_string();
+        self.status.agent_reason = None;
         if self.config.config_error.is_some() {
             self.status.state = "unavailable".to_string();
             self.status.error = self.config.config_error.clone();
+            self.status.agent_state = "unavailable".to_string();
+            self.status.agent_reason = Some("runtime_configuration".to_string());
             return self.status();
         }
         if self.config.external {
             self.status.owned = false;
-            if wait_for_health(&self.config.host, self.config.port, self.config.startup_timeout) {
+            if let Some(snapshot) = wait_for_health(&self.config.host, self.config.port, self.config.startup_timeout) {
                 self.status.state = "ready".to_string();
+                self.apply_health(snapshot);
             } else {
-                self.status.state = "unavailable".to_string();
-                self.status.error = Some("External Gateway is unavailable".to_string());
+                self.mark_gateway_unavailable("External Gateway is unavailable", "gateway_health_failed");
             }
             return self.status();
         }
@@ -158,17 +187,16 @@ impl GatewaySupervisor {
                     self.status.owned = true;
                 }
                 Err(_) => {
-                    self.status.state = "unavailable".to_string();
-                    self.status.error = Some("Gateway could not be started".to_string());
+                    self.mark_gateway_unavailable("Gateway could not be started", "gateway_start_failed");
                     return self.status();
                 }
             }
         }
-        if wait_for_health(&self.config.host, self.config.port, self.config.startup_timeout) {
+        if let Some(snapshot) = wait_for_health(&self.config.host, self.config.port, self.config.startup_timeout) {
             self.status.state = "ready".to_string();
+            self.apply_health(snapshot);
         } else {
-            self.status.state = "unavailable".to_string();
-            self.status.error = Some("Gateway did not become ready".to_string());
+            self.mark_gateway_unavailable("Gateway did not become ready", "gateway_health_failed");
             self.stop_owned_child();
         }
         self.status()
@@ -179,18 +207,34 @@ impl GatewaySupervisor {
         self.status.state = "stopped".to_string();
         self.status.owned = false;
         self.status.error = None;
+        self.status.agent_state = "stopped".to_string();
+        self.status.agent_reason = None;
         self.status()
     }
 
+    fn apply_health(&mut self, snapshot: HealthSnapshot) {
+        self.status.agent_state = snapshot.agent_state;
+        self.status.agent_reason = snapshot.agent_reason;
+    }
+
+    fn mark_gateway_unavailable(&mut self, message: &str, reason: &str) {
+        self.status.state = "unavailable".to_string();
+        self.status.error = Some(message.to_string());
+        self.status.agent_state = "unavailable".to_string();
+        self.status.agent_reason = Some(reason.to_string());
+    }
+
     fn reap_exited_child(&mut self) {
-        if let Some(child) = self.child.as_mut() {
-            if child.try_wait().ok().flatten().is_some() {
-                self.child = None;
-                self.status.owned = false;
-                if self.status.state == "ready" {
-                    self.status.state = "unavailable".to_string();
-                    self.status.error = Some("Gateway process exited".to_string());
-                }
+        let exited = self
+            .child
+            .as_mut()
+            .map(|child| child.try_wait().ok().flatten().is_some())
+            .unwrap_or(false);
+        if exited {
+            self.child = None;
+            self.status.owned = false;
+            if self.status.state == "ready" {
+                self.mark_gateway_unavailable("Gateway process exited", "gateway_process_exited");
             }
         }
     }
@@ -233,25 +277,25 @@ fn bounded_duration(key: &str, default_ms: u64) -> Duration {
     Duration::from_millis(millis)
 }
 
-fn wait_for_health(host: &str, port: u16, timeout: Duration) -> bool {
+fn wait_for_health(host: &str, port: u16, timeout: Duration) -> Option<HealthSnapshot> {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
-        if health_ok(host, port) {
-            return true;
+        if let Some(snapshot) = health_snapshot(host, port) {
+            return Some(snapshot);
         }
         sleep(Duration::from_millis(100));
     }
-    false
+    None
 }
 
-fn health_ok(host: &str, port: u16) -> bool {
+fn health_snapshot(host: &str, port: u16) -> Option<HealthSnapshot> {
     let address = match (host, port).to_socket_addrs().ok().and_then(|mut addresses| addresses.next()) {
         Some(address) => address,
-        None => return false,
+        None => return None,
     };
     let mut stream = match TcpStream::connect_timeout(&address, Duration::from_millis(250)) {
         Ok(stream) => stream,
-        Err(_) => return false,
+        Err(_) => return None,
     };
     let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
     let request = format!(
@@ -259,7 +303,7 @@ fn health_ok(host: &str, port: u16) -> bool {
         host, port
     );
     if stream.write_all(request.as_bytes()).is_err() {
-        return false;
+        return None;
     }
     let mut response = Vec::new();
     let mut buffer = [0_u8; 4096];
@@ -269,19 +313,56 @@ fn health_ok(host: &str, port: u16) -> bool {
             Ok(size) => response.extend_from_slice(&buffer[..size]),
             Err(_) => break,
         }
-        let decoded = String::from_utf8_lossy(&response);
-        if response.windows(4).any(|window| window == b"\r\n\r\n") && decoded.contains("\"version\":\"v1\"") {
-            break;
+        if let Some(snapshot) = parse_health_response(&response) {
+            let _ = stream.shutdown(Shutdown::Both);
+            return Some(snapshot);
         }
     }
     let _ = stream.shutdown(Shutdown::Both);
-    let body = String::from_utf8_lossy(&response);
-    body.contains(" 200 ") && body.contains("\"version\":\"v1\"")
+    parse_health_response(&response)
+}
+
+fn parse_health_response(response: &[u8]) -> Option<HealthSnapshot> {
+    let header_end = response.windows(4).position(|window| window == b"\r\n\r\n")?;
+    let headers = String::from_utf8_lossy(&response[..header_end]);
+    if !headers.contains(" 200 ") {
+        return None;
+    }
+    let payload: HealthResponse = serde_json::from_slice(&response[header_end + 4..]).ok()?;
+    if payload.version != "v1" || payload.status != "ok" {
+        return None;
+    }
+    let agent = match payload.agent {
+        Some(agent) => agent,
+        None => {
+            return Some(HealthSnapshot {
+                agent_state: "unknown".to_string(),
+                agent_reason: None,
+            });
+        }
+    };
+    let agent_state = match agent.status.as_str() {
+        "ready" => "ready",
+        "unavailable" => "unavailable",
+        _ => "unknown",
+    };
+    let agent_reason = if agent_state == "unavailable" {
+        match agent.reason.as_deref() {
+            Some("missing_configuration" | "invalid_configuration" | "initialization_failed") => agent.reason,
+            _ => Some("initialization_failed".to_string()),
+        }
+    } else {
+        None
+    };
+    Some(HealthSnapshot {
+        agent_state: agent_state.to_string(),
+        agent_reason,
+    })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{GatewaySupervisor, DEFAULT_PORT};
+    use super::{parse_health_response, GatewaySupervisor, DEFAULT_PORT};
 
     #[test]
     fn default_configuration_is_mock_and_uses_agent_command() {
@@ -294,5 +375,13 @@ mod tests {
         assert_eq!(supervisor.config.port, DEFAULT_PORT);
         assert_eq!(supervisor.config.executable, "conda");
         assert!(supervisor.config.args.contains(&"agent".to_string()));
+    }
+
+    #[test]
+    fn health_parser_keeps_gateway_and_agent_status_separate() {
+        let response = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"version\":\"v1\",\"status\":\"ok\",\"agent\":{\"status\":\"unavailable\",\"reason\":\"missing_configuration\"}}";
+        let snapshot = parse_health_response(response).expect("health response should parse");
+        assert_eq!(snapshot.agent_state, "unavailable");
+        assert_eq!(snapshot.agent_reason.as_deref(), Some("missing_configuration"));
     }
 }

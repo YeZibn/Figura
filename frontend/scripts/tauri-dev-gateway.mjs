@@ -1,12 +1,16 @@
 import { spawn } from 'node:child_process'
+import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import process from 'node:process'
+
+const DEFAULT_ENV_FILE = resolve(import.meta.dirname, '../../.env')
 
 export function gatewayTauriEnvironment(environment = process.env) {
   return {
     ...environment,
     CHARTAGENT_MODE: 'gateway',
     VITE_CHARTAGENT_MODE: 'gateway',
+    CHARTAGENT_ENV_FILE: environment.CHARTAGENT_ENV_FILE || DEFAULT_ENV_FILE,
   }
 }
 

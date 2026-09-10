@@ -90,7 +90,7 @@ class Agent:
         system: optional system prompt, kept first in the history.
         max_steps: maximum number of tool-calling turns before stopping.
         **chat_kwargs: forwarded to every ``client.chat(...)`` call (e.g. model,
-            enable_thinking, temperature).
+            reasoning_effort, temperature).
     """
 
     def __init__(

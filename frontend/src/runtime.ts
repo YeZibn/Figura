@@ -5,6 +5,8 @@ export type GatewayRuntimeStatus = {
   url: string
   owned: boolean
   error?: string | null
+  agentState?: 'starting' | 'ready' | 'unavailable' | 'unknown' | 'stopped'
+  agentReason?: string | null
 }
 
 function isTauriRuntime(): boolean {
@@ -16,6 +18,6 @@ export async function getGatewayRuntimeStatus(): Promise<GatewayRuntimeStatus | 
   try {
     return await invoke<GatewayRuntimeStatus>('gateway_status')
   } catch {
-    return { state: 'unavailable', url: '', owned: false, error: '桌面运行时不可用' }
+    return { state: 'unavailable', url: '', owned: false, error: '桌面运行时不可用', agentState: 'unavailable', agentReason: 'initialization_failed' }
   }
 }

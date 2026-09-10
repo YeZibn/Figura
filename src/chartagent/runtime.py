@@ -8,7 +8,7 @@ from typing import Any, Callable, IO, Optional, Sequence
 
 from .agent import Agent
 from .attachments import AttachmentRegistry
-from .client import LLMClient, load_environment
+from .client import LLMClient, load_environment, resolve_config
 from .memory import SQLiteAgentMemory
 from .trace import TraceSink
 from .tools.result import GeneratedImage
@@ -33,6 +33,23 @@ fixed validation sequence or numeric acceptance threshold is required.
 """
 
 VisualObservationSink = Callable[[str, str, Sequence[GeneratedImage]], Sequence[dict[str, Any]]]
+
+
+def probe_agent_readiness(*, model: str | None = None) -> dict[str, str]:
+    """Check local Agent configuration without making a provider request."""
+    try:
+        load_environment()
+        config = resolve_config(model=model)
+        if not config.api_key:
+            return {"status": "unavailable", "reason": "missing_configuration"}
+        LLMClient(config=config)
+    except ValueError as exc:
+        if "API key" in str(exc):
+            return {"status": "unavailable", "reason": "missing_configuration"}
+        return {"status": "unavailable", "reason": "invalid_configuration"}
+    except Exception:
+        return {"status": "unavailable", "reason": "initialization_failed"}
+    return {"status": "ready"}
 
 
 @dataclass
