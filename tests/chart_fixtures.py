@@ -64,3 +64,125 @@ def annotated_bar_chart(
         ],
     )
     return output.getvalue(), spec.to_dict()
+
+
+def line_chart(
+    values_by_series: dict[str, Sequence[float]] | None = None,
+    x_values: Sequence[float] = (0, 1, 2, 3, 4),
+    *,
+    title: str = "Trend",
+    x_label: str = "Time",
+    y_label: str = "Value",
+    source: str = "synthetic-line",
+) -> tuple[bytes, dict]:
+    """Render a clean, marked line chart with explicit multi-series truth."""
+    series_values = values_by_series or {
+        "North": (1, 3, 2, 4, 5),
+        "South": (2, 2, 4, 3, 6),
+    }
+    if any(len(values) != len(x_values) for values in series_values.values()):
+        raise ValueError("every line series must match x_values length")
+
+    colors = ("#1f77b4", "#d62728", "#2ca02c", "#9467bd")
+    figure, axis = plt.subplots(figsize=(6, 4), dpi=120)
+    for index, (label, values) in enumerate(series_values.items()):
+        axis.plot(
+            list(x_values),
+            [float(value) for value in values],
+            color=colors[index % len(colors)],
+            marker="o",
+            linewidth=2,
+            label=label,
+        )
+    axis.set_title(title)
+    axis.set_xlabel(x_label)
+    axis.set_ylabel(y_label)
+    axis.set_xticks(list(x_values))
+    all_values = [float(value) for values in series_values.values() for value in values]
+    axis.set_ylim(min(0, min(all_values)), max(all_values) + 1)
+    axis.set_yticks(range(int(min(0, min(all_values))), int(max(all_values) + 2), 2))
+    axis.legend()
+    axis.spines["top"].set_visible(False)
+    axis.spines["right"].set_visible(False)
+
+    output = BytesIO()
+    figure.savefig(output, format="png", facecolor="white")
+    plt.close(figure)
+
+    dataset = [
+        DataPoint(x=float(x), y=float(value), series=label)
+        for label, values in series_values.items()
+        for x, value in zip(x_values, values)
+    ]
+    spec = ChartSpec(
+        metadata=ChartMetadata(chart_type=ChartType.LINE, title=title, source=source),
+        axes=Axes(
+            x=Axis(label=x_label, min_value=float(min(x_values)), max_value=float(max(x_values))),
+            y=Axis(label=y_label, min_value=float(min(0, min(all_values))), max_value=float(max(all_values) + 1)),
+        ),
+        dataset=dataset,
+    )
+    return output.getvalue(), spec.to_dict()
+
+
+def grouped_bar_chart(
+    values_by_series: dict[str, Sequence[float]] | None = None,
+    categories: Sequence[str] = ("A", "B", "C"),
+    *,
+    stacked: bool = False,
+) -> tuple[bytes, dict]:
+    """Render grouped or stacked bars with legend-defined series truth."""
+    series_values = values_by_series or {
+        "North": (10, 20, 15),
+        "South": (12, 16, 19),
+    }
+    if any(len(values) != len(categories) for values in series_values.values()):
+        raise ValueError("every bar series must match categories length")
+
+    colors = ("#1f77b4", "#d62728", "#2ca02c", "#9467bd")
+    figure, axis = plt.subplots(figsize=(6, 4), dpi=120)
+    positions = list(range(len(categories)))
+    width = 0.78 / max(1, len(series_values))
+    bottoms = [0.0] * len(categories)
+    for index, (label, values) in enumerate(series_values.items()):
+        numeric_values = [float(value) for value in values]
+        if stacked:
+            axis.bar(
+                positions,
+                numeric_values,
+                width=0.68,
+                bottom=bottoms,
+                color=colors[index % len(colors)],
+                label=label,
+            )
+            bottoms = [bottom + value for bottom, value in zip(bottoms, numeric_values)]
+        else:
+            offset = (index - (len(series_values) - 1) / 2) * width
+            axis.bar(
+                [position + offset for position in positions],
+                numeric_values,
+                width=width * 0.92,
+                color=colors[index % len(colors)],
+                label=label,
+            )
+    axis.set_xticks(positions, list(categories))
+    maximum = max(bottoms) if stacked else max(float(value) for values in series_values.values() for value in values)
+    axis.set_ylim(0, maximum * 1.25)
+    axis.legend()
+    axis.spines["top"].set_visible(False)
+    axis.spines["right"].set_visible(False)
+    output = BytesIO()
+    figure.savefig(output, format="png", facecolor="white")
+    plt.close(figure)
+
+    dataset = [
+        DataPoint(category=str(category), value=float(value), series=label)
+        for label, values in series_values.items()
+        for category, value in zip(categories, values)
+    ]
+    spec = ChartSpec(
+        metadata=ChartMetadata(chart_type=ChartType.BAR, source="synthetic-bars"),
+        axes=Axes(x=Axis(label="Category", categories=list(categories)), y=Axis(label="Value")),
+        dataset=dataset,
+    )
+    return output.getvalue(), spec.to_dict()

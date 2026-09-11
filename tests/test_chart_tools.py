@@ -1,17 +1,19 @@
 """Tests for deterministic chart-understanding tools."""
 
 from io import BytesIO
+import json
 
 import pytest
 from PIL import Image, ImageChops
 
 from chartagent.spec import ChartSpec
-from chartagent.tools import ToolResult
+from chartagent.tools import Tool, ToolRegistry, ToolResult, dispatch_observation
 from chartagent.tools.chart import overlays
 from chartagent.tools.chart.geometry import measure_bars
+from chartagent.tools.chart.line import extract_line_series
 from chartagent.tools.chart.ocr import extract_text
 from chartagent.tools.chart.spec_tools import assemble_spec, validate_spec
-from tests.chart_fixtures import annotated_bar_chart
+from tests.chart_fixtures import annotated_bar_chart, grouped_bar_chart, line_chart
 
 
 def test_annotated_bar_chart_fixture_is_valid_png(tmp_path):
@@ -150,10 +152,125 @@ def test_measure_bars_blank_image_returns_empty(tmp_path):
     result = measure_bars(str(blank))
 
     assert isinstance(result, ToolResult)
-    assert result.data == {"bars": [], "baseline_y": None}
+    assert result.data["bars"] == []
+    assert result.data["baseline_y"] is None
+    assert result.data["warnings"]
+    assert result.data["confidence"]["overall"] == 0.0
     with Image.open(BytesIO(result.images[0].content)) as overlay:
         assert overlay.size == (320, 200)
         assert ImageChops.difference(Image.new("RGB", overlay.size, "white"), overlay).getbbox()
+
+
+def test_measure_grouped_bars_preserves_series_and_categories(tmp_path):
+    png_bytes, _ = grouped_bar_chart()
+    chart_path = tmp_path / "grouped-bars.png"
+    chart_path.write_bytes(png_bytes)
+
+    result = measure_bars(str(chart_path))
+
+    assert isinstance(result, ToolResult)
+    data = result.data
+    assert len(data["bars"]) == 6
+    assert {bar["series"] for bar in data["bars"]} == {"series_1", "series_2"}
+    assert {bar["category_index"] for bar in data["bars"]} == {1, 2, 3}
+    assert data["stacked"] is False
+    assert len(result.images) == 1
+    with Image.open(BytesIO(result.images[0].content)) as overlay:
+        assert overlay.size == (720, 480)
+
+
+def test_measure_stacked_bars_preserves_segments_and_total_height(tmp_path):
+    png_bytes, _ = grouped_bar_chart(stacked=True)
+    chart_path = tmp_path / "stacked-bars.png"
+    chart_path.write_bytes(png_bytes)
+
+    result = measure_bars(str(chart_path))
+
+    assert isinstance(result, ToolResult)
+    data = result.data
+    assert data["stacked"] is True
+    assert len(data["bars"]) == 6
+    assert all(bar["stack_total_h_px"] > bar["h_px"] for bar in data["bars"])
+    assert data["warnings"]
+
+
+def test_extract_line_series_preserves_colored_series_and_points(tmp_path, monkeypatch):
+    png_bytes, _ = line_chart()
+    chart_path = tmp_path / "lines.png"
+    chart_path.write_bytes(png_bytes)
+    monkeypatch.setattr("chartagent.tools.chart.line.extract_text", lambda _path: ToolResult([]))
+
+    result = extract_line_series(str(chart_path))
+
+    assert isinstance(result, ToolResult)
+    data = result.data
+    assert len(data["series"]) == 2
+    assert {entry["id"] for entry in data["series"]} == {"series_1", "series_2"}
+    assert all(len(entry["points"]) >= 4 for entry in data["series"])
+    assert all(
+        point["x_px"] < next_point["x_px"]
+        for entry in data["series"]
+        for point, next_point in zip(entry["points"], entry["points"][1:])
+    )
+    assert data["warnings"]
+    with Image.open(BytesIO(result.images[0].content)) as overlay:
+        assert overlay.size == (720, 480)
+
+
+def test_extract_line_series_calibrates_when_tick_evidence_is_available(tmp_path, monkeypatch):
+    png_bytes, _ = line_chart(values_by_series={"North": (1, 3, 2, 4, 5)})
+    chart_path = tmp_path / "calibrated-line.png"
+    chart_path.write_bytes(png_bytes)
+    snippets = [
+        {"text": "0", "bbox": [96, 418, 8, 12], "confidence": 0.99},
+        {"text": "1", "bbox": [196, 418, 8, 12], "confidence": 0.99},
+        {"text": "2", "bbox": [296, 418, 8, 12], "confidence": 0.99},
+        {"text": "3", "bbox": [396, 418, 8, 12], "confidence": 0.99},
+        {"text": "4", "bbox": [496, 418, 8, 12], "confidence": 0.99},
+        {"text": "0", "bbox": [36, 398, 20, 12], "confidence": 0.99},
+        {"text": "2", "bbox": [36, 298, 20, 12], "confidence": 0.99},
+        {"text": "4", "bbox": [36, 198, 20, 12], "confidence": 0.99},
+        {"text": "6", "bbox": [36, 98, 20, 12], "confidence": 0.99},
+    ]
+    monkeypatch.setattr(
+        "chartagent.tools.chart.line.extract_text",
+        lambda _path: ToolResult(snippets),
+    )
+
+    result = extract_line_series(str(chart_path))
+
+    assert isinstance(result, ToolResult)
+    assert result.data["axes"]["x"]["calibrated"] is True
+    assert result.data["axes"]["y"]["calibrated"] is True
+    points = result.data["series"][0]["points"]
+    assert all("x" in point and "y" in point for point in points)
+    assert not any("calibration unavailable" in warning for warning in result.warnings)
+
+
+def test_cartesian_tool_observation_serializes_warnings_and_overlay(tmp_path):
+    png_bytes, _ = grouped_bar_chart(stacked=True)
+    chart_path = tmp_path / "stacked-bars.png"
+    chart_path.write_bytes(png_bytes)
+    registry = ToolRegistry()
+    registry.register(
+        Tool(
+            "measure_bars",
+            "measure",
+            {"type": "object", "properties": {"image_path": {"type": "string"}}},
+            lambda image_path: measure_bars(image_path),
+        )
+    )
+
+    observation = dispatch_observation(
+        registry,
+        "measure_bars",
+        json.dumps({"image_path": str(chart_path)}),
+    )
+    payload = json.loads(observation.content)
+
+    assert payload["data"]["confidence"]["overall"] <= 1.0
+    assert payload["warnings"]
+    assert len(observation.images) == 1
 
 
 @pytest.mark.parametrize(
@@ -176,6 +293,30 @@ def test_assemble_spec_valid_specs_round_trip(chart_type, points):
     assert "error" not in result
     assert ChartSpec.from_dict(result).to_dict() == result
     assert result["metadata"]["source"] == "fixture.png"
+
+
+def test_assemble_spec_preserves_series_and_confidence():
+    result = assemble_spec(
+        "line",
+        [
+            {"x": 0, "y": 1, "series": "North", "confidence": 0.9},
+            {"x": 0, "y": 2, "series": "South", "confidence": 0.8},
+        ],
+        x_label="X",
+        y_label="Y",
+    )
+
+    assert result["dataset"][0]["series"] == "North"
+    assert result["dataset"][1]["confidence"] == 0.8
+    assert validate_spec(result) == {"ok": True, "issues": []}
+
+
+def test_assemble_spec_rejects_empty_series():
+    result = assemble_spec(
+        "line", [{"x": 0, "y": 1, "series": ""}], x_label="X", y_label="Y"
+    )
+
+    assert "series must be a non-empty string" in result["error"]
 
 
 def test_assemble_spec_rejects_missing_cartesian_axes():

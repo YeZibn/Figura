@@ -42,6 +42,14 @@ def _confidence_error(point: DataPoint, index: int) -> str | None:
     return None
 
 
+def _series_error(point: DataPoint, index: int) -> str | None:
+    if point.series is None:
+        return None
+    if not isinstance(point.series, str) or not point.series.strip():
+        return f"points[{index}].series must be a non-empty string when provided"
+    return None
+
+
 def assemble_spec(
     chart_type: str,
     points: list[dict],
@@ -71,7 +79,11 @@ def assemble_spec(
         if not isinstance(raw, Mapping):
             return {"error": f"points[{index}] must be an object"}
         point = DataPoint.from_dict(raw)
-        error = _point_error(kind, point, index) or _confidence_error(point, index)
+        error = (
+            _point_error(kind, point, index)
+            or _series_error(point, index)
+            or _confidence_error(point, index)
+        )
         if error:
             return {"error": error}
         data_points.append(point)
@@ -104,7 +116,11 @@ def validate_spec(spec: dict) -> dict:
             for issue in chart_spec.validate()
         ]
         for index, point in enumerate(chart_spec.dataset):
-            error = _point_error(chart_spec.metadata.chart_type, point, index)
+            error = (
+                _point_error(chart_spec.metadata.chart_type, point, index)
+                or _series_error(point, index)
+                or _confidence_error(point, index)
+            )
             if error:
                 issues.append({"location": f"dataset[{index}]", "message": error})
     except Exception as exc:  # noqa: BLE001 - critic boundary
@@ -119,6 +135,7 @@ _POINT_SCHEMA = {
         "value": {"type": "number"},
         "x": {"type": "number"},
         "y": {"type": "number"},
+        "series": {"type": "string"},
         "confidence": {"type": "number", "minimum": 0, "maximum": 1},
     },
     "additionalProperties": False,

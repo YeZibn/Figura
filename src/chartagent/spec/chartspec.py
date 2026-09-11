@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+import math
 from typing import Any, Dict, List, Mapping, Optional
 
 
@@ -228,8 +229,24 @@ def _validate_point(point: DataPoint, loc: str) -> List[ValidationIssue]:
             issues.append(
                 ValidationIssue(loc, "point carries neither category/value nor x/y")
             )
-    if point.confidence is not None and not (0.0 <= point.confidence <= 1.0):
+    if point.series is not None and (
+        not isinstance(point.series, str) or not point.series.strip()
+    ):
+        issues.append(
+            ValidationIssue(f"{loc}.series", "series must be a non-empty string when provided")
+        )
+    if point.confidence is not None and (
+        not _is_finite_number(point.confidence) or not 0.0 <= point.confidence <= 1.0
+    ):
         issues.append(
             ValidationIssue(f"{loc}.confidence", "confidence must be within [0, 1]")
         )
     return issues
+
+
+def _is_finite_number(value: Any) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(float(value))
+    )

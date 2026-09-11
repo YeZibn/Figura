@@ -61,6 +61,36 @@ def test_attachment_ids_are_session_scoped(tmp_path):
     assert not result.images
 
 
+def test_chart_sensor_uses_authorized_attachment_id(tmp_path):
+    from chartagent.tools import ToolRegistry, dispatch_observation
+    from chartagent.tools.chart import register_chart_tools
+    from tests.chart_fixtures import line_chart
+    import json
+
+    image = tmp_path / "line.png"
+    image.write_bytes(line_chart()[0])
+    attachments = AttachmentRegistry(session_id="session")
+    item = attachments.register(str(image))
+    registry = ToolRegistry()
+    register_chart_tools(registry, attachments=attachments)
+
+    authorized = dispatch_observation(
+        registry,
+        "extract_line_series",
+        json.dumps({"attachment_id": item.id}),
+    )
+    unauthorized = dispatch_observation(
+        registry,
+        "extract_line_series",
+        json.dumps({"attachment_id": "att_unknown"}),
+    )
+
+    assert json.loads(authorized.content)["data"]["image_size"] == [720, 480]
+    assert "authorized" in json.loads(unauthorized.content)["error"]
+    assert str(image) not in unauthorized.content
+    assert unauthorized.images == ()
+
+
 def test_context_summarizes_complete_old_runs_and_filters_sensitive_values():
     old = Run("old", None, 1, RunStatus.COMPLETED)
     old.records = [

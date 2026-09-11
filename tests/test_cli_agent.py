@@ -255,6 +255,7 @@ def test_agent_repl_registers_builtin_and_chart_tools(monkeypatch):
         "read_json_file",
         "extract_text",
         "measure_bars",
+        "extract_line_series",
         "assemble_spec",
         "validate_spec",
         "load_image",
@@ -281,6 +282,7 @@ def test_agent_repl_uses_advisory_chart_default(monkeypatch):
     for capability in (
         "extract_text",
         "measure_bars",
+        "extract_line_series",
         "assemble_spec",
         "validate_spec",
     ):

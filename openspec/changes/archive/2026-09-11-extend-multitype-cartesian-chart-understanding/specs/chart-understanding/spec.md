@@ -1,44 +1,4 @@
-# chart-understanding Specification
-
-## Purpose
-
-Give the agent deterministic sensors and a code-side assembler plus an
-independent validator, so it can restore clean annotated Cartesian charts to a
-valid ChartSpec through its own observe-reason-act loop, with the VLM doing
-semantic association and tools doing measurement.
-
-## Requirements
-
-### Requirement: Whole-image text extraction tool
-
-The system SHALL provide an `extract_text` tool that runs deterministic OCR on
-a whole local image and returns every detected text snippet with its bounding
-box and a confidence score. The tool takes no region arguments.
-The tool SHALL also produce a generated overlay image that identifies the
-detected text regions so the multimodal model can inspect their placement.
-
-#### Scenario: Annotations and labels are returned with visual evidence
-
-- **WHEN** `extract_text` is called with a synthetic bar chart image whose
-  value annotations are known
-- **THEN** the result contains one entry per printed text with `text`, `bbox`
-  (`[x, y, width, height]`), and `confidence` in `[0, 1]`
-- **AND** the value annotations appear as their exact printed strings
-- **AND** a generated overlay with the source image dimensions visibly marks
-  and identifies each returned text region
-
-#### Scenario: Unreadable image reports a structured error
-
-- **WHEN** `extract_text` is called with a path that does not exist
-- **THEN** the tool returns `{"error": ...}` naming the path, and never raises
-  an uncaught exception into the agent loop
-- **AND** the tool produces no visual artifact
-
-#### Scenario: No detected text still produces inspectable evidence
-
-- **WHEN** OCR completes successfully but detects no text
-- **THEN** the structured result is empty and the generated overlay preserves
-  the source image so the model can inspect the absence of detections
+## MODIFIED Requirements
 
 ### Requirement: Bar geometry measurement tool
 
@@ -100,47 +60,6 @@ series identity when known, and the detected baseline or stack boundaries.
   produces no visual artifact, and never raises an uncaught exception into the
   agent loop
 
-### Requirement: Code-side ChartSpec assembly tool
-
-The system SHALL provide an `assemble_spec` tool that constructs a ChartSpec
-from typed arguments (chart type, title, axis labels, points, source) in code
-and returns its dictionary form; the model never hand-writes IR JSON.
-
-#### Scenario: Valid arguments produce a schema-shaped spec
-
-- **WHEN** `assemble_spec` is called with a bar chart type and category/value
-  points
-- **THEN** the returned dictionary round-trips through `ChartSpec.from_dict`
-  and `to_dict` unchanged
-- **AND** metadata carries the provided source provenance
-
-#### Scenario: Malformed points are rejected as structured errors
-
-- **WHEN** `assemble_spec` is called with points lacking required fields or a
-  chart type outside the enumeration
-- **THEN** the tool returns `{"error": ...}` describing the offending input and
-  produces no spec
-
-### Requirement: Independent ChartSpec validation tool (Critic)
-
-The system SHALL provide a `validate_spec` tool that checks a given spec
-dictionary via `from_dict` plus `validate()` and returns
-`{"ok": bool, "issues": [...]}`. Validation is a separate agent action, never
-embedded in extraction or assembly.
-
-#### Scenario: Clean spec passes
-
-- **WHEN** `validate_spec` is called with a spec assembled from valid inputs
-- **THEN** the result is `{"ok": true, "issues": []}`
-
-#### Scenario: Invalid spec reports located issues without crashing
-
-- **WHEN** `validate_spec` is called with a spec whose dataset is empty or
-  whose points mix incompatible shapes
-- **THEN** the result is `{"ok": false, "issues": [...]}` with each issue
-  carrying a location and message
-- **AND** no exception escapes to the agent loop
-
 ### Requirement: U0 end-to-end restoration through the ReAct loop
 
 The system SHALL enable the agent, given a clean annotated bar chart or clean
@@ -198,26 +117,7 @@ visual observations).
   `extract_line_series`, `assemble_spec`, and `validate_spec` in addition to
   the built-ins
 
-### Requirement: Chart sensors use authorized attachments
-
-In the Agent tool registry, `extract_text`, `measure_bars`, and
-`extract_line_series` SHALL accept an authorized attachment ID resolved through
-the active session boundary and SHALL not expose arbitrary local paths in their
-model-facing schemas or results. Direct Python path-based sensor compatibility
-MAY remain available. Attachment failures SHALL be bounded structured errors
-without visual artifacts.
-
-#### Scenario: Authorized sensor call
-
-- **WHEN** a registered chart sensor receives a valid attachment ID
-- **THEN** it resolves the internal source image, returns its structured result,
-  and preserves any source-sized visual overlay
-
-#### Scenario: Unauthorized sensor call
-
-- **WHEN** a sensor receives an unknown, cross-session, missing, or changed ID
-- **THEN** it returns a structured error without revealing the source path or
-  producing an overlay
+## ADDED Requirements
 
 ### Requirement: Line-series extraction tool
 
@@ -312,3 +212,4 @@ an unstructured exception solely because it is uncertain.
 - **WHEN** a sensor cannot reliably resolve a series label or numeric axis
 - **THEN** the result includes a material warning naming the unresolved evidence
 - **AND** every emitted confidence value remains within `[0, 1]`
+

@@ -1,13 +1,4 @@
-# chartspec Specification
-
-## Purpose
-
-Defines `ChartSpec`, the shared intermediate representation (IR) between the
-understanding and generation sides: a serialization-friendly, documented data
-model that carries a chart's metadata, axes, and dataset, with a structural
-validator so both directions exchange data through one stable contract.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: ChartSpec data model
 
@@ -32,33 +23,6 @@ single-series representation.
 - **THEN** each point retains its series identity and optional confidence after
   serialization and reconstruction
 - **AND** the original dataset order is preserved
-
-### Requirement: Chart type enumeration
-
-The system SHALL model a chart's type as a closed `ChartType` enumeration
-covering common kinds (e.g. bar, line, pie, scatter), so downstream consumers
-can switch on a fixed set of values.
-
-#### Scenario: A supported chart type is accepted
-
-- **WHEN** a spec is constructed with a type from the `ChartType` enumeration
-- **THEN** the spec holds that type and validation reports no type error
-
-### Requirement: Axes conditional on chart type
-
-The system SHALL require axes for cartesian chart types (bar, line, scatter)
-and SHALL allow axes to be absent or empty for pie, so `validate()` judges axes
-presence against the declared chart type rather than uniformly.
-
-#### Scenario: Cartesian type without axes reports an issue
-
-- **WHEN** a bar, line, or scatter spec is validated with missing or empty axes
-- **THEN** `validate()` returns a problem locating the axes
-
-#### Scenario: Pie without axes validates clean
-
-- **WHEN** a pie spec carries a valid dataset but no axes
-- **THEN** `validate()` returns an empty list
 
 ### Requirement: Structured validation
 
@@ -127,3 +91,4 @@ overlay payloads in the ChartSpec.
 - **THEN** the ChartSpec retains only supported semantic values and bounded
   provenance references
 - **AND** no image bytes are required for `to_dict`, `from_dict`, or validation
+
