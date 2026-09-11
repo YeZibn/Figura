@@ -40,5 +40,5 @@ pub fn run() {
                 let _ = state.lock().expect("gateway supervisor mutex poisoned").stop();
             }
         })
-        .expect("error while running ChartAgent desktop client");
+        .expect("error while running Figura desktop client");
 }

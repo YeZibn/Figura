@@ -1,4 +1,4 @@
-"""Start the local ChartAgent gateway with ``python -m chartagent.gateway``."""
+"""Start the local Figura Gateway with ``python -m chartagent.gateway``."""
 
 from .server import main
 

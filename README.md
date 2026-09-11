@@ -1,6 +1,6 @@
-# ChartAgent
+# Figura
 
-ChartAgent provides a plain conversation mode and a freely planned, tool-capable Agent mode. Use the Conda environment named `agent` for all project commands:
+Figura is a local chart analysis workspace with a freely planned, tool-capable Agent mode. The current Python implementation keeps the `chartagent` module name for compatibility. Use the Conda environment named `agent` for all project commands:
 
 ```bash
 conda run -n agent python -m pytest -q

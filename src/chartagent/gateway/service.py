@@ -81,7 +81,7 @@ class GatewayService:
                 agent["reason"] = reason
             else:
                 agent["reason"] = "initialization_failed"
-        return success({"status": "ok", "service": "ChartAgent Gateway", "agent": agent})
+        return success({"status": "ok", "service": "Figura Gateway", "agent": agent})
 
     def list_sessions(self) -> dict[str, Any]:
         sessions = [session_summary(item).to_dict() for item in SQLiteAgentMemory.list_session_stats(database=self.database)]

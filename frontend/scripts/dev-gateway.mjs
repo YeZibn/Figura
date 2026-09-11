@@ -176,7 +176,7 @@ export async function run(environment = process.env) {
   }
 
   const handleSignal = async (signal) => {
-    console.log(`Received ${signal}; stopping local ChartAgent services.`)
+    console.log(`Received ${signal}; stopping local Figura services.`)
     await cleanup()
     process.exitCode = signal === 'SIGTERM' ? 143 : 130
   }

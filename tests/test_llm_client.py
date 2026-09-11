@@ -16,6 +16,17 @@ from chartagent.client.client import normalize_non_streaming, _collect_streaming
 from chartagent.client.config import DEFAULT_BASE_URL, DEFAULT_MAX_RETRIES, DEFAULT_TIMEOUT, load_environment
 from .conftest import non_streaming, streaming, streaming_with_tool_calls, tool_call
 
+_PROVIDER_ENV_NAMES = (
+    "OPENAI_API_KEY",
+    "OPENAI_BASE_URL",
+    "OPENAI_MODEL",
+    "OPENAI_TIMEOUT",
+    "OPENAI_MAX_RETRIES",
+    "DASHSCOPE_API_KEY",
+    "DASHSCOPE_BASE_URL",
+    "DASH_MODEL",
+)
+
 
 # --- 1. config layering ------------------------------------------------------- #
 def test_config_explicit_beats_env_beats_default():
@@ -90,7 +101,7 @@ def test_environment_file_contract_is_stable_across_launch_directories(tmp_path,
     )
     for directory in (tmp_path, tmp_path / "frontend"):
         directory.mkdir(exist_ok=True)
-        for name in ("DASHSCOPE_API_KEY", "DASHSCOPE_BASE_URL", "DASH_MODEL"):
+        for name in _PROVIDER_ENV_NAMES:
             monkeypatch.delenv(name, raising=False)
         monkeypatch.setenv("CHARTAGENT_ENV_FILE", str(env_file))
         monkeypatch.chdir(directory)
@@ -104,7 +115,7 @@ def test_environment_file_contract_is_stable_across_launch_directories(tmp_path,
 def test_process_environment_beats_environment_file(tmp_path, monkeypatch):
     env_file = tmp_path / ".env"
     env_file.write_text("DASHSCOPE_API_KEY=file-key\nDASHSCOPE_BASE_URL=http://file\n", encoding="utf-8")
-    for name in ("DASHSCOPE_API_KEY", "DASHSCOPE_BASE_URL", "DASH_MODEL"):
+    for name in _PROVIDER_ENV_NAMES:
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("CHARTAGENT_ENV_FILE", str(env_file))
     monkeypatch.setenv("DASHSCOPE_API_KEY", "process-key")

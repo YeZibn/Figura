@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "chartagent"
 version = "0.1.0"
-description = "ChartAgent - agentic foundation for chart reading/generation"
+description = "Figura - agentic foundation for chart reading/generation"
 requires-python = ">=3.10"
 dependencies = [
     "openai>=2.54.0,<3",

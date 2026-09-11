@@ -26,7 +26,7 @@ const clone = <T,>(value: T): T => structuredClone(value)
 
 export const mockClient: ChartAgentClient = {
   async getHealth() {
-    return { version: 'v1', status: 'ok', service: 'ChartAgent Mock', agent: { status: 'ready' as const } }
+    return { version: 'v1', status: 'ok', service: 'Figura Gateway（模拟）', agent: { status: 'ready' as const } }
   },
 
   async listSessions() { await wait(120); return Object.values(data).map((entry) => clone(entry.session)) },

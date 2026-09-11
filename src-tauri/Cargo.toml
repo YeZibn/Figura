@@ -1,8 +1,8 @@
 [package]
 name = "chartagent-desktop"
 version = "0.1.0"
-description = "ChartAgent desktop client"
-authors = ["ChartAgent"]
+description = "Figura desktop client"
+authors = ["Figura"]
 edition = "2021"
 
 [lib]

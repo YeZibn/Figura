@@ -59,7 +59,7 @@ def test_gateway_health_separates_http_and_agent_readiness():
     assert ready.health() == {
         "version": "v1",
         "status": "ok",
-        "service": "ChartAgent Gateway",
+        "service": "Figura Gateway",
         "agent": {"status": "ready"},
     }
 

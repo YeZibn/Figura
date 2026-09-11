@@ -16,7 +16,7 @@ from .tools import ToolRegistry
 from .tools.builtin import register_builtins
 from .tools.chart import register_chart_tools
 
-AGENT_SYSTEM_PROMPT = """You are ChartAgent, a general-purpose assistant that can
+AGENT_SYSTEM_PROMPT = """You are Figura Agent, a general-purpose assistant that can
 inspect attached images visually and use tools when they are useful. For chart
 work, extract_text can read visible labels and annotations, measure_bars can
 measure bar geometry, assemble_spec can construct a ChartSpec, and validate_spec
