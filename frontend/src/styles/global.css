@@ -249,10 +249,11 @@ button:disabled { cursor: not-allowed; }
   flex: none;
   border: 0;
   background: transparent;
-  color: #c1cbc6;
+  color: #aebbb5;
+  cursor: pointer;
 }
 
-.session-more:disabled { opacity: 1; }
+.session-more:hover { color: var(--danger); }
 
 .session-empty {
   display: grid;
@@ -903,6 +904,9 @@ button:disabled { cursor: not-allowed; }
   color: var(--brand);
 }
 
+.danger-action { color: var(--danger); }
+.danger-action:hover { border-color: #e0aaa5; color: #a9443c; }
+
 .empty-attachments {
   display: grid;
   justify-items: center;
@@ -982,6 +986,13 @@ button:disabled { cursor: not-allowed; }
   font-size: 16px;
 }
 
+.dialog-message {
+  margin: -5px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
 .session-dialog label {
   display: block;
   margin-bottom: 7px;
@@ -1032,6 +1043,18 @@ button:disabled { cursor: not-allowed; }
   background: var(--brand);
   color: #fff;
 }
+
+.dialog-danger {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid #d98b84;
+  background: var(--danger);
+  color: #fff;
+}
+
+.dialog-danger:hover:not(:disabled) { background: #a9443c; }
+.dialog-danger:disabled { cursor: wait; opacity: .7; }
 
 .dialog-primary:disabled {
   border-color: #d8e3df;

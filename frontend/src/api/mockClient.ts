@@ -32,6 +32,7 @@ export const mockClient: ChartAgentClient = {
   async listSessions() { await wait(120); return Object.values(data).map((entry) => clone(entry.session)) },
   async getSession(id) { await wait(160); return clone(data[id]) },
   async createSession(name) { await wait(160); const id = 'session-' + Date.now(); const session: Session = { id, name, updatedAt: '刚刚', runCount: 0 }; data[id] = { session, messages: [], attachments: [] }; return clone(data[id]) },
+  async deleteSession(id) { await wait(140); if (!data[id]) throw new Error('会话不存在'); delete data[id] },
   async listAttachments(sessionId) { await wait(80); return clone(data[sessionId]?.attachments ?? []) },
   async uploadAttachment(sessionId, file) {
     await wait(240)
@@ -39,6 +40,17 @@ export const mockClient: ChartAgentClient = {
     const attachment: Attachment = { id: 'att_mock_' + Date.now(), filename: file.name, mediaType: file.type || 'image/png', byteCount: file.size, previewUrl: URL.createObjectURL(file), status: 'registered', previewAvailable: true }
     target.attachments.push(attachment)
     return clone(attachment)
+  },
+  async deleteAttachment(sessionId, attachmentId) {
+    await wait(120)
+    const target = data[sessionId]
+    const index = target?.attachments.findIndex((item) => item.id === attachmentId) ?? -1
+    if (!target || index < 0) throw new Error('附件不存在')
+    const [removed] = target.attachments.splice(index, 1)
+    if (removed.previewUrl?.startsWith('blob:')) URL.revokeObjectURL(removed.previewUrl)
+  },
+  attachmentContentUrl(sessionId, attachmentId) {
+    return data[sessionId]?.attachments.find((item) => item.id === attachmentId)?.previewUrl || ''
   },
   async startRun(sessionId, text, attachmentIds = []) {
     await wait(90)

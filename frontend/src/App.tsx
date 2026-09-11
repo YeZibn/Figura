@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
-import { BarChart3, Check, ChevronDown, ChevronRight, FileImage, LoaderCircle, MessageSquare, MoreHorizontal, Paperclip, Plus, RefreshCw, Send, Sparkles, Terminal, X } from 'lucide-react'
+import { BarChart3, Check, ChevronDown, ChevronRight, FileImage, LoaderCircle, MessageSquare, MoreHorizontal, Paperclip, Plus, RefreshCw, Send, Sparkles, Terminal, Trash2, X } from 'lucide-react'
 import { GatewayClientError, gatewayClient } from './api/gatewayClient'
 import type { ChartAgentClient, RunSubscription } from './api/client'
 import { mockClient } from './api/mockClient'
@@ -16,6 +16,10 @@ type PendingAttachment = {
   status: 'uploading' | 'error'
   error?: string
 }
+
+type ConfirmAction =
+  | { kind: 'session'; session: Session }
+  | { kind: 'attachment'; attachment: Attachment }
 
 function statusLabel(status: AttachmentStatus): string {
   if (status === 'uploading') return '正在上传'
@@ -89,12 +93,12 @@ function gatewayStatusText(mode: 'mock' | 'gateway', runtimeStatus: GatewayRunti
   return '本地服务连接中'
 }
 
-function SessionSidebar(props: { sessions: Session[]; activeId: string; onSelect: (id: string) => void; onCreate: () => void; mode: 'mock' | 'gateway'; runtimeStatus: GatewayRuntimeStatus | null; health: GatewayHealth | null }) {
+function SessionSidebar(props: { sessions: Session[]; activeId: string; onSelect: (id: string) => void; onCreate: () => void; onDelete: (id: string) => void; mode: 'mock' | 'gateway'; runtimeStatus: GatewayRuntimeStatus | null; health: GatewayHealth | null }) {
   const statusUnavailable = props.runtimeStatus?.state === 'unavailable' || props.runtimeStatus?.agentState === 'unavailable' || props.health?.agent?.status === 'unavailable'
   return <aside className="sidebar panel">
     <div className="brand"><div className="brand-mark"><BarChart3 size={19} /></div><div><strong>Figura</strong><span>图表分析工作台</span></div></div>
     <div className="section-heading"><div><span className="eyebrow">工作区</span><strong>会话</strong></div><button className="icon-button" onClick={props.onCreate} title="新建会话" aria-label="新建会话"><Plus size={16} /></button></div>
-    <div className="session-list">{props.sessions.length ? props.sessions.map((session) => <div key={session.id} className={'session-item ' + (session.id === props.activeId ? 'selected' : '')}><button className="session-select" onClick={() => props.onSelect(session.id)} aria-current={session.id === props.activeId ? 'page' : undefined}><span className="session-dot" /><span className="session-copy"><strong>{session.name}</strong><small>{session.updatedAt}</small></span><span className="session-count">{session.runCount}</span></button><button className="session-more" title="会话操作" aria-label={`会话操作：${session.name}`} disabled><MoreHorizontal size={15} /></button></div>) : <div className="session-empty"><MessageSquare size={16} /><span>还没有会话</span><small>新建一个会话开始分析。</small></div>}</div>
+    <div className="session-list">{props.sessions.length ? props.sessions.map((session) => <div key={session.id} className={'session-item ' + (session.id === props.activeId ? 'selected' : '')}><button className="session-select" onClick={() => props.onSelect(session.id)} aria-current={session.id === props.activeId ? 'page' : undefined}><span className="session-dot" /><span className="session-copy"><strong>{session.name}</strong><small>{session.updatedAt}</small></span><span className="session-count">{session.runCount}</span></button><button className="session-more" onClick={() => props.onDelete(session.id)} title={`删除会话：${session.name}`} aria-label={`删除会话：${session.name}`}><Trash2 size={14} /></button></div>) : <div className="session-empty"><MessageSquare size={16} /><span>还没有会话</span><small>新建一个会话开始分析。</small></div>}</div>
     <div className="sidebar-footer"><span className={'status-dot ' + (statusUnavailable ? 'status-error' : '')} />{props.mode === 'gateway' ? 'Gateway 模式' : '模拟模式'} <span className="muted">·</span> {gatewayStatusText(props.mode, props.runtimeStatus, props.health)}</div>
   </aside>
 }
@@ -123,12 +127,14 @@ function ConversationPanel(props: { data: SessionData | null; liveItems: Convers
 }
 
 function AttachmentPreview({ attachment }: { attachment: Attachment }) {
-  return attachment.previewUrl ? <img src={attachment.previewUrl} alt={attachment.filename} /> : <div className="attachment-placeholder"><FileImage size={24} /><span>暂无本地预览</span></div>
+  const [failed, setFailed] = useState(false)
+  useEffect(() => setFailed(false), [attachment.previewUrl])
+  return attachment.previewUrl && !failed ? <img src={attachment.previewUrl} alt={attachment.filename} onError={() => setFailed(true)} /> : <div className="attachment-placeholder"><FileImage size={24} /><span>{attachment.status === 'unavailable' || failed ? '源文件不可用' : '暂无预览'}</span></div>
 }
 
-function AttachmentPanel(props: { attachments: Attachment[]; pending: PendingAttachment[]; selectedIds: string[]; error: string | null; onAdd: (files: File[]) => void; onToggle: (id: string) => void; onRemovePending: (key: string) => void; onRetryPending: (item: PendingAttachment) => void }) {
+function AttachmentPanel(props: { attachments: Attachment[]; pending: PendingAttachment[]; selectedIds: string[]; error: string | null; onAdd: (files: File[]) => void; onToggle: (id: string) => void; onRemovePending: (key: string) => void; onRetryPending: (item: PendingAttachment) => void; onRemove: (attachment: Attachment) => void }) {
   const inputRef = useRef<HTMLInputElement>(null)
-  return <aside className="right-panel panel"><div className="panel-heading"><div><span className="eyebrow">会话数据</span><h2>附件</h2></div><button className="attachment-add" onClick={() => inputRef.current?.click()} title="添加图片"><Plus size={14} />添加图片</button><input ref={inputRef} className="visually-hidden" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple onChange={(event) => { props.onAdd(Array.from(event.currentTarget.files ?? [])); event.currentTarget.value = '' }} /></div>{props.error && <div className="attachment-error" role="alert">{props.error}</div>}{props.pending.length === 0 && props.attachments.length === 0 ? <div className="empty-attachments"><Paperclip size={19} /><span>暂无附件</span><small>选择图片后会显示在这里。</small></div> : <div className="attachment-list">{props.pending.map((item) => <div className="attachment-card pending-card" key={item.key}><img src={item.previewUrl} alt={item.file.name} /><div className="attachment-info"><strong>{item.file.name}</strong><span>{mediaTypeForFile(item.file).replace('image/', '').toUpperCase()} · {formatBytes(item.file.size)}</span><div className={'attachment-status ' + (item.status === 'error' ? 'error' : '')}>{item.status === 'uploading' ? <><LoaderCircle className="spin-icon" size={12} />正在上传</> : <><X size={12} />{item.error || '上传失败'}</>}</div><div className="attachment-actions">{item.status === 'error' && <button className="small-action" onClick={() => props.onRetryPending(item)} title="重新上传"><RefreshCw size={12} />重试</button>}<button className="small-action" onClick={() => props.onRemovePending(item.key)} title="移除待处理附件"><X size={12} />移除</button></div></div></div>)}{props.attachments.map((attachment) => { const selectable = attachment.status !== 'unavailable'; const selected = props.selectedIds.includes(attachment.id); return <div className={'attachment-card ' + (selected ? 'selected' : '')} key={attachment.id}><AttachmentPreview attachment={attachment} /><div className="attachment-info"><strong>{attachment.filename}</strong><span>{attachment.mediaType.replace('image/', '').toUpperCase()} · {formatBytes(attachment.byteCount)}</span><div className={'attachment-status ' + (attachment.status === 'unavailable' ? 'error' : '')}><span className="status-dot" />{statusLabel(attachment.status)}{attachment.previewUrl && <em>本地预览</em>}</div>{selectable && <label className="attachment-select"><input type="checkbox" checked={selected} onChange={() => props.onToggle(attachment.id)} />附加到下一条消息{selected && <Check size={12} />}</label>}</div></div> })}</div>}<div className="details-divider" /><div className="panel-heading compact"><h2>执行详情</h2><span className="detail-count">{props.attachments.length ? `${props.attachments.length} 个附件` : '—'}</span></div><p className="details-note">工具活动和视觉观察会在后续运行中显示。</p></aside>
+  return <aside className="right-panel panel"><div className="panel-heading"><div><span className="eyebrow">会话数据</span><h2>附件</h2></div><button className="attachment-add" onClick={() => inputRef.current?.click()} title="添加图片"><Plus size={14} />添加图片</button><input ref={inputRef} className="visually-hidden" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple onChange={(event) => { props.onAdd(Array.from(event.currentTarget.files ?? [])); event.currentTarget.value = '' }} /></div>{props.error && <div className="attachment-error" role="alert">{props.error}</div>}{props.pending.length === 0 && props.attachments.length === 0 ? <div className="empty-attachments"><Paperclip size={19} /><span>暂无附件</span><small>选择图片后会显示在这里。</small></div> : <div className="attachment-list">{props.pending.map((item) => <div className="attachment-card pending-card" key={item.key}><img src={item.previewUrl} alt={item.file.name} /><div className="attachment-info"><strong>{item.file.name}</strong><span>{mediaTypeForFile(item.file).replace('image/', '').toUpperCase()} · {formatBytes(item.file.size)}</span><div className={'attachment-status ' + (item.status === 'error' ? 'error' : '')}>{item.status === 'uploading' ? <><LoaderCircle className="spin-icon" size={12} />正在上传</> : <><X size={12} />{item.error || '上传失败'}</>}</div><div className="attachment-actions">{item.status === 'error' && <button className="small-action" onClick={() => props.onRetryPending(item)} title="重新上传"><RefreshCw size={12} />重试</button>}<button className="small-action" onClick={() => props.onRemovePending(item.key)} title="移除待处理附件"><X size={12} />移除</button></div></div></div>)}{props.attachments.map((attachment) => { const selectable = attachment.status !== 'unavailable'; const selected = props.selectedIds.includes(attachment.id); return <div className={'attachment-card ' + (selected ? 'selected' : '')} key={attachment.id}><AttachmentPreview attachment={attachment} /><div className="attachment-info"><strong>{attachment.filename}</strong><span>{attachment.mediaType.replace('image/', '').toUpperCase()} · {formatBytes(attachment.byteCount)}</span><div className={'attachment-status ' + (attachment.status === 'unavailable' ? 'error' : '')}><span className="status-dot" />{statusLabel(attachment.status)}{attachment.previewUrl && <em>可预览</em>}</div>{selectable && <label className="attachment-select"><input type="checkbox" checked={selected} onChange={() => props.onToggle(attachment.id)} />附加到下一条消息{selected && <Check size={12} />}</label>}<div className="attachment-actions"><button className="small-action danger-action" onClick={() => props.onRemove(attachment)} title="删除附件"><Trash2 size={12} />删除</button></div></div></div> })}</div>}<div className="details-divider" /><div className="panel-heading compact"><h2>执行详情</h2><span className="detail-count">{props.attachments.length ? `${props.attachments.length} 个附件` : '—'}</span></div><p className="details-note">工具活动和视觉观察会在后续运行中显示。</p></aside>
 }
 
 export default function App() {
@@ -149,6 +155,8 @@ export default function App() {
   const [attachmentError, setAttachmentError] = useState<string | null>(null)
   const [creatingSession, setCreatingSession] = useState(false)
   const [newSessionName, setNewSessionName] = useState('')
+  const [confirmAction, setConfirmAction] = useState<ConfirmAction | null>(null)
+  const [deleting, setDeleting] = useState(false)
   const activeIdRef = useRef(activeId)
   const localPreviews = useRef(new Map<string, string>())
   const subscriptionRef = useRef<RunSubscription | null>(null)
@@ -179,14 +187,71 @@ export default function App() {
   const create = async () => { setNewSessionName(''); setCreatingSession(true) }
   const confirmCreate = async (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); const name = newSessionName.trim(); if (!name) return; setError(null); try { subscriptionRef.current?.close(); subscriptionRef.current = null; clearPending(); setSelectedIds([]); setLiveItems([]); setRunState('idle'); const created = await client.createSession(name); setSessions(await client.listSessions()); setActiveId(created.session.id); setCreatingSession(false) } catch (reason) { setError(toUserMessage(reason)) } }
 
+  const forgetLocalPreview = (attachmentId: string) => {
+    const url = localPreviews.current.get(attachmentId)
+    if (url?.startsWith('blob:')) URL.revokeObjectURL(url)
+    localPreviews.current.delete(attachmentId)
+  }
+
+  const requestDeleteSession = (id: string) => {
+    const session = sessions.find((item) => item.id === id)
+    if (session) setConfirmAction({ kind: 'session', session })
+  }
+
+  const requestDeleteAttachment = (attachment: Attachment) => setConfirmAction({ kind: 'attachment', attachment })
+
+  const confirmDelete = async () => {
+    const action = confirmAction
+    if (!action || deleting) return
+    setDeleting(true)
+    setError(null)
+    setAttachmentError(null)
+    try {
+      if (action.kind === 'session') {
+        const deletedIndex = sessions.findIndex((item) => item.id === action.session.id)
+        await client.deleteSession(action.session.id)
+        const remaining = sessions.filter((item) => item.id !== action.session.id)
+        setSessions(remaining)
+        if (activeIdRef.current === action.session.id) {
+          subscriptionRef.current?.close()
+          subscriptionRef.current = null
+          data?.attachments.forEach((attachment) => forgetLocalPreview(attachment.id))
+          clearPending()
+          setSelectedIds([])
+          setLiveItems([])
+          setRunState('idle')
+          setLoading(false)
+          setData(null)
+          const next = remaining[deletedIndex] || remaining[deletedIndex - 1]
+          setActiveId(next?.id ?? '')
+        }
+      } else {
+        const sessionId = activeIdRef.current
+        await client.deleteAttachment(sessionId, action.attachment.id)
+        forgetLocalPreview(action.attachment.id)
+        setSelectedIds((ids) => ids.filter((id) => id !== action.attachment.id))
+        setData((current) => current ? { ...current, attachments: current.attachments.filter((item) => item.id !== action.attachment.id) } : current)
+      }
+      setConfirmAction(null)
+    } catch (reason) {
+      const message = toUserMessage(reason)
+      if (action.kind === 'attachment') setAttachmentError(message)
+      else setError(message)
+    } finally {
+      setDeleting(false)
+    }
+  }
+
   const uploadPending = async (target: PendingAttachment) => {
     const sessionId = activeIdRef.current
     setPending((items) => items.map((item) => item.key === target.key ? { ...item, status: 'uploading', error: undefined } : item))
     try {
       const uploaded = await client.uploadAttachment(sessionId, target.file)
       if (activeIdRef.current !== sessionId) { URL.revokeObjectURL(target.previewUrl); return }
-      localPreviews.current.set(uploaded.id, target.previewUrl)
-      setData((current) => current ? { ...current, attachments: [...current.attachments.filter((item) => item.id !== uploaded.id), { ...uploaded, previewUrl: target.previewUrl, previewAvailable: true }] } : current)
+      const previewUrl = mode === 'mock' ? target.previewUrl : uploaded.previewUrl || ''
+      if (mode === 'mock') localPreviews.current.set(uploaded.id, target.previewUrl)
+      else URL.revokeObjectURL(target.previewUrl)
+      setData((current) => current ? { ...current, attachments: [...current.attachments.filter((item) => item.id !== uploaded.id), { ...uploaded, previewUrl, previewAvailable: Boolean(previewUrl) }] } : current)
       setSelectedIds((ids) => ids.includes(uploaded.id) ? ids : [...ids, uploaded.id])
       setPending((items) => items.filter((item) => item.key !== target.key))
       setAttachmentError(null)
@@ -273,7 +338,7 @@ export default function App() {
     }
   }
 
-  return <><div className="app-shell"><SessionSidebar sessions={sessions} activeId={activeId} onSelect={selectSession} onCreate={create} mode={mode} runtimeStatus={runtimeStatus} health={gatewayHealth} /><ConversationPanel data={data} liveItems={liveItems} runState={runState} selectedAttachmentIds={selectedIds} onSubmit={submit} loading={loading} loadingSession={loadingSession} error={error} /><AttachmentPanel attachments={data?.attachments ?? []} pending={pending} selectedIds={selectedIds} error={attachmentError} onAdd={addFiles} onToggle={toggleAttachment} onRemovePending={removePending} onRetryPending={(item) => void uploadPending(item)} /></div>{creatingSession && <div className="dialog-backdrop"><form className="session-dialog" onSubmit={(event) => void confirmCreate(event)}><h2>新建会话</h2><label htmlFor="session-name">会话名称</label><input id="session-name" value={newSessionName} onChange={(event) => setNewSessionName(event.target.value)} placeholder="例如：季度销售分析" autoFocus /><div className="dialog-actions"><button type="button" className="dialog-secondary" onClick={() => setCreatingSession(false)}>取消</button><button type="submit" className="dialog-primary" disabled={!newSessionName.trim()}>创建会话</button></div></form></div>}</>
+  return <><div className="app-shell"><SessionSidebar sessions={sessions} activeId={activeId} onSelect={selectSession} onCreate={create} onDelete={requestDeleteSession} mode={mode} runtimeStatus={runtimeStatus} health={gatewayHealth} /><ConversationPanel data={data} liveItems={liveItems} runState={runState} selectedAttachmentIds={selectedIds} onSubmit={submit} loading={loading} loadingSession={loadingSession} error={error} /><AttachmentPanel attachments={data?.attachments ?? []} pending={pending} selectedIds={selectedIds} error={attachmentError} onAdd={addFiles} onToggle={toggleAttachment} onRemovePending={removePending} onRetryPending={(item) => void uploadPending(item)} onRemove={requestDeleteAttachment} /></div>{creatingSession && <div className="dialog-backdrop"><form className="session-dialog" onSubmit={(event) => void confirmCreate(event)}><h2>新建会话</h2><label htmlFor="session-name">会话名称</label><input id="session-name" value={newSessionName} onChange={(event) => setNewSessionName(event.target.value)} placeholder="例如：季度销售分析" autoFocus /><div className="dialog-actions"><button type="button" className="dialog-secondary" onClick={() => setCreatingSession(false)}>取消</button><button type="submit" className="dialog-primary" disabled={!newSessionName.trim()}>创建会话</button></div></form></div>}{confirmAction && <div className="dialog-backdrop"><div className="session-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-dialog-title"><h2 id="delete-dialog-title">{confirmAction.kind === 'session' ? '删除会话？' : '删除附件？'}</h2><p className="dialog-message">{confirmAction.kind === 'session' ? `将永久删除“${confirmAction.session.name}”及其运行记录和附件。` : `将删除“${confirmAction.attachment.filename}”及其源文件。`}</p><div className="dialog-actions"><button type="button" className="dialog-secondary" onClick={() => setConfirmAction(null)} disabled={deleting}>取消</button><button type="button" className="dialog-danger" onClick={() => void confirmDelete()} disabled={deleting}><Trash2 size={13} />{deleting ? '正在删除' : '确认删除'}</button></div></div></div>}</>
 }
 
 function toUserMessage(error: unknown): string {
@@ -284,8 +349,10 @@ function toUserMessage(error: unknown): string {
     if (error.code === 'agent_unavailable') return 'Agent 当前不可用，请稍后重试。'
     if (error.code === 'session_not_found') return '会话不存在，可能已被删除。'
     if (error.code === 'session_exists') return '会话名称已存在，请换一个名称。'
+    if (error.code === 'session_busy') return '会话正在运行 Agent，请等待本次运行结束后再删除。'
     if (error.code === 'attachment_not_found') return '附件不存在或不属于当前会话。'
     if (error.code === 'attachment_unavailable') return '附件源文件不可用，请重新上传。'
+    if (error.code === 'attachment_storage_error') return '附件文件操作失败，请稍后重试。'
     if (error.code === 'unsupported_media_type' || error.code === 'invalid_image') return '图片格式无法识别，请选择 PNG、JPEG、GIF 或 WebP。'
     if (error.code === 'attachment_too_large' || error.code === 'attachment_storage_limit') return '图片或当前会话的附件总量超过限制。'
     if (error.code === 'invalid_filename') return '图片文件名无效，请重命名后重试。'

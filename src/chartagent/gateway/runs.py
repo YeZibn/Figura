@@ -6,6 +6,7 @@ import time
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from contextlib import contextmanager
 from threading import Condition, RLock
 from typing import Callable, Iterable
 from uuid import uuid4
@@ -268,6 +269,20 @@ class RunManager:
             self._runs[run.run_id] = run
             run.publish("run_started", {"status": RunStatus.RUNNING.value})
             return run
+
+    @contextmanager
+    def session_operation(self):
+        """Serialize session lifecycle checks with run creation."""
+        with self._lock:
+            yield
+
+    def has_active(self, session_id: str) -> bool:
+        with self._lock:
+            self.cleanup()
+            return any(
+                run.session_id == session_id and not run.terminal
+                for run in self._runs.values()
+            )
 
     def start(self, session_id: str, worker: Callable[[ManagedRun], None]) -> ManagedRun:
         run = self.create(session_id)

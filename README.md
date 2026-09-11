@@ -42,13 +42,33 @@ To verify the complete npm signal and port-release lifecycle, run
 not replace the regular static `npm run smoke` checks.
 
 The service listens on `127.0.0.1` and exposes versioned routes under `/api/v1`.
-The desktop panel can select PNG, JPEG, GIF, and WebP images, preview them
-locally, upload them to the active session, and select registered IDs for the
-next message. The Gateway keeps uploaded bytes in a temporary, process-owned
-directory and SQLite stores only safe attachment metadata and references. A
-Gateway restart can make the source unavailable; upload the image again in that
-case. Registration does not send image bytes to the model. The Agent decides
-whether to call `load_image` when visual inspection is useful.
+The desktop panel can select PNG, JPEG, GIF, and WebP images, preview them,
+upload them to the active session, delete registered attachments, and select
+valid IDs for the next message. The Gateway keeps uploaded bytes in a
+persistent application-owned directory and SQLite stores only safe attachment
+metadata and references. By default, attachments are stored beside the
+configured session database under `attachments/` (or under
+`~/.chartagent/attachments/` when no data directory is configured);
+`CHARTAGENT_ATTACHMENT_DIR` can override the location. A valid source remains
+available after a Gateway restart. If a source is missing or its hash changes,
+the workspace marks it unavailable and offers re-upload recovery. Registration
+does not send image bytes to the model. The Agent decides whether to call
+`load_image` when visual inspection is useful.
+
+The Gateway provides these attachment and lifecycle routes in addition to the
+session read/write operations:
+
+```text
+DELETE /api/v1/sessions/{session_id}
+DELETE /api/v1/sessions/{session_id}/attachments/{attachment_id}
+GET    /api/v1/sessions/{session_id}/attachments/{attachment_id}/content
+```
+
+Session deletion is permanent and removes its runs, records, attachment
+metadata, and managed source files. The Gateway rejects deletion while the
+session has an active Agent run. The desktop client asks for confirmation before
+deleting a session or attachment and selects a neighboring session after
+successful deletion.
 
 When running the Tauri client in Gateway mode, use the dedicated alias. Tauri
 owns the local Gateway child process and waits for `/api/v1/health` before

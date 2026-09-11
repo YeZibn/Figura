@@ -83,6 +83,14 @@ class GatewayRequestHandler(BaseHTTPRequestHandler):
                 )
                 self._send_binary(HTTPStatus.OK, content, media_type)
                 return
+            elif (parts := self._attachment_content_parts(path)) is not None:
+                session_id, attachment_id = parts
+                content, media_type = self.gateway.get_attachment_content(
+                    session_id,
+                    attachment_id,
+                )
+                self._send_binary(HTTPStatus.OK, content, media_type)
+                return
             elif (parts := self._run_events_parts(path)) is not None:
                 session_id, run_id = parts
                 run = self.gateway.get_run(session_id, run_id)
@@ -148,7 +156,21 @@ class GatewayRequestHandler(BaseHTTPRequestHandler):
         self._method_not_allowed()
 
     def do_DELETE(self) -> None:  # noqa: N802 - stdlib handler API
-        self._method_not_allowed()
+        try:
+            path = self._path()
+            prefix = f"{API_PREFIX}/sessions/"
+            if path.startswith(prefix) and len(path[len(prefix):].split("/")) == 1:
+                payload = self.gateway.delete_session(unquote(path[len(prefix):]))
+            elif (parts := self._attachment_delete_parts(path)) is not None:
+                session_id, attachment_id = parts
+                payload = self.gateway.delete_attachment(session_id, attachment_id)
+            else:
+                raise GatewayFault("not_found", 404, "Route was not found")
+            self._send_json(HTTPStatus.OK, payload)
+        except GatewayFault as exc:
+            self._send_fault(exc)
+        except Exception:
+            self._send_fault(GatewayFault("gateway_error", 500, "Gateway request failed"))
 
     def log_message(self, format: str, *args: Any) -> None:
         # Keep provider and request details out of the default desktop output.
@@ -216,6 +238,26 @@ class GatewayRequestHandler(BaseHTTPRequestHandler):
             and parts[3] == "observations"
         ):
             return unquote(parts[0]), unquote(parts[2]), unquote(parts[4])
+        return None
+
+    @staticmethod
+    def _attachment_content_parts(path: str) -> tuple[str, str] | None:
+        prefix = f"{API_PREFIX}/sessions/"
+        if not path.startswith(prefix):
+            return None
+        parts = path[len(prefix):].split("/")
+        if len(parts) == 4 and parts[1] == "attachments" and parts[3] == "content":
+            return unquote(parts[0]), unquote(parts[2])
+        return None
+
+    @staticmethod
+    def _attachment_delete_parts(path: str) -> tuple[str, str] | None:
+        prefix = f"{API_PREFIX}/sessions/"
+        if not path.startswith(prefix):
+            return None
+        parts = path[len(prefix):].split("/")
+        if len(parts) == 3 and parts[1] == "attachments":
+            return unquote(parts[0]), unquote(parts[2])
         return None
 
     def _attachment_headers(self) -> tuple[str, str]:
@@ -324,7 +366,7 @@ class GatewayRequestHandler(BaseHTTPRequestHandler):
         allowed = getattr(self.server, "allowed_origins", frozenset())
         if origin and origin in allowed:
             self.send_header("Access-Control-Allow-Origin", origin)
-            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
             self.send_header(
                 "Access-Control-Allow-Headers",
                 "Content-Type, X-ChartAgent-Media-Type, Last-Event-ID",

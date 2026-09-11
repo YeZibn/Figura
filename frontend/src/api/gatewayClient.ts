@@ -61,7 +61,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return payload
 }
 
-function mapAttachment(item: GatewayAttachment): Attachment {
+function attachmentContentUrl(sessionId: string, attachmentId: string): string {
+  return `${gatewayBaseUrl}/sessions/${encodeURIComponent(sessionId)}/attachments/${encodeURIComponent(attachmentId)}/content`
+}
+
+function mapAttachment(item: GatewayAttachment, sessionId?: string): Attachment {
   return {
     id: item.attachment_id,
     filename: item.filename,
@@ -70,12 +74,12 @@ function mapAttachment(item: GatewayAttachment): Attachment {
     sha256: item.sha256,
     status: item.status || 'registered',
     previewAvailable: item.preview_available || false,
-    previewUrl: '',
+    previewUrl: item.preview_available && sessionId ? attachmentContentUrl(sessionId, item.attachment_id) : '',
   }
 }
 
 function mapSessionData(payload: GatewaySessionData): SessionData {
-  return { ...payload, attachments: payload.attachments.map(mapAttachment) }
+  return { ...payload, attachments: payload.attachments.map((item) => mapAttachment(item, payload.session.id)) }
 }
 
 function mapRun(payload: GatewayRunResponse): RunHandle {
@@ -133,9 +137,13 @@ export const gatewayClient: ChartAgentClient = {
     }))
   },
 
+  async deleteSession(id) {
+    await request<{ deleted: boolean }>(`/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  },
+
   async listAttachments(sessionId) {
     const payload = await request<{ attachments: GatewayAttachment[] }>(`/sessions/${encodeURIComponent(sessionId)}/attachments`)
-    return payload.attachments.map(mapAttachment)
+    return payload.attachments.map((item) => mapAttachment(item, sessionId))
   },
 
   async uploadAttachment(sessionId, file) {
@@ -151,7 +159,18 @@ export const gatewayClient: ChartAgentClient = {
         },
       },
     )
-    return mapAttachment(payload.attachment)
+    return mapAttachment(payload.attachment, sessionId)
+  },
+
+  async deleteAttachment(sessionId, attachmentId) {
+    await request<{ deleted: boolean }>(
+      `/sessions/${encodeURIComponent(sessionId)}/attachments/${encodeURIComponent(attachmentId)}`,
+      { method: 'DELETE' },
+    )
+  },
+
+  attachmentContentUrl(sessionId, attachmentId) {
+    return attachmentContentUrl(sessionId, attachmentId)
   },
 
   async startRun(sessionId, text, attachmentIds = []) {

@@ -176,18 +176,87 @@ class SQLiteAgentMemory:
             conn.close()
 
     @classmethod
-    def delete_session(cls, name: str, *, database: str | Path | None = None) -> bool:
+    def delete_session_by_id(
+        cls,
+        session_id: str,
+        *,
+        database: str | Path | None = None,
+    ) -> list[Attachment] | None:
+        """Delete a session by opaque ID and return its attachment rows.
+
+        ``None`` means that no session existed; an empty list is a valid
+        deleted session with no attachments.
+        """
         path = Path(database) if database else default_database_path()
         if not path.exists():
-            return False
+            return None
         conn = sqlite3.connect(path)
+        conn.row_factory = sqlite3.Row
         try:
             conn.execute("PRAGMA foreign_keys = ON")
+            row = conn.execute("SELECT id FROM sessions WHERE id = ?", (session_id,)).fetchone()
+            if row is None:
+                return None
+            rows = conn.execute(
+                "SELECT id, session_id, run_id, ordinal, canonical_path, filename, media_type, byte_count, sha256, created_at FROM attachments WHERE session_id = ?",
+                (session_id,),
+            ).fetchall()
+            attachments = [
+                Attachment(
+                    item["id"], item["session_id"], item["run_id"], item["ordinal"],
+                    item["canonical_path"], item["filename"], item["media_type"],
+                    item["byte_count"], item["sha256"], item["created_at"],
+                )
+                for item in rows
+            ]
             with conn:
-                result = conn.execute("DELETE FROM sessions WHERE name = ?", (name,))
-            return result.rowcount > 0
+                conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+            return attachments
         finally:
             conn.close()
+
+    @classmethod
+    def delete_attachment_by_id(
+        cls,
+        session_id: str,
+        attachment_id: str,
+        *,
+        database: str | Path | None = None,
+    ) -> Attachment | None:
+        """Delete and return one attachment owned by a session."""
+        path = Path(database) if database else default_database_path()
+        if not path.exists():
+            return None
+        conn = sqlite3.connect(path)
+        conn.row_factory = sqlite3.Row
+        try:
+            conn.execute("PRAGMA foreign_keys = ON")
+            row = conn.execute(
+                "SELECT id, session_id, run_id, ordinal, canonical_path, filename, media_type, byte_count, sha256, created_at FROM attachments WHERE id = ? AND session_id = ?",
+                (attachment_id, session_id),
+            ).fetchone()
+            if row is None:
+                return None
+            item = Attachment(
+                row["id"], row["session_id"], row["run_id"], row["ordinal"],
+                row["canonical_path"], row["filename"], row["media_type"],
+                row["byte_count"], row["sha256"], row["created_at"],
+            )
+            with conn:
+                conn.execute(
+                    "DELETE FROM attachments WHERE id = ? AND session_id = ?",
+                    (attachment_id, session_id),
+                )
+            return item
+        finally:
+            conn.close()
+
+    @classmethod
+    def delete_session(cls, name: str, *, database: str | Path | None = None) -> bool:
+        session = cls.get_session_by_name(name, database=database)
+        if session is None:
+            return False
+        return cls.delete_session_by_id(session.id, database=database) is not None
 
     def _interrupt_running(self) -> None:
         with self.connection:
@@ -249,6 +318,13 @@ class SQLiteAgentMemory:
             self.connection.execute(
                 "UPDATE attachments SET run_id = ? WHERE id = ? AND session_id = ?",
                 (run_id, attachment_id, self.session.id),
+            )
+
+    def update_attachment_path(self, attachment_id: str, canonical_path: str) -> None:
+        with self.connection:
+            self.connection.execute(
+                "UPDATE attachments SET canonical_path = ? WHERE id = ? AND session_id = ?",
+                (canonical_path, attachment_id, self.session.id),
             )
 
     def get_attachment(self, attachment_id: str) -> Attachment | None:

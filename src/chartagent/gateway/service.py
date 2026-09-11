@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
@@ -46,7 +47,10 @@ class GatewayService:
         self.model = model
         self._memory_factory = memory_factory or self._open_memory
         self._runtime_factory = runtime_factory or self._build_runtime
-        self._attachment_store = attachment_store or EphemeralAttachmentStore(attachment_root)
+        self._attachment_store = attachment_store or EphemeralAttachmentStore(
+            attachment_root,
+            database=self.database,
+        )
         self._runs = run_manager or RunManager()
         self._readiness_probe = readiness_probe or (lambda: probe_agent_readiness(model=self.model))
 
@@ -110,6 +114,63 @@ class GatewayService:
             return self._transcript(memory).to_dict()
         finally:
             memory.close()
+
+    def delete_session(self, session_id: object) -> dict[str, Any]:
+        session = self._resolve_session(session_id)
+        with self._runs.session_operation():
+            if self._runs.has_active(session.id):
+                raise GatewayFault("session_busy", 409, "Session has an active Agent run")
+            attachments = SQLiteAgentMemory.delete_session_by_id(
+                session.id,
+                database=self.database,
+            )
+        if attachments is None:
+            raise GatewayFault("session_not_found", 404, "Session was not found")
+
+        cleanup_pending = False
+        for item in attachments:
+            if not self._attachment_store.is_managed_path(session.id, item.canonical_path):
+                continue
+            try:
+                self._attachment_store.remove_managed(session.id, item.canonical_path)
+            except AttachmentStoreError:
+                cleanup_pending = True
+        try:
+            self._attachment_store.remove_session(session.id)
+        except AttachmentStoreError:
+            cleanup_pending = True
+        result: dict[str, Any] = {"sessionId": session.id, "deleted": True}
+        if cleanup_pending:
+            result["cleanupPending"] = True
+        return success(result)
+
+    def delete_attachment(self, session_id: object, attachment_id: object) -> dict[str, Any]:
+        session = self._resolve_session(session_id)
+        if not isinstance(attachment_id, str) or not attachment_id.strip():
+            raise GatewayFault("invalid_request", 400, "Attachment ID is required")
+        with self._runs.session_operation():
+            if self._runs.has_active(session.id):
+                raise GatewayFault("session_busy", 409, "Session has an active Agent run")
+            memory = self._memory_factory(session.name, create=False)
+            try:
+                item = memory.get_attachment(attachment_id)
+            finally:
+                memory.close()
+            if item is None:
+                raise GatewayFault("attachment_not_found", 404, "Attachment was not found")
+            if self._attachment_store.is_managed_path(session.id, item.canonical_path):
+                try:
+                    self._attachment_store.remove_managed(session.id, item.canonical_path)
+                except AttachmentStoreError as exc:
+                    raise GatewayFault(exc.code, exc.status, exc.message) from exc
+            deleted = SQLiteAgentMemory.delete_attachment_by_id(
+                session.id,
+                attachment_id,
+                database=self.database,
+            )
+        if deleted is None:
+            raise GatewayFault("attachment_not_found", 404, "Attachment was not found")
+        return success({"sessionId": session.id, "attachmentId": attachment_id, "deleted": True})
 
     def submit_message(
         self,
@@ -175,10 +236,12 @@ class GatewayService:
     ) -> ManagedRun:
         session, prompt = self._prepare_prompt(session_id, raw_text, raw_attachment_ids)
         try:
-            return self._runs.start(
-                session.id,
-                lambda run: self._execute_run(run, session.name, prompt),
-            )
+            with self._runs.session_operation():
+                current = self._resolve_session(session.id)
+                return self._runs.start(
+                    current.id,
+                    lambda run: self._execute_run(run, current.name, prompt),
+                )
         except RuntimeError as exc:
             raise GatewayFault("run_limit", 429, "Too many Agent runs are active") from exc
 
@@ -197,11 +260,10 @@ class GatewayService:
             try:
                 registry = self._registry(memory)
                 for attachment_id in attachment_ids:
-                    item, error = registry.validate(attachment_id)
+                    item = registry.get(attachment_id)
                     if item is None:
-                        if registry.get(attachment_id) is None:
-                            raise GatewayFault("attachment_not_found", 404, "Attachment was not found")
-                        raise GatewayFault("attachment_unavailable", 409, "Attachment is unavailable")
+                        raise GatewayFault("attachment_not_found", 404, "Attachment was not found")
+                    item, error = self._validated_attachment(memory, item)
                     if error:
                         raise GatewayFault("attachment_unavailable", 409, "Attachment is unavailable")
                     attachment_metadata.append(item.metadata())
@@ -315,7 +377,7 @@ class GatewayService:
             except (OSError, ValueError) as exc:
                 self._attachment_store.remove(staged)
                 raise GatewayFault("invalid_image", 400, "Attachment could not be registered") from exc
-            return success({"attachment": self._attachment_summary(item, registry).to_dict()})
+            return success({"attachment": self._attachment_summary(memory, item).to_dict()})
         finally:
             memory.close()
 
@@ -325,10 +387,33 @@ class GatewayService:
         try:
             registry = self._registry(memory)
             attachments = [
-                self._attachment_summary(item, registry).to_dict()
+                self._attachment_summary(memory, item).to_dict()
                 for item in memory.list_attachments()
             ]
             return success({"attachments": attachments})
+        finally:
+            memory.close()
+
+    def get_attachment_content(
+        self,
+        session_id: object,
+        attachment_id: object,
+    ) -> tuple[bytes, str]:
+        session = self._resolve_session(session_id)
+        if not isinstance(attachment_id, str) or not attachment_id.strip():
+            raise GatewayFault("invalid_request", 400, "Attachment ID is required")
+        memory = self._memory_factory(session.name, create=False)
+        try:
+            item = memory.get_attachment(attachment_id)
+            if item is None:
+                raise GatewayFault("attachment_not_found", 404, "Attachment was not found")
+            item, error = self._validated_attachment(memory, item)
+            if error or item is None:
+                raise GatewayFault("attachment_unavailable", 409, "Attachment is unavailable")
+            try:
+                return Path(item.canonical_path).read_bytes(), item.media_type
+            except OSError as exc:
+                raise GatewayFault("attachment_unavailable", 409, "Attachment is unavailable") from exc
         finally:
             memory.close()
 
@@ -355,12 +440,42 @@ class GatewayService:
             memory.close()
 
     def _transcript(self, memory: SQLiteAgentMemory) -> SessionTranscript:
-        registry = self._registry(memory)
         attachments = [
-            self._attachment_summary(item, registry)
+            self._attachment_summary(memory, item)
             for item in memory.list_attachments()
         ]
         return project_completed_runs(memory.session, memory.completed_runs(), attachments)
+
+    def _validated_attachment(self, memory: SQLiteAgentMemory, item):
+        if not self._attachment_store.is_managed_path(memory.session.id, item.canonical_path):
+            migrated = self._attachment_store.migrate_legacy(
+                memory.session.id,
+                item.filename,
+                item.media_type,
+                item.canonical_path,
+                item.sha256,
+            )
+            if migrated is not None:
+                memory.update_attachment_path(item.id, str(migrated))
+                return replace(item, canonical_path=str(migrated)), None
+        registry = AttachmentRegistry(
+            session_id=memory.session.id,
+            load=lambda attachment_id: item if attachment_id == item.id else None,
+        )
+        validated, error = registry.validate(item.id)
+        if not error:
+            return item, None
+        migrated = self._attachment_store.migrate_legacy(
+            memory.session.id,
+            item.filename,
+            item.media_type,
+            item.canonical_path,
+            item.sha256,
+        )
+        if migrated is None:
+            return item, error
+        memory.update_attachment_path(item.id, str(migrated))
+        return replace(item, canonical_path=str(migrated)), None
 
     @staticmethod
     def _registry(
@@ -374,9 +489,8 @@ class GatewayService:
             load=memory.get_attachment,
         )
 
-    @staticmethod
-    def _attachment_summary(item, registry: AttachmentRegistry) -> AttachmentSummary:
-        _, error = registry.validate(item.id)
+    def _attachment_summary(self, memory: SQLiteAgentMemory, item) -> AttachmentSummary:
+        _, error = self._validated_attachment(memory, item)
         return AttachmentSummary(
             attachment_id=item.id,
             filename=item.filename,
@@ -384,7 +498,7 @@ class GatewayService:
             byte_count=item.byte_count,
             sha256=item.sha256,
             status="unavailable" if error else "registered",
-            preview_available=False,
+            preview_available=error is None,
         )
 
     def close(self) -> None:

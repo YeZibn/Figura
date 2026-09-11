@@ -173,7 +173,7 @@ def test_gateway_service_maps_unavailable_agent_and_preserves_history(tmp_path):
     }
 
 
-def test_attachment_upload_projects_safe_metadata_and_cleans_on_restart(tmp_path):
+def test_attachment_upload_projects_safe_metadata_and_survives_restart(tmp_path):
     database = tmp_path / "sessions.db"
     attachment_root = tmp_path / "attachments"
     service = GatewayService(database=database, attachment_root=attachment_root)
@@ -193,10 +193,90 @@ def test_attachment_upload_projects_safe_metadata_and_cleans_on_restart(tmp_path
     assert content.decode("latin1") not in encoded
     assert service.get_session(session_id)["attachments"][0]["status"] == "registered"
 
-    # A new Gateway process owns a fresh temporary root. SQLite keeps the safe
-    # reference, while the source becomes unavailable and can be re-uploaded.
+    # A new Gateway process reuses the persistent attachment root.
     restarted = GatewayService(database=database, attachment_root=attachment_root)
-    assert restarted.get_session(session_id)["attachments"][0]["status"] == "unavailable"
+    assert restarted.get_session(session_id)["attachments"][0]["status"] == "registered"
+    restored, media_type = restarted.get_attachment_content(session_id, metadata["attachment_id"])
+    assert restored == content
+    assert media_type == "image/png"
+
+
+def test_attachment_store_resolves_persistent_root_and_cleans_only_orphans(tmp_path):
+    database = tmp_path / "sessions.db"
+    store = EphemeralAttachmentStore(database=database)
+    assert store.root == tmp_path / "attachments"
+    owned = store.stage("session", "owned.png", "image/png", _png_bytes())
+    orphan = store.stage("session", "orphan.png", "image/png", _png_bytes())
+    assert store.cleanup_orphans({str(owned.resolve())}) == 1
+    assert owned.exists()
+    assert not orphan.exists()
+
+
+def test_legacy_attachment_source_is_migrated_when_still_valid(tmp_path):
+    database = tmp_path / "sessions.db"
+    legacy_root = tmp_path / "legacy"
+    first = GatewayService(database=database, attachment_root=legacy_root)
+    session_id = first.create_session("demo")["session"]["id"]
+    metadata = first.upload_attachment(session_id, "chart.png", "image/png", _png_bytes())["attachment"]
+
+    restarted = GatewayService(database=database, attachment_root=tmp_path / "attachments")
+    assert restarted.get_session(session_id)["attachments"][0]["status"] == "registered"
+    restored, _ = restarted.get_attachment_content(session_id, metadata["attachment_id"])
+    assert restored == _png_bytes()
+    stored = SQLiteAgentMemory("demo", database=database, create=False)
+    try:
+        assert str(tmp_path / "attachments") in stored.get_attachment(metadata["attachment_id"]).canonical_path
+    finally:
+        stored.close()
+
+
+def test_session_and_attachment_deletion_are_scoped_and_cascading(tmp_path):
+    database = tmp_path / "sessions.db"
+    root = tmp_path / "attachments"
+    service = GatewayService(database=database, attachment_root=root)
+    first_id = service.create_session("first")["session"]["id"]
+    second_id = service.create_session("second")["session"]["id"]
+    attachment_id = service.upload_attachment(first_id, "chart.png", "image/png", _png_bytes())["attachment"]["attachment_id"]
+
+    with pytest.raises(GatewayFault) as cross_session:
+        service.delete_attachment(second_id, attachment_id)
+    assert cross_session.value.code == "attachment_not_found"
+    assert service.get_attachment_content(first_id, attachment_id)[0] == _png_bytes()
+
+    deleted_attachment = service.delete_attachment(first_id, attachment_id)
+    assert deleted_attachment["deleted"] is True
+    with pytest.raises(GatewayFault) as missing:
+        service.get_attachment_content(first_id, attachment_id)
+    assert missing.value.code == "attachment_not_found"
+
+    attachment_id = service.upload_attachment(first_id, "chart.png", "image/png", _png_bytes())["attachment"]["attachment_id"]
+    attachment_path = SQLiteAgentMemory("first", database=database, create=False)
+    try:
+        source = Path(attachment_path.get_attachment(attachment_id).canonical_path)
+    finally:
+        attachment_path.close()
+    assert source.exists()
+    assert service.delete_session(first_id)["deleted"] is True
+    assert not source.exists()
+    with pytest.raises(GatewayFault) as gone:
+        service.get_session(first_id)
+    assert gone.value.code == "session_not_found"
+    assert service.get_session(second_id)["session"]["name"] == "second"
+
+
+def test_session_deletion_rejects_active_run(tmp_path):
+    database = tmp_path / "sessions.db"
+    manager = RunManager()
+    service = GatewayService(database=database, run_manager=manager)
+    session_id = service.create_session("busy")["session"]["id"]
+    run = manager.create(session_id)
+    with pytest.raises(GatewayFault) as error:
+        service.delete_session(session_id)
+    assert error.value.code == "session_busy"
+    assert service.get_session(session_id)["session"]["name"] == "busy"
+    run.complete("done")
+    assert service.delete_session(session_id)["deleted"] is True
+    manager.close()
 
 
 def test_attachment_store_rejects_bad_content_and_enforces_limits(tmp_path):
@@ -340,6 +420,22 @@ def test_gateway_http_routes_and_bounded_errors(tmp_path):
 
         connection = http.client.HTTPConnection("127.0.0.1", port, timeout=3)
         connection.request(
+            "GET",
+            f"/api/v1/sessions/{session_id}/attachments/{attachment_id}/content",
+            headers={"Origin": "http://127.0.0.1:1420"},
+        )
+        response = connection.getresponse()
+        image_body = response.read()
+        allow_origin = response.getheader("Access-Control-Allow-Origin")
+        content_type = response.getheader("Content-Type")
+        connection.close()
+        assert response.status == 200
+        assert image_body == _png_bytes()
+        assert content_type == "image/png"
+        assert allow_origin == "http://127.0.0.1:1420"
+
+        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=3)
+        connection.request(
             "POST",
             f"/api/v1/sessions/{session_id}/attachments?filename=bad.png",
             body=b"not-json",
@@ -360,6 +456,16 @@ def test_gateway_http_routes_and_bounded_errors(tmp_path):
         status, bad, _ = _request(port, "POST", f"/api/v1/sessions/{session_id}/messages", {"text": " "})
         assert status == 400
         assert bad["error"]["code"] == "invalid_request"
+
+        status, deleted, _ = _request(port, "DELETE", f"/api/v1/sessions/{session_id}/attachments/{attachment_id}")
+        assert status == 200
+        assert deleted["deleted"] is True
+        status, deleted_session, _ = _request(port, "DELETE", f"/api/v1/sessions/{session_id}")
+        assert status == 200
+        assert deleted_session["deleted"] is True
+        status, missing_session, _ = _request(port, "GET", f"/api/v1/sessions/{session_id}")
+        assert status == 404
+        assert missing_session["error"]["code"] == "session_not_found"
 
         status, missing, _ = _request(port, "GET", "/api/v1/unknown")
         assert status == 404

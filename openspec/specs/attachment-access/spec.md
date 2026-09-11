@@ -40,9 +40,19 @@ Before reading bytes, the system MUST verify ownership, existence, readability, 
 
 ### Requirement: Attachment references survive named-session restart
 
-Named sessions SHALL persist safe attachment references while ephemeral references remain process-local and no source or generated image bytes are persisted.
+Named sessions SHALL persist safe attachment references and their uploaded source bytes below the configured application-owned attachment directory. The Gateway SHALL be able to validate and load a persistent source after restart using its prior attachment ID. Source bytes SHALL remain outside SQLite records and ephemeral generated observations SHALL remain process-local.
 
 #### Scenario: Resumed session reloads an attachment
 
-- **WHEN** a named session is resumed and the source still passes validation
-- **THEN** the model can load it again using its prior attachment ID
+- **WHEN** a named session is resumed and the persistent source still passes validation
+- **THEN** the model can load it again using its prior attachment ID and the workspace can request its safe preview
+
+#### Scenario: Persistent source is missing or changed
+
+- **WHEN** a named session is resumed but the referenced source no longer exists or fails its stored hash validation
+- **THEN** the attachment remains safe metadata only, loading is rejected with a bounded error, and the client marks it unavailable
+
+#### Scenario: Attachment data remains outside model history
+
+- **WHEN** a persistent attachment is registered or reloaded
+- **THEN** SQLite records and model history contain only bounded metadata and opaque IDs, never source image bytes or local paths

@@ -1,7 +1,8 @@
-"""Ephemeral, bounded storage for images uploaded through the local gateway."""
+"""Bounded, persistent storage for images uploaded through the local gateway."""
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import shutil
@@ -14,7 +15,7 @@ from PIL import Image, UnidentifiedImageError
 
 from ..attachments import DEFAULT_MAX_ATTACHMENT_BYTES, SUPPORTED_IMAGE_TYPES
 
-DEFAULT_ATTACHMENT_ROOT = Path(tempfile.gettempdir()) / "chartagent-attachments"
+DEFAULT_ATTACHMENT_ROOT = Path.home() / ".chartagent" / "attachments"
 DEFAULT_MAX_SESSION_ATTACHMENT_BYTES = 80 * 1024 * 1024
 MAX_ATTACHMENT_FILENAME = 255
 
@@ -38,32 +39,44 @@ class AttachmentStoreError(Exception):
 
 
 class EphemeralAttachmentStore:
-    """Store uploaded bytes below a private process-managed temporary root."""
+    """Store uploaded bytes below a private application-owned root.
+
+    The historical class name is kept for compatibility with existing callers.
+    New instances are persistent and never clear the root during startup.
+    """
 
     def __init__(
         self,
         root: str | Path | None = None,
         *,
+        database: str | Path | None = None,
         max_bytes: int = DEFAULT_MAX_ATTACHMENT_BYTES,
         max_session_bytes: int = DEFAULT_MAX_SESSION_ATTACHMENT_BYTES,
     ) -> None:
-        self.root = Path(root) if root is not None else Path(os.environ.get("CHARTAGENT_ATTACHMENT_DIR", DEFAULT_ATTACHMENT_ROOT))
+        self.root = self._resolve_root(root, database)
         self.max_bytes = max_bytes
         self.max_session_bytes = max_session_bytes
         self.root.mkdir(parents=True, exist_ok=True)
-        self._clean_startup_root()
+        self._restrict_permissions(self.root, 0o700)
 
-    def _clean_startup_root(self) -> None:
-        for child in self.root.iterdir():
-            try:
-                if child.is_dir():
-                    shutil.rmtree(child)
-                else:
-                    child.unlink()
-            except OSError:
-                # A stale file that cannot be removed will never be selected by
-                # the generated paths below, so startup remains usable.
-                continue
+    @staticmethod
+    def _resolve_root(root: str | Path | None, database: str | Path | None) -> Path:
+        if root is not None:
+            return Path(root).expanduser()
+        configured = os.environ.get("CHARTAGENT_ATTACHMENT_DIR")
+        if configured:
+            return Path(configured).expanduser()
+        if database is not None:
+            return Path(database).expanduser().parent / "attachments"
+        data_dir = os.environ.get("CHARTAGENT_DATA_DIR")
+        return (Path(data_dir).expanduser() if data_dir else DEFAULT_ATTACHMENT_ROOT.parent) / "attachments"
+
+    @staticmethod
+    def _restrict_permissions(path: Path, mode: int) -> None:
+        try:
+            path.chmod(mode)
+        except OSError:
+            pass
 
     def stage(self, session_id: str, filename: str, media_type: str, content: bytes) -> Path:
         self._validate_session_id(session_id)
@@ -81,11 +94,27 @@ class EphemeralAttachmentStore:
                 413,
                 "Session attachment storage limit exceeded",
             )
+        self._restrict_permissions(session_root, 0o700)
         path = session_root / f"upload_{uuid4().hex}{suffix}"
+        temporary = None
         try:
-            path.write_bytes(content)
-            path.chmod(0o600)
+            with tempfile.NamedTemporaryFile(
+                mode="wb",
+                dir=session_root,
+                prefix=".upload_",
+                suffix=suffix,
+                delete=False,
+            ) as stream:
+                temporary = Path(stream.name)
+                stream.write(content)
+                stream.flush()
+                os.fsync(stream.fileno())
+            self._restrict_permissions(temporary, 0o600)
+            os.replace(temporary, path)
+            self._restrict_permissions(path, 0o600)
         except OSError as exc:
+            if temporary is not None:
+                self.remove(temporary)
             self.remove(path)
             raise AttachmentStoreError(
                 "attachment_storage_error",
@@ -94,12 +123,84 @@ class EphemeralAttachmentStore:
             ) from exc
         return path
 
-    def remove(self, path: str | Path) -> None:
+    def remove(self, path: str | Path) -> bool:
         candidate = Path(path)
         try:
             candidate.unlink(missing_ok=True)
+            return True
         except OSError:
-            pass
+            return False
+
+    def is_managed_path(self, session_id: str, path: str | Path) -> bool:
+        self._validate_session_id(session_id)
+        candidate = Path(path).expanduser().resolve(strict=False)
+        session_root = (self.root / session_id).resolve(strict=False)
+        try:
+            candidate.relative_to(session_root)
+        except ValueError:
+            return False
+        return candidate != session_root
+
+    def remove_managed(self, session_id: str, path: str | Path) -> bool:
+        if not self.is_managed_path(session_id, path):
+            raise AttachmentStoreError("attachment_storage_error", 500, "Attachment storage path is invalid")
+        candidate = Path(path).expanduser().resolve(strict=False)
+        try:
+            candidate.unlink(missing_ok=True)
+            return True
+        except OSError as exc:
+            raise AttachmentStoreError("attachment_storage_error", 500, "Attachment could not be removed") from exc
+
+    def remove_session(self, session_id: str) -> bool:
+        self._validate_session_id(session_id)
+        session_root = (self.root / session_id).resolve(strict=False)
+        try:
+            session_root.relative_to(self.root.resolve(strict=False))
+        except ValueError as exc:
+            raise AttachmentStoreError("attachment_storage_error", 500, "Attachment storage path is invalid") from exc
+        try:
+            shutil.rmtree(session_root, ignore_errors=False)
+            return True
+        except FileNotFoundError:
+            return True
+        except OSError as exc:
+            raise AttachmentStoreError("attachment_storage_error", 500, "Attachment directory could not be removed") from exc
+
+    def migrate_legacy(self, session_id: str, filename: str, media_type: str, source: str | Path, expected_sha256: str) -> Path | None:
+        """Copy a valid legacy source into managed storage without trusting its path."""
+        candidate = Path(source).expanduser()
+        if self.is_managed_path(session_id, candidate) or not candidate.is_file():
+            return None
+        try:
+            content = candidate.read_bytes()
+        except OSError:
+            return None
+        if hashlib.sha256(content).hexdigest() != expected_sha256:
+            return None
+        try:
+            return self.stage(session_id, filename, media_type, content)
+        except AttachmentStoreError:
+            return None
+
+    def cleanup_orphans(self, referenced_paths: set[str]) -> int:
+        """Remove only opaque files below managed session directories."""
+        removed = 0
+        if not self.root.exists():
+            return removed
+        root = self.root.resolve(strict=False)
+        for session_root in self.root.iterdir():
+            if not session_root.is_dir():
+                continue
+            try:
+                session_root.resolve(strict=False).relative_to(root)
+            except ValueError:
+                continue
+            for item in session_root.iterdir():
+                if not item.is_file() or str(item.resolve(strict=False)) in referenced_paths:
+                    continue
+                if item.name.startswith("upload_") or item.name.startswith(".upload_"):
+                    removed += int(self.remove(item))
+        return removed
 
     def _validate_upload(self, filename: str, media_type: str, content: bytes) -> str:
         if not isinstance(filename, str) or not filename.strip():
