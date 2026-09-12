@@ -186,3 +186,44 @@ def grouped_bar_chart(
         dataset=dataset,
     )
     return output.getvalue(), spec.to_dict()
+
+
+def pie_chart(
+    values: Sequence[float] = (35, 25, 20, 20),
+    labels: Sequence[str] = ("Alpha", "Beta", "Gamma", "Delta"),
+    *,
+    title: str = "Share",
+    source: str = "synthetic-pie",
+    show_labels: bool = True,
+) -> tuple[bytes, dict]:
+    """Render a clean non-donut pie chart with optional percentage labels."""
+    if len(values) != len(labels) or not values or any(float(value) <= 0 for value in values):
+        raise ValueError("values and labels must have the same non-zero positive length")
+    numeric_values = [float(value) for value in values]
+    label_values = [str(label) for label in labels]
+    figure, axis = plt.subplots(figsize=(6, 4), dpi=120)
+    pie_result = axis.pie(
+        numeric_values,
+        startangle=90,
+        counterclock=False,
+        colors=("#4c78a8", "#f58518", "#e45756", "#72b7b2"),
+        labels=None,
+        autopct="%1.0f%%" if show_labels else None,
+        pctdistance=0.68,
+    )
+    wedges = pie_result[0]
+    axis.set_title(title)
+    axis.legend(wedges, label_values, loc="center left", bbox_to_anchor=(1.0, 0.5))
+    axis.set_aspect("equal")
+    output = BytesIO()
+    figure.savefig(output, format="png", facecolor="white", bbox_inches="tight")
+    plt.close(figure)
+    total = sum(numeric_values)
+    spec = ChartSpec(
+        metadata=ChartMetadata(chart_type=ChartType.PIE, title=title, source=source),
+        dataset=[
+            DataPoint(category=label, value=value / total)
+            for label, value in zip(label_values, numeric_values)
+        ],
+    )
+    return output.getvalue(), spec.to_dict()

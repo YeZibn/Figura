@@ -6,11 +6,19 @@ from ..registry import ToolRegistry
 from .geometry import MEASURE_BARS
 from .line import EXTRACT_LINE_SERIES
 from .ocr import EXTRACT_TEXT
+from .pie import EXTRACT_PIE_SLICES
 from .spec_tools import ASSEMBLE_SPEC, VALIDATE_SPEC
 from ...attachments import AttachmentRegistry
 from ..tool import Tool
 
-CHART_TOOLS = [EXTRACT_TEXT, MEASURE_BARS, EXTRACT_LINE_SERIES, ASSEMBLE_SPEC, VALIDATE_SPEC]
+CHART_TOOLS = [
+    EXTRACT_TEXT,
+    MEASURE_BARS,
+    EXTRACT_LINE_SERIES,
+    EXTRACT_PIE_SLICES,
+    ASSEMBLE_SPEC,
+    VALIDATE_SPEC,
+]
 CHART_TOOL_NAMES = [tool.name for tool in CHART_TOOLS]
 
 
@@ -34,6 +42,11 @@ def _authorized_tool(tool: Tool, attachments: AttachmentRegistry) -> Tool:
 def register_chart_tools(registry: ToolRegistry, *, attachments: AttachmentRegistry | None = None) -> None:
     """Register all available chart-understanding tools."""
     for tool in CHART_TOOLS:
-        if attachments is not None and tool.name in {"extract_text", "measure_bars", "extract_line_series"}:
+        if attachments is not None and tool.name in {
+            "extract_text",
+            "measure_bars",
+            "extract_line_series",
+            "extract_pie_slices",
+        }:
             tool = _authorized_tool(tool, attachments)
         registry.register(tool)

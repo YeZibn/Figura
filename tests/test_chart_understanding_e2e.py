@@ -9,7 +9,7 @@ import pytest
 from chartagent import Agent, ToolRegistry, build_user_content
 from chartagent.client.models import NormalizedResult, ToolCall
 from chartagent.tools.chart import register_chart_tools
-from tests.chart_fixtures import annotated_bar_chart, line_chart
+from tests.chart_fixtures import annotated_bar_chart, line_chart, pie_chart
 
 
 def _call(call_id: str, name: str, arguments: dict) -> NormalizedResult:
@@ -37,6 +37,7 @@ class _UnderstandingClient:
             "extract_text",
             "measure_bars",
             "extract_line_series",
+            "extract_pie_slices",
             "assemble_spec",
             "validate_spec",
         }
@@ -190,6 +191,66 @@ def test_agent_restores_multi_series_line_without_fixed_tool_sequence(tmp_path, 
     answer = agent.run(
         build_user_content("Extract and validate the multi-series data.", [str(image_path)])
     )
+
+    assert json.loads(answer) == client.assembled
+    assert client.stage == 4
+
+
+class _PieUnderstandingClient:
+    def __init__(self, image_path: str) -> None:
+        self.image_path = image_path
+        self.stage = 0
+        self.assembled: dict | None = None
+
+    def chat(self, messages, **kwargs):
+        def last_tool_data() -> object:
+            tool_messages = [message for message in messages if message["role"] == "tool"]
+            payload = json.loads(tool_messages[-1]["content"])
+            return payload.get("data", payload)
+
+        if self.stage == 0:
+            result = _call("pie", "extract_pie_slices", {"image_path": self.image_path})
+        elif self.stage == 1:
+            observed = last_tool_data()
+            assert observed["totals"]["consistent"] is True
+            result = _call(
+                "assemble",
+                "assemble_spec",
+                {
+                    "chart_type": "pie",
+                    "points": [
+                        {"category": "Alpha", "value": 0.35},
+                        {"category": "Beta", "value": 0.25},
+                        {"category": "Gamma", "value": 0.20},
+                        {"category": "Delta", "value": 0.20},
+                    ],
+                },
+            )
+        elif self.stage == 2:
+            self.assembled = last_tool_data()
+            assert self.assembled["axes"] is None
+            result = _call("validate", "validate_spec", {"spec": self.assembled})
+        elif self.stage == 3:
+            assert last_tool_data() == {"ok": True, "issues": []}
+            result = NormalizedResult(content=json.dumps(self.assembled))
+        else:
+            raise AssertionError("unexpected extra model call")
+        self.stage += 1
+        return result
+
+
+def test_agent_restores_pie_without_cartesian_tool_sequence(tmp_path, monkeypatch):
+    png_bytes, _ = pie_chart(values=(35, 25, 20, 20))
+    image_path = tmp_path / "pie.png"
+    image_path.write_bytes(png_bytes)
+    monkeypatch.setattr("chartagent.tools.chart.pie.extract_text", lambda _path: __import__("chartagent.tools", fromlist=["ToolResult"]).ToolResult([]))
+
+    registry = ToolRegistry()
+    register_chart_tools(registry)
+    client = _PieUnderstandingClient(str(image_path))
+    agent = Agent(client, registry, system="Restore the pie chart to ChartSpec.")
+
+    answer = agent.run(build_user_content("Extract and validate this pie chart.", [str(image_path)]))
 
     assert json.loads(answer) == client.assembled
     assert client.stage == 4

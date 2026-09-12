@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from io import BytesIO
+import math
 
 from PIL import Image, ImageDraw
 
@@ -121,4 +122,48 @@ def render_line_overlay(
             )
     if not any(entry.get("points") for entry in series):
         _tag(draw, (8, 8), "NO LINE SERIES DETECTED", image_size=overlay.size)
+    return _png_bytes(overlay)
+
+
+def render_pie_overlay(
+    image: Image.Image,
+    circle: dict | None,
+    slices: list[dict],
+) -> bytes:
+    """Draw pie boundaries and bounded sector labels over the source image."""
+    overlay = image.convert("RGB").copy()
+    draw = ImageDraw.Draw(overlay)
+    if circle is None:
+        _tag(draw, (8, 8), "NO PIE REGION DETECTED", image_size=overlay.size)
+        return _png_bytes(overlay)
+
+    center_x, center_y = circle["center"]
+    radius = float(circle["radius"])
+    draw.ellipse(
+        (center_x - radius, center_y - radius, center_x + radius, center_y + radius),
+        outline="#0066ff",
+        width=3,
+    )
+
+    def point(angle: float, distance: float) -> tuple[int, int]:
+        radians = math.radians(angle)
+        return (
+            int(round(center_x + distance * math.sin(radians))),
+            int(round(center_y - distance * math.cos(radians))),
+        )
+
+    colors = ["#e60000", "#008f5a", "#7a00cc", "#d66b00", "#0066cc"]
+    for index, item in enumerate(slices):
+        start = float(item.get("start_angle_deg", 0.0))
+        span = float(item.get("angle_deg", 0.0))
+        color = colors[index % len(colors)]
+        start_point = point(start, radius)
+        end_point = point(start + span, radius)
+        draw.line((center_x, center_y, start_point[0], start_point[1]), fill=color, width=3)
+        draw.line((center_x, center_y, end_point[0], end_point[1]), fill=color, width=3)
+        label_point = point(start + span / 2.0, radius * 0.68)
+        label = f'{item.get("id", index + 1)} {float(item.get("ratio", 0.0)):.0%}'
+        _tag(draw, label_point, label, image_size=overlay.size)
+    if not slices:
+        _tag(draw, (8, 8), "NO PIE SECTORS DETECTED", image_size=overlay.size)
     return _png_bytes(overlay)

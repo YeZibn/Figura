@@ -3,6 +3,7 @@
 from io import BytesIO
 import json
 
+import numpy as np
 import pytest
 from PIL import Image, ImageChops
 
@@ -12,8 +13,9 @@ from chartagent.tools.chart import overlays
 from chartagent.tools.chart.geometry import measure_bars
 from chartagent.tools.chart.line import extract_line_series
 from chartagent.tools.chart.ocr import extract_text
+from chartagent.tools.chart.pie import extract_pie_slices
 from chartagent.tools.chart.spec_tools import assemble_spec, validate_spec
-from tests.chart_fixtures import annotated_bar_chart, grouped_bar_chart, line_chart
+from tests.chart_fixtures import annotated_bar_chart, grouped_bar_chart, line_chart, pie_chart
 
 
 def test_annotated_bar_chart_fixture_is_valid_png(tmp_path):
@@ -245,6 +247,107 @@ def test_extract_line_series_calibrates_when_tick_evidence_is_available(tmp_path
     points = result.data["series"][0]["points"]
     assert all("x" in point and "y" in point for point in points)
     assert not any("calibration unavailable" in warning for warning in result.warnings)
+
+
+def test_extract_pie_slices_measures_clean_sectors(tmp_path, monkeypatch):
+    png_bytes, _ = pie_chart(values=(35, 25, 20, 20))
+    chart_path = tmp_path / "pie.png"
+    chart_path.write_bytes(png_bytes)
+    monkeypatch.setattr("chartagent.tools.chart.pie.extract_text", lambda _path: ToolResult([]))
+
+    result = extract_pie_slices(str(chart_path))
+
+    assert isinstance(result, ToolResult)
+    data = result.data
+    assert len(data["slices"]) == 4
+    assert [item["ratio"] for item in data["slices"]] == pytest.approx(
+        [0.35, 0.25, 0.20, 0.20], abs=0.035
+    )
+    assert data["circle"]["radius"] > 100
+    assert data["totals"]["consistent"] is True
+    assert 0.0 <= data["confidence"]["overall"] <= 1.0
+    with Image.open(BytesIO(result.images[0].content)) as overlay, Image.open(chart_path) as source:
+        assert overlay.size == source.size
+        assert ImageChops.difference(source.convert("RGB"), overlay.convert("RGB")).getbbox()
+
+
+def test_extract_pie_slices_preserves_printed_values_separately(tmp_path, monkeypatch):
+    png_bytes, _ = pie_chart(values=(60, 40), labels=("Alpha", "Beta"))
+    chart_path = tmp_path / "pie-labels.png"
+    chart_path.write_bytes(png_bytes)
+    snippets = [
+        {"id": 1, "text": "60%", "bbox": [315, 240, 32, 16], "confidence": 0.98},
+    ]
+    monkeypatch.setattr("chartagent.tools.chart.pie.extract_text", lambda _path: ToolResult(snippets))
+
+    result = extract_pie_slices(str(chart_path))
+
+    assert isinstance(result, ToolResult)
+    printed = [item for item in result.data["slices"] if "printed_value" in item]
+    assert printed
+    assert printed[0]["printed_value"] == 60.0
+    assert printed[0]["ratio"] != printed[0]["printed_value"]
+
+
+def test_extract_pie_slices_associates_legend_color_and_label(tmp_path, monkeypatch):
+    png_bytes, _ = pie_chart(values=(60, 40), labels=("Alpha", "Beta"), show_labels=False)
+    chart_path = tmp_path / "pie-legend.png"
+    chart_path.write_bytes(png_bytes)
+    snippets = [
+        {"id": 1, "text": "Alpha", "bbox": [435, 201, 40, 14], "confidence": 0.96},
+        {"id": 2, "text": "Beta", "bbox": [435, 226, 32, 14], "confidence": 0.96},
+    ]
+    monkeypatch.setattr("chartagent.tools.chart.pie.extract_text", lambda _path: ToolResult(snippets))
+
+    result = extract_pie_slices(str(chart_path))
+
+    assert isinstance(result, ToolResult)
+    assert any(entry.get("slice_id") for entry in result.data["legend"])
+    assert {item.get("label") for item in result.data["slices"]} >= {"Alpha", "Beta"}
+
+
+def test_extract_pie_slices_reports_incomplete_sector_totals(tmp_path, monkeypatch):
+    png_bytes, _ = pie_chart(values=(60, 40), labels=("Alpha", "Beta"), show_labels=False)
+    chart_path = tmp_path / "incomplete-pie.png"
+    chart_path.write_bytes(png_bytes)
+    monkeypatch.setattr("chartagent.tools.chart.pie.extract_text", lambda _path: ToolResult([]))
+    monkeypatch.setattr(
+        "chartagent.tools.chart.pie._sample_labels",
+        lambda _rgb, _circle, _palette: (
+            np.concatenate([np.zeros(360, dtype=int), np.full(360, -1, dtype=int)]),
+            0.5,
+        ),
+    )
+
+    result = extract_pie_slices(str(chart_path))
+
+    assert isinstance(result, ToolResult)
+    assert result.data["slices"]
+    assert result.data["totals"]["consistent"] is False
+    assert any("totals" in warning for warning in result.data["warnings"])
+
+
+def test_extract_pie_slices_blank_image_is_inspectable(tmp_path):
+    blank = tmp_path / "blank.png"
+    Image.new("RGB", (320, 200), "white").save(blank)
+
+    result = extract_pie_slices(str(blank))
+
+    assert isinstance(result, ToolResult)
+    assert result.data["slices"] == []
+    assert result.data["warnings"]
+    with Image.open(BytesIO(result.images[0].content)) as overlay:
+        assert overlay.size == (320, 200)
+
+
+def test_assemble_and_validate_axis_free_pie_spec():
+    spec = assemble_spec(
+        "pie",
+        [{"category": "Alpha", "value": 0.6}, {"category": "Beta", "value": 0.4}],
+    )
+
+    assert spec["axes"] is None
+    assert validate_spec(spec) == {"ok": True, "issues": []}
 
 
 def test_cartesian_tool_observation_serializes_warnings_and_overlay(tmp_path):

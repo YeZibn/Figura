@@ -254,9 +254,10 @@ def test_agent_repl_registers_builtin_and_chart_tools(monkeypatch):
         "parse_json",
         "read_json_file",
         "extract_text",
-        "measure_bars",
-        "extract_line_series",
-        "assemble_spec",
+            "measure_bars",
+            "extract_line_series",
+            "extract_pie_slices",
+            "assemble_spec",
         "validate_spec",
         "load_image",
     }
