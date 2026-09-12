@@ -125,6 +125,73 @@ def line_chart(
     return output.getvalue(), spec.to_dict()
 
 
+def scatter_chart(
+    values_by_series: dict[str, Sequence[float]] | None = None,
+    x_values: Sequence[float] = (0, 1, 2, 3, 4),
+    *,
+    title: str = "Distribution",
+    x_label: str = "Input",
+    y_label: str = "Output",
+    source: str = "synthetic-scatter",
+) -> tuple[bytes, dict]:
+    """Render a clean, marker-only scatter chart with explicit ground truth."""
+    series_values = values_by_series or {
+        "North": (1, 3, 2, 5, 4),
+        "South": (2, 4, 5, 3, 6),
+    }
+    if any(len(values) != len(x_values) for values in series_values.values()):
+        raise ValueError("every scatter series must match x_values length")
+
+    colors = ("#1f77b4", "#d62728", "#2ca02c", "#9467bd")
+    figure, axis = plt.subplots(figsize=(6, 4), dpi=120)
+    for index, (label, values) in enumerate(series_values.items()):
+        axis.scatter(
+            list(x_values),
+            [float(value) for value in values],
+            color=colors[index % len(colors)],
+            s=64,
+            label=label,
+        )
+    axis.set_title(title)
+    axis.set_xlabel(x_label)
+    axis.set_ylabel(y_label)
+    axis.set_xlim(min(x_values) - 0.25, max(x_values) + 0.25)
+    all_values = [float(value) for values in series_values.values() for value in values]
+    axis.set_ylim(0, max(all_values) + 2)
+    axis.set_xticks(list(x_values))
+    axis.set_yticks(range(0, int(max(all_values) + 3), 2))
+    axis.legend(loc="center left", bbox_to_anchor=(1.02, 0.5))
+    axis.spines["top"].set_visible(False)
+    axis.spines["right"].set_visible(False)
+
+    output = BytesIO()
+    figure.savefig(output, format="png", facecolor="white")
+    plt.close(figure)
+
+    dataset = [
+        DataPoint(x=float(x), y=float(value), series=label)
+        for label, values in series_values.items()
+        for x, value in zip(x_values, values)
+    ]
+    spec = ChartSpec(
+        metadata=ChartMetadata(chart_type=ChartType.SCATTER, title=title, source=source),
+        axes=Axes(
+            x=Axis(
+                label=x_label,
+                min_value=float(min(x_values)),
+                max_value=float(max(x_values)),
+            ),
+            y=Axis(
+                label=y_label,
+                min_value=0.0,
+                max_value=float(max(all_values) + 2),
+            ),
+        ),
+        dataset=dataset,
+    )
+    return output.getvalue(), spec.to_dict()
+
+
 def grouped_bar_chart(
     values_by_series: dict[str, Sequence[float]] | None = None,
     categories: Sequence[str] = ("A", "B", "C"),

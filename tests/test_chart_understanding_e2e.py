@@ -9,7 +9,7 @@ import pytest
 from chartagent import Agent, ToolRegistry, build_user_content
 from chartagent.client.models import NormalizedResult, ToolCall
 from chartagent.tools.chart import register_chart_tools
-from tests.chart_fixtures import annotated_bar_chart, line_chart, pie_chart
+from tests.chart_fixtures import annotated_bar_chart, line_chart, pie_chart, scatter_chart
 
 
 def _call(call_id: str, name: str, arguments: dict) -> NormalizedResult:
@@ -38,6 +38,7 @@ class _UnderstandingClient:
             "measure_bars",
             "extract_line_series",
             "extract_pie_slices",
+            "extract_scatter_points",
             "assemble_spec",
             "validate_spec",
         }
@@ -251,6 +252,81 @@ def test_agent_restores_pie_without_cartesian_tool_sequence(tmp_path, monkeypatc
     agent = Agent(client, registry, system="Restore the pie chart to ChartSpec.")
 
     answer = agent.run(build_user_content("Extract and validate this pie chart.", [str(image_path)]))
+
+    assert json.loads(answer) == client.assembled
+    assert client.stage == 4
+
+
+class _ScatterUnderstandingClient:
+    def __init__(self, image_path: str, ground_truth: dict) -> None:
+        self.image_path = image_path
+        self.ground_truth = ground_truth
+        self.stage = 0
+        self.assembled: dict | None = None
+
+    def chat(self, messages, **kwargs):
+        tool_names = {
+            entry["function"]["name"] for entry in kwargs.get("tools", [])
+        }
+        assert "extract_scatter_points" in tool_names
+
+        def last_tool_data() -> object:
+            tool_messages = [message for message in messages if message["role"] == "tool"]
+            payload = json.loads(tool_messages[-1]["content"])
+            return payload.get("data", payload)
+
+        if self.stage == 0:
+            result = _call(
+                "scatter",
+                "extract_scatter_points",
+                {"image_path": self.image_path},
+            )
+        elif self.stage == 1:
+            observed = last_tool_data()
+            assert len(observed["series"]) == 2
+            assert len(observed["points"]) == 10
+            result = _call(
+                "assemble",
+                "assemble_spec",
+                {
+                    "chart_type": "scatter",
+                    "x_label": self.ground_truth["axes"]["x"]["label"],
+                    "y_label": self.ground_truth["axes"]["y"]["label"],
+                    "points": self.ground_truth["dataset"],
+                    "source": self.ground_truth["metadata"]["source"],
+                },
+            )
+        elif self.stage == 2:
+            self.assembled = last_tool_data()
+            assert self.assembled["metadata"]["chart_type"] == "scatter"
+            assert self.assembled["axes"] is not None
+            result = _call("validate", "validate_spec", {"spec": self.assembled})
+        elif self.stage == 3:
+            assert last_tool_data() == {"ok": True, "issues": []}
+            result = NormalizedResult(content=json.dumps(self.assembled))
+        else:
+            raise AssertionError("unexpected extra model call")
+        self.stage += 1
+        return result
+
+
+def test_agent_restores_scatter_without_fixed_tool_sequence(tmp_path, monkeypatch):
+    png_bytes, ground_truth = scatter_chart()
+    image_path = tmp_path / "scatter.png"
+    image_path.write_bytes(png_bytes)
+    monkeypatch.setattr(
+        "chartagent.tools.chart.scatter.extract_text",
+        lambda _path: __import__("chartagent.tools", fromlist=["ToolResult"]).ToolResult([]),
+    )
+
+    registry = ToolRegistry()
+    register_chart_tools(registry)
+    client = _ScatterUnderstandingClient(str(image_path), ground_truth)
+    agent = Agent(client, registry, system="Restore the scatter chart to ChartSpec.")
+
+    answer = agent.run(
+        build_user_content("Extract and validate this scatter chart.", [str(image_path)])
+    )
 
     assert json.loads(answer) == client.assembled
     assert client.stage == 4

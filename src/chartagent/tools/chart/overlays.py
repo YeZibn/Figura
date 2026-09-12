@@ -125,6 +125,57 @@ def render_line_overlay(
     return _png_bytes(overlay)
 
 
+def render_scatter_overlay(
+    image: Image.Image,
+    plot_area: list[int] | None,
+    series: list[dict],
+) -> bytes:
+    """Draw point IDs and uncertainty evidence over the source image."""
+    overlay = image.convert("RGB").copy()
+    draw = ImageDraw.Draw(overlay)
+    if plot_area:
+        x, y, width, height = plot_area
+        draw.rectangle(
+            (
+                x,
+                y,
+                min(overlay.width - 1, x + width),
+                min(overlay.height - 1, y + height),
+            ),
+            outline="#0066ff",
+            width=2,
+        )
+
+    fallback_colors = ["#e60000", "#008f5a", "#7a00cc", "#d66b00", "#0066cc"]
+    has_points = False
+    for series_index, entry in enumerate(series):
+        color = entry.get("color") or fallback_colors[series_index % len(fallback_colors)]
+        for point in entry.get("points", []):
+            if point.get("x_px") is None or point.get("y_px") is None:
+                continue
+            has_points = True
+            x = int(point["x_px"])
+            y = int(point["y_px"])
+            appearance = point.get("appearance") or {}
+            radius = max(4, int(round(float(appearance.get("radius_px", 4)))))
+            outline = "#111111" if point.get("outlier_candidate") else color
+            width = 4 if point.get("merged_candidate") else 2
+            draw.ellipse(
+                (x - radius, y - radius, x + radius, y + radius),
+                outline=outline,
+                width=width,
+            )
+            _tag(
+                draw,
+                (x + radius + 2, y - radius - 2),
+                str(point.get("id", "point")),
+                image_size=overlay.size,
+            )
+    if not has_points:
+        _tag(draw, (8, 8), "NO SCATTER POINTS DETECTED", image_size=overlay.size)
+    return _png_bytes(overlay)
+
+
 def render_pie_overlay(
     image: Image.Image,
     circle: dict | None,

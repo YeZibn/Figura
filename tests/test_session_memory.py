@@ -121,6 +121,39 @@ def test_pie_sensor_uses_authorized_attachment_id(tmp_path, monkeypatch):
     assert unauthorized.images == ()
 
 
+def test_scatter_sensor_uses_authorized_attachment_id(tmp_path, monkeypatch):
+    from chartagent.tools import ToolRegistry, dispatch_observation
+    from chartagent.tools.chart import register_chart_tools
+    from tests.chart_fixtures import scatter_chart
+
+    image = tmp_path / "scatter.png"
+    image.write_bytes(scatter_chart()[0])
+    monkeypatch.setattr(
+        "chartagent.tools.chart.scatter.extract_text",
+        lambda _path: __import__("chartagent.tools", fromlist=["ToolResult"]).ToolResult([]),
+    )
+    attachments = AttachmentRegistry(session_id="session")
+    item = attachments.register(str(image))
+    registry = ToolRegistry()
+    register_chart_tools(registry, attachments=attachments)
+
+    authorized = dispatch_observation(
+        registry,
+        "extract_scatter_points",
+        json.dumps({"attachment_id": item.id}),
+    )
+    unauthorized = dispatch_observation(
+        registry,
+        "extract_scatter_points",
+        json.dumps({"attachment_id": "att_unknown"}),
+    )
+
+    assert json.loads(authorized.content)["data"]["points"]
+    assert "authorized" in json.loads(unauthorized.content)["error"]
+    assert str(image) not in unauthorized.content
+    assert unauthorized.images == ()
+
+
 def test_context_summarizes_complete_old_runs_and_filters_sensitive_values():
     old = Run("old", None, 1, RunStatus.COMPLETED)
     old.records = [

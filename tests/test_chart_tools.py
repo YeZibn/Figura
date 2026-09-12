@@ -14,8 +14,15 @@ from chartagent.tools.chart.geometry import measure_bars
 from chartagent.tools.chart.line import extract_line_series
 from chartagent.tools.chart.ocr import extract_text
 from chartagent.tools.chart.pie import extract_pie_slices
+from chartagent.tools.chart.scatter import extract_scatter_points
 from chartagent.tools.chart.spec_tools import assemble_spec, validate_spec
-from tests.chart_fixtures import annotated_bar_chart, grouped_bar_chart, line_chart, pie_chart
+from tests.chart_fixtures import (
+    annotated_bar_chart,
+    grouped_bar_chart,
+    line_chart,
+    pie_chart,
+    scatter_chart,
+)
 
 
 def test_annotated_bar_chart_fixture_is_valid_png(tmp_path):
@@ -249,6 +256,116 @@ def test_extract_line_series_calibrates_when_tick_evidence_is_available(tmp_path
     assert not any("calibration unavailable" in warning for warning in result.warnings)
 
 
+def test_extract_scatter_points_preserves_series_and_calibrated_coordinates(tmp_path, monkeypatch):
+    png_bytes, _ = scatter_chart()
+    chart_path = tmp_path / "scatter.png"
+    chart_path.write_bytes(png_bytes)
+    snippets = [
+        {"text": str(value), "bbox": [left, 418, 8, 12], "confidence": 0.99}
+        for left, value in zip([110, 234, 358, 482, 606], [0, 1, 2, 3, 4])
+    ] + [
+        {"text": str(value), "bbox": [36, top, 20, 12], "confidence": 0.99}
+        for value, top in zip([0, 2, 4, 6, 8], [418, 325, 233, 140, 48])
+    ]
+    monkeypatch.setattr(
+        "chartagent.tools.chart.scatter.extract_text",
+        lambda _path: ToolResult(snippets),
+    )
+
+    result = extract_scatter_points(str(chart_path))
+
+    assert isinstance(result, ToolResult)
+    data = result.data
+    assert len(data["series"]) == 2
+    assert [entry["point_count"] for entry in data["series"]] == [5, 5]
+    assert len(data["points"]) == 10
+    assert data["axes"]["x"]["calibrated"] is True
+    assert data["axes"]["y"]["calibrated"] is True
+    assert all("x" in point and "y" in point for point in data["points"])
+    observed_y_values = []
+    for entry in data["series"]:
+        assert [point["x"] for point in entry["points"]] == pytest.approx(
+            [0, 1, 2, 3, 4], abs=0.15
+        )
+        observed_y_values.append([point["y"] for point in entry["points"]])
+    assert any(
+        values == pytest.approx([1, 3, 2, 5, 4], abs=0.15)
+        for values in observed_y_values
+    )
+    assert any(
+        values == pytest.approx([2, 4, 5, 3, 6], abs=0.15)
+        for values in observed_y_values
+    )
+    assert 0.0 <= data["confidence"]["overall"] <= 1.0
+    with Image.open(BytesIO(result.images[0].content)) as overlay, Image.open(chart_path) as source:
+        assert overlay.size == source.size
+        assert ImageChops.difference(source.convert("RGB"), overlay.convert("RGB")).getbbox()
+
+
+def test_extract_scatter_points_preserves_pixel_evidence_when_uncalibrated(tmp_path, monkeypatch):
+    png_bytes, _ = scatter_chart()
+    chart_path = tmp_path / "uncalibrated-scatter.png"
+    chart_path.write_bytes(png_bytes)
+    monkeypatch.setattr(
+        "chartagent.tools.chart.scatter.extract_text",
+        lambda _path: ToolResult([]),
+    )
+
+    result = extract_scatter_points(str(chart_path))
+
+    assert isinstance(result, ToolResult)
+    assert result.data["points"]
+    assert all("x_px" in point and "y_px" in point for point in result.data["points"])
+    assert not any("x" in point or "y" in point for point in result.data["points"])
+    assert any("calibration unavailable" in warning for warning in result.data["warnings"])
+
+
+def test_extract_scatter_points_reports_overlap_and_outlier_evidence(tmp_path, monkeypatch):
+    png_bytes, _ = scatter_chart(
+        values_by_series={"North": (1, 1, 2, 3, 8)},
+        x_values=(0, 0.02, 1, 2, 4),
+    )
+    chart_path = tmp_path / "uncertain-scatter.png"
+    chart_path.write_bytes(png_bytes)
+    monkeypatch.setattr(
+        "chartagent.tools.chart.scatter.extract_text",
+        lambda _path: ToolResult([]),
+    )
+
+    result = extract_scatter_points(str(chart_path))
+
+    assert isinstance(result, ToolResult)
+    assert result.data["points"]
+    assert all("appearance" in point for point in result.data["points"])
+    assert result.data["overlaps"] or any(
+        point["merged_candidate"] for point in result.data["points"]
+    )
+    assert any(
+        point["outlier_candidate"] for point in result.data["points"]
+    )
+    assert result.data["warnings"]
+
+
+def test_extract_scatter_points_blank_image_is_inspectable(tmp_path):
+    blank = tmp_path / "blank-scatter.png"
+    Image.new("RGB", (320, 200), "white").save(blank)
+
+    result = extract_scatter_points(str(blank))
+
+    assert isinstance(result, ToolResult)
+    assert result.data["series"] == []
+    assert result.data["points"] == []
+    assert result.data["warnings"]
+    with Image.open(BytesIO(result.images[0].content)) as overlay:
+        assert overlay.size == (320, 200)
+
+
+def test_extract_scatter_points_missing_file_is_structured_error(tmp_path):
+    missing = tmp_path / "missing-scatter.png"
+
+    assert extract_scatter_points(str(missing)) == {"error": f"image not found: {missing}"}
+
+
 def test_extract_pie_slices_measures_clean_sectors(tmp_path, monkeypatch):
     png_bytes, _ = pie_chart(values=(35, 25, 20, 20))
     chart_path = tmp_path / "pie.png"
@@ -381,6 +498,7 @@ def test_cartesian_tool_observation_serializes_warnings_and_overlay(tmp_path):
     [
         ("bar", [{"category": "A", "value": 12}]),
         ("line", [{"x": 1, "y": 12}, {"x": 2, "y": 18}]),
+        ("scatter", [{"x": 1, "y": 12}, {"x": 2, "y": 18}]),
     ],
 )
 def test_assemble_spec_valid_specs_round_trip(chart_type, points):
@@ -426,6 +544,21 @@ def test_assemble_spec_rejects_missing_cartesian_axes():
     result = assemble_spec("bar", [{"category": "A", "value": 1}])
 
     assert "require non-empty x_label and y_label" in result["error"]
+
+    scatter_result = assemble_spec("scatter", [{"x": 1, "y": 2}])
+    assert "require non-empty x_label and y_label" in scatter_result["error"]
+
+
+def test_validate_spec_rejects_scatter_without_axes():
+    result = validate_spec(
+        {
+            "metadata": {"chart_type": "scatter"},
+            "dataset": [{"x": 1, "y": 2}],
+        }
+    )
+
+    assert result["ok"] is False
+    assert any(issue["location"] == "axes" for issue in result["issues"])
 
 
 def test_assemble_spec_rejects_unknown_type():

@@ -7,6 +7,7 @@ from .geometry import MEASURE_BARS
 from .line import EXTRACT_LINE_SERIES
 from .ocr import EXTRACT_TEXT
 from .pie import EXTRACT_PIE_SLICES
+from .scatter import EXTRACT_SCATTER_POINTS
 from .spec_tools import ASSEMBLE_SPEC, VALIDATE_SPEC
 from ...attachments import AttachmentRegistry
 from ..tool import Tool
@@ -16,6 +17,7 @@ CHART_TOOLS = [
     MEASURE_BARS,
     EXTRACT_LINE_SERIES,
     EXTRACT_PIE_SLICES,
+    EXTRACT_SCATTER_POINTS,
     ASSEMBLE_SPEC,
     VALIDATE_SPEC,
 ]
@@ -47,6 +49,7 @@ def register_chart_tools(registry: ToolRegistry, *, attachments: AttachmentRegis
             "measure_bars",
             "extract_line_series",
             "extract_pie_slices",
+            "extract_scatter_points",
         }:
             tool = _authorized_tool(tool, attachments)
         registry.register(tool)
