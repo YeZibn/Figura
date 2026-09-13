@@ -15,6 +15,7 @@ import pytest
 from PIL import Image
 
 from chartagent.attachments import AttachmentRegistry
+from chartagent.agent import Agent
 from chartagent.gateway.attachments import AttachmentStoreError, EphemeralAttachmentStore
 from chartagent.gateway.history import GatewayHistoryStore
 from chartagent.gateway.protocol import GatewayFault, RunEvent, validate_message_text, validate_session_name
@@ -27,6 +28,8 @@ from chartagent.memory.models import Record, Run
 from chartagent.runtime import AgentRuntime
 from chartagent.tools.result import GeneratedImage
 from chartagent.trace import TraceEvent
+from chartagent.client.models import NormalizedResult, ToolCall
+from chartagent.tools import Tool, ToolRegistry, ToolResult
 
 
 def _completed_run(run_id: str, text: str = "问题", answer: str = "答案") -> Run:
@@ -113,6 +116,18 @@ def test_completed_projection_keeps_safe_attachment_ids_and_clean_user_text(tmp_
     assert message["attachmentIds"] == ["att_demo"]
 
 
+def test_projection_marks_legacy_split_identity_without_merging_it(tmp_path):
+    session = SQLiteAgentMemory("demo", database=tmp_path / "sessions.db").session
+    run = _completed_run("memory-run", "旧问题", "旧答案")
+
+    transcript = project_completed_runs(session, [run], canonical_run_ids=["gateway-run"])
+
+    assert [message.id for message in transcript.messages] == ["memory-run:user", "memory-run:assistant"]
+    assert all(message.association_status == "legacy_unassociated" for message in transcript.messages)
+    payload = transcript.to_dict()
+    assert all(item["associationStatus"] == "legacy_unassociated" for item in payload["messages"])
+
+
 def test_gateway_service_lifecycle_and_message(tmp_path):
     database = tmp_path / "sessions.db"
     service = GatewayService(database=database)
@@ -146,6 +161,136 @@ def test_gateway_service_lifecycle_and_message(tmp_path):
     assert result["answer"] == "来自模拟 Agent"
     assert [item["kind"] for item in result["messages"]] == ["user", "assistant"]
     assert service.list_sessions()["sessions"][0]["runCount"] == 1
+
+
+def test_gateway_run_id_is_shared_by_runtime_memory_trace_and_projection(tmp_path):
+    database = tmp_path / "sessions.db"
+    captured: dict[str, object] = {}
+
+    class FinalClient:
+        def __init__(self):
+            self.calls = 0
+
+        def chat(self, messages, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                return NormalizedResult(
+                    tool_calls=[ToolCall("chart-call", "make_chart", "{}")]
+                )
+            return NormalizedResult(content="统一身份完成")
+
+    def runtime_factory(name, *, run_id, trace_sink, visual_observation_sink):
+        memory = SQLiteAgentMemory(name, database=database, create=False)
+        attachments = AttachmentRegistry(
+            session_id=memory.session.id,
+            save=memory.save_attachment,
+            load=memory.get_attachment,
+        )
+        registry = ToolRegistry()
+        registry.register(
+            Tool(
+                "make_chart",
+                "生成用于测试的图表",
+                {"type": "object", "properties": {}, "additionalProperties": False},
+                lambda: ToolResult(
+                    {"ok": True},
+                    images=(
+                        GeneratedImage(
+                            _png_bytes(),
+                            "image/png",
+                            "生成测试图表",
+                            metadata={
+                                "kind": "generated_chart",
+                                "chart_type": "bar",
+                                "title": "统一身份图表",
+                                "width": 4,
+                                "height": 3,
+                            },
+                        ),
+                    ),
+                ),
+            )
+        )
+        agent = Agent(
+            FinalClient(),
+            registry,
+            memory=memory,
+            run_id=run_id,
+            trace=trace_sink,
+            visual_observation_sink=visual_observation_sink,
+            attachments=attachments,
+        )
+        captured["run_id"] = run_id
+        return AgentRuntime(agent, memory, attachments)
+
+    service = GatewayService(database=database, runtime_factory=runtime_factory)
+    session_id = service.create_session("canonical-run")["session"]["id"]
+    accepted = service.start_run(session_id, "检查身份")
+    run_id = accepted["run"]["runId"]
+    run = service.get_run(session_id, run_id)
+    assert run.wait_terminal(timeout=2)
+
+    assert captured["run_id"] == run_id
+    assert all(event.run_id == run_id for event in run.iter_events())
+    generated = next(event for event in run.iter_events() if event.kind == "generated_chart")
+    artifact = generated.payload["artifacts"][0]
+    assert service.get_generated_artifact(session_id, run_id, artifact["artifactId"]) == (_png_bytes(), "image/png")
+    stored = SQLiteAgentMemory("canonical-run", database=database, create=False)
+    try:
+        completed = stored.completed_runs()
+        assert [item.id for item in completed] == [run_id]
+    finally:
+        stored.close()
+    transcript = service.get_session(session_id)
+    assert [item["id"] for item in transcript["messages"]] == [f"{run_id}:user", f"{run_id}:assistant"]
+    assert all("associationStatus" not in item for item in transcript["messages"])
+    service.close()
+
+
+def test_gateway_multiple_runs_restore_once_in_stable_order(tmp_path):
+    database = tmp_path / "sessions.db"
+
+    class FinalClient:
+        def chat(self, messages, **kwargs):
+            return NormalizedResult(content="历史恢复完成")
+
+    def runtime_factory(name, *, run_id, trace_sink, visual_observation_sink):
+        memory = SQLiteAgentMemory(name, database=database, create=False)
+        attachments = AttachmentRegistry(
+            session_id=memory.session.id,
+            save=memory.save_attachment,
+            load=memory.get_attachment,
+        )
+        agent = Agent(
+            FinalClient(),
+            ToolRegistry(),
+            memory=memory,
+            run_id=run_id,
+            trace=trace_sink,
+            attachments=attachments,
+        )
+        return AgentRuntime(agent, memory, attachments)
+
+    service = GatewayService(database=database, runtime_factory=runtime_factory)
+    session_id = service.create_session("history-runs")["session"]["id"]
+    first = service.submit_message(session_id, "第一次")
+    second = service.submit_message(session_id, "第二次")
+    first_id = first["runId"]
+    second_id = second["runId"]
+    assert first_id != second_id
+
+    restored_service = GatewayService(database=database, runtime_factory=runtime_factory)
+    restored = restored_service.get_session(session_id)
+    assert [item["id"] for item in restored["messages"]] == [
+        f"{first_id}:user",
+        f"{first_id}:assistant",
+        f"{second_id}:user",
+        f"{second_id}:assistant",
+    ]
+    assert [item["runId"] for item in restored["runs"]] == [first_id, second_id]
+    assert len({item["id"] for item in restored["messages"]}) == 4
+    service.close()
+    restored_service.close()
 
 
 def test_gateway_service_maps_unavailable_agent_and_preserves_history(tmp_path):

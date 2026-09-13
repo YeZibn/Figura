@@ -45,11 +45,13 @@ def project_completed_runs(
     session: Session,
     runs: Iterable[Run],
     attachments: Iterable[AttachmentSummary | dict] = (),
+    canonical_run_ids: Iterable[str] | None = None,
 ) -> SessionTranscript:
     """Project complete user/final pairs and omit protocol/tool internals."""
     messages: list[ConversationText] = []
     completed_count = 0
     latest_timestamp = session.updated_at
+    canonical_ids = set(canonical_run_ids) if canonical_run_ids is not None else None
     for run in runs:
         if run.status != RunStatus.COMPLETED:
             continue
@@ -60,6 +62,11 @@ def project_completed_runs(
         completed_count += 1
         latest_timestamp = max(latest_timestamp, run.updated_at)
         attachment_ids = _attachment_ids(run)
+        association_status = (
+            None
+            if canonical_ids is None or run.id in canonical_ids
+            else "legacy_unassociated"
+        )
         messages.extend(
             (
                 ConversationText(
@@ -68,8 +75,15 @@ def project_completed_runs(
                     _display_user_text(user[0]),
                     user[1],
                     attachment_ids,
+                    association_status,
                 ),
-                ConversationText(f"{run.id}:assistant", "assistant", final[0], final[1]),
+                ConversationText(
+                    f"{run.id}:assistant",
+                    "assistant",
+                    final[0],
+                    final[1],
+                    association_status=association_status,
+                ),
             )
         )
     summary = SessionSummary(session.id, session.name, latest_timestamp, completed_count)

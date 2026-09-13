@@ -262,9 +262,21 @@ class SQLiteAgentMemory:
         with self.connection:
             self.connection.execute("UPDATE runs SET status = ?, updated_at = ? WHERE session_id = ? AND status = ?", (RunStatus.INTERRUPTED.value, utc_now(), self.session.id, RunStatus.RUNNING.value))
 
-    def begin_run(self) -> Run:
+    def begin_run(self, run_id: str | None = None) -> Run:
+        if run_id is None:
+            run_id = str(uuid.uuid4())
+        elif not isinstance(run_id, str):
+            raise ValueError("run id must be text")
+        run_id = bounded(run_id, 128, "run id")
+        existing = self.connection.execute(
+            "SELECT session_id FROM runs WHERE id = ?", (run_id,)
+        ).fetchone()
+        if existing is not None:
+            if existing["session_id"] != self.session.id:
+                raise ValueError("run id belongs to another session")
+            raise ValueError("run id already exists")
         ordinal = self.connection.execute("SELECT COALESCE(MAX(ordinal), 0) + 1 FROM runs WHERE session_id = ?", (self.session.id,)).fetchone()[0]
-        run = Run(str(uuid.uuid4()), self.session.id, int(ordinal))
+        run = Run(run_id, self.session.id, int(ordinal))
         now = utc_now()
         with self.connection:
             self.connection.execute("INSERT INTO runs VALUES (?, ?, ?, ?, ?, ?, ?)", (run.id, run.session_id, run.ordinal, run.status.value, None, now, now))

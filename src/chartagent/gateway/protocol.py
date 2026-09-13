@@ -207,6 +207,7 @@ class ConversationText:
     text: str
     timestamp: str
     attachment_ids: tuple[str, ...] = ()
+    association_status: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         result: dict[str, Any] = {
@@ -217,6 +218,8 @@ class ConversationText:
         }
         if self.attachment_ids:
             result["attachmentIds"] = list(self.attachment_ids)
+        if self.association_status:
+            result["associationStatus"] = self.association_status
         return result
 
 

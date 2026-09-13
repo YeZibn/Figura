@@ -1,6 +1,7 @@
 """Offline coverage for named memory and authorized attachments."""
 
 import json
+import pytest
 
 from chartagent.attachments import AttachmentRegistry
 from chartagent.memory import SQLiteAgentMemory, RunStatus
@@ -30,6 +31,25 @@ def test_sqlite_reopens_completed_runs_and_interrupts_active(tmp_path):
     context = reopened.context(current, {"role": "system", "content": "sys"})
     assert any(message.get("content") == "first" for message in context)
     assert not any(message.get("content") == "partial" for message in context)
+
+
+def test_external_run_id_is_persisted_and_rejects_cross_session_collision(tmp_path):
+    db = tmp_path / "sessions.db"
+    first = SQLiteAgentMemory("first", database=db)
+    run = first.begin_run("gateway-run-1")
+    assert run.id == "gateway-run-1"
+    first.finish(run, RunStatus.COMPLETED, "final")
+    first.close()
+
+    reopened = SQLiteAgentMemory("first", database=db, create=False)
+    with pytest.raises(ValueError, match="already exists"):
+        reopened.begin_run("gateway-run-1")
+    reopened.close()
+
+    second = SQLiteAgentMemory("second", database=db)
+    with pytest.raises(ValueError, match="another session"):
+        second.begin_run("gateway-run-1")
+    second.close()
 
 
 def test_attachment_load_is_validated_and_does_not_expose_path(tmp_path):

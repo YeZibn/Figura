@@ -431,6 +431,11 @@ button:disabled { cursor: not-allowed; }
   font-size: 10px;
 }
 
+.message-association-warning {
+  color: #a16207;
+  font-size: 10px;
+}
+
 .bubble {
   padding: 12px 14px;
   border: 1px solid transparent;
@@ -1163,6 +1168,60 @@ button:disabled { cursor: not-allowed; }
 .generated-chart-reason { color: var(--danger) !important; }
 .trace-warning { margin: 9px 0 2px; padding: 8px 9px; border: 1px solid #ead4aa; border-radius: 4px; background: var(--warning-soft); color: #8b642d; font-size: 10px; line-height: 1.5; }
 .trace-empty { padding: 13px 0 3px; color: var(--subtle); font-size: 10px; }
+
+.run-block {
+  max-width: 780px;
+  margin: 0 auto 24px;
+}
+
+.run-block > .message-row,
+.run-block > .run-timeline {
+  max-width: none;
+}
+
+.run-block > .message-row {
+  margin-bottom: 12px;
+}
+
+.run-block > .run-timeline {
+  margin-bottom: 12px;
+}
+
+.run-result {
+  padding-top: 13px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.run-result-heading {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0 0 9px 41px;
+  color: var(--brand);
+  font-size: 11px;
+}
+
+.run-result-heading span {
+  margin-left: auto;
+  color: var(--subtle);
+  font-size: 10px;
+}
+
+.run-result .message-row {
+  margin-bottom: 10px;
+}
+
+.run-result-artifacts {
+  display: grid;
+  gap: 10px;
+  margin-left: 41px;
+}
+
+.run-result .generated-chart {
+  max-width: 520px;
+  margin: 0;
+  padding: 11px;
+}
 
 .markdown-content { display: grid; gap: 9px; line-height: 1.65; }
 .markdown-content > * { margin: 0; }

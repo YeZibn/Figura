@@ -30,7 +30,6 @@ from .trace import (
     TraceEmitter,
     TraceSink,
     bounded_reasoning,
-    new_run_id,
     summarize_arguments,
     summarize_images,
     summarize_result,
@@ -104,6 +103,7 @@ class Agent:
         trace_sink: Optional[TraceSink] = None,
         trace_reasoning: bool = False,
         trace_run_id: Optional[str] = None,
+        run_id: Optional[str] = None,
         visual_observation_sink: Optional[VisualObservationSink] = None,
         memory: Optional[AgentMemory] = None,
         attachments: Any = None,
@@ -117,7 +117,10 @@ class Agent:
         self._chat_kwargs = chat_kwargs
         self._trace_sink = trace if trace is not None else trace_sink
         self._trace_reasoning = trace_reasoning
-        self._trace_run_id = trace_run_id
+        if run_id is not None and trace_run_id is not None and run_id != trace_run_id:
+            raise ValueError("run_id and trace_run_id must identify the same run")
+        self._run_id = run_id
+        self._trace_run_id = trace_run_id or run_id
         self._visual_observation_sink = visual_observation_sink
         self.memory = memory or InMemoryAgentMemory(context_budget=context_budget)
         self.attachments = attachments
@@ -154,7 +157,7 @@ class Agent:
         (e.g. from ``build_user_content``); it is appended to history and
         forwarded to the client unchanged.
         """
-        run = self.memory.begin_run()
+        run = self.memory.begin_run(self._run_id) if self._run_id is not None else self.memory.begin_run()
         self._messages = []
         self._current_messages = []
         user_message = {"role": "user", "content": user_input}
@@ -167,7 +170,7 @@ class Agent:
         self._current_messages.append(user_message)  # type: ignore[arg-type]
         tools = registry_tools(self.registry)
         emitter = (
-            TraceEmitter(self._trace_sink, run_id=self._trace_run_id or new_run_id())
+            TraceEmitter(self._trace_sink, run_id=self._trace_run_id or run.id)
             if self._trace_sink is not None
             else None
         )

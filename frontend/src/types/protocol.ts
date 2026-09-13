@@ -20,8 +20,8 @@ export type Attachment = {
 }
 
 export type ConversationItem =
-  | { id: string; kind: 'user'; text: string; timestamp: string; attachmentIds?: string[] }
-  | { id: string; kind: 'assistant'; text: string; timestamp: string }
+  | { id: string; kind: 'user'; text: string; timestamp: string; attachmentIds?: string[]; associationStatus?: string }
+  | { id: string; kind: 'assistant'; text: string; timestamp: string; associationStatus?: string }
   | { id: string; kind: 'tool_call'; toolName: string; status: 'success' | 'running' | 'error'; detail: string; timestamp: string }
   | { id: string; kind: 'tool_result'; toolName: string; status: 'success' | 'error'; detail: string; timestamp: string }
   | { id: string; kind: 'visual_observation'; toolName: string; caption: string; imageUrl?: string; timestamp: string }

@@ -69,6 +69,7 @@ class GatewayService:
         self,
         name: str,
         *,
+        run_id: str | None = None,
         trace_sink: TraceSink | None = None,
         visual_observation_sink: Callable[[str, str, Sequence[GeneratedImage]], Sequence[dict[str, Any]]] | None = None,
     ) -> AgentRuntime:
@@ -76,6 +77,7 @@ class GatewayService:
             session_name=name,
             database=self.database,
             model=self.model,
+            run_id=run_id,
             trace_sink=trace_sink,
             visual_observation_sink=visual_observation_sink,
         )
@@ -387,6 +389,7 @@ class GatewayService:
     ) -> AgentRuntime:
         factory = self._runtime_factory
         kwargs: dict[str, Any] = {
+            "run_id": run.run_id,
             "trace_sink": run.publish_trace,
             "visual_observation_sink": visual_sink,
         }
@@ -532,8 +535,13 @@ class GatewayService:
             self._attachment_summary(memory, item)
             for item in memory.list_attachments()
         ]
-        transcript = project_completed_runs(memory.session, memory.completed_runs(), attachments)
         runs = tuple(self._history.list_runs(memory.session.id))
+        transcript = project_completed_runs(
+            memory.session,
+            memory.completed_runs(),
+            attachments,
+            canonical_run_ids=(item["runId"] for item in runs),
+        )
         return replace(transcript, runs=runs)
 
     def _validated_attachment(self, memory: SQLiteAgentMemory, item):

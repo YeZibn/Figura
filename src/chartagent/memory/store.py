@@ -7,14 +7,14 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 from .context import build_context, sanitize_payload
-from .models import Run, RunStatus, Session, utc_now
+from .models import Run, RunStatus, Session, bounded, utc_now
 
 
 class AgentMemory(ABC):
     session: Session | None
 
     @abstractmethod
-    def begin_run(self) -> Run: ...
+    def begin_run(self, run_id: str | None = None) -> Run: ...
     @abstractmethod
     def append(self, run: Run, kind: str, payload: dict[str, Any]) -> None: ...
     @abstractmethod
@@ -29,8 +29,15 @@ class InMemoryAgentMemory(AgentMemory):
         self.context_budget = context_budget
         self.runs: list[Run] = []
 
-    def begin_run(self) -> Run:
-        run = Run(str(uuid.uuid4()), self.session.id if self.session else None, len(self.runs) + 1)
+    def begin_run(self, run_id: str | None = None) -> Run:
+        if run_id is None:
+            run_id = str(uuid.uuid4())
+        elif not isinstance(run_id, str):
+            raise ValueError("run id must be text")
+        run_id = bounded(run_id, 128, "run id")
+        if any(item.id == run_id for item in self.runs):
+            raise ValueError(f"run id already exists: {run_id}")
+        run = Run(run_id, self.session.id if self.session else None, len(self.runs) + 1)
         self.runs.append(run)
         return run
 

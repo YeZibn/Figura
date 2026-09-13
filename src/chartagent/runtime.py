@@ -75,6 +75,7 @@ def create_agent_runtime(
     system: str = AGENT_SYSTEM_PROMPT,
     trace_sink: Optional[TraceSink] = None,
     trace_reasoning: bool = False,
+    run_id: str | None = None,
     visual_observation_sink: Optional[VisualObservationSink] = None,
     session_name: str | None = None,
     database: str | Path | None = None,
@@ -111,6 +112,9 @@ def create_agent_runtime(
     agent_kwargs: dict[str, Any] = {"system": system, "model": model}
     if trace_sink is not None:
         agent_kwargs.update(trace=trace_sink, trace_reasoning=trace_reasoning)
+    if run_id is not None:
+        agent_kwargs["run_id"] = run_id
+        agent_kwargs["trace_run_id"] = run_id
     if visual_observation_sink is not None:
         agent_kwargs["visual_observation_sink"] = visual_observation_sink
     if memory is not None:

@@ -80,7 +80,7 @@ type ToolStep = {
   status: 'running' | 'success' | 'error'
 }
 
-type TimelineRow = { kind: 'event'; event: AgentRunEvent } | { kind: 'tool'; step: ToolStep } | { kind: 'chart'; event: AgentRunEvent; artifact: GeneratedChartReference }
+type TimelineRow = { kind: 'event'; event: AgentRunEvent } | { kind: 'tool'; step: ToolStep }
 
 function timestampLabel(timestamp: string): string {
   if (!timestamp) return currentTime()
@@ -112,18 +112,20 @@ function normalizeTimeline(events: AgentRunEvent[]): TimelineRow[] {
       const step = callId ? steps.get(callId) : undefined
       if (step) { step.observations.push(...observations); continue }
     }
-    if (event.kind === 'generated_chart') {
-      const artifacts = Array.isArray(payload.artifacts)
-        ? payload.artifacts.filter((item): item is GeneratedChartReference => Boolean(item && typeof item === 'object' && (item as Record<string, unknown>).artifactKind === 'generated_chart'))
-        : []
-      if (artifacts.length) {
-        artifacts.forEach((artifact) => rows.push({ kind: 'chart', event, artifact }))
-        continue
-      }
-    }
     rows.push({ kind: 'event', event })
   }
   return rows
+}
+
+function generatedArtifacts(events: AgentRunEvent[]): GeneratedChartReference[] {
+  return events
+    .filter((event) => event.kind === 'generated_chart')
+    .flatMap((event) => {
+      const artifacts = eventPayload(event).artifacts
+      return Array.isArray(artifacts)
+        ? artifacts.filter((item): item is GeneratedChartReference => Boolean(item && typeof item === 'object' && (item as Record<string, unknown>).artifactKind === 'generated_chart'))
+        : []
+    })
 }
 
 function mergeEvents(current: AgentRunEvent[], incoming: AgentRunEvent[]): AgentRunEvent[] {
@@ -245,7 +247,7 @@ function GeneratedChartView({ artifact }: { artifact: GeneratedChartReference })
 }
 
 function eventLabel(event: AgentRunEvent): string {
-  const labels: Record<string, string> = { run_started: '运行已开始', model_started: '模型轮次开始', model_completed: '模型轮次完成', progress: '处理中', budget_exhausted: '达到预算上限', final_answer: '最终回答已生成', run_failed: '运行失败', history_gap: '历史记录不完整' }
+  const labels: Record<string, string> = { run_started: '运行已开始', model_started: '模型轮次开始', model_completed: '模型轮次完成', progress: '处理中', generated_chart: '图表已生成', final_answer: '最终回答已生成', budget_exhausted: '达到预算上限', run_failed: '运行失败', history_gap: '历史记录不完整' }
   return labels[event.kind] || event.kind
 }
 
@@ -261,7 +263,7 @@ function RunTimeline({ timeline, expanded, onToggle }: { timeline: RunTimeline; 
       {summary.historyWarning && <div className="trace-warning" role="status">部分执行记录未能持久化，当前显示的过程可能不完整。</div>}
       {timeline.historyGap && <div className="trace-warning" role="status">历史记录存在缺口，未显示缺失的执行步骤。</div>}
       {rows.length === 0 && <div className="trace-empty">没有可恢复的执行事件。</div>}
-      {rows.map((row) => row.kind === 'event' ? <div className={'trace-event ' + (row.event.kind === 'run_failed' || row.event.kind === 'history_gap' ? 'error' : '')} key={`${row.event.runId}-${row.event.sequence}`}><span className="trace-event-dot" /><span className="trace-event-copy"><strong>{eventLabel(row.event)}</strong><small>{timestampLabel(row.event.timestamp)}</small><span>{textDetail(eventPayload(row.event).message || eventPayload(row.event).status || eventPayload(row.event).reason || '')}</span></span></div> : row.kind === 'chart' ? <GeneratedChartView key={`${row.event.runId}-${row.event.sequence}-${row.artifact.artifactId || row.artifact.title || 'chart'}`} artifact={row.artifact} /> : <div className="trace-tool" key={row.step.id}><button className="trace-tool-header" onClick={() => setExpandedSteps((current) => { const next = new Set(current); next.has(row.step.id) ? next.delete(row.step.id) : next.add(row.step.id); return next })} aria-expanded={expandedSteps.has(row.step.id)}><span className="trace-event-dot" /><span className="trace-tool-name"><strong>{row.step.toolName}</strong><small>{row.step.callId}</small></span><span className={'run-status ' + row.step.status}>{row.step.status === 'running' ? '运行中' : row.step.status === 'success' ? '完成' : '失败'}</span>{expandedSteps.has(row.step.id) ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</button>{expandedSteps.has(row.step.id) && <div className="trace-tool-detail">{row.step.call && <div><label>调用参数</label><pre>{textDetail(eventPayload(row.step.call).arguments)}</pre></div>}{row.step.result && <div><label>工具结果</label><pre>{textDetail(eventPayload(row.step.result).result || eventPayload(row.step.result).message)}</pre></div>}{row.step.observations.map((observation, index) => <ObservationView key={index} observation={observation} />)}</div>}</div>)}
+      {rows.map((row) => row.kind === 'event' ? <div className={'trace-event ' + (row.event.kind === 'run_failed' || row.event.kind === 'history_gap' ? 'error' : '')} key={`${row.event.runId}-${row.event.sequence}`}><span className="trace-event-dot" /><span className="trace-event-copy"><strong>{eventLabel(row.event)}</strong><small>{timestampLabel(row.event.timestamp)}</small><span>{textDetail(eventPayload(row.event).message || eventPayload(row.event).status || eventPayload(row.event).reason || (row.event.kind === 'generated_chart' ? '生成图表结果已移至最终结果区域' : ''))}</span></span></div> : <div className="trace-tool" key={row.step.id}><button className="trace-tool-header" onClick={() => setExpandedSteps((current) => { const next = new Set(current); next.has(row.step.id) ? next.delete(row.step.id) : next.add(row.step.id); return next })} aria-expanded={expandedSteps.has(row.step.id)}><span className="trace-event-dot" /><span className="trace-tool-name"><strong>{row.step.toolName}</strong><small>{row.step.callId}</small></span><span className={'run-status ' + row.step.status}>{row.step.status === 'running' ? '运行中' : row.step.status === 'success' ? '完成' : '失败'}</span>{expandedSteps.has(row.step.id) ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</button>{expandedSteps.has(row.step.id) && <div className="trace-tool-detail">{row.step.call && <div><label>调用参数</label><pre>{textDetail(eventPayload(row.step.call).arguments)}</pre></div>}{row.step.result && <div><label>工具结果</label><pre>{textDetail(eventPayload(row.step.result).result || eventPayload(row.step.result).message)}</pre></div>}{row.step.observations.map((observation, index) => <ObservationView key={index} observation={observation} />)}</div>}</div>)}
     </div>}
   </section>
 }
@@ -289,26 +291,61 @@ function SessionSidebar(props: { sessions: Session[]; activeId: string; onSelect
 
 function Message(props: { item: ConversationItem; expanded: boolean; onToggle: (id: string) => void }) {
   const item = props.item
-  if (item.kind === 'user') return <div className="message-row user-row"><div className="avatar user-avatar">我</div><div className="message-body"><div className="message-meta"><strong>你</strong><time>{item.timestamp}</time></div><div className="bubble user-bubble">{item.text}{item.attachmentIds?.length ? <div className="inline-attachment"><Paperclip size={13} /> {item.attachmentIds.length} 个附件</div> : null}</div></div></div>
-  if (item.kind === 'assistant') return <div className="message-row assistant-row"><div className="avatar agent-avatar"><Sparkles size={15} /></div><div className="message-body"><div className="message-meta"><strong>Figura Agent</strong><time>{item.timestamp}</time></div><div className="bubble assistant-bubble"><SafeMarkdown source={item.text} /><details className="answer-source"><summary>查看原文</summary><pre>{item.text.slice(0, 12000)}</pre></details></div></div></div>
+  const associationWarning = (item.kind === 'user' || item.kind === 'assistant') && item.associationStatus === 'legacy_unassociated' ? <span className="message-association-warning">历史关联不完整</span> : null
+  if (item.kind === 'user') return <div className="message-row user-row"><div className="avatar user-avatar">我</div><div className="message-body"><div className="message-meta"><strong>你</strong>{associationWarning}<time>{item.timestamp}</time></div><div className="bubble user-bubble">{item.text}{item.attachmentIds?.length ? <div className="inline-attachment"><Paperclip size={13} /> {item.attachmentIds.length} 个附件</div> : null}</div></div></div>
+  if (item.kind === 'assistant') return <div className="message-row assistant-row"><div className="avatar agent-avatar"><Sparkles size={15} /></div><div className="message-body"><div className="message-meta"><strong>Figura Agent</strong>{associationWarning}<time>{item.timestamp}</time></div><div className="bubble assistant-bubble"><SafeMarkdown source={item.text} /><details className="answer-source"><summary>查看原文</summary><pre>{item.text.slice(0, 12000)}</pre></details></div></div></div>
   if (item.kind === 'visual_observation') return <div className="visual-observation"><div className="observation-label"><FileImage size={14} /> <strong>视觉观察</strong><span>{item.toolName}</span></div>{item.imageUrl ? <img src={item.imageUrl} alt={item.caption} /> : <div className="observation-placeholder">临时视觉证据不可用</div>}<small>{item.caption}</small></div>
   if (item.kind === 'error') return <div className="error-banner" role="alert">{item.text}</div>
   const label = item.kind === 'tool_call' ? '工具调用' : '工具结果'
   return <div className={'execution-item ' + (props.expanded ? 'expanded' : '')}><button className="execution-header" onClick={() => props.onToggle(item.id)} aria-expanded={props.expanded}><span className="execution-icon"><Terminal size={14} /></span><span><strong>{label}</strong><b>{item.toolName}</b></span><span className={'execution-status ' + item.status}>{toolStatusLabel(item.status)}</span>{props.expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}</button>{props.expanded && <div className="execution-detail">{item.detail}</div>}</div>
 }
 
+function RunBlock(props: {
+  timeline: RunTimeline
+  user?: ConversationItem
+  assistant?: ConversationItem
+  expanded: boolean
+  onToggleRun: () => void
+  expandedMessage: string | null
+  onToggleMessage: (id: string) => void
+}) {
+  const { timeline, user, assistant } = props
+  const answer = assistant?.kind === 'assistant' ? assistant.text : timeline.summary.answer || ''
+  const answerTimestamp = assistant?.kind === 'assistant' ? assistant.timestamp : timestampLabel(timeline.summary.updatedAt)
+  const artifacts = generatedArtifacts(timeline.events)
+  return <section className={'run-block run-' + timeline.summary.status}>
+    {user && <Message item={user} expanded={props.expandedMessage === user.id} onToggle={props.onToggleMessage} />}
+    <RunTimeline timeline={timeline} expanded={props.expanded} onToggle={props.onToggleRun} />
+    {(answer || artifacts.length > 0) && <section className="run-result" aria-label="最终结果">
+      <div className="run-result-heading"><Sparkles size={14} /><strong>最终结果</strong><span>{answer ? answerTimestamp : '图表输出'}</span></div>
+      {answer && <Message item={{ id: `${timeline.summary.runId}:assistant`, kind: 'assistant', text: answer, timestamp: answerTimestamp }} expanded={props.expandedMessage === `${timeline.summary.runId}:assistant`} onToggle={props.onToggleMessage} />}
+      {artifacts.length > 0 && <div className="run-result-artifacts">{artifacts.map((artifact, index) => <GeneratedChartView key={`${timeline.summary.runId}-artifact-${artifact.artifactId || index}`} artifact={artifact} />)}</div>}
+    </section>}
+  </section>
+}
+
 function ConversationPanel(props: { data: SessionData | null; timelines: RunTimeline[]; pendingUser: ConversationItem | null; runState: RunState; selectedAttachmentIds: string[]; onSubmit: (text: string, attachmentIds: string[]) => Promise<boolean>; loading: boolean; loadingSession: boolean; error: string | null; onToggleRun: (runId: string, status: RunSummary['status']) => void; expandedRuns: Set<string> }) {
   const [text, setText] = useState('')
   const [expanded, setExpanded] = useState<string | null>(null)
   const messages = [...(props.data?.messages ?? []), ...(props.pendingUser ? [props.pendingUser] : [])]
-  const matchedRunIds = new Set<string>()
+  const linkedMessageIds = new Set<string>()
   const send = async () => {
     const value = text.trim()
     if (!value || props.loading) return
     const submitted = await props.onSubmit(value, props.selectedAttachmentIds)
     if (submitted) setText('')
   }
-  return <main className="conversation panel"><header className="conversation-header"><div className="conversation-title"><span className="eyebrow">当前会话</span><h1>{props.data?.session.name ?? (props.loadingSession ? '正在加载会话' : '暂无活动会话')}</h1>{props.data && <span className="conversation-meta">{props.data.session.runCount} 次运行 · 执行记录保存在本机</span>}</div><span className={'run-chip ' + props.runState}><span className="status-dot" />{runStateLabel(props.runState)} · {props.data?.session.runCount ?? 0} 次运行</span></header><div className="message-scroll">{props.loadingSession ? <div className="loading-state"><span className="spinner" />正在加载会话...</div> : props.error && !props.data && messages.length === 0 ? <div className="error-state"><div className="empty-icon"><MessageSquare size={22} /></div><h2>无法连接本地服务</h2><p>{props.error}</p></div> : !props.data && messages.length === 0 ? <div className="empty-conversation"><div className="empty-icon"><MessageSquare size={22} /></div><h2>创建第一个会话</h2><p>请从左侧新建会话，开始使用 Figura。</p></div> : messages.length === 0 && props.timelines.length === 0 ? <div className="empty-conversation"><div className="empty-icon"><MessageSquare size={22} /></div><h2>开始新的分析</h2><p>提出问题或添加图片，开始使用 Figura。</p></div> : <>{messages.map((item) => { const timeline = item.kind === 'assistant' ? props.timelines.find((candidate) => candidate.summary.runId === item.id.split(':')[0] || (candidate.summary.answer && candidate.summary.answer === item.text)) : undefined; const timelineId = timeline?.summary.runId || ''; if (timelineId) matchedRunIds.add(timelineId); return <div key={item.id}><Message item={item} expanded={expanded === item.id} onToggle={(id) => setExpanded(expanded === id ? null : id)} />{timeline && <RunTimeline timeline={timeline} expanded={props.expandedRuns.has(timelineId) || timeline.summary.status === 'running'} onToggle={() => props.onToggleRun(timelineId, timeline.summary.status)} />}</div> })}{props.timelines.filter((timeline) => !matchedRunIds.has(timeline.summary.runId)).map((timeline) => <RunTimeline key={timeline.summary.runId} timeline={timeline} expanded={props.expandedRuns.has(timeline.summary.runId) || timeline.summary.status === 'running'} onToggle={() => props.onToggleRun(timeline.summary.runId, timeline.summary.status)} />)}</>}{props.loading && <div className="typing"><span /><span /><span /> Figura Agent 正在思考</div>}{props.error && <div className="error-banner" role="alert">{props.error}</div>}</div><div className="composer"><div className="composer-label"><Sparkles size={13} /><span>向 Figura Agent 提问</span></div><textarea value={text} onChange={(event) => setText(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void send() } }} placeholder="例如：比较这张图中各系列的变化趋势..." rows={1} /><div className="composer-actions"><span className="composer-hint">Enter 发送 · Shift + Enter 换行</span><button className="send-button" onClick={() => void send()} disabled={!text.trim() || props.loading || props.loadingSession} title="发送消息" aria-label="发送消息"><Send size={16} /></button></div></div></main>
+  const sortedTimelines = [...props.timelines].sort((left, right) => left.summary.createdAt.localeCompare(right.summary.createdAt))
+  const runBlocks = sortedTimelines.map((timeline) => {
+    const user = messages.find((item) => item.id === `${timeline.summary.runId}:user`)
+    const assistant = messages.find((item) => item.id === `${timeline.summary.runId}:assistant`)
+    if (user) linkedMessageIds.add(user.id)
+    if (assistant) linkedMessageIds.add(assistant.id)
+    return { timeline, user, assistant }
+  })
+  const orphanMessages = messages.filter((item) => !linkedMessageIds.has(item.id))
+  const toggleMessage = (id: string) => setExpanded((current) => current === id ? null : id)
+  return <main className="conversation panel"><header className="conversation-header"><div className="conversation-title"><span className="eyebrow">当前会话</span><h1>{props.data?.session.name ?? (props.loadingSession ? '正在加载会话' : '暂无活动会话')}</h1>{props.data && <span className="conversation-meta">{props.data.session.runCount} 次运行 · 执行记录保存在本机</span>}</div><span className={'run-chip ' + props.runState}><span className="status-dot" />{runStateLabel(props.runState)} · {props.data?.session.runCount ?? 0} 次运行</span></header><div className="message-scroll">{props.loadingSession ? <div className="loading-state"><span className="spinner" />正在加载会话...</div> : props.error && !props.data && messages.length === 0 ? <div className="error-state"><div className="empty-icon"><MessageSquare size={22} /></div><h2>无法连接本地服务</h2><p>{props.error}</p></div> : !props.data && messages.length === 0 ? <div className="empty-conversation"><div className="empty-icon"><MessageSquare size={22} /></div><h2>创建第一个会话</h2><p>请从左侧新建会话，开始使用 Figura。</p></div> : messages.length === 0 && props.timelines.length === 0 ? <div className="empty-conversation"><div className="empty-icon"><MessageSquare size={22} /></div><h2>开始新的分析</h2><p>提出问题或添加图片，开始使用 Figura。</p></div> : <>{runBlocks.map(({ timeline, user, assistant }) => <RunBlock key={timeline.summary.runId} timeline={timeline} user={user} assistant={assistant} expanded={props.expandedRuns.has(timeline.summary.runId) || timeline.summary.status === 'running'} onToggleRun={() => props.onToggleRun(timeline.summary.runId, timeline.summary.status)} expandedMessage={expanded} onToggleMessage={toggleMessage} />)}{orphanMessages.map((item) => <Message key={item.id} item={item} expanded={expanded === item.id} onToggle={toggleMessage} />)}</>}{props.loading && <div className="typing"><span /><span /><span /> Figura Agent 正在思考</div>}{props.error && <div className="error-banner" role="alert">{props.error}</div>}</div><div className="composer"><div className="composer-label"><Sparkles size={13} /><span>向 Figura Agent 提问</span></div><textarea value={text} onChange={(event) => setText(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void send() } }} placeholder="例如：比较这张图中各系列的变化趋势..." rows={1} /><div className="composer-actions"><span className="composer-hint">Enter 发送 · Shift + Enter 换行</span><button className="send-button" onClick={() => void send()} disabled={!text.trim() || props.loading || props.loadingSession} title="发送消息" aria-label="发送消息"><Send size={16} /></button></div></div></main>
 }
 
 function AttachmentPreview({ attachment }: { attachment: Attachment }) {
@@ -536,6 +573,7 @@ export default function App() {
     try {
       const handle = await client.startRun(sessionId, text, attachmentIds)
       if (activeIdRef.current !== sessionId) return false
+      setPendingUser((current) => current ? { ...current, id: `${handle.runId}:user` } : current)
       setRunState('running')
       const startedAt = new Date().toISOString()
       setTimelines((current) => current.some((item) => item.summary.runId === handle.runId) ? current : [...current, { summary: { runId: handle.runId, sessionId, status: 'running', createdAt: startedAt, updatedAt: startedAt, eventCount: 0 }, events: [], historyGap: false }])

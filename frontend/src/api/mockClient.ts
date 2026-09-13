@@ -4,8 +4,8 @@ import type { AgentRunEvent, Attachment, ConversationItem, RunHandle, RunHistory
 const image = 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360"%3E%3Crect width="640" height="360" fill="%23f7f9fb"/%3E%3Cpath d="M74 292h492M110 260V104m130 156V68m130 192V126m130 134V92" stroke="%232e8c82" stroke-width="54" stroke-linecap="round"/%3E%3Cpath d="M60 48h520" stroke="%23dbe3e8"/%3E%3C/svg%3E'
 const attachments: Attachment[] = [{ id: 'att_demo_chart', filename: '季度销售.png', mediaType: 'image/png', byteCount: 16299, previewUrl: image, status: 'observation' }]
 const baseMessages: ConversationItem[] = [
-  { id: 'm1', kind: 'user', text: '请分析这张图表，并告诉我每个类别的数值。', timestamp: '10:39', attachmentIds: ['att_demo_chart'] },
-  { id: 'm8', kind: 'assistant', text: '这张图表包含三个类别：Alpha 为 8，Beta 为 16，Gamma 为 24。测量得到的柱高约为 1:2:3，与图中打印的数值一致。', timestamp: '10:40' },
+  { id: 'run_mock_demo:user', kind: 'user', text: '请分析这张图表，并告诉我每个类别的数值。', timestamp: '10:39', attachmentIds: ['att_demo_chart'] },
+  { id: 'run_mock_demo:assistant', kind: 'assistant', text: '这张图表包含三个类别：Alpha 为 8，Beta 为 16，Gamma 为 24。测量得到的柱高约为 1:2:3，与图中打印的数值一致。', timestamp: '10:40' },
 ]
 
 const demoRun: RunSummary = { runId: 'run_mock_demo', sessionId: 'chart-analysis', status: 'completed', createdAt: '2026-09-13T10:39:00+08:00', updatedAt: '2026-09-13T10:40:00+08:00', eventCount: 10, answer: '这张图表包含三个类别：Alpha 为 8，Beta 为 16，Gamma 为 24。测量得到的柱高约为 1:2:3，与图中打印的数值一致。' }
@@ -114,8 +114,8 @@ export const mockClient: ChartAgentClient = {
       const pending = pendingRuns.get(runId)
       emit('final_answer', 7, { answer: '模拟回复：已完成本次图表分析。' })
       if (target) {
-        target.messages.push({ id: `user-${Date.now()}`, kind: 'user', text: pending?.text || '已提交的分析请求', timestamp, attachmentIds: pending?.attachmentIds.length ? pending.attachmentIds : undefined })
-        target.messages.push({ id: `assistant-${Date.now()}`, kind: 'assistant', text: '模拟回复：已完成本次图表分析。', timestamp })
+        target.messages.push({ id: `${runId}:user`, kind: 'user', text: pending?.text || '已提交的分析请求', timestamp, attachmentIds: pending?.attachmentIds.length ? pending.attachmentIds : undefined })
+        target.messages.push({ id: `${runId}:assistant`, kind: 'assistant', text: '模拟回复：已完成本次图表分析。', timestamp })
         target.session = { ...target.session, updatedAt: '刚刚', runCount: target.session.runCount + 1 }
       }
       pendingRuns.delete(runId)
