@@ -2,52 +2,14 @@
 
 from __future__ import annotations
 
-import math
 from collections.abc import Mapping
 from typing import Any
 
 from ...spec import Axes, Axis, ChartMetadata, ChartSpec, ChartType, DataPoint
 from ..tool import Tool
+from .validation import validate_generation
 
-_CATEGORICAL_TYPES = frozenset({ChartType.BAR, ChartType.PIE})
 _CARTESIAN_TYPES = frozenset({ChartType.BAR, ChartType.LINE, ChartType.SCATTER})
-
-
-def _is_number(value: Any) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
-
-
-def _point_error(chart_type: ChartType, point: DataPoint, index: int) -> str | None:
-    prefix = f"points[{index}]"
-    if chart_type in _CATEGORICAL_TYPES:
-        if not isinstance(point.category, str) or not point.category.strip():
-            return f"{prefix} requires a non-empty category"
-        if not _is_number(point.value):
-            return f"{prefix} requires a finite numeric value"
-        if point.x is not None or point.y is not None:
-            return f"{prefix} cannot contain x/y for {chart_type.value} charts"
-    else:
-        if not _is_number(point.x) or not _is_number(point.y):
-            return f"{prefix} requires finite numeric x and y values"
-        if point.category is not None or point.value is not None:
-            return f"{prefix} cannot contain category/value for {chart_type.value} charts"
-    return None
-
-
-def _confidence_error(point: DataPoint, index: int) -> str | None:
-    if point.confidence is None:
-        return None
-    if not _is_number(point.confidence) or not 0.0 <= point.confidence <= 1.0:
-        return f"points[{index}].confidence must be a number within [0, 1]"
-    return None
-
-
-def _series_error(point: DataPoint, index: int) -> str | None:
-    if point.series is None:
-        return None
-    if not isinstance(point.series, str) or not point.series.strip():
-        return f"points[{index}].series must be a non-empty string when provided"
-    return None
 
 
 def assemble_spec(
@@ -79,19 +41,16 @@ def assemble_spec(
         if not isinstance(raw, Mapping):
             return {"error": f"points[{index}] must be an object"}
         point = DataPoint.from_dict(raw)
-        error = (
-            _point_error(kind, point, index)
-            or _series_error(point, index)
-            or _confidence_error(point, index)
-        )
-        if error:
-            return {"error": error}
         data_points.append(point)
 
     axes = None
     if kind in _CARTESIAN_TYPES:
         categories = (
-            [point.category for point in data_points]
+            list(dict.fromkeys(
+                point.category.strip()
+                for point in data_points
+                if isinstance(point.category, str)
+            ))
             if kind is ChartType.BAR
             else None
         )
@@ -100,29 +59,25 @@ def assemble_spec(
             y=Axis(label=y_label),
         )
 
-    return ChartSpec(
+    chart_spec = ChartSpec(
         metadata=ChartMetadata(chart_type=kind, title=title, source=source),
         axes=axes,
         dataset=data_points,
-    ).to_dict()
+    )
+    validation = validate_generation(chart_spec)
+    if validation.blocking:
+        return {
+            "error": validation.issues[0].message,
+            "issues": validation.legacy_issues(),
+        }
+    return chart_spec.to_dict()
 
 
 def validate_spec(spec: dict) -> dict:
     """Run the ChartSpec validator and chart-type point compatibility checks."""
     try:
         chart_spec = ChartSpec.from_dict(spec)
-        issues = [
-            {"location": issue.location, "message": issue.message}
-            for issue in chart_spec.validate()
-        ]
-        for index, point in enumerate(chart_spec.dataset):
-            error = (
-                _point_error(chart_spec.metadata.chart_type, point, index)
-                or _series_error(point, index)
-                or _confidence_error(point, index)
-            )
-            if error:
-                issues.append({"location": f"dataset[{index}]", "message": error})
+        issues = validate_generation(chart_spec).legacy_issues()
     except Exception as exc:  # noqa: BLE001 - critic boundary
         issues = [{"location": "spec", "message": str(exc)}]
     return {"ok": not issues, "issues": issues}

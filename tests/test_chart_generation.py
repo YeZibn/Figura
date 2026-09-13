@@ -2,6 +2,7 @@
 
 from io import BytesIO
 import warnings
+import pytest
 from matplotlib import font_manager
 from matplotlib.font_manager import FontProperties
 from PIL import Image
@@ -11,6 +12,7 @@ from chartagent.tools import ToolRegistry, dispatch_observation
 from chartagent.tools.chart import generation
 from chartagent.tools.chart.generation import MAX_CHART_HEIGHT, render_chart
 from chartagent.tools.chart.register import register_chart_tools
+from chartagent.tools.chart.spec_tools import validate_spec
 from chartagent.tools.result import ToolResult
 
 
@@ -55,6 +57,8 @@ def test_render_chart_supports_all_chart_types_and_fixed_dimensions():
         with Image.open(BytesIO(result.images[0].content)) as image:
             assert image.format == "PNG"
             assert image.size == (1200, 800)
+        assert result.data["validation"]["status"] in {"passed", "warning"}
+        assert result.data["validation"]["checks"]["artifact"] == "passed"
         assert result.data["font"]["status"] in {"resolved", "fallback"}
         assert result.data["font"]["source"] in {"configured", "system", "fallback"}
 
@@ -184,3 +188,156 @@ def test_render_chart_is_registered_and_dispatches_visual_payload():
 
     assert result.images
     assert '"kind": "generated_chart"' in result.content
+
+
+def _grouped_spec_with_missing_value() -> dict:
+    return {
+        "metadata": {"chart_type": "bar", "title": "分组"},
+        "axes": {
+            "x": {"label": "类别", "categories": ["A", "B"]},
+            "y": {"label": "数值"},
+        },
+        "dataset": [
+            {"category": "A", "value": 1, "series": "甲"},
+            {"category": "A", "value": 2, "series": "乙"},
+            {"category": "B", "value": 3, "series": "乙"},
+        ],
+    }
+
+
+@pytest.mark.parametrize(
+    "spec",
+    [
+        {"metadata": {"chart_type": "pie"}, "dataset": [{"category": "A", "value": -1}, {"category": "B", "value": 2}]},
+        {"metadata": {"chart_type": "pie"}, "dataset": [{"category": "A", "value": 0}]},
+        {"metadata": {"chart_type": "bar"}, "axes": {"x": {"label": "x"}, "y": {"label": "y"}}, "dataset": [{"category": "A", "value": 1}, {"category": "A", "value": 2}]},
+        _grouped_spec_with_missing_value(),
+        {"metadata": {"chart_type": "line"}, "axes": {"x": {"label": "x", "min_value": 2, "max_value": 1}, "y": {"label": "y"}}, "dataset": [{"x": 1, "y": 2}]},
+    ],
+)
+def test_validate_spec_and_render_chart_agree_on_generation_eligibility(spec):
+    validation = validate_spec(spec)
+    rendered = render_chart(spec)
+
+    assert validation["ok"] is False
+    assert isinstance(rendered, dict)
+    assert rendered["validation"]["status"] == "failed"
+
+
+def test_grouped_bar_requires_explicit_zero_for_each_series_category():
+    missing = render_chart(_grouped_spec_with_missing_value())
+    complete = _grouped_spec_with_missing_value()
+    complete["dataset"].append({"category": "B", "value": 0, "series": "甲"})
+
+    assert isinstance(missing, dict)
+    assert any(issue["code"] == "missing_category_value" for issue in missing["validation"]["issues"])
+    assert isinstance(render_chart(complete), ToolResult)
+
+
+def test_render_chart_applies_numeric_axis_ranges(monkeypatch):
+    observed: dict[str, tuple[tuple[float, float], tuple[float, float]]] = {}
+
+    def capture(fig, ax, spec):
+        observed["limits"] = (tuple(float(value) for value in ax.get_xlim()), tuple(float(value) for value in ax.get_ylim()))
+        return []
+
+    monkeypatch.setattr(generation, "_audit_figure", capture)
+    spec = _spec(ChartType.LINE).to_dict()
+    spec["axes"]["x"].update({"min_value": 1, "max_value": 2})
+    spec["axes"]["y"].update({"min_value": 0, "max_value": 5})
+
+    result = render_chart(spec)
+
+    assert isinstance(result, ToolResult)
+    assert observed["limits"] == ((1.0, 2.0), (0.0, 5.0))
+    assert result.data["validation"]["checks"]["artifact"] == "passed"
+
+
+def test_render_chart_respects_declared_bar_category_order():
+    spec = _spec(ChartType.BAR).to_dict()
+    spec["axes"]["x"]["categories"] = ["Q3", "Q1", "Q2"]
+
+    result = render_chart(spec)
+
+    assert isinstance(result, ToolResult)
+    assert result.data["validation"]["checks"]["fidelity"] == "passed"
+
+
+def test_artist_fidelity_failure_does_not_publish_image(monkeypatch):
+    monkeypatch.setattr(generation, "_render_bar", lambda ax, spec, font: ax.bar([0], [1]))
+
+    result = render_chart(_spec(ChartType.BAR).to_dict())
+
+    assert isinstance(result, dict)
+    assert result["validation"]["status"] == "failed"
+    assert any(issue["code"] == "artist_count_mismatch" for issue in result["validation"]["issues"])
+
+
+def test_dense_category_layout_returns_explicit_warning():
+    categories = [f"类别{i}" for i in range(13)]
+    spec = ChartSpec(
+        metadata=ChartMetadata(chart_type=ChartType.BAR, title="密集类别"),
+        axes=Axes(x=Axis(label="类别", categories=categories), y=Axis(label="数值")),
+        dataset=[DataPoint(category=category, value=index + 1) for index, category in enumerate(categories)],
+    )
+
+    result = render_chart(spec.to_dict())
+
+    assert isinstance(result, ToolResult)
+    assert result.data["validation"]["status"] == "warning"
+    assert result.data["validation"]["checks"]["layout"] == "warning"
+    assert any(issue["code"] == "label_density" for issue in result.data["validation"]["issues"])
+
+
+def test_dense_legend_layout_returns_explicit_warning():
+    dataset = [
+        DataPoint(x=x, y=x + index, series=f"系列{index}")
+        for index in range(9)
+        for x in (0, 1)
+    ]
+    spec = ChartSpec(
+        metadata=ChartMetadata(chart_type=ChartType.LINE, title="多系列"),
+        axes=Axes(x=Axis(label="时间"), y=Axis(label="数值")),
+        dataset=dataset,
+    )
+
+    result = render_chart(spec.to_dict())
+
+    assert isinstance(result, ToolResult)
+    assert result.data["validation"]["status"] == "warning"
+    assert result.data["validation"]["checks"]["layout"] == "warning"
+    assert any(issue["code"] == "legend_density" for issue in result.data["validation"]["issues"])
+
+
+def test_render_chart_rejects_blank_encoded_png(monkeypatch):
+    def blank_savefig(_figure, target, **_kwargs):
+        Image.new("RGB", (1200, 800), "white").save(target, format="PNG")
+
+    monkeypatch.setattr(generation.plt.Figure, "savefig", blank_savefig)
+
+    result = render_chart(_spec(ChartType.BAR).to_dict())
+
+    assert isinstance(result, dict)
+    assert any(issue["code"] == "blank_artifact" for issue in result["validation"]["issues"])
+
+
+def test_render_chart_rejects_malformed_encoded_png(monkeypatch):
+    def malformed_savefig(_figure, target, **_kwargs):
+        target.write(b"not a png")
+
+    monkeypatch.setattr(generation.plt.Figure, "savefig", malformed_savefig)
+
+    result = render_chart(_spec(ChartType.BAR).to_dict())
+
+    assert isinstance(result, dict)
+    assert any(issue["code"] == "artifact_decode" for issue in result["validation"]["issues"])
+
+
+def test_validation_diagnostics_are_bounded_and_do_not_include_image_bytes_or_paths():
+    result = render_chart(_spec(ChartType.BAR).to_dict())
+
+    assert isinstance(result, ToolResult)
+    serialized = str(result.data)
+    assert len(result.data["validation"]["issues"]) <= 32
+    assert "content" not in serialized
+    assert "/Users/" not in serialized

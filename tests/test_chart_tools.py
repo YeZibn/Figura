@@ -532,6 +532,24 @@ def test_assemble_spec_preserves_series_and_confidence():
     assert validate_spec(result) == {"ok": True, "issues": []}
 
 
+def test_assemble_spec_deduplicates_multi_series_bar_categories():
+    result = assemble_spec(
+        "bar",
+        [
+            {"category": "A", "value": 1, "series": "North"},
+            {"category": "B", "value": 2, "series": "North"},
+            {"category": "A", "value": 3, "series": "South"},
+            {"category": "B", "value": 4, "series": "South"},
+        ],
+        x_label="Category",
+        y_label="Value",
+    )
+
+    assert "error" not in result
+    assert result["axes"]["x"]["categories"] == ["A", "B"]
+    assert validate_spec(result)["ok"] is True
+
+
 def test_assemble_spec_rejects_empty_series():
     result = assemble_spec(
         "line", [{"x": 0, "y": 1, "series": ""}], x_label="X", y_label="Y"

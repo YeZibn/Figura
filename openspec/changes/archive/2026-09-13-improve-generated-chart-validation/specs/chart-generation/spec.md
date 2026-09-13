@@ -1,10 +1,4 @@
-# chart-generation Specification
-
-## Purpose
-
-Provide a deterministic, validated reverse path that turns Figura's shared ChartSpec data into bounded chart artifacts that an Agent and a user can inspect and reuse.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Valid ChartSpec produces a bounded chart artifact
 
@@ -66,8 +60,8 @@ ambiguous SHALL prevent publication of the chart artifact.
 #### Scenario: Invalid ChartSpec is rejected before rendering
 
 - **WHEN** a ChartSpec is missing required axes, contains invalid points,
-  unsupported values, an invalid pie dataset, duplicate categorical points,
-  or an invalid numeric axis range
+  unsupported values, an invalid pie dataset, duplicate categorical points, or
+  an invalid numeric axis range
 - **THEN** the system returns a bounded structured validation error
 - **AND** it produces no chart artifact
 
@@ -78,63 +72,6 @@ ambiguous SHALL prevent publication of the chart artifact.
 - **THEN** both operations apply the same semantic eligibility rules
 - **AND** a spec accepted for rendering is not rejected later for a rule that
   the standalone validation operation omitted
-
-### Requirement: Chinese font availability is diagnosable
-
-The rendering operation SHALL allow a caller to provide a font path override
-and SHALL search supported system font families when no override is provided.
-When no compatible CJK font can be resolved, the system SHALL still preserve
-the existing bounded rendering behavior where possible, while returning an
-explicit bounded warning or status that identifies the fallback condition.
-
-#### Scenario: Configured font override is available
-
-- **WHEN** a caller provides a readable supported font path
-- **THEN** the renderer uses that font for all generated chart text
-- **AND** the result metadata identifies the resolved font as configured
-
-#### Scenario: System CJK font is resolved
-
-- **WHEN** no font override is provided and a supported system CJK font exists
-- **THEN** the renderer uses the discovered font for all generated chart text
-- **AND** the result metadata identifies the resolved font as system-provided
-
-#### Scenario: No CJK font is available
-
-- **WHEN** neither the configured path nor supported system font families can
-  provide a compatible CJK font
-- **THEN** the renderer returns a bounded fallback warning or status
-- **AND** it does not silently claim that Chinese text was rendered correctly
-
-### Requirement: Agent can request chart generation through the tool boundary
-
-The Agent SHALL be able to request rendering of a ChartSpec through a
-registered tool. The tool SHALL return structured chart metadata together with
-an attributed visual payload when rendering succeeds, and SHALL permit the
-Agent to decide whether to assemble, validate, render, inspect, retry, or
-answer without imposing a fixed tool sequence.
-
-#### Scenario: User asks to redraw understood data
-
-- **WHEN** a user asks the Agent to redraw data recovered from an attached
-  chart
-- **THEN** the Agent can reuse or assemble a ChartSpec, validate it, request a
-  chart artifact, and include the generated result in its answer
-
-#### Scenario: Agent inspects generated visual evidence
-
-- **WHEN** a chart-rendering tool returns a valid visual payload
-- **THEN** the Agent can receive the generated chart as attributed visual
-  evidence on a later model turn and may accept it, retry it, or ignore it
-- **AND** the structured chart metadata remains available independently
-
-#### Scenario: Rendering failure is recoverable
-
-- **WHEN** rendering fails because the input is invalid or a configured output
-  limit is exceeded
-- **THEN** the tool returns a bounded structured error or warning
-- **AND** the Agent run remains able to revise the request or provide a text
-  answer without an uncaught renderer exception
 
 ### Requirement: Generated chart output is bounded and attributable
 
@@ -156,11 +93,13 @@ images.
 
 #### Scenario: Output limits and artifact validity are enforced
 
-- **WHEN** the rendered image exceeds the configured byte or dimension limit
-  , cannot be fully decoded as the declared image type, or fails an artifact
+- **WHEN** the rendered image exceeds the configured byte or dimension limit,
+  cannot be fully decoded as the declared image type, or fails an artifact
   integrity check
 - **THEN** the system rejects or bounds the output with an explicit reason
 - **AND** it does not publish a partial, malformed, or unverified artifact
+
+## ADDED Requirements
 
 ### Requirement: Rendered chart undergoes a deterministic quality audit
 
