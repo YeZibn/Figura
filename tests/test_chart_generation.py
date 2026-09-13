@@ -1,11 +1,14 @@
 """Tests for deterministic ChartSpec-to-image generation."""
 
 from io import BytesIO
-
+import warnings
+from matplotlib import font_manager
+from matplotlib.font_manager import FontProperties
 from PIL import Image
 
 from chartagent.spec import Axes, Axis, ChartMetadata, ChartSpec, ChartType, DataPoint
 from chartagent.tools import ToolRegistry, dispatch_observation
+from chartagent.tools.chart import generation
 from chartagent.tools.chart.generation import MAX_CHART_HEIGHT, render_chart
 from chartagent.tools.chart.register import register_chart_tools
 from chartagent.tools.result import ToolResult
@@ -52,6 +55,8 @@ def test_render_chart_supports_all_chart_types_and_fixed_dimensions():
         with Image.open(BytesIO(result.images[0].content)) as image:
             assert image.format == "PNG"
             assert image.size == (1200, 800)
+        assert result.data["font"]["status"] in {"resolved", "fallback"}
+        assert result.data["font"]["source"] in {"configured", "system", "fallback"}
 
 
 def test_render_chart_preserves_multi_series_metadata():
@@ -60,6 +65,85 @@ def test_render_chart_preserves_multi_series_metadata():
     assert isinstance(result, ToolResult)
     assert result.data["series"] == ["北区", "南区"]
     assert result.data["point_count"] == 4
+
+
+def test_configured_font_is_used_without_exposing_path(monkeypatch):
+    font_path = font_manager.findfont(FontProperties(family="DejaVu Sans"))
+    monkeypatch.setenv(generation.FONT_PATH_ENV, font_path)
+    monkeypatch.setattr(generation, "_font_supports_cjk", lambda _path: True)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        result = render_chart(_spec(ChartType.BAR).to_dict())
+
+    assert isinstance(result, ToolResult)
+    assert result.data["font"] == {
+        "status": "resolved",
+        "source": "configured",
+        "family": "DejaVu Sans",
+    }
+    assert font_path not in str(result.data)
+    assert font_path not in str(result.images[0].metadata)
+    assert result.warnings == ()
+
+
+def test_invalid_configured_font_returns_bounded_fallback(monkeypatch):
+    monkeypatch.setenv(generation.FONT_PATH_ENV, "/missing/figura-cjk-font.ttf")
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        result = render_chart(_spec(ChartType.PIE).to_dict())
+
+    assert isinstance(result, ToolResult)
+    assert result.data["font"] == {
+        "status": "fallback",
+        "source": "fallback",
+        "family": None,
+    }
+    assert len(result.warnings) == 1
+    assert generation.FONT_PATH_ENV in result.warnings[0]
+    assert "/missing/" not in str(result.data)
+
+
+def test_system_font_resolution_is_ordered_and_reported(monkeypatch):
+    font_path = font_manager.findfont(FontProperties(family="DejaVu Sans"))
+    seen_families: list[str] = []
+
+    def fake_findfont(properties, *, fallback_to_default=True):
+        if fallback_to_default is not False:
+            return font_path
+        family = properties.get_family()[0]
+        seen_families.append(family)
+        if family == generation._CJK_FAMILIES[1]:
+            return font_path
+        raise ValueError("font not found")
+
+    monkeypatch.delenv(generation.FONT_PATH_ENV, raising=False)
+    monkeypatch.setattr(generation.font_manager, "findfont", fake_findfont)
+    monkeypatch.setattr(generation, "_font_supports_cjk", lambda _path: True)
+    monkeypatch.setattr(generation, "_font_name", lambda _properties, _path: "DejaVu Sans")
+
+    resolved = generation._resolve_font()
+
+    assert resolved.status == "resolved"
+    assert resolved.source == "system"
+    assert resolved.family == "DejaVu Sans"
+    assert seen_families == list(generation._CJK_FAMILIES[:2])
+
+
+def test_chinese_specs_keep_font_diagnostics_for_all_chart_types(monkeypatch):
+    monkeypatch.setenv(generation.FONT_PATH_ENV, "")
+    for chart_type in ChartType:
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            result = render_chart(_spec(chart_type).to_dict())
+        assert isinstance(result, ToolResult)
+        assert result.data["font"]["status"] in {"resolved", "fallback"}
+        if result.data["font"]["status"] == "resolved":
+            assert result.warnings == ()
+            assert not any("Glyph" in str(item.message) for item in caught)
+        else:
+            assert result.warnings
 
 
 def test_render_chart_rejects_negative_or_zero_pie_totals():

@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 from collections import OrderedDict
+from dataclasses import dataclass
 from io import BytesIO
 import math
+import os
+from pathlib import Path
 from typing import Any, Iterable
 
 import matplotlib
@@ -14,6 +17,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 from PIL import Image
+from matplotlib import font_manager
+from matplotlib.font_manager import FontProperties
 
 from ...spec import ChartSpec, ChartType, DataPoint
 from ..result import GeneratedImage, ToolResult
@@ -27,6 +32,120 @@ MAX_CHART_BYTES = 10 * 1024 * 1024
 MAX_CHART_POINTS = 512
 MAX_TITLE_LENGTH = 240
 MAX_LABEL_LENGTH = 160
+MAX_FONT_NAME_LENGTH = 120
+FONT_PATH_ENV = "CHARTAGENT_FONT_PATH"
+_CJK_FAMILIES = (
+    "PingFang SC",
+    "Hiragino Sans GB",
+    "Microsoft YaHei",
+    "SimHei",
+    "Noto Sans CJK SC",
+    "WenQuanYi Zen Hei",
+)
+_CJK_PROBES = "中文图表数据"
+
+
+@dataclass(frozen=True)
+class _ResolvedFont:
+    """Per-render font choice and bounded diagnostics."""
+
+    properties: FontProperties | None
+    family: str | None
+    source: str
+    status: str
+    warning: str | None = None
+
+
+def _font_supports_cjk(path: str | os.PathLike[str]) -> bool:
+    """Return whether a font file contains representative CJK glyphs."""
+    try:
+        font = font_manager.get_font(path)
+        charmap = font.get_charmap()
+        return all(ord(character) in charmap for character in _CJK_PROBES)
+    except (OSError, RuntimeError, ValueError):
+        return False
+
+
+def _font_name(properties: FontProperties, path: str | None = None) -> str | None:
+    try:
+        name = properties.get_name()
+    except (OSError, RuntimeError, ValueError):
+        name = None
+    if not isinstance(name, str) or not name.strip():
+        name = Path(path).stem if path else None
+    return name.strip()[:MAX_FONT_NAME_LENGTH] if name else None
+
+
+def _resolved_font_from_path(path: str, source: str) -> _ResolvedFont | None:
+    candidate = Path(path).expanduser()
+    if not candidate.is_file() or not os.access(candidate, os.R_OK):
+        return None
+    if not _font_supports_cjk(candidate):
+        return None
+    try:
+        properties = FontProperties(fname=str(candidate))
+        family = _font_name(properties, str(candidate))
+    except (OSError, RuntimeError, ValueError):
+        return None
+    if not family:
+        return None
+    return _ResolvedFont(properties, family, source, "resolved")
+
+
+def _resolve_font() -> _ResolvedFont:
+    """Resolve one CJK font without changing process-wide Matplotlib settings."""
+    configured = os.environ.get(FONT_PATH_ENV, "").strip()
+    if configured:
+        resolved = _resolved_font_from_path(configured, "configured")
+        if resolved is not None:
+            return resolved
+        return _ResolvedFont(
+            None,
+            None,
+            "fallback",
+            "fallback",
+            f"{FONT_PATH_ENV} does not point to a readable CJK font",
+        )
+
+    for family in _CJK_FAMILIES:
+        try:
+            path = font_manager.findfont(
+                FontProperties(family=family),
+                fallback_to_default=False,
+            )
+        except (OSError, RuntimeError, ValueError):
+            continue
+        resolved = _resolved_font_from_path(path, "system")
+        if resolved is not None:
+            return resolved
+
+    return _ResolvedFont(
+        None,
+        None,
+        "fallback",
+        "fallback",
+        "no compatible CJK font was found; Chinese text may be missing",
+    )
+
+
+def _set_font(text: Any, font: _ResolvedFont) -> None:
+    if font.properties is not None:
+        text.set_fontproperties(font.properties)
+
+
+def _set_tick_fonts(axis: Any, font: _ResolvedFont) -> None:
+    for label in (*axis.get_xticklabels(), *axis.get_yticklabels()):
+        _set_font(label, font)
+
+
+def _set_legend_fonts(legend: Any, font: _ResolvedFont) -> None:
+    if legend is None:
+        return
+    for text in legend.get_texts():
+        _set_font(text, font)
+    title = legend.get_title()
+    if title is not None:
+        _set_font(title, font)
 
 
 def _finite(value: object) -> bool:
@@ -92,17 +211,18 @@ def _group_points(points: list[DataPoint]) -> OrderedDict[str, list[DataPoint]]:
     return groups
 
 
-def _configure_axes(ax: Any, spec: ChartSpec) -> None:
+def _configure_axes(ax: Any, spec: ChartSpec, font: _ResolvedFont) -> None:
     if spec.metadata.title:
-        ax.set_title(spec.metadata.title[:MAX_TITLE_LENGTH])
+        _set_font(ax.set_title(spec.metadata.title[:MAX_TITLE_LENGTH]), font)
     if spec.axes is not None:
-        ax.set_xlabel(spec.axes.x.label[:MAX_LABEL_LENGTH])
-        ax.set_ylabel(spec.axes.y.label[:MAX_LABEL_LENGTH])
+        _set_font(ax.set_xlabel(spec.axes.x.label[:MAX_LABEL_LENGTH]), font)
+        _set_font(ax.set_ylabel(spec.axes.y.label[:MAX_LABEL_LENGTH]), font)
     ax.grid(axis="y", alpha=0.22)
     ax.set_axisbelow(True)
+    _set_tick_fonts(ax, font)
 
 
-def _render_bar(ax: Any, spec: ChartSpec) -> None:
+def _render_bar(ax: Any, spec: ChartSpec, font: _ResolvedFont) -> None:
     categories = _unique(
         [
             category
@@ -128,7 +248,7 @@ def _render_bar(ax: Any, spec: ChartSpec) -> None:
         )
         for bar in bars:
             value = bar.get_height()
-            ax.annotate(
+            annotation = ax.annotate(
                 f"{value:g}",
                 (bar.get_x() + bar.get_width() / 2, value),
                 xytext=(0, 4),
@@ -137,12 +257,14 @@ def _render_bar(ax: Any, spec: ChartSpec) -> None:
                 va="bottom",
                 fontsize=8,
             )
+            _set_font(annotation, font)
     ax.set_xticks(positions, categories)
     if explicit_series:
-        ax.legend()
+        _set_legend_fonts(ax.legend(), font)
+    _set_tick_fonts(ax, font)
 
 
-def _render_line(ax: Any, spec: ChartSpec) -> None:
+def _render_line(ax: Any, spec: ChartSpec, font: _ResolvedFont) -> None:
     groups = _group_points(spec.dataset)
     colors = plt.get_cmap("tab10")
     explicit_series = any(point.series for point in spec.dataset)
@@ -155,10 +277,10 @@ def _render_line(ax: Any, spec: ChartSpec) -> None:
             color=colors(index % 10),
         )
     if explicit_series:
-        ax.legend()
+        _set_legend_fonts(ax.legend(), font)
 
 
-def _render_scatter(ax: Any, spec: ChartSpec) -> None:
+def _render_scatter(ax: Any, spec: ChartSpec, font: _ResolvedFont) -> None:
     groups = _group_points(spec.dataset)
     colors = plt.get_cmap("tab10")
     explicit_series = any(point.series for point in spec.dataset)
@@ -171,13 +293,20 @@ def _render_scatter(ax: Any, spec: ChartSpec) -> None:
             alpha=0.86,
         )
     if explicit_series:
-        ax.legend()
+        _set_legend_fonts(ax.legend(), font)
 
 
-def _render_pie(ax: Any, spec: ChartSpec) -> None:
+def _render_pie(ax: Any, spec: ChartSpec, font: _ResolvedFont) -> None:
     labels = [point.category or "" for point in spec.dataset]
     values = [float(point.value) for point in spec.dataset]
-    ax.pie(values, labels=labels, autopct="%1.1f%%", startangle=90)
+    _, label_texts, percentage_texts = ax.pie(
+        values,
+        labels=labels,
+        autopct="%1.1f%%",
+        startangle=90,
+    )
+    for text in (*label_texts, *percentage_texts):
+        _set_font(text, font)
     ax.axis("equal")
 
 
@@ -202,20 +331,21 @@ def render_chart(
         if issues:
             return {"error": "ChartSpec cannot be rendered", "issues": issues}
 
+        font = _resolve_font()
         fig, ax = plt.subplots(figsize=(width / 100, height / 100), dpi=100)
         try:
             chart_type = chart_spec.metadata.chart_type
             if chart_type is ChartType.BAR:
-                _render_bar(ax, chart_spec)
+                _render_bar(ax, chart_spec, font)
             elif chart_type is ChartType.LINE:
-                _render_line(ax, chart_spec)
+                _render_line(ax, chart_spec, font)
             elif chart_type is ChartType.PIE:
-                _render_pie(ax, chart_spec)
+                _render_pie(ax, chart_spec, font)
             elif chart_type is ChartType.SCATTER:
-                _render_scatter(ax, chart_spec)
+                _render_scatter(ax, chart_spec, font)
             else:  # pragma: no cover - ChartType.from_dict closes this set.
                 return {"error": f"unsupported chart type: {chart_type}"}
-            _configure_axes(ax, chart_spec)
+            _configure_axes(ax, chart_spec, font)
             fig.tight_layout()
             output = BytesIO()
             fig.savefig(output, format="png", dpi=100)
@@ -238,7 +368,13 @@ def render_chart(
             "height": actual_height,
             "point_count": len(chart_spec.dataset),
             "series": _unique(_series_name(point) for point in chart_spec.dataset),
+            "font": {
+                "status": font.status,
+                "source": font.source,
+                "family": font.family,
+            },
         }
+        warnings = (font.warning,) if font.warning else ()
         return ToolResult(
             data=data,
             images=(
@@ -252,9 +388,13 @@ def render_chart(
                         "title": title,
                         "width": actual_width,
                         "height": actual_height,
+                        "font_status": font.status,
+                        "font_source": font.source,
+                        "font_family": font.family,
                     },
                 ),
             ),
+            warnings=warnings,
         )
     except (TypeError, ValueError, KeyError) as exc:
         return {"error": f"ChartSpec cannot be rendered: {str(exc)[:240]}"}

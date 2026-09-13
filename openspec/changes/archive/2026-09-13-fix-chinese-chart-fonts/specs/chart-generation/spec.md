@@ -1,10 +1,4 @@
-# chart-generation Specification
-
-## Purpose
-
-Provide a deterministic, validated reverse path that turns Figura's shared ChartSpec data into bounded chart artifacts that an Agent and a user can inspect and reuse.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Valid ChartSpec produces a bounded chart artifact
 
@@ -77,54 +71,3 @@ explicit bounded warning or status that identifies the fallback condition.
   provide a compatible CJK font
 - **THEN** the renderer returns a bounded fallback warning or status
 - **AND** it does not silently claim that Chinese text was rendered correctly
-
-### Requirement: Agent can request chart generation through the tool boundary
-
-The Agent SHALL be able to request rendering of a ChartSpec through a
-registered tool. The tool SHALL return structured chart metadata together with
-an attributed visual payload when rendering succeeds, and SHALL permit the
-Agent to decide whether to assemble, validate, render, inspect, retry, or
-answer without imposing a fixed tool sequence.
-
-#### Scenario: User asks to redraw understood data
-
-- **WHEN** a user asks the Agent to redraw data recovered from an attached
-  chart
-- **THEN** the Agent can reuse or assemble a ChartSpec, validate it, request a
-  chart artifact, and include the generated result in its answer
-
-#### Scenario: Agent inspects generated visual evidence
-
-- **WHEN** a chart-rendering tool returns a valid visual payload
-- **THEN** the Agent can receive the generated chart as attributed visual
-  evidence on a later model turn and may accept it, retry it, or ignore it
-- **AND** the structured chart metadata remains available independently
-
-#### Scenario: Rendering failure is recoverable
-
-- **WHEN** rendering fails because the input is invalid or a configured output
-  limit is exceeded
-- **THEN** the tool returns a bounded structured error or warning
-- **AND** the Agent run remains able to revise the request or provide a text
-  answer without an uncaught renderer exception
-
-### Requirement: Generated chart output is bounded and attributable
-
-Every successful generated chart SHALL expose an opaque artifact reference,
-media type, byte count, dimensions, chart type, and bounded caption or title.
-Artifact metadata SHALL NOT contain local source paths, credentials, raw
-provider payloads, or embedded image bytes. Generated output SHALL be
-distinguishable from temporary model-observation images.
-
-#### Scenario: Generated output metadata is safe
-
-- **WHEN** a rendering operation succeeds
-- **THEN** its structured result contains bounded metadata and an opaque
-  reference suitable for Gateway and desktop-client retrieval
-- **AND** the JSON result contains no raw image bytes or local filesystem path
-
-#### Scenario: Output limits are enforced
-
-- **WHEN** the rendered image exceeds the configured byte or dimension limit
-- **THEN** the system rejects or bounds the output with an explicit reason
-- **AND** it does not publish a partial or unbounded artifact
