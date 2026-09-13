@@ -8,7 +8,7 @@ const baseMessages: ConversationItem[] = [
   { id: 'm8', kind: 'assistant', text: '这张图表包含三个类别：Alpha 为 8，Beta 为 16，Gamma 为 24。测量得到的柱高约为 1:2:3，与图中打印的数值一致。', timestamp: '10:40' },
 ]
 
-const demoRun: RunSummary = { runId: 'run_mock_demo', sessionId: 'chart-analysis', status: 'completed', createdAt: '2026-09-13T10:39:00+08:00', updatedAt: '2026-09-13T10:40:00+08:00', eventCount: 7, answer: '这张图表包含三个类别：Alpha 为 8，Beta 为 16，Gamma 为 24。测量得到的柱高约为 1:2:3，与图中打印的数值一致。' }
+const demoRun: RunSummary = { runId: 'run_mock_demo', sessionId: 'chart-analysis', status: 'completed', createdAt: '2026-09-13T10:39:00+08:00', updatedAt: '2026-09-13T10:40:00+08:00', eventCount: 10, answer: '这张图表包含三个类别：Alpha 为 8，Beta 为 16，Gamma 为 24。测量得到的柱高约为 1:2:3，与图中打印的数值一致。' }
 const demoEvents: AgentRunEvent[] = [
   { runId: demoRun.runId, sequence: 1, kind: 'run_started', timestamp: '2026-09-13T10:39:00+08:00', payload: { status: 'running' } },
   { runId: demoRun.runId, sequence: 2, kind: 'tool_call', timestamp: '2026-09-13T10:39:20+08:00', payload: { tool_name: 'load_image', call_id: 'demo-load', arguments: { attachment_id: 'att_demo_chart' } } },
@@ -17,6 +17,9 @@ const demoEvents: AgentRunEvent[] = [
   { runId: demoRun.runId, sequence: 5, kind: 'tool_call', timestamp: '2026-09-13T10:40:00+08:00', payload: { tool_name: 'measure_bars', call_id: 'demo-measure', arguments: { attachment_id: 'att_demo_chart' } } },
   { runId: demoRun.runId, sequence: 6, kind: 'tool_result', timestamp: '2026-09-13T10:40:10+08:00', payload: { tool_name: 'measure_bars', call_id: 'demo-measure', status: 'success', result: { bars: 3, baseline_y: 425 } } },
   { runId: demoRun.runId, sequence: 7, kind: 'visual_observation', timestamp: '2026-09-13T10:40:11+08:00', payload: { tool_name: 'measure_bars', call_id: 'demo-measure', observations: [{ observationId: 'demo-bars-image', mediaType: 'image/svg+xml', caption: '已检测柱子、稳定标识和基线', byteCount: image.length, imageUrl: image }] } },
+  { runId: demoRun.runId, sequence: 8, kind: 'generated_chart', timestamp: '2026-09-13T10:40:20+08:00', payload: { tool_name: 'render_chart', call_id: 'demo-render', artifacts: [{ artifactKind: 'generated_chart', artifactId: 'artifact_mock_chart', mediaType: 'image/png', caption: '生成图表：季度销售重绘', byteCount: image.length, chartType: 'bar', title: '季度销售重绘', width: 640, height: 360, status: 'available', imageUrl: image, downloadUrl: image }] } },
+  { runId: demoRun.runId, sequence: 9, kind: 'generated_chart', timestamp: '2026-09-13T10:40:22+08:00', payload: { tool_name: 'render_chart', call_id: 'demo-expired-render', artifacts: [{ artifactKind: 'generated_chart', mediaType: 'image/png', caption: '历史生成图表', chartType: 'line', title: '历史生成图表', width: 640, height: 360, status: 'unavailable', reason: 'artifact_expired' }] } },
+  { runId: demoRun.runId, sequence: 10, kind: 'final_answer', timestamp: '2026-09-13T10:40:25+08:00', payload: { answer: demoRun.answer } },
 ]
 
 const data: Record<string, SessionData> = {
@@ -58,6 +61,9 @@ export const mockClient: ChartAgentClient = {
   attachmentContentUrl(sessionId, attachmentId) {
     return data[sessionId]?.attachments.find((item) => item.id === attachmentId)?.previewUrl || ''
   },
+  generatedArtifactUrl(_sessionId, _runId, _artifactId) {
+    return image
+  },
   async startRun(sessionId, text, attachmentIds = []) {
     await wait(90)
     const runId = `run_mock_${Date.now()}`
@@ -98,10 +104,15 @@ export const mockClient: ChartAgentClient = {
       call_id: 'mock-call-1',
       observations: [{ observationId: 'mock-observation', mediaType: 'image/svg+xml', caption: '模拟柱状图测量结果', byteCount: image.length, imageUrl: image }],
     }))
+    schedule(650, () => emit('generated_chart', 6, {
+      tool_name: 'render_chart',
+      call_id: 'mock-render-1',
+      artifacts: [{ artifactKind: 'generated_chart', artifactId: `artifact_${runId}`, mediaType: 'image/png', caption: '生成图表：分析结果重绘', byteCount: image.length, chartType: 'bar', title: '分析结果重绘', width: 640, height: 360, status: 'available', imageUrl: image, downloadUrl: image }],
+    }))
     schedule(760, () => {
       if (closed) return
       const pending = pendingRuns.get(runId)
-      emit('final_answer', 6, { answer: '模拟回复：已完成本次图表分析。' })
+      emit('final_answer', 7, { answer: '模拟回复：已完成本次图表分析。' })
       if (target) {
         target.messages.push({ id: `user-${Date.now()}`, kind: 'user', text: pending?.text || '已提交的分析请求', timestamp, attachmentIds: pending?.attachmentIds.length ? pending.attachmentIds : undefined })
         target.messages.push({ id: `assistant-${Date.now()}`, kind: 'assistant', text: '模拟回复：已完成本次图表分析。', timestamp })

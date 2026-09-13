@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable, Sequence
@@ -261,11 +262,36 @@ class GatewayService:
         run = self.get_run(session.id, run_id)
         if not isinstance(observation_id, str) or not observation_id.strip():
             raise GatewayFault("invalid_request", 400, "Observation ID is required")
-        item = self._history.get_artifact(session.id, run.run_id, observation_id)
+        item = self._history.get_artifact(
+            session.id,
+            run.run_id,
+            observation_id,
+            artifact_kind="visual_observation",
+        )
         if item is None:
             item = self._runs.observations.get(run.run_id, session.id, observation_id)
         if item is None:
             raise GatewayFault("observation_not_found", 404, "Observation was not found")
+        return item
+
+    def get_generated_artifact(
+        self,
+        session_id: object,
+        run_id: object,
+        artifact_id: object,
+    ) -> tuple[bytes, str]:
+        session = self._resolve_session(session_id)
+        run = self.get_run(session.id, run_id)
+        if not isinstance(artifact_id, str) or not artifact_id.strip():
+            raise GatewayFault("invalid_request", 400, "Artifact ID is required")
+        item = self._history.get_artifact(
+            session.id,
+            run.run_id,
+            artifact_id,
+            artifact_kind="generated_chart",
+        )
+        if item is None:
+            raise GatewayFault("generated_artifact_unavailable", 404, "Generated chart is unavailable")
         return item
 
     def _start_managed_run(
@@ -385,11 +411,24 @@ class GatewayService:
     ) -> list[dict[str, Any]]:
         references = []
         for image in images:
+            metadata = getattr(image, "metadata", {})
+            is_generated_chart = isinstance(metadata, Mapping) and metadata.get("kind") == "generated_chart"
             reference = None
             try:
                 reference = self._history.add_artifact(run.run_id, run.session_id, image)
             except Exception:  # noqa: BLE001 - visual evidence must not stop the run
                 reference = None
+            if is_generated_chart:
+                if reference is None:
+                    references.append({
+                        "artifactKind": "generated_chart",
+                        "status": "unavailable",
+                        "caption": str(getattr(image, "caption", "生成图表"))[:240],
+                        "reason": "artifact_persistence_failed",
+                    })
+                else:
+                    references.append(reference)
+                continue
             if reference is None:
                 fallback = self._runs.observations.add(run.run_id, run.session_id, image)
                 if fallback is not None:

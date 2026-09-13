@@ -94,19 +94,24 @@ operation for compatibility. The desktop live-run path uses:
 POST /api/v1/sessions/{session_id}/runs
 GET  /api/v1/sessions/{session_id}/runs/{run_id}/events
 GET  /api/v1/sessions/{session_id}/runs/{run_id}/observations/{observation_id}
+GET  /api/v1/sessions/{session_id}/runs/{run_id}/artifacts/{artifact_id}
 ```
 
 The event stream is bounded SSE and includes model turns, tool calls, tool
-results, visual-observation metadata, final answers, and failures. Generated
-visual evidence is available only through short-lived opaque observation IDs;
-event JSON and durable session memory never contain image bytes, credentials,
-provider raw responses, or unbounded trace content. Run cancellation is not
-part of this milestone. Gateway runs also persist bounded execution history
-separately from model conversation records. The client restores run summaries
-and events after reload, replays from an event cursor after reconnect, joins
-tool calls/results/visual observations by `call_id`, and marks interrupted or
-incomplete history explicitly. Final answers are rendered as safe Markdown;
-the original bounded source remains available in the answer panel.
+results, visual-observation metadata, generated-chart metadata, final answers,
+and failures. Temporary visual evidence is available through short-lived
+opaque observation IDs. User-facing charts created by `render_chart` use a
+separate `artifact_<id>` reference and the `/artifacts/` route, so their PNG
+bytes are persisted for the configured run-retention period and remain scoped
+to the owning session. Event JSON and durable session memory never contain
+image bytes, credentials, provider raw responses, or unbounded trace content.
+Run cancellation is not part of this milestone. Gateway runs also persist
+bounded execution history separately from model conversation records. The
+client restores run summaries and events after reload, replays from an event
+cursor after reconnect, joins tool calls/results/visual observations by
+`call_id`, and renders generated charts with preview, metadata, download, or an
+explicit unavailable state. Final answers are rendered as safe Markdown; the
+original bounded source remains available in the answer panel.
 
 Additional run-history routes are:
 
@@ -134,6 +139,15 @@ conda run -n agent python -m chartagent --agent --delete-session demo
 In the Agent REPL, enter an image as `@/path/to/chart.png` or `@"/path with spaces/chart.png"`. The CLI registers the file and sends the model an opaque `att_...` ID plus safe metadata. It does not eagerly send image bytes. The model can call `load_image(attachment_id)` whenever visual inspection is useful, and can pass the same ID to `extract_text` or `measure_bars`. Every load validates ownership, file availability, size, media type, and content hash.
 
 Tool-generated overlays are returned as in-memory visual observations for the next model turn. Their bytes, source-image bytes, provider reasoning, raw responses, credentials, and trace events are not persisted in session memory.
+
+To redraw structured data, the Agent can pass an existing or newly assembled
+`ChartSpec` to the optional `render_chart` tool. The tool validates the shared
+specification and supports `bar`, `line`, `pie`, and `scatter` charts with
+bounded PNG output. A successful call returns structured metadata plus visual
+evidence for the next model turn; the Gateway separately stores the generated
+PNG as a `generated_chart` artifact for the desktop preview and download. A
+rendering or artifact-limit failure remains a structured tool error and does
+not prevent a text answer.
 
 ## Trace mode
 

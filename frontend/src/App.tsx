@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
-import { BarChart3, Check, ChevronDown, ChevronRight, FileImage, LoaderCircle, MessageSquare, Paperclip, Plus, RefreshCw, Send, Sparkles, Terminal, Trash2, X } from 'lucide-react'
+import { BarChart3, Check, ChevronDown, ChevronRight, Download, FileImage, LoaderCircle, MessageSquare, Paperclip, Plus, RefreshCw, Send, Sparkles, Terminal, Trash2, X } from 'lucide-react'
 import { GatewayClientError, gatewayClient } from './api/gatewayClient'
 import type { ChartAgentClient, RunSubscription } from './api/client'
 import { mockClient } from './api/mockClient'
 import { formatBytes, mediaTypeForFile, validateImageFile } from './attachments'
 import { getGatewayRuntimeStatus, type GatewayRuntimeStatus } from './runtime'
-import type { AgentRunEvent, Attachment, AttachmentStatus, ConversationItem, GatewayHealth, RunState, RunSummary, Session, SessionData } from './types/protocol'
+import type { AgentRunEvent, Attachment, AttachmentStatus, ConversationItem, GatewayHealth, GeneratedChartReference, RunState, RunSummary, Session, SessionData } from './types/protocol'
 import './styles/global.css'
 import './styles/error.css'
 
@@ -80,7 +80,7 @@ type ToolStep = {
   status: 'running' | 'success' | 'error'
 }
 
-type TimelineRow = { kind: 'event'; event: AgentRunEvent } | { kind: 'tool'; step: ToolStep }
+type TimelineRow = { kind: 'event'; event: AgentRunEvent } | { kind: 'tool'; step: ToolStep } | { kind: 'chart'; event: AgentRunEvent; artifact: GeneratedChartReference }
 
 function timestampLabel(timestamp: string): string {
   if (!timestamp) return currentTime()
@@ -111,6 +111,15 @@ function normalizeTimeline(events: AgentRunEvent[]): TimelineRow[] {
       const observations = Array.isArray(payload.observations) ? payload.observations.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object')) : []
       const step = callId ? steps.get(callId) : undefined
       if (step) { step.observations.push(...observations); continue }
+    }
+    if (event.kind === 'generated_chart') {
+      const artifacts = Array.isArray(payload.artifacts)
+        ? payload.artifacts.filter((item): item is GeneratedChartReference => Boolean(item && typeof item === 'object' && (item as Record<string, unknown>).artifactKind === 'generated_chart'))
+        : []
+      if (artifacts.length) {
+        artifacts.forEach((artifact) => rows.push({ kind: 'chart', event, artifact }))
+        continue
+      }
     }
     rows.push({ kind: 'event', event })
   }
@@ -190,6 +199,51 @@ function ObservationView({ observation }: { observation: Record<string, unknown>
   return <div className="trace-observation"><div className="observation-label"><FileImage size={13} /><strong>视觉观察</strong></div>{imageUrl ? <img src={imageUrl} alt={caption} /> : <div className="observation-placeholder">视觉证据不可用或已过期</div>}<small>{caption}</small></div>
 }
 
+function chartTypeLabel(value: string): string {
+  return ({ bar: '柱状图', line: '折线图', pie: '饼图', scatter: '散点图' } as Record<string, string>)[value] || value || '图表'
+}
+
+function GeneratedChartView({ artifact }: { artifact: GeneratedChartReference }) {
+  const [downloading, setDownloading] = useState(false)
+  const [downloadError, setDownloadError] = useState('')
+  const [imageFailed, setImageFailed] = useState(false)
+  useEffect(() => setImageFailed(false), [artifact.imageUrl])
+  const status = artifact.status === 'failed' ? 'failed' : artifact.status === 'unavailable' || !artifact.imageUrl || imageFailed ? 'unavailable' : 'available'
+  const statusLabel = status === 'available' ? '已生成' : status === 'failed' ? '生成失败' : '暂不可用'
+  const metadata = [
+    artifact.chartType ? chartTypeLabel(artifact.chartType) : '',
+    artifact.width && artifact.height ? `${artifact.width} × ${artifact.height}` : '',
+    typeof artifact.byteCount === 'number' ? formatBytes(artifact.byteCount) : '',
+  ].filter(Boolean).join(' · ')
+  const download = async () => {
+    if (!artifact.downloadUrl || downloading) return
+    setDownloading(true)
+    setDownloadError('')
+    try {
+      const response = await fetch(artifact.downloadUrl)
+      if (!response.ok) throw new Error('download failed')
+      const blob = await response.blob()
+      const objectUrl = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = objectUrl
+      link.download = `${artifact.title || 'figura-chart'}.png`
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      URL.revokeObjectURL(objectUrl)
+    } catch {
+      setDownloadError('下载失败，请稍后重试')
+    } finally {
+      setDownloading(false)
+    }
+  }
+  return <article className={'generated-chart ' + status}>
+    <div className="generated-chart-heading"><div className="observation-label"><BarChart3 size={13} /><strong>生成图表</strong><span>{statusLabel}</span></div>{artifact.downloadUrl && status === 'available' && <button className="chart-download" type="button" onClick={() => void download()} disabled={downloading} title="下载生成图表"><Download size={13} />{downloading ? '正在下载' : '下载 PNG'}</button>}</div>
+    {artifact.imageUrl && status === 'available' ? <img src={artifact.imageUrl} alt={artifact.title || artifact.caption || '生成图表'} onError={() => setImageFailed(true)} /> : <div className="observation-placeholder">{status === 'failed' ? '图表生成失败，未产生可下载文件' : '图表文件已过期或暂不可用'}</div>}
+    <div className="generated-chart-copy"><strong>{artifact.title || artifact.caption || '未命名图表'}</strong>{metadata && <small>{metadata}</small>}{artifact.reason && <small className="generated-chart-reason">{artifact.reason}</small>}{downloadError && <small className="generated-chart-reason">{downloadError}</small>}</div>
+  </article>
+}
+
 function eventLabel(event: AgentRunEvent): string {
   const labels: Record<string, string> = { run_started: '运行已开始', model_started: '模型轮次开始', model_completed: '模型轮次完成', progress: '处理中', budget_exhausted: '达到预算上限', final_answer: '最终回答已生成', run_failed: '运行失败', history_gap: '历史记录不完整' }
   return labels[event.kind] || event.kind
@@ -207,7 +261,7 @@ function RunTimeline({ timeline, expanded, onToggle }: { timeline: RunTimeline; 
       {summary.historyWarning && <div className="trace-warning" role="status">部分执行记录未能持久化，当前显示的过程可能不完整。</div>}
       {timeline.historyGap && <div className="trace-warning" role="status">历史记录存在缺口，未显示缺失的执行步骤。</div>}
       {rows.length === 0 && <div className="trace-empty">没有可恢复的执行事件。</div>}
-      {rows.map((row) => row.kind === 'event' ? <div className={'trace-event ' + (row.event.kind === 'run_failed' || row.event.kind === 'history_gap' ? 'error' : '')} key={`${row.event.runId}-${row.event.sequence}`}><span className="trace-event-dot" /><span className="trace-event-copy"><strong>{eventLabel(row.event)}</strong><small>{timestampLabel(row.event.timestamp)}</small><span>{textDetail(eventPayload(row.event).message || eventPayload(row.event).status || eventPayload(row.event).reason || '')}</span></span></div> : <div className="trace-tool" key={row.step.id}><button className="trace-tool-header" onClick={() => setExpandedSteps((current) => { const next = new Set(current); next.has(row.step.id) ? next.delete(row.step.id) : next.add(row.step.id); return next })} aria-expanded={expandedSteps.has(row.step.id)}><span className="trace-event-dot" /><span className="trace-tool-name"><strong>{row.step.toolName}</strong><small>{row.step.callId}</small></span><span className={'run-status ' + row.step.status}>{row.step.status === 'running' ? '运行中' : row.step.status === 'success' ? '完成' : '失败'}</span>{expandedSteps.has(row.step.id) ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</button>{expandedSteps.has(row.step.id) && <div className="trace-tool-detail">{row.step.call && <div><label>调用参数</label><pre>{textDetail(eventPayload(row.step.call).arguments)}</pre></div>}{row.step.result && <div><label>工具结果</label><pre>{textDetail(eventPayload(row.step.result).result || eventPayload(row.step.result).message)}</pre></div>}{row.step.observations.map((observation, index) => <ObservationView key={index} observation={observation} />)}</div>}</div>)}
+      {rows.map((row) => row.kind === 'event' ? <div className={'trace-event ' + (row.event.kind === 'run_failed' || row.event.kind === 'history_gap' ? 'error' : '')} key={`${row.event.runId}-${row.event.sequence}`}><span className="trace-event-dot" /><span className="trace-event-copy"><strong>{eventLabel(row.event)}</strong><small>{timestampLabel(row.event.timestamp)}</small><span>{textDetail(eventPayload(row.event).message || eventPayload(row.event).status || eventPayload(row.event).reason || '')}</span></span></div> : row.kind === 'chart' ? <GeneratedChartView key={`${row.event.runId}-${row.event.sequence}-${row.artifact.artifactId || row.artifact.title || 'chart'}`} artifact={row.artifact} /> : <div className="trace-tool" key={row.step.id}><button className="trace-tool-header" onClick={() => setExpandedSteps((current) => { const next = new Set(current); next.has(row.step.id) ? next.delete(row.step.id) : next.add(row.step.id); return next })} aria-expanded={expandedSteps.has(row.step.id)}><span className="trace-event-dot" /><span className="trace-tool-name"><strong>{row.step.toolName}</strong><small>{row.step.callId}</small></span><span className={'run-status ' + row.step.status}>{row.step.status === 'running' ? '运行中' : row.step.status === 'success' ? '完成' : '失败'}</span>{expandedSteps.has(row.step.id) ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</button>{expandedSteps.has(row.step.id) && <div className="trace-tool-detail">{row.step.call && <div><label>调用参数</label><pre>{textDetail(eventPayload(row.step.call).arguments)}</pre></div>}{row.step.result && <div><label>工具结果</label><pre>{textDetail(eventPayload(row.step.result).result || eventPayload(row.step.result).message)}</pre></div>}{row.step.observations.map((observation, index) => <ObservationView key={index} observation={observation} />)}</div>}</div>)}
     </div>}
   </section>
 }

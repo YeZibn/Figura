@@ -189,6 +189,32 @@ def test_visual_tool_result_adds_attributed_multimodal_observation():
     assert evidence[2]["image_url"]["url"].startswith("data:image/png;base64,")
 
 
+def test_generated_chart_emits_distinct_trace_event():
+    registry = ToolRegistry()
+    registry.register(
+        Tool(
+            "render_chart",
+            "return a generated chart",
+            {"type": "object"},
+            lambda: ToolResult(
+                {"kind": "generated_chart", "chart_type": "bar"},
+                [GeneratedImage(
+                    b"chart",
+                    "image/png",
+                    "生成图表：销售",
+                    metadata={"kind": "generated_chart", "chart_type": "bar", "title": "销售", "width": 640, "height": 480},
+                )],
+            ),
+        )
+    )
+    events = []
+    client = ScriptedClient([_call("render_chart", "{}", "chart-1"), _final("done")])
+    sink = lambda _tool, _call, _images: [{"artifactKind": "generated_chart", "artifactId": "artifact_chart", "status": "available"}]
+    assert Agent(client, registry, trace_sink=events.append, visual_observation_sink=sink).run("重绘") == "done"
+    chart_event = next(event for event in events if event.kind == "generated_chart")
+    assert chart_event.payload["artifacts"][0]["artifactKind"] == "generated_chart"
+
+
 def test_multiple_tools_append_all_tool_messages_before_visual_observation():
     registry = ToolRegistry()
     registry.register(

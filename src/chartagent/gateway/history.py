@@ -7,6 +7,7 @@ import json
 import os
 import shutil
 import time
+from collections.abc import Mapping
 from pathlib import Path
 from threading import RLock
 from typing import Any
@@ -15,6 +16,10 @@ from uuid import uuid4
 from ..memory.sqlite import default_database_path
 from ..trace import truncate_text
 from .protocol import (
+    GeneratedChartReference,
+    MAX_ARTIFACT_CAPTION,
+    MAX_ARTIFACT_CHART_TYPE,
+    MAX_ARTIFACT_TITLE,
     MAX_EVENT_KIND,
     MAX_EVENT_PAYLOAD,
     RunEvent,
@@ -115,7 +120,12 @@ class GatewayHistoryStore:
                   byte_count INTEGER NOT NULL,
                   sha256 TEXT NOT NULL,
                   created_at TEXT NOT NULL,
-                  expires_at REAL NOT NULL
+                  expires_at REAL NOT NULL,
+                  artifact_kind TEXT NOT NULL DEFAULT 'visual_observation',
+                  chart_type TEXT,
+                  title TEXT,
+                  width INTEGER,
+                  height INTEGER
                 );
                 CREATE INDEX IF NOT EXISTS idx_gateway_runs_session
                   ON gateway_runs(session_id, created_at);
@@ -134,9 +144,18 @@ class GatewayHistoryStore:
                 ("terminal_message", "TEXT"),
                 ("answer_source", "TEXT"),
                 ("history_warning", "TEXT"),
+                ("artifact_kind", "TEXT NOT NULL DEFAULT 'visual_observation'"),
+                ("chart_type", "TEXT"),
+                ("title", "TEXT"),
+                ("width", "INTEGER"),
+                ("height", "INTEGER"),
             ):
-                if name not in columns:
-                    connection.execute(f"ALTER TABLE gateway_runs ADD COLUMN {name} {declaration}")
+                table = "gateway_runs" if name in {"terminal_code", "terminal_message", "answer_source", "history_warning"} else "gateway_run_artifacts"
+                table_columns = columns if table == "gateway_runs" else {
+                    row["name"] for row in connection.execute("PRAGMA table_info(gateway_run_artifacts)")
+                }
+                if name not in table_columns:
+                    connection.execute(f"ALTER TABLE {table} ADD COLUMN {name} {declaration}")
 
     @staticmethod
     def _restrict_permissions(path: Path, mode: int) -> None:
@@ -358,7 +377,19 @@ class GatewayHistoryStore:
             return None
         if media_type not in _SUPPORTED_ARTIFACT_TYPES or not isinstance(caption, str) or not caption.strip():
             return None
-        observation_id = f"obs_{uuid4().hex}"
+        metadata = getattr(image, "metadata", {})
+        generated = isinstance(metadata, Mapping) and metadata.get("kind") == "generated_chart"
+        artifact_kind = "generated_chart" if generated else "visual_observation"
+        observation_id = f"artifact_{uuid4().hex}" if generated else f"obs_{uuid4().hex}"
+        chart_type = str(metadata.get("chart_type", ""))[:MAX_ARTIFACT_CHART_TYPE] if generated else None
+        title = str(metadata.get("title", caption))[:MAX_ARTIFACT_TITLE] if generated else None
+        try:
+            width = int(metadata.get("width", 0)) if generated else None
+            height = int(metadata.get("height", 0)) if generated else None
+        except (TypeError, ValueError):
+            return None
+        if generated and (not chart_type or not title or not width or not height):
+            return None
         session_root = self.artifact_root / session_id
         session_root.mkdir(mode=0o700, parents=True, exist_ok=True)
         self._restrict_permissions(session_root, 0o700)
@@ -371,12 +402,24 @@ class GatewayHistoryStore:
             return None
         created = utc_timestamp()
         expires_at = time.time() + self.retention_seconds
-        reference = {
-            "observationId": observation_id,
-            "mediaType": media_type,
-            "caption": truncate_text(caption, 500),
-            "byteCount": len(content),
-        }
+        if generated:
+            reference = GeneratedChartReference(
+                artifact_id=observation_id,
+                media_type=media_type,
+                caption=caption,
+                byte_count=len(content),
+                chart_type=chart_type,
+                title=title,
+                width=width,
+                height=height,
+            ).to_dict()
+        else:
+            reference = {
+                "observationId": observation_id,
+                "mediaType": media_type,
+                "caption": truncate_text(caption, MAX_ARTIFACT_CAPTION),
+                "byteCount": len(content),
+            }
         try:
             with self._lock, self._connect() as connection:
                 self._cleanup_connection(connection)
@@ -393,21 +436,30 @@ class GatewayHistoryStore:
                     path.unlink(missing_ok=True)
                     return None
                 connection.execute(
-                    "INSERT INTO gateway_run_artifacts(observation_id, run_id, session_id, managed_path, media_type, caption, byte_count, sha256, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (observation_id, run_id, session_id, str(path), media_type, reference["caption"], len(content), hashlib.sha256(content).hexdigest(), created, expires_at),
+                    "INSERT INTO gateway_run_artifacts(observation_id, run_id, session_id, managed_path, media_type, caption, byte_count, sha256, created_at, expires_at, artifact_kind, chart_type, title, width, height) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (observation_id, run_id, session_id, str(path), media_type, reference["caption"], len(content), hashlib.sha256(content).hexdigest(), created, expires_at, artifact_kind, chart_type, title, width, height),
                 )
         except Exception:
             path.unlink(missing_ok=True)
             raise
         return reference
 
-    def get_artifact(self, session_id: str, run_id: str, observation_id: str) -> tuple[bytes, str] | None:
+    def get_artifact(
+        self,
+        session_id: str,
+        run_id: str,
+        observation_id: str,
+        *,
+        artifact_kind: str | None = None,
+    ) -> tuple[bytes, str] | None:
         with self._lock, self._connect() as connection:
             self._cleanup_connection(connection)
-            row = connection.execute(
-                "SELECT managed_path, media_type, expires_at FROM gateway_run_artifacts WHERE observation_id = ? AND run_id = ? AND session_id = ?",
-                (observation_id, run_id, session_id),
-            ).fetchone()
+            query = "SELECT managed_path, media_type, expires_at FROM gateway_run_artifacts WHERE observation_id = ? AND run_id = ? AND session_id = ?"
+            params: list[Any] = [observation_id, run_id, session_id]
+            if artifact_kind is not None:
+                query += " AND artifact_kind = ?"
+                params.append(artifact_kind)
+            row = connection.execute(query, params).fetchone()
             if row is None or float(row["expires_at"]) <= time.time():
                 return None
             path = self._safe_artifact_path(row["managed_path"], session_id)

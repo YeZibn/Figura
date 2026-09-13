@@ -9,6 +9,7 @@ from .ocr import EXTRACT_TEXT
 from .pie import EXTRACT_PIE_SLICES
 from .scatter import EXTRACT_SCATTER_POINTS
 from .spec_tools import ASSEMBLE_SPEC, VALIDATE_SPEC
+from .generation import RENDER_CHART
 from ...attachments import AttachmentRegistry
 from ..tool import Tool
 
@@ -20,6 +21,7 @@ CHART_TOOLS = [
     EXTRACT_SCATTER_POINTS,
     ASSEMBLE_SPEC,
     VALIDATE_SPEC,
+    RENDER_CHART,
 ]
 CHART_TOOL_NAMES = [tool.name for tool in CHART_TOOLS]
 

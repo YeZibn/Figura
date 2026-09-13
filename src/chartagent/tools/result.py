@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from collections.abc import Mapping
 from typing import Any, Iterable
 
 SUPPORTED_GENERATED_IMAGE_MIME_TYPES = frozenset(
@@ -25,6 +26,7 @@ class GeneratedImage:
     content: bytes
     media_type: str
     caption: str
+    metadata: Mapping[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -79,13 +81,18 @@ def normalize_tool_result(
             warnings.append(f"generated image {index + 1} omitted: {warning}")
             continue
         images.append(candidate)
-        metadata.append(
-            {
-                "media_type": candidate.media_type.lower(),
-                "caption": candidate.caption,
-                "attached": True,
-            }
-        )
+        image_metadata: dict[str, Any] = {
+            "media_type": candidate.media_type.lower(),
+            "caption": candidate.caption,
+            "attached": True,
+        }
+        if isinstance(candidate.metadata, Mapping):
+            for key, value in candidate.metadata.items():
+                if not isinstance(key, str) or len(key) > 64:
+                    continue
+                if isinstance(value, (str, int, float, bool)) or value is None:
+                    image_metadata[key] = value
+        metadata.append(image_metadata)
 
     content = json.dumps(
         {"data": result.data, "warnings": warnings, "images": metadata},

@@ -18,6 +18,7 @@ export type ChartAgentClient = {
   uploadAttachment(sessionId: string, file: File): Promise<Attachment>
   deleteAttachment(sessionId: string, attachmentId: string): Promise<void>
   attachmentContentUrl(sessionId: string, attachmentId: string): string
+  generatedArtifactUrl(sessionId: string, runId: string, artifactId: string): string
   startRun(sessionId: string, text: string, attachmentIds?: string[]): Promise<RunHandle>
   getRunHistory(sessionId: string, runId: string, afterSequence?: number): Promise<RunHistory>
   subscribeRun(sessionId: string, runId: string, callbacks: RunEventCallbacks, afterSequence?: number): RunSubscription

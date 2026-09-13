@@ -13,11 +13,11 @@ dependencies = [
     "numpy>=1.24",
     "pillow>=10",
     "rapidocr>=3.8",
+    "matplotlib>=3.8",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "matplotlib>=3.8",
     "pytest>=8",
 ]
 

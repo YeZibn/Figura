@@ -746,3 +746,150 @@ def test_gateway_history_bounds_payloads_and_cascades_visual_artifacts(tmp_path)
     assert service.delete_session(session_id)["deleted"] is True
     assert not artifact_path.exists()
     service.close()
+
+
+def test_generated_chart_artifact_is_distinct_authorized_and_reloadable(tmp_path):
+    database = tmp_path / "sessions.db"
+    artifact_root = tmp_path / "run-artifacts"
+    store = GatewayHistoryStore(database, artifact_root=artifact_root)
+    service = GatewayService(database=database, history_store=store)
+    first_id = service.create_session("chart-owner")["session"]["id"]
+    second_id = service.create_session("other-owner")["session"]["id"]
+    store.create_run("run_chart", first_id)
+    image = GeneratedImage(
+        b"chart-bytes",
+        "image/png",
+        "生成图表：销售趋势",
+        metadata={
+            "kind": "generated_chart",
+            "chart_type": "line",
+            "title": "销售趋势",
+            "width": 1200,
+            "height": 800,
+        },
+    )
+    reference = store.add_artifact("run_chart", first_id, image)
+    assert reference is not None
+    assert reference["artifactKind"] == "generated_chart"
+    assert reference["artifactId"].startswith("artifact_")
+    assert "observationId" not in reference
+    assert reference["chartType"] == "line"
+    assert service.get_generated_artifact(first_id, "run_chart", reference["artifactId"]) == (b"chart-bytes", "image/png")
+    with pytest.raises(GatewayFault) as legacy_route:
+        service.get_observation(first_id, "run_chart", reference["artifactId"])
+    assert legacy_route.value.code == "observation_not_found"
+    with pytest.raises(GatewayFault) as cross_session:
+        service.get_generated_artifact(second_id, "run_chart", reference["artifactId"])
+    assert cross_session.value.code == "run_unavailable"
+
+    reloaded = GatewayHistoryStore(database, artifact_root=artifact_root)
+    assert reloaded.get_artifact(first_id, "run_chart", reference["artifactId"], artifact_kind="generated_chart") == (b"chart-bytes", "image/png")
+    service.close()
+    reloaded.close()
+
+
+def test_generated_chart_http_artifact_route_and_session_cascade(tmp_path):
+    database = tmp_path / "sessions.db"
+    store = GatewayHistoryStore(database, artifact_root=tmp_path / "run-artifacts")
+    service = GatewayService(database=database, history_store=store)
+    first_id = service.create_session("chart-http")["session"]["id"]
+    second_id = service.create_session("chart-safe")["session"]["id"]
+    store.create_run("run_http", first_id)
+    store.create_run("run_safe", second_id)
+    first = store.add_artifact(
+        "run_http",
+        first_id,
+        GeneratedImage(b"first", "image/png", "第一张", metadata={"kind": "generated_chart", "chart_type": "bar", "title": "第一张", "width": 640, "height": 480}),
+    )
+    second = store.add_artifact(
+        "run_safe",
+        second_id,
+        GeneratedImage(b"second", "image/png", "第二张", metadata={"kind": "generated_chart", "chart_type": "pie", "title": "第二张", "width": 640, "height": 480}),
+    )
+    assert first and second
+    server = GatewayHTTPServer(("127.0.0.1", 0), service)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    try:
+        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=3)
+        connection.request("GET", f"/api/v1/sessions/{first_id}/runs/run_http/artifacts/{first['artifactId']}")
+        response = connection.getresponse()
+        raw = response.read()
+        connection.close()
+        assert response.status == 200
+        assert raw == b"first"
+        status, body, _ = _request(port, "GET", f"/api/v1/sessions/{first_id}/runs/run_http/observations/{first['artifactId']}")
+        assert status == 404
+        assert body["error"]["code"] == "observation_not_found"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=3)
+    assert service.delete_session(first_id)["deleted"] is True
+    assert store.get_artifact(second_id, "run_safe", second["artifactId"], artifact_kind="generated_chart") == (b"second", "image/png")
+    service.close()
+
+
+def test_generated_chart_artifact_expires_without_becoming_readable(tmp_path):
+    database = tmp_path / "sessions.db"
+    store = GatewayHistoryStore(database, artifact_root=tmp_path / "run-artifacts", retention_seconds=0)
+    service = GatewayService(database=database, history_store=store)
+    session_id = service.create_session("chart-expiry")["session"]["id"]
+    store.create_run("run_expiry", session_id)
+    reference = store.add_artifact(
+        "run_expiry",
+        session_id,
+        GeneratedImage(b"expired", "image/png", "过期图表", metadata={"kind": "generated_chart", "chart_type": "scatter", "title": "过期图表", "width": 640, "height": 480}),
+    )
+    assert reference is not None
+    assert store.get_artifact(session_id, "run_expiry", reference["artifactId"], artifact_kind="generated_chart") is None
+    service.close()
+
+
+def test_async_gateway_orders_generated_chart_event_after_tool_result(tmp_path):
+    database = tmp_path / "sessions.db"
+
+    class FakeAgent:
+        def __init__(self, memory, trace_sink, visual_observation_sink):
+            self.memory = memory
+            self.trace_sink = trace_sink
+            self.visual_observation_sink = visual_observation_sink
+
+        def run(self, prompt):
+            run = self.memory.begin_run()
+            image = GeneratedImage(
+                b"generated-chart",
+                "image/png",
+                "生成图表：趋势",
+                metadata={"kind": "generated_chart", "chart_type": "line", "title": "趋势", "width": 1200, "height": 800},
+            )
+            self.trace_sink(TraceEvent("tool_call", run_id="agent", turn=1, payload={"tool_name": "render_chart", "call_id": "c1"}))
+            self.trace_sink(TraceEvent("tool_result", run_id="agent", turn=1, payload={"tool_name": "render_chart", "call_id": "c1", "status": "success"}))
+            refs = self.visual_observation_sink("render_chart", "c1", [image])
+            self.trace_sink(TraceEvent("generated_chart", run_id="agent", turn=1, payload={"tool_name": "render_chart", "call_id": "c1", "artifacts": refs}))
+            self.memory.append(run, "final", {"answer": "已重绘"})
+            self.memory.finish(run, RunStatus.COMPLETED, "final")
+            return "已重绘"
+
+    class FakeRuntime:
+        def __init__(self, memory, trace_sink, visual_observation_sink):
+            self.agent = FakeAgent(memory, trace_sink, visual_observation_sink)
+
+        def close(self):
+            self.agent.memory.close()
+
+    def runtime_factory(name, *, trace_sink=None, visual_observation_sink=None):
+        return FakeRuntime(SQLiteAgentMemory(name, database=database, create=False), trace_sink, visual_observation_sink)
+
+    service = GatewayService(database=database, runtime_factory=runtime_factory)
+    session_id = service.create_session("generated-run")["session"]["id"]
+    accepted = service.start_run(session_id, "生成图表")
+    run = service.get_run(session_id, accepted["run"]["runId"])
+    assert run.wait_terminal(timeout=2)
+    events = list(run.iter_events())
+    assert [event.kind for event in events] == ["run_started", "tool_call", "tool_result", "generated_chart", "final_answer"]
+    reference = events[3].payload["artifacts"][0]
+    assert reference["artifactKind"] == "generated_chart"
+    assert service.get_generated_artifact(session_id, run.run_id, reference["artifactId"]) == (b"generated-chart", "image/png")
+    service.close()

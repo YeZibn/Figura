@@ -1,5 +1,5 @@
 import type { ChartAgentClient, RunEventCallbacks, RunSubscription } from './client'
-import type { AgentRunEvent, Attachment, GatewayHealth, ObservationReference, RunHandle, RunHistory, RunSummary, Session, SessionData } from '../types/protocol'
+import type { AgentRunEvent, Attachment, GatewayHealth, GeneratedChartReference, ObservationReference, RunHandle, RunHistory, RunSummary, Session, SessionData } from '../types/protocol'
 import { mediaTypeForFile } from '../attachments'
 
 type GatewaySessionList = { sessions: Session[] }
@@ -66,6 +66,10 @@ function attachmentContentUrl(sessionId: string, attachmentId: string): string {
   return `${gatewayBaseUrl}/sessions/${encodeURIComponent(sessionId)}/attachments/${encodeURIComponent(attachmentId)}/content`
 }
 
+function generatedArtifactUrl(sessionId: string, runId: string, artifactId: string): string {
+  return `${gatewayBaseUrl}/sessions/${encodeURIComponent(sessionId)}/runs/${encodeURIComponent(runId)}/artifacts/${encodeURIComponent(artifactId)}`
+}
+
 function mapAttachment(item: GatewayAttachment, sessionId?: string): Attachment {
   return {
     id: item.attachment_id,
@@ -100,6 +104,15 @@ function mapRunEvent(event: GatewayRunEvent, sessionId: string): AgentRunEvent {
       }
     })
   }
+  if (event.kind === 'generated_chart' && Array.isArray(payload.artifacts)) {
+    payload.artifacts = payload.artifacts.map((item) => {
+      if (!item || typeof item !== 'object') return item
+      const reference = item as Partial<GeneratedChartReference>
+      if (!reference.artifactId || reference.status === 'unavailable' || reference.status === 'failed') return item
+      const url = generatedArtifactUrl(sessionId, event.runId, reference.artifactId)
+      return { ...reference, imageUrl: url, downloadUrl: url }
+    })
+  }
   return { runId: event.runId, sequence: event.sequence, kind: event.kind, timestamp: event.timestamp, payload }
 }
 
@@ -111,6 +124,7 @@ const streamEventKinds = [
   'tool_call',
   'tool_result',
   'visual_observation',
+  'generated_chart',
   'reasoning',
   'budget_exhausted',
   'final_answer',
@@ -173,6 +187,10 @@ export const gatewayClient: ChartAgentClient = {
 
   attachmentContentUrl(sessionId, attachmentId) {
     return attachmentContentUrl(sessionId, attachmentId)
+  },
+
+  generatedArtifactUrl(sessionId, runId, artifactId) {
+    return generatedArtifactUrl(sessionId, runId, artifactId)
   },
 
   async startRun(sessionId, text, attachmentIds = []) {

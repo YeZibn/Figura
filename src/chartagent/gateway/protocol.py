@@ -19,6 +19,9 @@ MAX_ATTACHMENT_ID = 128
 MAX_RUN_ID = 128
 MAX_EVENT_KIND = 64
 MAX_EVENT_PAYLOAD = 12000
+MAX_ARTIFACT_CAPTION = 500
+MAX_ARTIFACT_TITLE = 240
+MAX_ARTIFACT_CHART_TYPE = 64
 
 
 class GatewayFault(Exception):
@@ -89,6 +92,39 @@ class ObservationReference:
             "caption": truncate_text(self.caption, 500),
             "byteCount": self.byte_count,
         }
+
+
+@dataclass(frozen=True)
+class GeneratedChartReference:
+    """Safe metadata for a durable, user-facing generated chart artifact."""
+
+    artifact_id: str
+    media_type: str
+    caption: str
+    byte_count: int
+    chart_type: str
+    title: str
+    width: int
+    height: int
+    status: str = "available"
+    reason: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        result: dict[str, Any] = {
+            "artifactKind": "generated_chart",
+            "artifactId": self.artifact_id,
+            "mediaType": self.media_type,
+            "caption": truncate_text(self.caption, MAX_ARTIFACT_CAPTION),
+            "byteCount": max(0, int(self.byte_count)),
+            "chartType": truncate_text(self.chart_type, MAX_ARTIFACT_CHART_TYPE),
+            "title": truncate_text(self.title, MAX_ARTIFACT_TITLE),
+            "width": max(0, int(self.width)),
+            "height": max(0, int(self.height)),
+            "status": self.status,
+        }
+        if self.reason:
+            result["reason"] = truncate_text(self.reason, MAX_ERROR_MESSAGE)
+        return result
 
 
 @dataclass(frozen=True)

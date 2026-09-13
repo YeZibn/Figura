@@ -59,6 +59,22 @@ export type ObservationReference = {
   imageUrl?: string
 }
 
+export type GeneratedChartReference = {
+  artifactKind: 'generated_chart'
+  artifactId?: string
+  mediaType: string
+  caption: string
+  byteCount?: number
+  chartType?: string
+  title?: string
+  width?: number
+  height?: number
+  status?: 'available' | 'unavailable' | 'failed' | string
+  reason?: string
+  imageUrl?: string
+  downloadUrl?: string
+}
+
 export type AgentRunEvent = {
   runId: string
   sequence: number

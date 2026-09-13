@@ -259,8 +259,9 @@ def test_agent_repl_registers_builtin_and_chart_tools(monkeypatch):
             "extract_pie_slices",
             "extract_scatter_points",
             "assemble_spec",
-        "validate_spec",
-        "load_image",
+            "validate_spec",
+            "render_chart",
+            "load_image",
     }
 
 

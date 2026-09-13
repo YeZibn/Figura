@@ -41,6 +41,7 @@ class _UnderstandingClient:
             "extract_scatter_points",
             "assemble_spec",
             "validate_spec",
+            "render_chart",
         }
 
         def last_tool_data() -> object:

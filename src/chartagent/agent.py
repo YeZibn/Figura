@@ -273,7 +273,20 @@ class Agent:
                             observation_refs = ()
                     image_payload = {"images": summarize_images(observation.images)}
                     if observation_refs:
-                        image_payload["observations"] = list(observation_refs)
+                        generated_refs = [
+                            reference
+                            for reference in observation_refs
+                            if reference.get("artifactKind") == "generated_chart"
+                        ]
+                        regular_refs = [
+                            reference
+                            for reference in observation_refs
+                            if reference.get("artifactKind") != "generated_chart"
+                        ]
+                        if regular_refs:
+                            image_payload["observations"] = regular_refs
+                        if generated_refs:
+                            image_payload["artifacts"] = generated_refs
                     emitter.emit(
                         "tool_result",
                         turn=turn,
@@ -285,7 +298,11 @@ class Agent:
                     )
                     if observation.images:
                         emitter.emit(
-                            "visual_observation",
+                            "generated_chart" if any(
+                                image.metadata.get("kind") == "generated_chart"
+                                for image in observation.images
+                                if hasattr(image.metadata, "get")
+                            ) else "visual_observation",
                             turn=turn,
                             tool_name=call.name,
                             call_id=call.id,

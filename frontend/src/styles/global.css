@@ -1146,6 +1146,21 @@ button:disabled { cursor: not-allowed; }
 .trace-observation img { display: block; width: 100%; max-height: 190px; object-fit: contain; background: #eef3f0; }
 .trace-observation .observation-placeholder { min-height: 80px; }
 .trace-observation small { color: var(--muted); font-size: 10px; line-height: 1.4; }
+.generated-chart { display: grid; gap: 8px; max-width: 420px; margin: 8px 0 9px 16px; padding: 9px; border: 1px solid #c8ddd7; border-radius: 6px; background: var(--panel-strong); }
+.generated-chart.unavailable,
+.generated-chart.failed { border-color: #ead4aa; background: #fffdf7; }
+.generated-chart.failed { border-color: #efcfcc; background: #fff9f8; }
+.generated-chart-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.generated-chart-heading .observation-label { display: flex; align-items: center; gap: 5px; min-width: 0; color: var(--brand); font-size: 10px; }
+.generated-chart-heading .observation-label span { color: var(--muted); }
+.generated-chart img { display: block; width: 100%; max-height: 250px; object-fit: contain; border: 1px solid var(--line-soft); background: #f7faf7; }
+.chart-download { display: inline-flex; align-items: center; gap: 4px; flex: none; padding: 3px 5px; border: 0; background: transparent; color: var(--brand); font-size: 10px; cursor: pointer; }
+.chart-download:hover:not(:disabled) { color: var(--brand-strong); text-decoration: underline; text-underline-offset: 2px; }
+.chart-download:disabled { cursor: wait; opacity: .6; }
+.generated-chart-copy { display: grid; gap: 3px; min-width: 0; }
+.generated-chart-copy strong { overflow: hidden; color: #40514d; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.generated-chart-copy small { color: var(--muted); font-size: 10px; line-height: 1.4; }
+.generated-chart-reason { color: var(--danger) !important; }
 .trace-warning { margin: 9px 0 2px; padding: 8px 9px; border: 1px solid #ead4aa; border-radius: 4px; background: var(--warning-soft); color: #8b642d; font-size: 10px; line-height: 1.5; }
 .trace-empty { padding: 13px 0 3px; color: var(--subtle); font-size: 10px; }
 

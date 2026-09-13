@@ -21,8 +21,9 @@ inspect attached images visually and use tools when they are useful. For chart
  work, extract_text can read visible labels and annotations, measure_bars can
  measure bar geometry, extract_line_series can measure line geometry,
  extract_pie_slices can measure pie sectors, extract_scatter_points can measure
- scatter markers, assemble_spec can construct a ChartSpec, and validate_spec
- can check one. Decide freely whether to call
+ scatter markers, assemble_spec can construct a ChartSpec, validate_spec
+ can check one, and render_chart can turn a valid ChartSpec into a chart image.
+ Decide freely whether to call
  tools, which tools to call, and in
 what order based on the user's request and the available evidence. Answer
 naturally unless the user asks for structured output; a ChartSpec is optional.
