@@ -7,6 +7,7 @@ import hashlib
 import io
 import json
 import threading
+import time
 from pathlib import Path
 from urllib.parse import quote
 
@@ -15,6 +16,7 @@ from PIL import Image
 
 from chartagent.attachments import AttachmentRegistry
 from chartagent.gateway.attachments import AttachmentStoreError, EphemeralAttachmentStore
+from chartagent.gateway.history import GatewayHistoryStore
 from chartagent.gateway.protocol import GatewayFault, RunEvent, validate_message_text, validate_session_name
 from chartagent.gateway.projection import project_completed_runs
 from chartagent.gateway.server import GatewayHTTPServer, serve
@@ -625,3 +627,122 @@ def test_http_async_run_returns_sse_stream(tmp_path):
         server.shutdown()
         server.server_close()
         thread.join(timeout=3)
+
+
+def test_gateway_history_survives_in_memory_run_expiry_and_scopes_artifacts(tmp_path):
+    database = tmp_path / "sessions.db"
+    service = GatewayService(database=database)
+    session_id = service.create_session("history")['session']['id']
+    store = GatewayHistoryStore(database, artifact_root=tmp_path / "run-artifacts")
+    store.create_run("run_persisted", session_id)
+    store.append_event(RunEvent("run_persisted", 1, "tool_call", {"tool_name": "inspect", "call_id": "c1"}))
+    store.append_event(RunEvent("run_persisted", 2, "final_answer", {"answer": "# 已完成"}))
+    store.update_run("run_persisted", RunStatus.COMPLETED, answer_source="# 已完成")
+
+    history = store.history(session_id, "run_persisted")
+    assert history is not None
+    assert [item["sequence"] for item in history["events"]] == [1, 2]
+    assert history["run"]["answer"] == "# 已完成"
+
+    manager = RunManager(retention_seconds=0.01, history_store=store)
+    active = manager.create(session_id)
+    active.publish("tool_call", {"tool_name": "inspect", "call_id": "replay"})
+    active.complete("恢复完成")
+    time.sleep(0.03)
+    manager.cleanup()
+    restored = manager.historical(session_id, active.run_id)
+    assert restored is not None
+    assert [event.kind for event in restored.iter_events()] == ["run_started", "tool_call"]
+    manager.close()
+
+    restarted = GatewayService(database=database)
+    historical = restarted.get_run(session_id, "run_persisted")
+    assert historical.status == RunStatus.COMPLETED
+    assert [event.kind for event in historical.iter_events()] == ["tool_call", "final_answer"]
+    with pytest.raises(GatewayFault) as missing:
+        restarted.get_run("other-session", "run_persisted")
+    assert missing.value.code == "session_not_found"
+    restarted.close()
+    service.close()
+
+
+def test_gateway_history_routes_return_runs_and_cursor_replay(tmp_path):
+    database = tmp_path / "sessions.db"
+
+    class FakeAgent:
+        def __init__(self, memory):
+            self.memory = memory
+
+        def run(self, prompt):
+            run = self.memory.begin_run()
+            self.memory.append(run, "user", {"text": prompt})
+            self.memory.append(run, "final", {"answer": "路由完成"})
+            self.memory.finish(run, RunStatus.COMPLETED, "final")
+            return "路由完成"
+
+    class FakeRuntime:
+        def __init__(self, memory):
+            self.agent = FakeAgent(memory)
+
+        def close(self):
+            self.agent.memory.close()
+
+    service = GatewayService(
+        database=database,
+        runtime_factory=lambda name: FakeRuntime(SQLiteAgentMemory(name, database=database, create=False)),
+    )
+    session_id = service.create_session("history-routes")["session"]["id"]
+    server = GatewayHTTPServer(("127.0.0.1", 0), service)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    try:
+        status, accepted, _ = _request(port, "POST", f"/api/v1/sessions/{session_id}/runs", {"text": "开始"})
+        assert status == 202
+        run_id = accepted["run"]["runId"]
+        run = service.get_run(session_id, run_id)
+        assert run.wait_terminal(timeout=2)
+        status, runs, _ = _request(port, "GET", f"/api/v1/sessions/{session_id}/runs")
+        assert status == 200
+        assert runs["runs"][0]["runId"] == run_id
+        status, history, _ = _request(port, "GET", f"/api/v1/sessions/{session_id}/runs/{run_id}?after=1")
+        assert status == 200
+        assert [event["sequence"] for event in history["events"]] == [2]
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=3)
+
+
+def test_gateway_history_bounds_payloads_and_cascades_visual_artifacts(tmp_path):
+    database = tmp_path / "sessions.db"
+    artifact_root = tmp_path / "run-artifacts"
+    service = GatewayService(database=database, history_store=GatewayHistoryStore(database, artifact_root=artifact_root, max_events=2))
+    session_id = service.create_session("bounded-history")["session"]["id"]
+    service._history.create_run("run_bounded", session_id)
+    service._history.append_event(RunEvent("run_bounded", 1, "tool_call", {"credentials": "secret", "value": "data:image/png;base64,hidden"}))
+    service._history.append_event(RunEvent("run_bounded", 2, "tool_result", {"result": "kept"}))
+    service._history.append_event(RunEvent("run_bounded", 3, "final_answer", {"answer": "完成"}))
+    history = service._history.history(session_id, "run_bounded")
+    assert history is not None
+    assert history["historyGap"] is True
+    assert [event["sequence"] for event in history["events"]] == [2, 3]
+    encoded = json.dumps(history, ensure_ascii=False)
+    assert "secret" not in encoded
+    assert "data:image" not in encoded
+
+    reference = service._history.add_artifact(
+        "run_bounded",
+        session_id,
+        GeneratedImage(b"overlay", "image/png", "安全观察"),
+    )
+    assert reference is not None
+    artifact_path = artifact_root / session_id / (reference["observationId"] + ".bin")
+    assert artifact_path.is_file()
+    assert service.get_observation(session_id, "run_bounded", reference["observationId"]) == (b"overlay", "image/png")
+    artifact_path.write_bytes(b"tampered")
+    # A modified managed file is rejected by the hash check.
+    assert service._history.get_artifact(session_id, "run_bounded", reference["observationId"]) is None
+    assert service.delete_session(session_id)["deleted"] is True
+    assert not artifact_path.exists()
+    service.close()

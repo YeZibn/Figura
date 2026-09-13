@@ -9,13 +9,15 @@ from typing import Any, Callable, Sequence
 
 from ..attachments import AttachmentRegistry
 from ..memory import SQLiteAgentMemory
+from ..memory.sqlite import default_database_path
 from ..multimodal import build_registered_attachment_turn
 from ..runtime import AgentRuntime, create_agent_runtime, probe_agent_readiness
 from ..tools.result import GeneratedImage
 from ..trace import TraceSink
 from .attachments import AttachmentStoreError, EphemeralAttachmentStore
+from .history import GatewayHistoryStore, HistoryStoreError
 from .projection import project_completed_runs, session_summary
-from .runs import ManagedRun, RunManager
+from .runs import HistoricalRun, ManagedRun, RunManager
 from .protocol import (
     AttachmentSummary,
     GatewayFault,
@@ -41,9 +43,10 @@ class GatewayService:
         attachment_store: EphemeralAttachmentStore | None = None,
         attachment_root: str | Path | None = None,
         run_manager: RunManager | None = None,
+        history_store: GatewayHistoryStore | None = None,
         readiness_probe: Callable[[], dict[str, str]] | None = None,
     ) -> None:
-        self.database = database
+        self.database = Path(database).expanduser() if database is not None else default_database_path()
         self.model = model
         self._memory_factory = memory_factory or self._open_memory
         self._runtime_factory = runtime_factory or self._build_runtime
@@ -51,7 +54,11 @@ class GatewayService:
             attachment_root,
             database=self.database,
         )
-        self._runs = run_manager or RunManager()
+        self._history = history_store or GatewayHistoryStore(self.database)
+        self._history.interrupt_running_runs()
+        self._runs = run_manager or RunManager(history_store=self._history)
+        if run_manager is not None:
+            self._runs.history_store = self._history
         self._readiness_probe = readiness_probe or (lambda: probe_agent_readiness(model=self.model))
 
     def _open_memory(self, name: str, *, create: bool = True) -> SQLiteAgentMemory:
@@ -120,6 +127,10 @@ class GatewayService:
         with self._runs.session_operation():
             if self._runs.has_active(session.id):
                 raise GatewayFault("session_busy", 409, "Session has an active Agent run")
+            try:
+                self._history.delete_session(session.id)
+            except HistoryStoreError as exc:
+                raise GatewayFault("gateway_storage_error", 500, "运行记录清理失败") from exc
             attachments = SQLiteAgentMemory.delete_session_by_id(
                 session.id,
                 database=self.database,
@@ -209,9 +220,36 @@ class GatewayService:
         if not isinstance(run_id, str) or not run_id.strip():
             raise GatewayFault("invalid_request", 400, "Run ID is required")
         run = self._runs.get(run_id)
-        if run is None or run.session_id != session.id:
+        if run is not None and run.session_id == session.id:
+            return run
+        historical = self._runs.historical(session.id, run_id)
+        if historical is not None:
+            return historical
+        if run is not None and run.session_id != session.id:
             raise GatewayFault("run_not_found", 404, "Run was not found")
-        return run
+        if self._history.get_run(session.id, run_id) is not None:
+            return self._runs.historical(session.id, run_id)  # type: ignore[return-value]
+        raise GatewayFault("run_unavailable", 404, "Run history is no longer available")
+
+    def list_runs(self, session_id: object) -> dict[str, Any]:
+        session = self._resolve_session(session_id)
+        return success({"runs": self._history.list_runs(session.id)})
+
+    def get_run_history(
+        self,
+        session_id: object,
+        run_id: object,
+        after_sequence: int = 0,
+    ) -> dict[str, Any]:
+        session = self._resolve_session(session_id)
+        if not isinstance(run_id, str) or not run_id.strip():
+            raise GatewayFault("invalid_request", 400, "Run ID is required")
+        history = self._history.history(session.id, run_id, max(0, int(after_sequence)))
+        if history is None:
+            if self._runs.get(run_id) is not None:
+                raise GatewayFault("event_history_unavailable", 503, "Run history is not available")
+            raise GatewayFault("run_unavailable", 404, "Run history is no longer available")
+        return success(history)
 
     def get_observation(
         self,
@@ -223,7 +261,9 @@ class GatewayService:
         run = self.get_run(session.id, run_id)
         if not isinstance(observation_id, str) or not observation_id.strip():
             raise GatewayFault("invalid_request", 400, "Observation ID is required")
-        item = self._runs.observations.get(run.run_id, session.id, observation_id)
+        item = self._history.get_artifact(session.id, run.run_id, observation_id)
+        if item is None:
+            item = self._runs.observations.get(run.run_id, session.id, observation_id)
         if item is None:
             raise GatewayFault("observation_not_found", 404, "Observation was not found")
         return item
@@ -345,9 +385,17 @@ class GatewayService:
     ) -> list[dict[str, Any]]:
         references = []
         for image in images:
-            reference = self._runs.observations.add(run.run_id, run.session_id, image)
+            reference = None
+            try:
+                reference = self._history.add_artifact(run.run_id, run.session_id, image)
+            except Exception:  # noqa: BLE001 - visual evidence must not stop the run
+                reference = None
+            if reference is None:
+                fallback = self._runs.observations.add(run.run_id, run.session_id, image)
+                if fallback is not None:
+                    reference = fallback.to_dict()
             if reference is not None:
-                references.append(reference.to_dict())
+                references.append(reference)
         return references
 
     def upload_attachment(
@@ -430,6 +478,7 @@ class GatewayService:
             SessionSummary(session.id, session.name, session.updated_at, 0),
             (),
             (),
+            (),
         )
 
     def _load_transcript(self, session) -> SessionTranscript:
@@ -444,7 +493,9 @@ class GatewayService:
             self._attachment_summary(memory, item)
             for item in memory.list_attachments()
         ]
-        return project_completed_runs(memory.session, memory.completed_runs(), attachments)
+        transcript = project_completed_runs(memory.session, memory.completed_runs(), attachments)
+        runs = tuple(self._history.list_runs(memory.session.id))
+        return replace(transcript, runs=runs)
 
     def _validated_attachment(self, memory: SQLiteAgentMemory, item):
         if not self._attachment_store.is_managed_path(memory.session.id, item.canonical_path):
@@ -503,3 +554,4 @@ class GatewayService:
 
     def close(self) -> None:
         self._runs.close()
+        self._history.close()

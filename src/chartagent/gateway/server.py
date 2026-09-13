@@ -74,6 +74,8 @@ class GatewayRequestHandler(BaseHTTPRequestHandler):
                 payload = self.gateway.health()
             elif path == f"{API_PREFIX}/sessions":
                 payload = self.gateway.list_sessions()
+            elif (session_id := self._run_collection_session_id(path)) is not None:
+                payload = self.gateway.list_runs(session_id)
             elif (parts := self._run_observation_parts(path)) is not None:
                 session_id, run_id, observation_id = parts
                 content, media_type = self.gateway.get_observation(
@@ -94,8 +96,11 @@ class GatewayRequestHandler(BaseHTTPRequestHandler):
             elif (parts := self._run_events_parts(path)) is not None:
                 session_id, run_id = parts
                 run = self.gateway.get_run(session_id, run_id)
-                self._send_events(run)
+                self._send_events(run, self._stream_cursor())
                 return
+            elif (parts := self._run_detail_parts(path)) is not None:
+                session_id, run_id = parts
+                payload = self.gateway.get_run_history(session_id, run_id, self._query_sequence())
             elif (session_id := self._subresource_session_id(path, "attachments")) is not None:
                 payload = self.gateway.list_attachments(session_id)
             else:
@@ -227,6 +232,16 @@ class GatewayRequestHandler(BaseHTTPRequestHandler):
         return None
 
     @staticmethod
+    def _run_detail_parts(path: str) -> tuple[str, str] | None:
+        prefix = f"{API_PREFIX}/sessions/"
+        if not path.startswith(prefix):
+            return None
+        parts = path[len(prefix):].split("/")
+        if len(parts) == 3 and parts[1] == "runs":
+            return unquote(parts[0]), unquote(parts[2])
+        return None
+
+    @staticmethod
     def _run_observation_parts(path: str) -> tuple[str, str, str] | None:
         prefix = f"{API_PREFIX}/sessions/"
         if not path.startswith(prefix):
@@ -313,7 +328,7 @@ class GatewayRequestHandler(BaseHTTPRequestHandler):
     def _send_fault(self, fault: GatewayFault) -> None:
         self._send_json(fault.status, fault.to_dict())
 
-    def _send_events(self, run) -> None:
+    def _send_events(self, run, after_sequence: int) -> None:
         self.close_connection = True
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
@@ -323,8 +338,7 @@ class GatewayRequestHandler(BaseHTTPRequestHandler):
         self._send_cors_headers()
         self.end_headers()
         try:
-            last_event_id = self._last_event_id()
-            for event in run.iter_events(last_event_id):
+            for event in run.iter_events(after_sequence):
                 if event is None:
                     self.wfile.write(b": heartbeat\n\n")
                 else:
@@ -351,6 +365,16 @@ class GatewayRequestHandler(BaseHTTPRequestHandler):
             return max(0, int(raw))
         except ValueError:
             return 0
+
+    def _query_sequence(self) -> int:
+        raw = parse_qs(urlsplit(self.path).query, keep_blank_values=True).get("after", ["0"])[0]
+        try:
+            return max(0, int(raw))
+        except ValueError:
+            return 0
+
+    def _stream_cursor(self) -> int:
+        return max(self._last_event_id(), self._query_sequence())
 
     def _send_binary(self, status: int | HTTPStatus, content: bytes, media_type: str) -> None:
         self.send_response(status)

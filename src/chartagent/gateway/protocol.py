@@ -45,11 +45,12 @@ class GatewayFault(Exception):
 
 
 class RunStatus(str, Enum):
-    """External lifecycle states for an in-memory Gateway run."""
+    """External lifecycle states for a Gateway run."""
 
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
+    INTERRUPTED = "interrupted"
 
 
 def utc_timestamp() -> str:
@@ -228,6 +229,7 @@ class SessionTranscript:
     session: SessionSummary
     messages: tuple[ConversationText, ...] = ()
     attachments: tuple[Mapping[str, Any], ...] = ()
+    runs: tuple[Mapping[str, Any], ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -235,6 +237,7 @@ class SessionTranscript:
             "session": self.session.to_dict(),
             "messages": [message.to_dict() for message in self.messages],
             "attachments": [dict(attachment) for attachment in self.attachments],
+            "runs": [dict(run) for run in self.runs],
         }
 
 

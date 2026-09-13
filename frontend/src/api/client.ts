@@ -1,4 +1,4 @@
-import type { AgentRunEvent, Attachment, GatewayHealth, RunHandle, Session, SessionData } from '../types/protocol'
+import type { AgentRunEvent, Attachment, GatewayHealth, RunHandle, RunHistory, Session, SessionData } from '../types/protocol'
 
 export type RunSubscription = { close(): void }
 
@@ -19,6 +19,7 @@ export type ChartAgentClient = {
   deleteAttachment(sessionId: string, attachmentId: string): Promise<void>
   attachmentContentUrl(sessionId: string, attachmentId: string): string
   startRun(sessionId: string, text: string, attachmentIds?: string[]): Promise<RunHandle>
-  subscribeRun(sessionId: string, runId: string, callbacks: RunEventCallbacks): RunSubscription
+  getRunHistory(sessionId: string, runId: string, afterSequence?: number): Promise<RunHistory>
+  subscribeRun(sessionId: string, runId: string, callbacks: RunEventCallbacks, afterSequence?: number): RunSubscription
   submitMessage(sessionId: string, text: string, attachmentIds?: string[]): Promise<SessionData>
 }

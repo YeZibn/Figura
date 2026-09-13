@@ -27,8 +27,23 @@ export type ConversationItem =
   | { id: string; kind: 'visual_observation'; toolName: string; caption: string; imageUrl?: string; timestamp: string }
   | { id: string; kind: 'error'; text: string; timestamp: string }
 
-export type SessionData = { session: Session; messages: ConversationItem[]; attachments: Attachment[] }
-export type RunState = 'idle' | 'connecting' | 'running' | 'completed' | 'failed' | 'unavailable'
+export type SessionData = { session: Session; messages: ConversationItem[]; attachments: Attachment[]; runs: RunSummary[] }
+export type RunStatus = 'running' | 'completed' | 'failed' | 'interrupted'
+export type RunState = 'idle' | 'connecting' | 'running' | 'completed' | 'failed' | 'interrupted' | 'unavailable'
+
+export type RunSummary = {
+  runId: string
+  sessionId: string
+  status: RunStatus
+  createdAt: string
+  updatedAt: string
+  expiresAt?: number
+  eventCount: number
+  terminalCode?: string | null
+  terminalMessage?: string | null
+  answer?: string | null
+  historyWarning?: string | null
+}
 
 export type RunHandle = {
   runId: string
@@ -50,6 +65,13 @@ export type AgentRunEvent = {
   kind: string
   timestamp: string
   payload: Record<string, unknown>
+}
+
+export type RunHistory = {
+  run: RunSummary
+  events: AgentRunEvent[]
+  historyGap: boolean
+  firstSequence?: number | null
 }
 
 export type GatewayAgentStatus = {

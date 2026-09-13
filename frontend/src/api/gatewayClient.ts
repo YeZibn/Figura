@@ -1,5 +1,5 @@
 import type { ChartAgentClient, RunEventCallbacks, RunSubscription } from './client'
-import type { AgentRunEvent, Attachment, GatewayHealth, ObservationReference, RunHandle, Session, SessionData } from '../types/protocol'
+import type { AgentRunEvent, Attachment, GatewayHealth, ObservationReference, RunHandle, RunHistory, RunSummary, Session, SessionData } from '../types/protocol'
 import { mediaTypeForFile } from '../attachments'
 
 type GatewaySessionList = { sessions: Session[] }
@@ -15,6 +15,7 @@ type GatewayAttachment = {
 type GatewaySessionData = Omit<SessionData, 'attachments'> & { attachments: GatewayAttachment[] }
 type GatewayRunResponse = { run: { runId: string; sessionId: string; status: 'running' } }
 type GatewayRunEvent = { runId: string; sequence: number; kind: string; timestamp: string; payload?: Record<string, unknown> }
+type GatewayRunHistory = { run: RunSummary; events: GatewayRunEvent[]; historyGap: boolean; firstSequence?: number | null }
 type GatewayHealthResponse = GatewayHealth
 
 export class GatewayClientError extends Error {
@@ -79,7 +80,7 @@ function mapAttachment(item: GatewayAttachment, sessionId?: string): Attachment 
 }
 
 function mapSessionData(payload: GatewaySessionData): SessionData {
-  return { ...payload, attachments: payload.attachments.map((item) => mapAttachment(item, payload.session.id)) }
+  return { ...payload, runs: payload.runs || [], attachments: payload.attachments.map((item) => mapAttachment(item, payload.session.id)) }
 }
 
 function mapRun(payload: GatewayRunResponse): RunHandle {
@@ -114,6 +115,7 @@ const streamEventKinds = [
   'budget_exhausted',
   'final_answer',
   'run_failed',
+  'history_gap',
 ]
 
 export const gatewayClient: ChartAgentClient = {
@@ -180,8 +182,18 @@ export const gatewayClient: ChartAgentClient = {
     }))
   },
 
-  subscribeRun(sessionId, runId, callbacks: RunEventCallbacks): RunSubscription {
-    const source = new EventSource(`${gatewayBaseUrl}/sessions/${encodeURIComponent(sessionId)}/runs/${encodeURIComponent(runId)}/events`)
+  async getRunHistory(sessionId, runId, afterSequence = 0) {
+    const payload = await request<GatewayRunHistory>(`/sessions/${encodeURIComponent(sessionId)}/runs/${encodeURIComponent(runId)}?after=${Math.max(0, afterSequence)}`)
+    return {
+      run: payload.run,
+      events: payload.events.map((event) => mapRunEvent(event, sessionId)),
+      historyGap: payload.historyGap,
+      firstSequence: payload.firstSequence,
+    }
+  },
+
+  subscribeRun(sessionId, runId, callbacks: RunEventCallbacks, afterSequence = 0): RunSubscription {
+    const source = new EventSource(`${gatewayBaseUrl}/sessions/${encodeURIComponent(sessionId)}/runs/${encodeURIComponent(runId)}/events?after=${Math.max(0, afterSequence)}`)
     let closed = false
     let connectionErrors = 0
     const receive = (raw: Event) => {

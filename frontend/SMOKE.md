@@ -27,10 +27,11 @@ For repeatable browser verification, run `npm run dev`, open `http://127.0.0.1:1
 2. In mock mode, the sample sessions can be selected; the conversation and attachment panel update.
 3. The `+` session action creates a named empty session and clears stale attachment content.
 4. The sample chart attachment shows its preview, file metadata, and observation state.
-5. Tool call/result rows start collapsed and expand through their keyboard-accessible controls.
+5. Completed runs show a collapsed execution summary; opening it reveals ordered events, and each tool call/result pair expands as one correlated step.
 6. Entering text and pressing Enter shows the user message, thinking indicator, and mock assistant response.
 7. An empty session shows the start-analysis empty state; an empty attachment list shows its own empty state.
 8. Narrowing the window keeps the composer usable and stacks the secondary panel below the conversation.
 9. In Gateway mode, creating a session and submitting text use the local Python service; stopping the service shows a Chinese connection error and does not switch to mock data.
 10. Stopping `npm run dev:gateway` with `Ctrl-C` cleans up both its Gateway and Vite process groups before the launcher exits, without terminating an unrelated process on the configured port.
 11. `npm run smoke:launcher` repeats the npm signal lifecycle, frontend bind failure, port release, and external-listener protection checks on isolated ports.
+12. Reloading a Gateway session restores run summaries and persisted events; final answers render headings, lists, tables, links, emphasis, and code blocks without executing raw HTML.

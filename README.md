@@ -101,7 +101,20 @@ results, visual-observation metadata, final answers, and failures. Generated
 visual evidence is available only through short-lived opaque observation IDs;
 event JSON and durable session memory never contain image bytes, credentials,
 provider raw responses, or unbounded trace content. Run cancellation is not
-part of this milestone.
+part of this milestone. Gateway runs also persist bounded execution history
+separately from model conversation records. The client restores run summaries
+and events after reload, replays from an event cursor after reconnect, joins
+tool calls/results/visual observations by `call_id`, and marks interrupted or
+incomplete history explicitly. Final answers are rendered as safe Markdown;
+the original bounded source remains available in the answer panel.
+
+Additional run-history routes are:
+
+```text
+GET    /api/v1/sessions/{session_id}/runs
+GET    /api/v1/sessions/{session_id}/runs/{run_id}
+GET    /api/v1/sessions/{session_id}/runs/{run_id}/events?after={sequence}
+```
 
 ## Agent sessions
 

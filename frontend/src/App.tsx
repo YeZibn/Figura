@@ -1,11 +1,11 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react'
-import { BarChart3, Check, ChevronDown, ChevronRight, FileImage, LoaderCircle, MessageSquare, MoreHorizontal, Paperclip, Plus, RefreshCw, Send, Sparkles, Terminal, Trash2, X } from 'lucide-react'
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
+import { BarChart3, Check, ChevronDown, ChevronRight, FileImage, LoaderCircle, MessageSquare, Paperclip, Plus, RefreshCw, Send, Sparkles, Terminal, Trash2, X } from 'lucide-react'
 import { GatewayClientError, gatewayClient } from './api/gatewayClient'
 import type { ChartAgentClient, RunSubscription } from './api/client'
 import { mockClient } from './api/mockClient'
 import { formatBytes, mediaTypeForFile, validateImageFile } from './attachments'
 import { getGatewayRuntimeStatus, type GatewayRuntimeStatus } from './runtime'
-import type { AgentRunEvent, Attachment, AttachmentStatus, ConversationItem, GatewayHealth, RunState, Session, SessionData } from './types/protocol'
+import type { AgentRunEvent, Attachment, AttachmentStatus, ConversationItem, GatewayHealth, RunState, RunSummary, Session, SessionData } from './types/protocol'
 import './styles/global.css'
 import './styles/error.css'
 
@@ -42,12 +42,17 @@ function runStateLabel(state: RunState): string {
   if (state === 'running') return '运行中'
   if (state === 'completed') return '已完成'
   if (state === 'failed') return '运行失败'
+  if (state === 'interrupted') return '已中断'
   if (state === 'unavailable') return '服务不可用'
   return '准备就绪'
 }
 
 function currentTime(): string {
   return new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit' }).format(new Date())
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, milliseconds))
 }
 
 function eventPayload(event: AgentRunEvent): Record<string, unknown> {
@@ -59,27 +64,152 @@ function textDetail(value: unknown): string {
   try { return JSON.stringify(value, null, 2) } catch { return '事件内容不可显示' }
 }
 
-function conversationItemsForEvent(event: AgentRunEvent): ConversationItem[] {
-  const payload = eventPayload(event)
-  const timestamp = event.timestamp ? new Date(event.timestamp).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : currentTime()
-  if (event.kind === 'tool_call') {
-    return [{ id: `${event.runId}-${event.sequence}`, kind: 'tool_call', toolName: String(payload.tool_name || '未知工具'), status: 'running', detail: textDetail(payload.arguments), timestamp }]
+type RunTimeline = {
+  summary: RunSummary
+  events: AgentRunEvent[]
+  historyGap: boolean
+}
+
+type ToolStep = {
+  id: string
+  callId: string
+  toolName: string
+  call?: AgentRunEvent
+  result?: AgentRunEvent
+  observations: Record<string, unknown>[]
+  status: 'running' | 'success' | 'error'
+}
+
+type TimelineRow = { kind: 'event'; event: AgentRunEvent } | { kind: 'tool'; step: ToolStep }
+
+function timestampLabel(timestamp: string): string {
+  if (!timestamp) return currentTime()
+  const parsed = new Date(timestamp)
+  return Number.isNaN(parsed.valueOf()) ? timestamp : parsed.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+}
+
+function normalizeTimeline(events: AgentRunEvent[]): TimelineRow[] {
+  const rows: TimelineRow[] = []
+  const steps = new Map<string, ToolStep>()
+  for (const event of [...events].sort((left, right) => left.sequence - right.sequence)) {
+    const payload = eventPayload(event)
+    if (event.kind === 'tool_call' || event.kind === 'tool_result') {
+      const callId = typeof payload.call_id === 'string' && payload.call_id ? payload.call_id : `sequence-${event.sequence}`
+      let step = steps.get(callId)
+      if (!step) {
+        step = { id: `${event.runId}-${callId}`, callId, toolName: String(payload.tool_name || '未知工具'), observations: [], status: 'running' }
+        steps.set(callId, step)
+        rows.push({ kind: 'tool', step })
+      }
+      step.toolName = String(payload.tool_name || step.toolName)
+      if (event.kind === 'tool_call') step.call = event
+      else { step.result = event; step.status = payload.status === 'error' ? 'error' : 'success' }
+      continue
+    }
+    if (event.kind === 'visual_observation') {
+      const callId = typeof payload.call_id === 'string' ? payload.call_id : ''
+      const observations = Array.isArray(payload.observations) ? payload.observations.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object')) : []
+      const step = callId ? steps.get(callId) : undefined
+      if (step) { step.observations.push(...observations); continue }
+    }
+    rows.push({ kind: 'event', event })
   }
-  if (event.kind === 'tool_result') {
-    return [{ id: `${event.runId}-${event.sequence}`, kind: 'tool_result', toolName: String(payload.tool_name || '未知工具'), status: payload.status === 'error' ? 'error' : 'success', detail: textDetail(payload.result), timestamp }]
+  return rows
+}
+
+function mergeEvents(current: AgentRunEvent[], incoming: AgentRunEvent[]): AgentRunEvent[] {
+  const bySequence = new Map(current.map((event) => [event.sequence, event]))
+  incoming.forEach((event) => bySequence.set(event.sequence, event))
+  return [...bySequence.values()].sort((left, right) => left.sequence - right.sequence)
+}
+
+function isSafeLink(value: string): boolean {
+  return /^(https?:\/\/|mailto:)/i.test(value)
+}
+
+function inlineMarkdown(value: string, keyPrefix: string): ReactNode[] {
+  const parts = value.split(/(\[[^\]]+\]\([^\)]+\)|\*\*[^*]+\*\*|__[^_]+__|`[^`]+`|\*[^*]+\*|_[^_]+_)/g).filter(Boolean)
+  return parts.map((part, index) => {
+    const key = `${keyPrefix}-${index}`
+    const link = part.match(/^\[([^\]]+)\]\(([^\)]+)\)$/)
+    if (link) return isSafeLink(link[2]) ? <a key={key} href={link[2]} target="_blank" rel="noreferrer">{link[1]}</a> : <span key={key}>{link[1]}</span>
+    if ((part.startsWith('**') && part.endsWith('**')) || (part.startsWith('__') && part.endsWith('__'))) return <strong key={key}>{part.slice(2, -2)}</strong>
+    if ((part.startsWith('*') && part.endsWith('*')) || (part.startsWith('_') && part.endsWith('_'))) return <em key={key}>{part.slice(1, -1)}</em>
+    if (part.startsWith('`') && part.endsWith('`')) return <code key={key}>{part.slice(1, -1)}</code>
+    return <span key={key}>{part}</span>
+  })
+}
+
+function SafeMarkdown({ source }: { source: string }) {
+  const text = source.slice(0, 12000)
+  const lines = text.split(/\r?\n/)
+  const blocks: ReactNode[] = []
+  let index = 0
+  while (index < lines.length) {
+    const line = lines[index]
+    if (line.startsWith('```')) {
+      const language = line.slice(3).trim()
+      const code: string[] = []
+      index += 1
+      while (index < lines.length && !lines[index].startsWith('```')) { code.push(lines[index]); index += 1 }
+      blocks.push(<pre className="markdown-code" key={`code-${index}`}><code data-language={language || undefined}>{code.join('\n')}</code></pre>)
+      index += 1
+      continue
+    }
+    if (!line.trim()) { index += 1; continue }
+    const heading = line.match(/^(#{1,3})\s+(.+)$/)
+    if (heading) { const Tag = `h${heading[1].length}` as 'h1' | 'h2' | 'h3'; blocks.push(<Tag key={`heading-${index}`}>{inlineMarkdown(heading[2], `heading-${index}`)}</Tag>); index += 1; continue }
+    if (/^\|.*\|$/.test(line) && index + 1 < lines.length && /^\|?\s*:?-{3,}/.test(lines[index + 1])) {
+      const rows: string[][] = []
+      while (index < lines.length && /^\|.*\|$/.test(lines[index]) && !/^\|?\s*:?-{3,}/.test(lines[index])) {
+        rows.push(lines[index].replace(/^\||\|$/g, '').split('|').map((cell) => cell.trim())); index += 1
+        if (index < lines.length && /^\|?\s*:?-{3,}/.test(lines[index])) index += 1
+      }
+      blocks.push(<table className="markdown-table" key={`table-${index}`}><tbody>{rows.map((row, rowIndex) => <tr key={rowIndex}>{row.map((cell, cellIndex) => rowIndex === 0 ? <th key={cellIndex}>{inlineMarkdown(cell, `table-${index}-${rowIndex}-${cellIndex}`)}</th> : <td key={cellIndex}>{inlineMarkdown(cell, `table-${index}-${rowIndex}-${cellIndex}`)}</td>)}</tr>)}</tbody></table>)
+      continue
+    }
+    if (/^\s*[-*]\s+/.test(line) || /^\s*\d+\.\s+/.test(line)) {
+      const ordered = /^\s*\d+\.\s+/.test(line)
+      const items: string[] = []
+      while (index < lines.length && (ordered ? /^\s*\d+\.\s+/.test(lines[index]) : /^\s*[-*]\s+/.test(lines[index]))) items.push(lines[index].replace(ordered ? /^\s*\d+\.\s+/ : /^\s*[-*]\s+/, '')), index += 1
+      const List = ordered ? 'ol' : 'ul'
+      blocks.push(<List key={`list-${index}`}>{items.map((item, itemIndex) => <li key={itemIndex}>{inlineMarkdown(item, `list-${index}-${itemIndex}`)}</li>)}</List>)
+      continue
+    }
+    const paragraph: string[] = [line]
+    index += 1
+    while (index < lines.length && lines[index].trim() && !lines[index].startsWith('```') && !/^(#{1,3})\s+/.test(lines[index])) { paragraph.push(lines[index]); index += 1 }
+    blocks.push(<p key={`paragraph-${index}`}>{paragraph.map((part, partIndex) => <span key={partIndex}>{partIndex > 0 && <br />}{inlineMarkdown(part, `paragraph-${index}-${partIndex}`)}</span>)}</p>)
   }
-  if (event.kind === 'visual_observation') {
-    const observations = Array.isArray(payload.observations) ? payload.observations : []
-    return observations.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object')).map((item, index) => ({
-      id: `${event.runId}-${event.sequence}-${index}`,
-      kind: 'visual_observation',
-      toolName: String(payload.tool_name || '视觉工具'),
-      caption: String(item.caption || '视觉观察'),
-      imageUrl: typeof item.imageUrl === 'string' ? item.imageUrl : undefined,
-      timestamp,
-    }))
-  }
-  return []
+  return <div className="markdown-content">{blocks}</div>
+}
+
+function ObservationView({ observation }: { observation: Record<string, unknown> }) {
+  const imageUrl = typeof observation.imageUrl === 'string' ? observation.imageUrl : ''
+  const caption = String(observation.caption || '视觉观察')
+  return <div className="trace-observation"><div className="observation-label"><FileImage size={13} /><strong>视觉观察</strong></div>{imageUrl ? <img src={imageUrl} alt={caption} /> : <div className="observation-placeholder">视觉证据不可用或已过期</div>}<small>{caption}</small></div>
+}
+
+function eventLabel(event: AgentRunEvent): string {
+  const labels: Record<string, string> = { run_started: '运行已开始', model_started: '模型轮次开始', model_completed: '模型轮次完成', progress: '处理中', budget_exhausted: '达到预算上限', final_answer: '最终回答已生成', run_failed: '运行失败', history_gap: '历史记录不完整' }
+  return labels[event.kind] || event.kind
+}
+
+function RunTimeline({ timeline, expanded, onToggle }: { timeline: RunTimeline; expanded: boolean; onToggle: () => void }) {
+  const [expandedSteps, setExpandedSteps] = useState<Set<string>>(new Set())
+  const rows = normalizeTimeline(timeline.events)
+  const summary = timeline.summary
+  const status = summary.status
+  const statusText = status === 'completed' ? '已完成' : status === 'failed' ? '失败' : status === 'interrupted' ? '已中断' : '运行中'
+  return <section className={'run-timeline ' + status + (expanded ? ' expanded' : '')}>
+    <button className="run-summary" onClick={onToggle} aria-expanded={expanded} aria-controls={`trace-${summary.runId}`}><span className="run-arrow">{expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}</span><span className="run-summary-icon"><Terminal size={14} /></span><span className="run-summary-copy"><strong>执行过程</strong><small>{timestampLabel(summary.createdAt)} · {summary.eventCount || timeline.events.length} 个事件</small></span><span className={'run-status ' + status}>{statusText}</span></button>
+    {expanded && <div className="run-trace" id={`trace-${summary.runId}`}>
+      {summary.historyWarning && <div className="trace-warning" role="status">部分执行记录未能持久化，当前显示的过程可能不完整。</div>}
+      {timeline.historyGap && <div className="trace-warning" role="status">历史记录存在缺口，未显示缺失的执行步骤。</div>}
+      {rows.length === 0 && <div className="trace-empty">没有可恢复的执行事件。</div>}
+      {rows.map((row) => row.kind === 'event' ? <div className={'trace-event ' + (row.event.kind === 'run_failed' || row.event.kind === 'history_gap' ? 'error' : '')} key={`${row.event.runId}-${row.event.sequence}`}><span className="trace-event-dot" /><span className="trace-event-copy"><strong>{eventLabel(row.event)}</strong><small>{timestampLabel(row.event.timestamp)}</small><span>{textDetail(eventPayload(row.event).message || eventPayload(row.event).status || eventPayload(row.event).reason || '')}</span></span></div> : <div className="trace-tool" key={row.step.id}><button className="trace-tool-header" onClick={() => setExpandedSteps((current) => { const next = new Set(current); next.has(row.step.id) ? next.delete(row.step.id) : next.add(row.step.id); return next })} aria-expanded={expandedSteps.has(row.step.id)}><span className="trace-event-dot" /><span className="trace-tool-name"><strong>{row.step.toolName}</strong><small>{row.step.callId}</small></span><span className={'run-status ' + row.step.status}>{row.step.status === 'running' ? '运行中' : row.step.status === 'success' ? '完成' : '失败'}</span>{expandedSteps.has(row.step.id) ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</button>{expandedSteps.has(row.step.id) && <div className="trace-tool-detail">{row.step.call && <div><label>调用参数</label><pre>{textDetail(eventPayload(row.step.call).arguments)}</pre></div>}{row.step.result && <div><label>工具结果</label><pre>{textDetail(eventPayload(row.step.result).result || eventPayload(row.step.result).message)}</pre></div>}{row.step.observations.map((observation, index) => <ObservationView key={index} observation={observation} />)}</div>}</div>)}
+    </div>}
+  </section>
 }
 
 function gatewayStatusText(mode: 'mock' | 'gateway', runtimeStatus: GatewayRuntimeStatus | null, health: GatewayHealth | null): string {
@@ -106,24 +236,25 @@ function SessionSidebar(props: { sessions: Session[]; activeId: string; onSelect
 function Message(props: { item: ConversationItem; expanded: boolean; onToggle: (id: string) => void }) {
   const item = props.item
   if (item.kind === 'user') return <div className="message-row user-row"><div className="avatar user-avatar">我</div><div className="message-body"><div className="message-meta"><strong>你</strong><time>{item.timestamp}</time></div><div className="bubble user-bubble">{item.text}{item.attachmentIds?.length ? <div className="inline-attachment"><Paperclip size={13} /> {item.attachmentIds.length} 个附件</div> : null}</div></div></div>
-  if (item.kind === 'assistant') return <div className="message-row assistant-row"><div className="avatar agent-avatar"><Sparkles size={15} /></div><div className="message-body"><div className="message-meta"><strong>Figura Agent</strong><time>{item.timestamp}</time></div><div className="bubble assistant-bubble">{item.text}</div></div></div>
+  if (item.kind === 'assistant') return <div className="message-row assistant-row"><div className="avatar agent-avatar"><Sparkles size={15} /></div><div className="message-body"><div className="message-meta"><strong>Figura Agent</strong><time>{item.timestamp}</time></div><div className="bubble assistant-bubble"><SafeMarkdown source={item.text} /><details className="answer-source"><summary>查看原文</summary><pre>{item.text.slice(0, 12000)}</pre></details></div></div></div>
   if (item.kind === 'visual_observation') return <div className="visual-observation"><div className="observation-label"><FileImage size={14} /> <strong>视觉观察</strong><span>{item.toolName}</span></div>{item.imageUrl ? <img src={item.imageUrl} alt={item.caption} /> : <div className="observation-placeholder">临时视觉证据不可用</div>}<small>{item.caption}</small></div>
   if (item.kind === 'error') return <div className="error-banner" role="alert">{item.text}</div>
   const label = item.kind === 'tool_call' ? '工具调用' : '工具结果'
   return <div className={'execution-item ' + (props.expanded ? 'expanded' : '')}><button className="execution-header" onClick={() => props.onToggle(item.id)} aria-expanded={props.expanded}><span className="execution-icon"><Terminal size={14} /></span><span><strong>{label}</strong><b>{item.toolName}</b></span><span className={'execution-status ' + item.status}>{toolStatusLabel(item.status)}</span>{props.expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}</button>{props.expanded && <div className="execution-detail">{item.detail}</div>}</div>
 }
 
-function ConversationPanel(props: { data: SessionData | null; liveItems: ConversationItem[]; runState: RunState; selectedAttachmentIds: string[]; onSubmit: (text: string, attachmentIds: string[]) => Promise<boolean>; loading: boolean; loadingSession: boolean; error: string | null }) {
+function ConversationPanel(props: { data: SessionData | null; timelines: RunTimeline[]; pendingUser: ConversationItem | null; runState: RunState; selectedAttachmentIds: string[]; onSubmit: (text: string, attachmentIds: string[]) => Promise<boolean>; loading: boolean; loadingSession: boolean; error: string | null; onToggleRun: (runId: string, status: RunSummary['status']) => void; expandedRuns: Set<string> }) {
   const [text, setText] = useState('')
   const [expanded, setExpanded] = useState<string | null>(null)
-  const items = [...(props.data?.messages ?? []), ...props.liveItems]
+  const messages = [...(props.data?.messages ?? []), ...(props.pendingUser ? [props.pendingUser] : [])]
+  const matchedRunIds = new Set<string>()
   const send = async () => {
     const value = text.trim()
     if (!value || props.loading) return
     const submitted = await props.onSubmit(value, props.selectedAttachmentIds)
     if (submitted) setText('')
   }
-  return <main className="conversation panel"><header className="conversation-header"><div className="conversation-title"><span className="eyebrow">当前会话</span><h1>{props.data?.session.name ?? (props.loadingSession ? '正在加载会话' : '暂无活动会话')}</h1>{props.data && <span className="conversation-meta">{props.data.session.runCount} 次运行 · 持续记录在本机</span>}</div><span className={'run-chip ' + props.runState}><span className="status-dot" />{runStateLabel(props.runState)} · {props.data?.session.runCount ?? 0} 次运行</span></header><div className="message-scroll">{props.loadingSession ? <div className="loading-state"><span className="spinner" />正在加载会话...</div> : props.error && !props.data && items.length === 0 ? <div className="error-state"><div className="empty-icon"><MessageSquare size={22} /></div><h2>无法连接本地服务</h2><p>{props.error}</p></div> : !props.data && items.length === 0 ? <div className="empty-conversation"><div className="empty-icon"><MessageSquare size={22} /></div><h2>创建第一个会话</h2><p>请从左侧新建会话，开始使用 Figura。</p></div> : items.length === 0 ? <div className="empty-conversation"><div className="empty-icon"><MessageSquare size={22} /></div><h2>开始新的分析</h2><p>提出问题或添加图片，开始使用 Figura。</p></div> : items.map((item) => <Message key={item.id} item={item} expanded={expanded === item.id} onToggle={(id) => setExpanded(expanded === id ? null : id)} />)}{props.loading && <div className="typing"><span /><span /><span /> Figura Agent 正在思考</div>}{props.error && <div className="error-banner" role="alert">{props.error}</div>}</div><div className="composer"><div className="composer-label"><Sparkles size={13} /><span>向 Figura Agent 提问</span></div><textarea value={text} onChange={(event) => setText(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void send() } }} placeholder="例如：比较这张图中各系列的变化趋势..." rows={1} /><div className="composer-actions"><span className="composer-hint">Enter 发送 · Shift + Enter 换行</span><button className="send-button" onClick={() => void send()} disabled={!text.trim() || props.loading || props.loadingSession} title="发送消息" aria-label="发送消息"><Send size={16} /></button></div></div></main>
+  return <main className="conversation panel"><header className="conversation-header"><div className="conversation-title"><span className="eyebrow">当前会话</span><h1>{props.data?.session.name ?? (props.loadingSession ? '正在加载会话' : '暂无活动会话')}</h1>{props.data && <span className="conversation-meta">{props.data.session.runCount} 次运行 · 执行记录保存在本机</span>}</div><span className={'run-chip ' + props.runState}><span className="status-dot" />{runStateLabel(props.runState)} · {props.data?.session.runCount ?? 0} 次运行</span></header><div className="message-scroll">{props.loadingSession ? <div className="loading-state"><span className="spinner" />正在加载会话...</div> : props.error && !props.data && messages.length === 0 ? <div className="error-state"><div className="empty-icon"><MessageSquare size={22} /></div><h2>无法连接本地服务</h2><p>{props.error}</p></div> : !props.data && messages.length === 0 ? <div className="empty-conversation"><div className="empty-icon"><MessageSquare size={22} /></div><h2>创建第一个会话</h2><p>请从左侧新建会话，开始使用 Figura。</p></div> : messages.length === 0 && props.timelines.length === 0 ? <div className="empty-conversation"><div className="empty-icon"><MessageSquare size={22} /></div><h2>开始新的分析</h2><p>提出问题或添加图片，开始使用 Figura。</p></div> : <>{messages.map((item) => { const timeline = item.kind === 'assistant' ? props.timelines.find((candidate) => candidate.summary.runId === item.id.split(':')[0] || (candidate.summary.answer && candidate.summary.answer === item.text)) : undefined; const timelineId = timeline?.summary.runId || ''; if (timelineId) matchedRunIds.add(timelineId); return <div key={item.id}><Message item={item} expanded={expanded === item.id} onToggle={(id) => setExpanded(expanded === id ? null : id)} />{timeline && <RunTimeline timeline={timeline} expanded={props.expandedRuns.has(timelineId) || timeline.summary.status === 'running'} onToggle={() => props.onToggleRun(timelineId, timeline.summary.status)} />}</div> })}{props.timelines.filter((timeline) => !matchedRunIds.has(timeline.summary.runId)).map((timeline) => <RunTimeline key={timeline.summary.runId} timeline={timeline} expanded={props.expandedRuns.has(timeline.summary.runId) || timeline.summary.status === 'running'} onToggle={() => props.onToggleRun(timeline.summary.runId, timeline.summary.status)} />)}</>}{props.loading && <div className="typing"><span /><span /><span /> Figura Agent 正在思考</div>}{props.error && <div className="error-banner" role="alert">{props.error}</div>}</div><div className="composer"><div className="composer-label"><Sparkles size={13} /><span>向 Figura Agent 提问</span></div><textarea value={text} onChange={(event) => setText(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void send() } }} placeholder="例如：比较这张图中各系列的变化趋势..." rows={1} /><div className="composer-actions"><span className="composer-hint">Enter 发送 · Shift + Enter 换行</span><button className="send-button" onClick={() => void send()} disabled={!text.trim() || props.loading || props.loadingSession} title="发送消息" aria-label="发送消息"><Send size={16} /></button></div></div></main>
 }
 
 function AttachmentPreview({ attachment }: { attachment: Attachment }) {
@@ -147,7 +278,9 @@ export default function App() {
   const [data, setData] = useState<SessionData | null>(null)
   const [pending, setPending] = useState<PendingAttachment[]>([])
   const [selectedIds, setSelectedIds] = useState<string[]>([])
-  const [liveItems, setLiveItems] = useState<ConversationItem[]>([])
+  const [timelines, setTimelines] = useState<RunTimeline[]>([])
+  const [pendingUser, setPendingUser] = useState<ConversationItem | null>(null)
+  const [expandedRuns, setExpandedRuns] = useState<Set<string>>(new Set())
   const [runState, setRunState] = useState<RunState>('idle')
   const [loading, setLoading] = useState(false)
   const [loadingSession, setLoadingSession] = useState(true)
@@ -180,12 +313,70 @@ export default function App() {
   const withLocalPreviews = (value: SessionData): SessionData => ({ ...value, attachments: value.attachments.map((attachment) => ({ ...attachment, previewUrl: attachment.previewUrl || localPreviews.current.get(attachment.id) || '' })) })
 
   useEffect(() => { setLoadingSession(true); client.listSessions().then((items) => { setSessions(items); setActiveId(items[0]?.id ?? '') }).catch((reason) => setError(toUserMessage(reason))).finally(() => setLoadingSession(false)) }, [client])
-  useEffect(() => { if (!activeId) { setData(null); return }; setData(null); setLoadingSession(true); client.getSession(activeId).then((value) => setData(withLocalPreviews(value))).catch((reason) => setError(toUserMessage(reason))).finally(() => setLoadingSession(false)) }, [activeId, client])
+  useEffect(() => {
+    if (!activeId) { setData(null); setTimelines([]); return }
+    setData(null)
+    setTimelines([])
+    setLoadingSession(true)
+    void client.getSession(activeId).then(async (value) => {
+      if (activeIdRef.current !== activeId) return
+      setData(withLocalPreviews(value))
+      const hydrated = await Promise.all(value.runs.map(async (summary) => {
+        try {
+          const history = await client.getRunHistory(activeId, summary.runId)
+          return { summary: history.run, events: history.events, historyGap: history.historyGap }
+        } catch {
+          return { summary, events: [], historyGap: true }
+        }
+      }))
+      if (activeIdRef.current === activeId) {
+        setTimelines(hydrated)
+        const current = hydrated.find((item) => item.summary.status === 'running')
+        if (current) {
+          setRunState('running')
+          setLoading(true)
+          const cursor = Math.max(...current.events.map((event) => event.sequence), 0)
+          subscriptionRef.current = client.subscribeRun(activeId, current.summary.runId, {
+            onEvent(event) {
+              if (activeIdRef.current !== activeId) return
+              if (event.kind === 'history_gap') {
+                setTimelines((items) => items.map((item) => item.summary.runId === current.summary.runId ? { ...item, historyGap: true } : item))
+                return
+              }
+              setTimelines((items) => items.map((item) => item.summary.runId === current.summary.runId ? { ...item, events: mergeEvents(item.events, [event]), summary: { ...item.summary, eventCount: Math.max(item.summary.eventCount, event.sequence), updatedAt: event.timestamp } } : item))
+            },
+            onError(reason) {
+              if (activeIdRef.current !== activeId) return
+              setRunState('unavailable')
+              setLoading(false)
+              setError(toUserMessage(reason))
+            },
+            onComplete() {
+              subscriptionRef.current = null
+              void client.getSession(activeId).then(async (updated) => {
+                if (activeIdRef.current !== activeId) return
+                setData(withLocalPreviews(updated))
+                setSessions((items) => items.map((item) => item.id === updated.session.id ? updated.session : item))
+                const history = await client.getRunHistory(activeId, current.summary.runId)
+                setTimelines((items) => items.map((item) => item.summary.runId === current.summary.runId ? { ...item, summary: history.run, events: mergeEvents(item.events, history.events), historyGap: item.historyGap || history.historyGap } : item))
+                setPendingUser(null)
+                setRunState(history.run.status === 'interrupted' ? 'interrupted' : history.run.status === 'failed' ? 'failed' : 'completed')
+                setLoading(false)
+              }).catch((reason) => { setRunState('unavailable'); setLoading(false); setError(toUserMessage(reason)) })
+            },
+          }, cursor)
+        } else {
+          setRunState('idle')
+          setLoading(false)
+        }
+      }
+    }).catch((reason) => setError(toUserMessage(reason))).finally(() => setLoadingSession(false))
+  }, [activeId, client])
 
   const clearPending = () => { pending.forEach((item) => URL.revokeObjectURL(item.previewUrl)); setPending([]) }
-  const selectSession = (id: string) => { subscriptionRef.current?.close(); subscriptionRef.current = null; clearPending(); setSelectedIds([]); setLiveItems([]); setRunState('idle'); setAttachmentError(null); setError(null); setActiveId(id) }
+  const selectSession = (id: string) => { subscriptionRef.current?.close(); subscriptionRef.current = null; clearPending(); setSelectedIds([]); setPendingUser(null); setTimelines([]); setExpandedRuns(new Set()); setRunState('idle'); setAttachmentError(null); setError(null); setActiveId(id) }
   const create = async () => { setNewSessionName(''); setCreatingSession(true) }
-  const confirmCreate = async (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); const name = newSessionName.trim(); if (!name) return; setError(null); try { subscriptionRef.current?.close(); subscriptionRef.current = null; clearPending(); setSelectedIds([]); setLiveItems([]); setRunState('idle'); const created = await client.createSession(name); setSessions(await client.listSessions()); setActiveId(created.session.id); setCreatingSession(false) } catch (reason) { setError(toUserMessage(reason)) } }
+  const confirmCreate = async (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); const name = newSessionName.trim(); if (!name) return; setError(null); try { subscriptionRef.current?.close(); subscriptionRef.current = null; clearPending(); setSelectedIds([]); setPendingUser(null); setTimelines([]); setRunState('idle'); const created = await client.createSession(name); setSessions(await client.listSessions()); setActiveId(created.session.id); setCreatingSession(false) } catch (reason) { setError(toUserMessage(reason)) } }
 
   const forgetLocalPreview = (attachmentId: string) => {
     const url = localPreviews.current.get(attachmentId)
@@ -218,7 +409,9 @@ export default function App() {
           data?.attachments.forEach((attachment) => forgetLocalPreview(attachment.id))
           clearPending()
           setSelectedIds([])
-          setLiveItems([])
+          setPendingUser(null)
+          setTimelines([])
+          setExpandedRuns(new Set())
           setRunState('idle')
           setLoading(false)
           setData(null)
@@ -285,50 +478,70 @@ export default function App() {
     setRunState('connecting')
     setError(null)
     setSelectedIds([])
-    setLiveItems([{ id: `pending-${Date.now()}`, kind: 'user', text, timestamp: currentTime(), attachmentIds: attachmentIds.length ? attachmentIds : undefined }])
+    setPendingUser({ id: `pending-${Date.now()}`, kind: 'user', text, timestamp: currentTime(), attachmentIds: attachmentIds.length ? attachmentIds : undefined })
     try {
       const handle = await client.startRun(sessionId, text, attachmentIds)
       if (activeIdRef.current !== sessionId) return false
       setRunState('running')
+      const startedAt = new Date().toISOString()
+      setTimelines((current) => current.some((item) => item.summary.runId === handle.runId) ? current : [...current, { summary: { runId: handle.runId, sessionId, status: 'running', createdAt: startedAt, updatedAt: startedAt, eventCount: 0 }, events: [], historyGap: false }])
       let terminalFailure = false
-      subscriptionRef.current = client.subscribeRun(sessionId, handle.runId, {
-        onEvent(event) {
-          if (activeIdRef.current !== sessionId) return
-          if (event.kind === 'run_failed') {
-            terminalFailure = true
-            setRunState('failed')
-            setLoading(false)
-            setError(toUserMessage(new GatewayClientError(String(event.payload.code || 'agent_failed'), String(event.payload.message || 'Agent 执行失败'), 502, typeof event.payload.reason === 'string' ? event.payload.reason : undefined)))
-          } else if (event.kind !== 'run_started') {
-            setRunState('running')
-          }
-          const items = conversationItemsForEvent(event)
-          if (items.length) setLiveItems((current) => [...current, ...items])
-        },
-        onError(reason) {
-          if (activeIdRef.current !== sessionId) return
-          setRunState('unavailable')
-          setLoading(false)
-          setError(toUserMessage(reason))
-        },
-        onComplete() {
-          subscriptionRef.current = null
-          if (activeIdRef.current !== sessionId) return
-          if (terminalFailure) return
-          void client.getSession(sessionId).then((updated) => {
+      let reconnectAttempts = 0
+      const applyHistory = (history: Awaited<ReturnType<ChartAgentClient['getRunHistory']>>) => {
+        setTimelines((current) => current.map((item) => item.summary.runId === handle.runId ? { summary: history.run, events: mergeEvents(item.events, history.events), historyGap: item.historyGap || history.historyGap } : item))
+        return history
+      }
+      const connect = (afterSequence = 0) => {
+        subscriptionRef.current = client.subscribeRun(sessionId, handle.runId, {
+          onEvent(event) {
             if (activeIdRef.current !== sessionId) return
-            setData(withLocalPreviews(updated))
-            setSessions((current) => current.map((item) => item.id === updated.session.id ? updated.session : item))
-            setLiveItems((current) => current.filter((item) => item.kind !== 'user' && item.kind !== 'assistant'))
-            setRunState('completed')
-            setLoading(false)
-          }).catch((reason) => {
-            setRunState('failed')
+            if (event.kind === 'history_gap') {
+              setTimelines((current) => current.map((item) => item.summary.runId === handle.runId ? { ...item, historyGap: true } : item))
+              return
+            }
+            if (event.kind === 'run_failed') {
+              terminalFailure = true
+              setRunState('failed')
+              setLoading(false)
+              setError(toUserMessage(new GatewayClientError(String(event.payload.code || 'agent_failed'), String(event.payload.message || 'Agent 执行失败'), 502, typeof event.payload.reason === 'string' ? event.payload.reason : undefined)))
+            } else if (event.kind !== 'run_started') setRunState('running')
+            setTimelines((current) => current.map((item) => item.summary.runId === handle.runId ? { ...item, events: mergeEvents(item.events, [event]), summary: { ...item.summary, eventCount: Math.max(item.summary.eventCount, event.sequence), updatedAt: event.timestamp }, historyGap: item.historyGap || event.kind === 'history_gap' } : item))
+          },
+          async onError(reason) {
+            if (activeIdRef.current !== sessionId) return
+            setRunState('connecting')
+            try {
+              const currentTimeline = await client.getRunHistory(sessionId, handle.runId)
+              const history = applyHistory(currentTimeline)
+              if (history.run.status === 'running' && reconnectAttempts < 2) { reconnectAttempts += 1; const latest = Math.max(...history.events.map((event) => event.sequence), 0); connect(latest); return }
+              if (history.run.status === 'completed') { setRunState('completed'); setLoading(false); setPendingUser(null); return }
+              if (history.run.status === 'failed') terminalFailure = true
+            } catch { /* The visible error below preserves all events already rendered. */ }
+            setRunState('unavailable')
             setLoading(false)
             setError(toUserMessage(reason))
-          })
-        },
-      })
+          },
+          onComplete() {
+            subscriptionRef.current = null
+            if (activeIdRef.current !== sessionId || terminalFailure) return
+            void client.getSession(sessionId).then(async (updated) => {
+              if (activeIdRef.current !== sessionId) return
+              setData(withLocalPreviews(updated))
+              setSessions((current) => current.map((item) => item.id === updated.session.id ? updated.session : item))
+              let history = await client.getRunHistory(sessionId, handle.runId)
+              for (let attempt = 0; attempt < 5 && history.run.status === 'running'; attempt += 1) {
+                await delay(40)
+                history = await client.getRunHistory(sessionId, handle.runId)
+              }
+              applyHistory(history)
+              setPendingUser(null)
+              setRunState(history.run.status === 'interrupted' ? 'interrupted' : 'completed')
+              setLoading(false)
+            }).catch((reason) => { setRunState('failed'); setLoading(false); setError(toUserMessage(reason)) })
+          },
+        }, afterSequence)
+      }
+      connect()
       return true
     } catch (reason) {
       setRunState('unavailable')
@@ -338,7 +551,8 @@ export default function App() {
     }
   }
 
-  return <><div className="app-shell"><SessionSidebar sessions={sessions} activeId={activeId} onSelect={selectSession} onCreate={create} onDelete={requestDeleteSession} mode={mode} runtimeStatus={runtimeStatus} health={gatewayHealth} /><ConversationPanel data={data} liveItems={liveItems} runState={runState} selectedAttachmentIds={selectedIds} onSubmit={submit} loading={loading} loadingSession={loadingSession} error={error} /><AttachmentPanel attachments={data?.attachments ?? []} pending={pending} selectedIds={selectedIds} error={attachmentError} onAdd={addFiles} onToggle={toggleAttachment} onRemovePending={removePending} onRetryPending={(item) => void uploadPending(item)} onRemove={requestDeleteAttachment} /></div>{creatingSession && <div className="dialog-backdrop"><form className="session-dialog" onSubmit={(event) => void confirmCreate(event)}><h2>新建会话</h2><label htmlFor="session-name">会话名称</label><input id="session-name" value={newSessionName} onChange={(event) => setNewSessionName(event.target.value)} placeholder="例如：季度销售分析" autoFocus /><div className="dialog-actions"><button type="button" className="dialog-secondary" onClick={() => setCreatingSession(false)}>取消</button><button type="submit" className="dialog-primary" disabled={!newSessionName.trim()}>创建会话</button></div></form></div>}{confirmAction && <div className="dialog-backdrop"><div className="session-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-dialog-title"><h2 id="delete-dialog-title">{confirmAction.kind === 'session' ? '删除会话？' : '删除附件？'}</h2><p className="dialog-message">{confirmAction.kind === 'session' ? `将永久删除“${confirmAction.session.name}”及其运行记录和附件。` : `将删除“${confirmAction.attachment.filename}”及其源文件。`}</p><div className="dialog-actions"><button type="button" className="dialog-secondary" onClick={() => setConfirmAction(null)} disabled={deleting}>取消</button><button type="button" className="dialog-danger" onClick={() => void confirmDelete()} disabled={deleting}><Trash2 size={13} />{deleting ? '正在删除' : '确认删除'}</button></div></div></div>}</>
+  const toggleRun = (runId: string, status: RunSummary['status']) => setExpandedRuns((current) => { const next = new Set(current); if (status === 'running') { next.has(runId) ? next.delete(runId) : next.add(runId) } else { next.has(runId) ? next.delete(runId) : next.add(runId) } return next })
+  return <><div className="app-shell"><SessionSidebar sessions={sessions} activeId={activeId} onSelect={selectSession} onCreate={create} onDelete={requestDeleteSession} mode={mode} runtimeStatus={runtimeStatus} health={gatewayHealth} /><ConversationPanel data={data} timelines={timelines} pendingUser={pendingUser} runState={runState} selectedAttachmentIds={selectedIds} onSubmit={submit} loading={loading} loadingSession={loadingSession} error={error} onToggleRun={toggleRun} expandedRuns={expandedRuns} /><AttachmentPanel attachments={data?.attachments ?? []} pending={pending} selectedIds={selectedIds} error={attachmentError} onAdd={addFiles} onToggle={toggleAttachment} onRemovePending={removePending} onRetryPending={(item) => void uploadPending(item)} onRemove={requestDeleteAttachment} /></div>{creatingSession && <div className="dialog-backdrop"><form className="session-dialog" onSubmit={(event) => void confirmCreate(event)}><h2>新建会话</h2><label htmlFor="session-name">会话名称</label><input id="session-name" value={newSessionName} onChange={(event) => setNewSessionName(event.target.value)} placeholder="例如：季度销售分析" autoFocus /><div className="dialog-actions"><button type="button" className="dialog-secondary" onClick={() => setCreatingSession(false)}>取消</button><button type="submit" className="dialog-primary" disabled={!newSessionName.trim()}>创建会话</button></div></form></div>}{confirmAction && <div className="dialog-backdrop"><div className="session-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-dialog-title"><h2 id="delete-dialog-title">{confirmAction.kind === 'session' ? '删除会话？' : '删除附件？'}</h2><p className="dialog-message">{confirmAction.kind === 'session' ? `将永久删除“${confirmAction.session.name}”及其运行记录和附件。` : `将删除“${confirmAction.attachment.filename}”及其源文件。`}</p><div className="dialog-actions"><button type="button" className="dialog-secondary" onClick={() => setConfirmAction(null)} disabled={deleting}>取消</button><button type="button" className="dialog-danger" onClick={() => void confirmDelete()} disabled={deleting}><Trash2 size={13} />{deleting ? '正在删除' : '确认删除'}</button></div></div></div>}</>
 }
 
 function toUserMessage(error: unknown): string {
@@ -350,6 +564,7 @@ function toUserMessage(error: unknown): string {
     if (error.code === 'session_not_found') return '会话不存在，可能已被删除。'
     if (error.code === 'session_exists') return '会话名称已存在，请换一个名称。'
     if (error.code === 'session_busy') return '会话正在运行 Agent，请等待本次运行结束后再删除。'
+    if (error.code === 'run_unavailable' || error.code === 'event_history_unavailable') return '这条执行记录已不可用，当前只保留可恢复的会话内容。'
     if (error.code === 'attachment_not_found') return '附件不存在或不属于当前会话。'
     if (error.code === 'attachment_unavailable') return '附件源文件不可用，请重新上传。'
     if (error.code === 'attachment_storage_error') return '附件文件操作失败，请稍后重试。'

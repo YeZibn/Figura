@@ -18,6 +18,7 @@ from ..tools.result import (
     SUPPORTED_GENERATED_IMAGE_MIME_TYPES,
 )
 from ..trace import TraceEvent
+from .history import GatewayHistoryStore, HistoryStoreError
 from .protocol import (
     MAX_EVENT_PAYLOAD,
     ObservationReference,
@@ -133,8 +134,10 @@ class ManagedRun:
         *,
         max_events: int = DEFAULT_MAX_RUN_EVENTS,
         retention_seconds: float = DEFAULT_RUN_RETENTION_SECONDS,
+        history_store: GatewayHistoryStore | None = None,
+        run_id: str | None = None,
     ) -> None:
-        self.run_id = f"run_{uuid4().hex}"
+        self.run_id = run_id or f"run_{uuid4().hex}"
         self.session_id = session_id
         self.status = RunStatus.RUNNING
         self.answer: str | None = None
@@ -145,6 +148,8 @@ class ManagedRun:
         self.created_at = utc_timestamp()
         self.finished_at: float | None = None
         self.retention_seconds = retention_seconds
+        self.history_store = history_store
+        self.history_warning: str | None = None
         self._events: deque[RunEvent] = deque(maxlen=max_events)
         self._next_sequence = 0
         self._condition = Condition(RLock())
@@ -170,6 +175,11 @@ class ManagedRun:
                 kind=kind,
                 payload=sanitize_payload(payload or {}),
             )
+            if self.history_store is not None:
+                try:
+                    self.history_store.append_event(event)
+                except Exception:  # noqa: BLE001 - trace persistence cannot stop a run
+                    self._mark_history_warning()
             self._events.append(event)
             self._condition.notify_all()
             return event
@@ -197,6 +207,7 @@ class ManagedRun:
             self.status = RunStatus.COMPLETED
             self.finished_at = time.monotonic()
             self._condition.notify_all()
+        self._update_history(RunStatus.COMPLETED, answer_source=self.answer)
 
     def fail(self, code: str, status: int, message: str, reason: str | None = None) -> None:
         with self._condition:
@@ -209,6 +220,51 @@ class ManagedRun:
             self.status = RunStatus.FAILED
             self.finished_at = time.monotonic()
             self._condition.notify_all()
+        self._update_history(
+            RunStatus.FAILED,
+            terminal_code=self.error_code,
+            terminal_message=self.error_message,
+        )
+
+    def _mark_history_warning(self) -> None:
+        if self.history_warning is None:
+            self.history_warning = "执行记录未能完整持久化"
+        if self.history_store is not None:
+            try:
+                self.history_store.update_run(
+                    self.run_id,
+                    self.status,
+                    terminal_code=self.error_code,
+                    terminal_message=self.error_message,
+                    answer_source=self.answer,
+                    history_warning=self.history_warning,
+                )
+            except Exception:  # noqa: BLE001 - diagnostics remain isolated
+                pass
+
+    def _update_history(self, status: RunStatus, **kwargs) -> None:
+        if self.history_store is None:
+            return
+        try:
+            self.history_store.update_run(
+                self.run_id,
+                status,
+                history_warning=self.history_warning,
+                **kwargs,
+            )
+        except Exception:  # noqa: BLE001 - diagnostics remain isolated
+            self._mark_history_warning()
+
+    def _durable_events(self, after_sequence: int) -> tuple[list[RunEvent], bool, int | None]:
+        if self.history_store is None:
+            return [], False, None
+        try:
+            snapshot = self.history_store.history(self.session_id, self.run_id, after_sequence)
+            if snapshot is None:
+                return [], False, None
+            return [RunEvent(**_event_kwargs(item)) for item in snapshot["events"]], bool(snapshot["historyGap"]), snapshot.get("firstSequence")
+        except Exception:  # noqa: BLE001 - live replay can fall back to memory
+            return [], False, None
 
     def wait_terminal(self, timeout: float | None = None) -> bool:
         with self._condition:
@@ -218,6 +274,18 @@ class ManagedRun:
 
     def iter_events(self, after_sequence: int = 0, *, heartbeat_seconds: float = 15.0) -> Iterable[RunEvent | None]:
         cursor = max(0, after_sequence)
+        durable, history_gap, first_sequence = self._durable_events(cursor)
+        if history_gap:
+            yield RunEvent(
+                self.run_id,
+                cursor,
+                "history_gap",
+                {"afterSequence": cursor, "firstSequence": first_sequence},
+            )
+        for event in durable:
+            if event.sequence > cursor:
+                cursor = event.sequence
+                yield event
         while True:
             with self._condition:
                 pending = [event for event in self._events if event.sequence > cursor]
@@ -236,6 +304,52 @@ class ManagedRun:
                 return
 
 
+def _event_kwargs(value: dict) -> dict:
+    """Convert the public camel-case event shape back into the dataclass."""
+    return {
+        "run_id": value["runId"],
+        "sequence": value["sequence"],
+        "kind": value["kind"],
+        "payload": value.get("payload", {}),
+        "timestamp": value.get("timestamp", ""),
+    }
+
+
+class HistoricalRun:
+    """Read-only run view used after the in-memory replay window expires."""
+
+    def __init__(self, summary: dict, history_store: GatewayHistoryStore) -> None:
+        self.run_id = str(summary["runId"])
+        self.session_id = str(summary["sessionId"])
+        self.status = RunStatus(str(summary["status"]))
+        self.answer = summary.get("answer")
+        self.error_code = summary.get("terminalCode")
+        self.error_message = summary.get("terminalMessage")
+        self.history_warning = summary.get("historyWarning")
+        self.history_store = history_store
+
+    @property
+    def terminal(self) -> bool:
+        return self.status is not RunStatus.RUNNING
+
+    def wait_terminal(self, timeout: float | None = None) -> bool:
+        return self.terminal
+
+    def iter_events(self, after_sequence: int = 0, *, heartbeat_seconds: float = 15.0) -> Iterable[RunEvent | None]:
+        snapshot = self.history_store.history(self.session_id, self.run_id, max(0, after_sequence))
+        if snapshot is None:
+            return
+        if snapshot["historyGap"]:
+            yield RunEvent(
+                self.run_id,
+                max(0, after_sequence),
+                "history_gap",
+                {"afterSequence": max(0, after_sequence), "firstSequence": snapshot.get("firstSequence")},
+            )
+        for item in snapshot["events"]:
+            yield RunEvent(**_event_kwargs(item))
+
+
 class RunManager:
     """Own active and recently completed runs without durable trace state."""
 
@@ -246,11 +360,13 @@ class RunManager:
         max_events: int = DEFAULT_MAX_RUN_EVENTS,
         retention_seconds: float = DEFAULT_RUN_RETENTION_SECONDS,
         observation_store: ObservationStore | None = None,
+        history_store: GatewayHistoryStore | None = None,
     ) -> None:
         self.max_runs = max_runs
         self.max_events = max_events
         self.retention_seconds = retention_seconds
         self.observations = observation_store or ObservationStore(retention_seconds=retention_seconds)
+        self.history_store = history_store
         self._runs: dict[str, ManagedRun] = {}
         self._lock = RLock()
         self._executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="chartagent-run")
@@ -265,8 +381,14 @@ class RunManager:
                 session_id,
                 max_events=self.max_events,
                 retention_seconds=self.retention_seconds,
+                history_store=self.history_store,
             )
             self._runs[run.run_id] = run
+            if self.history_store is not None:
+                try:
+                    self.history_store.create_run(run.run_id, session_id)
+                except Exception:  # noqa: BLE001 - keep the live run usable
+                    run._mark_history_warning()
             run.publish("run_started", {"status": RunStatus.RUNNING.value})
             return run
 
@@ -293,6 +415,12 @@ class RunManager:
         with self._lock:
             self.cleanup()
             return self._runs.get(run_id)
+
+    def historical(self, session_id: str, run_id: str) -> HistoricalRun | None:
+        if self.history_store is None:
+            return None
+        summary = self.history_store.get_run(session_id, run_id)
+        return HistoricalRun(summary, self.history_store) if summary is not None else None
 
     def cleanup(self) -> None:
         expired = [run_id for run_id, run in self._runs.items() if run.expired]
