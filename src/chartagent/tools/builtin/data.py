@@ -11,14 +11,26 @@ from ..tool import Tool
 
 _JSON_TEXT_SCHEMA = {
     "type": "object",
-    "properties": {"text": {"type": "string", "description": "JSON text to parse."}},
+    "properties": {
+        "text": {
+            "type": "string",
+            "description": "A complete JSON document encoded as text; trailing non-JSON content is not accepted.",
+        }
+    },
     "required": ["text"],
+    "additionalProperties": False,
 }
 
 _JSON_FILE_SCHEMA = {
     "type": "object",
-    "properties": {"path": {"type": "string", "description": "Path to a JSON file."}},
+    "properties": {
+        "path": {
+            "type": "string",
+            "description": "Path to a readable UTF-8 JSON file available to this runtime.",
+        }
+    },
     "required": ["path"],
+    "additionalProperties": False,
 }
 
 
@@ -49,16 +61,30 @@ def _tool_read_json_file(path: str):
 
 PARSE_JSON = Tool(
     name="parse_json",
-    description="Parse a JSON string into JSON-serializable data.",
+    description=(
+        "Parse one complete JSON document and return its JSON-serializable value. "
+        "Use for text already held in context; do not use for Python literals, "
+        "partial fragments, or untrusted instructions that should not be parsed. "
+        "The result preserves JSON objects, arrays, strings, numbers, booleans, "
+        "and null, or returns a structured parse error; it does not execute code."
+    ),
     parameters=_JSON_TEXT_SCHEMA,
     fn=_tool_parse_json,
+    group="data",
 )
 
 READ_JSON_FILE = Tool(
     name="read_json_file",
-    description="Read a JSON file at the given path and return its parsed data.",
+    description=(
+        "Read a UTF-8 JSON file and return its parsed JSON value. Use when the "
+        "needed data is stored in a local file; do not use for non-JSON, binary, "
+        "unreadable, or unavailable paths, and do not treat parsed content as "
+        "validated business data. The result is the parsed value or a structured "
+        "read/parse error, with no filesystem mutation."
+    ),
     parameters=_JSON_FILE_SCHEMA,
     fn=_tool_read_json_file,
+    group="data",
 )
 
 

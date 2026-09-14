@@ -1,13 +1,4 @@
-# tool-system Specification
-
-## Purpose
-
-Provides a declarative tool abstraction — tool definition, registration,
-dispatch, and serialization — whose shape is designed to be exposed to external
-agent hosts via MCP with minimal effort. It is the capability layer that future
-agent loops call, without building the loop itself.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Declarative tool definition
 
@@ -18,9 +9,9 @@ also carry a human-readable display name and a stable group identifier for
 user interfaces and execution traces. The model-facing description SHALL be
 one coherent paragraph that explains the tool's purpose, applicable input or
 situation, when it should not be used, returned data or visual evidence, and
-material limitations. The metadata SHALL be independent of the callable so the
-same tool can be described to an LLM or mapped to an external protocol without
-touching the callable.
+material limitations. The metadata SHALL be independent of the callable so
+the same tool can be described to an LLM or mapped to an external protocol
+without touching the callable.
 
 #### Scenario: Register a tool carrying core and display metadata
 
@@ -29,6 +20,12 @@ touching the callable.
 - **THEN** the definition retains the stable name, description, parameters,
   callable, display name, and group without executing or introspecting the
   callable
+
+#### Scenario: Tool metadata stays decoupled from the callable
+
+- **WHEN** a tool is read back for LLM tool-definition or external mapping
+- **THEN** its name, description, parameters schema, and bounded display
+  metadata are available without executing or introspecting the callable
 
 #### Scenario: Existing tool construction remains compatible
 
@@ -47,12 +44,6 @@ touching the callable.
   returns, and any material limitation
 - **AND** the model-facing definition does not require separate undocumented
   fields for selecting the tool
-
-#### Scenario: Tool metadata stays decoupled from the callable
-
-- **WHEN** a tool is read back for LLM tool-definition or external mapping
-- **THEN** the name, description and parameters schema are available without
-  executing or introspecting the callable
 
 ### Requirement: Tool registry
 
@@ -85,70 +76,22 @@ authorization boundary.
 - **AND** its parameters and description do not instruct the model to provide a
   local filesystem path
 
-### Requirement: Dispatch a tool call to execution
-
-The system SHALL dispatch a tool call — a name plus a JSON string of arguments —
-to the matching callable, running it with the parsed arguments, and SHALL handle
-the case of an unknown tool name.
-
-#### Scenario: Unknown tool name yields a structured error
-
-- **WHEN** a dispatch names a tool that is not registered
-- **THEN** it returns a structured error produced by the registry, so the caller
-  can feed it back to the model
-
-### Requirement: Structured result and serialization
-
-The system SHALL normalize tool execution into structured data, zero or more
-generated image payloads with captions, and zero or more non-fatal warnings.
-The structured portion SHALL serialize as a JSON string fit to enter message
-history, while generated images remain separate from JSON serialization. Tools
-that return existing JSON-serializable values SHALL continue to produce the
-same structured observation with no images or warnings. A failed call SHALL be
-represented as a structured error object so the LLM or an external host can
-read success and failure through the same observation contract.
-
-#### Scenario: Successful result is JSON-serialized
-
-- **WHEN** a tool call succeeds and the callable returns a value
-- **THEN** the result returns as a JSON string and can enter history, with no
-  generated images or warnings for a legacy JSON-serializable value
-
-#### Scenario: Enriched result separates data from images
-
-- **WHEN** a tool succeeds and returns structured data plus generated images
-- **THEN** the structured data and image metadata are JSON-serializable while
-  the image payloads are exposed separately for multimodal transport
-
-#### Scenario: Failure becomes a structured error
-
-- **WHEN** a tool call raises, or its result cannot be JSON-serialized
-- **THEN** the result is a `{"error": ...}` structure rather than an unhandled
-  exception or un-serializable object
-
-#### Scenario: Invalid image does not invalidate structured data
-
-- **WHEN** a tool returns serializable structured data alongside an invalid
-  generated image
-- **THEN** the structured observation remains successful and reports the image
-  problem as a non-fatal warning
-
 ### Requirement: Convertible to an MCP tool surface
 
-The system SHALL provide a thin conversion that maps registered tools to the MCP
-tool manifest shape (name, description, input schema) and their callables to an
-MCP-compatible callable form, producing the exposed surface without running a
-server. The converted manifest SHALL be derived from the same registered
-definition used by the Agent, and local presentation metadata MAY be retained
-in the manifest object without changing the standard MCP name, description, or
-input-schema fields.
+The system SHALL provide a thin conversion that maps registered tools to the
+MCP tool manifest shape (name, description, input schema) and their
+callables to an MCP-compatible callable form, producing the exposed surface
+without running a server. The converted manifest SHALL be derived from the
+same registered definition used by the Agent, and local presentation metadata
+MAY be retained in the manifest object without changing the
+standard MCP name, description, or input-schema fields.
 
 #### Scenario: Registry maps to MCP tool manifests
 
 - **WHEN** the registry is converted to an MCP tool surface
 - **THEN** each registered tool yields its stable name, normalized description
-  and parameters schema in MCP form, and a callable wrapper that can be invoked
-  for that tool
+  and parameters schema in MCP form, and a callable wrapper that can be
+  invoked for that tool
 - **AND** the manifest does not silently omit or invent required input fields
 
 #### Scenario: Agent and MCP descriptions agree
@@ -159,6 +102,8 @@ input-schema fields.
   parameter contract
 - **AND** optional local display metadata does not replace the description or
   input schema
+
+## ADDED Requirements
 
 ### Requirement: Tool parameter contracts are explicit and bounded
 

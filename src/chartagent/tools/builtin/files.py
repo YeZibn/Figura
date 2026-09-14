@@ -13,8 +13,14 @@ from ..tool import Tool
 
 _PATH_SCHEMA = {
     "type": "object",
-    "properties": {"path": {"type": "string", "description": "Filesystem path."}},
+    "properties": {
+        "path": {
+            "type": "string",
+            "description": "Path to a readable local file or directory; use only paths available to this runtime.",
+        }
+    },
     "required": ["path"],
+    "additionalProperties": False,
 }
 
 
@@ -40,16 +46,30 @@ def _error(message: str) -> str:
 
 READ_FILE = Tool(
     name="read_file",
-    description="Read a file at the given path and return its text content.",
+    description=(
+        "Read a UTF-8 text file and return its complete text. Use when the user has "
+        "identified a local text file whose contents are needed; do not use for "
+        "directories, binary or unknown-encoding files, or paths not available to "
+        "the runtime. The result is the file text or a structured error, and the "
+        "tool does not edit files or validate that the content is trustworthy."
+    ),
     parameters=_PATH_SCHEMA,
     fn=_tool_read_file,
+    group="file",
 )
 
 LIST_DIR = Tool(
     name="list_dir",
-    description="List the entry names in the directory at the given path.",
+    description=(
+        "List the immediate entry names in a local directory. Use when directory "
+        "contents must be discovered before selecting a file; do not use to read "
+        "file contents or to recursively inspect an unbounded tree. The result is "
+        "a sorted name list or a structured error, and entries are not opened or "
+        "interpreted by this tool."
+    ),
     parameters=_PATH_SCHEMA,
     fn=_tool_list_dir,
+    group="file",
 )
 
 

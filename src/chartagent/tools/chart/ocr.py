@@ -81,8 +81,13 @@ def extract_text(image_path: str) -> ToolResult | dict:
 EXTRACT_TEXT = Tool(
     name="extract_text",
     description=(
-        "Run OCR over an entire chart image and return text snippets with "
-        "pixel bounding boxes and confidence scores."
+        "Run OCR over the entire authorized chart image and return detected text "
+        "snippets with stable IDs, pixel bounding boxes, confidence scores, and a "
+        "labeled overlay. Use when labels, titles, annotations, or printed values "
+        "are needed; do not use it as a substitute for measuring geometry or for "
+        "reading stylized, rotated, obscured, or very small text as ground truth. "
+        "OCR output is visual evidence and may be empty or contain recognition "
+        "errors, so compare confidence and the overlay with other evidence."
     ),
     parameters={
         "type": "object",
@@ -96,4 +101,5 @@ EXTRACT_TEXT = Tool(
         "additionalProperties": False,
     },
     fn=extract_text,
+    group="chart-observation",
 )

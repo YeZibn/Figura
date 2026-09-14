@@ -338,7 +338,26 @@ def extract_pie_slices(image_path: str) -> ToolResult | dict:
 
 EXTRACT_PIE_SLICES = Tool(
     name="extract_pie_slices",
-    description="Extract sectors from a clean non-donut pie chart, including angular ratios, colors, labels, totals, confidence, and warnings.",
-    parameters={"type": "object", "properties": {"image_path": {"type": "string", "description": "Path to the local pie-chart image."}}, "required": ["image_path"], "additionalProperties": False},
+    description=(
+        "Extract sectors from a clean authorized non-donut pie chart and return "
+        "sector IDs, angles, ratios, colors, optional legend labels, totals, "
+        "confidence, warnings, and an overlay. Use when the image contains a "
+        "recognizable pie chart; do not use for donut, 3D, exploded, occluded, or "
+        "ambiguous circular graphics, and do not treat inferred labels or ratios "
+        "as exact source data when coverage is incomplete. Check consistency and "
+        "warnings before using the result for a ChartSpec."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "image_path": {
+                "type": "string",
+                "description": "Internal image path used only by the callable; authorized registrations replace this with attachment_id.",
+            }
+        },
+        "required": ["image_path"],
+        "additionalProperties": False,
+    },
     fn=extract_pie_slices,
+    group="chart-observation",
 )

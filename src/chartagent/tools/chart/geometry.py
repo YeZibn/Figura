@@ -261,8 +261,13 @@ def measure_bars(image_path: str) -> ToolResult | dict:
 MEASURE_BARS = Tool(
     name="measure_bars",
     description=(
-        "Measure single-series, grouped, or clean stacked bars, returning "
-        "pixel bounds, heights, series identities, and normalized ratios."
+        "Measure single-series, grouped, or clean stacked bars in an authorized "
+        "chart image and return bar IDs, pixel bounds, heights, category and series "
+        "evidence, normalized ratios, confidence, warnings, and an overlay. Use "
+        "when bar geometry or relative magnitudes are required; do not use it for "
+        "non-bar charts, 3D or heavily occluded bars, or as proof of exact source "
+        "values without axis calibration. Colors and stable geometry can identify "
+        "series, but labels and numeric values may remain unresolved."
     ),
     parameters={
         "type": "object",
@@ -276,4 +281,5 @@ MEASURE_BARS = Tool(
         "additionalProperties": False,
     },
     fn=measure_bars,
+    group="chart-observation",
 )

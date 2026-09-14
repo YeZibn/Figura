@@ -11,17 +11,21 @@ from __future__ import annotations
 from typing import Any, Callable, Dict, List
 
 from .registry import ToolRegistry
+from .tool import canonical_tool_definition
 
 
 class McpToolManifest:
     """MCP-shaped tool manifest plus a callable wrapper."""
 
     def __init__(self, name: str, description: str, input_schema: Dict[str, Any],
-                 abstract: Callable[..., Any]) -> None:
+                 abstract: Callable[..., Any], *, display_name: str | None = None,
+                 group: str = "general") -> None:
         self.name = name
         self.description = description
         self.input_schema = input_schema
         self.abstract = abstract  # placeholder for an MCP server callable
+        self.display_name = display_name
+        self.group = group
 
 
 def to_mcp_tools(registry: ToolRegistry) -> Dict[str, Any]:
@@ -33,11 +37,14 @@ def to_mcp_tools(registry: ToolRegistry) -> Dict[str, Any]:
     manifests: List[McpToolManifest] = []
     callables: Dict[str, Callable[..., Any]] = {}
     for tool in registry.list():
+        definition = canonical_tool_definition(tool)
         manifests.append(McpToolManifest(
-            name=tool.name,
-            description=tool.description,
-            input_schema=dict(tool.parameters),
+            name=definition["name"],
+            description=definition["description"],
+            input_schema=definition["parameters"],
             abstract=tool.fn,
+            display_name=tool.display_name,
+            group=tool.group,
         ))
         callables[tool.name] = tool.fn
     return {"manifests": manifests, "callables": callables}

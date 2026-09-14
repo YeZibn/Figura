@@ -123,4 +123,20 @@ class AttachmentRegistry:
                 return {"error": "attachment file is unavailable"}
             return ToolResult(item.metadata() | {"status": "loaded"}, (GeneratedImage(content, item.media_type, f"Loaded attachment {item.filename}"),))
 
-        return Tool("load_image", "Load an authorized image attachment for visual inspection.", {"type": "object", "properties": {"attachment_id": {"type": "string", "description": "Opaque attachment ID from the user turn."}}, "required": ["attachment_id"], "additionalProperties": False}, load_image)
+        return Tool(
+            "load_image",
+            "Load one authorized user image for visual inspection. Use when the model needs direct visual evidence that is not supplied by a chart sensor; do not provide a local filesystem path or an attachment ID not present in the current authorized context. The result contains bounded attachment metadata and image evidence, but loading does not prove that the image is a chart or that its contents are correct.",
+            {
+                "type": "object",
+                "properties": {
+                    "attachment_id": {
+                        "type": "string",
+                        "description": "Opaque authorized attachment ID from the user turn, such as att_<opaque-id>; never a local path or URL.",
+                    }
+                },
+                "required": ["attachment_id"],
+                "additionalProperties": False,
+            },
+            load_image,
+            group="attachment",
+        )

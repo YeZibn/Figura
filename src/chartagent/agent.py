@@ -35,6 +35,7 @@ from .trace import (
     summarize_result,
 )
 from .tools.registry import ToolRegistry, dispatch_observation
+from .tools.tool import canonical_tool_definition
 from .memory import AgentMemory, InMemoryAgentMemory, RunStatus
 from .review import ChartReviewManager, CandidateStatus, PublicationStatus
 from .tools.result import GeneratedImage
@@ -49,12 +50,13 @@ VisualObservationSink = Callable[[str, str, Sequence[GeneratedImage]], Sequence[
 
 def tool_to_openai_schema(tool: Any) -> dict:
     """Map a ``Tool`` to an OpenAI ``tools`` entry."""
+    definition = canonical_tool_definition(tool)
     return {
         "type": "function",
         "function": {
-            "name": tool.name,
-            "description": tool.description,
-            "parameters": tool.parameters,
+            "name": definition["name"],
+            "description": definition["description"],
+            "parameters": definition["parameters"],
         },
     }
 

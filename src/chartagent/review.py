@@ -577,18 +577,18 @@ class ChartReviewManager:
 
         return Tool(
             "review_generated_chart",
-            "Complete the mandatory review for one generated chart candidate. Use the exact candidateId and reviewId from the pending result; submit a structured decision only when the result requests one.",
+            "Complete the mandatory review for one generated chart candidate. Use the exact candidate_id and review_id from the pending render result, and submit decision only when the review status requires a bounded model decision; do not call this for ordinary source-image analysis or invent identifiers. The result contains candidate, review checks, evidence, publication status, and rejection or warning details. Tool completion means the review transition was processed, not that publication succeeded: claim the chart as published only when publication_status is published or published_with_warning.",
             {
                 "type": "object",
                 "properties": {
-                    "candidate_id": {"type": "string"},
-                    "review_id": {"type": "string"},
+                    "candidate_id": {"type": "string", "minLength": 1, "maxLength": 120, "description": "Exact candidateId returned by render_chart or an earlier review result."},
+                    "review_id": {"type": "string", "minLength": 1, "maxLength": 120, "description": "Exact reviewId paired with candidate_id in the pending result."},
                     "decision": {
                         "type": "object",
                         "properties": {
-                            "accepted": {"type": "boolean"},
-                            "reason": {"type": "string"},
-                            "evidence_refs": {"type": "array", "items": {"type": "string"}, "maxItems": MAX_REVIEW_EVIDENCE},
+                            "accepted": {"type": "boolean", "description": "Whether the candidate passes the requested semantic review."},
+                            "reason": {"type": "string", "maxLength": MAX_REVIEW_TEXT, "description": "Short bounded reason for accepting or rejecting the candidate."},
+                            "evidence_refs": {"type": "array", "items": {"type": "string", "maxLength": 120, "description": "Reference to supplied review evidence, such as a check or overlay."}, "maxItems": MAX_REVIEW_EVIDENCE, "description": "Evidence references required when accepting a semantically reviewed candidate."},
                         },
                         "required": ["accepted"],
                         "additionalProperties": False,
@@ -598,6 +598,7 @@ class ChartReviewManager:
                 "additionalProperties": False,
             },
             review_generated_chart,
+            group="chart-review",
         )
 
     def gate(self, run_id: str) -> dict[str, Any]:

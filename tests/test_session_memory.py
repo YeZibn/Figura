@@ -111,6 +111,33 @@ def test_chart_sensor_uses_authorized_attachment_id(tmp_path):
     assert unauthorized.images == ()
 
 
+def test_authorized_chart_tools_keep_identity_and_hide_local_paths():
+    from chartagent.tools.chart import register_chart_tools
+    from chartagent.tools.chart.register import CHART_TOOLS
+
+    attachments = AttachmentRegistry(session_id="session")
+    registry = ToolRegistry()
+    register_chart_tools(registry, attachments=attachments)
+    source_by_name = {tool.name: tool for tool in CHART_TOOLS}
+
+    for name in (
+        "extract_text",
+        "measure_bars",
+        "extract_line_series",
+        "extract_pie_slices",
+        "extract_scatter_points",
+    ):
+        public = registry.get(name)
+        source = source_by_name[name]
+        assert public is not None
+        assert public.name == source.name
+        assert public.description == source.description
+        assert public.group == source.group == "chart-observation"
+        assert set(public.parameters["properties"]) == {"attachment_id"}
+        assert "image_path" not in json.dumps(public.parameters)
+        assert "image_path" not in public.description
+
+
 def test_pie_sensor_uses_authorized_attachment_id(tmp_path, monkeypatch):
     from chartagent.tools import ToolRegistry, dispatch_observation
     from chartagent.tools.chart import register_chart_tools

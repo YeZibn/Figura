@@ -38,9 +38,23 @@ def _authorized_tool(tool: Tool, attachments: AttachmentRegistry) -> Tool:
     schema = dict(tool.parameters)
     schema["properties"] = dict(schema.get("properties", {}))
     schema["properties"].pop("image_path", None)
-    schema["properties"]["attachment_id"] = {"type": "string", "description": "Opaque authorized attachment ID from the user turn."}
-    schema["required"] = ["attachment_id"]
-    return Tool(tool.name, tool.description + " Accepts an authorized attachment ID.", schema, call)
+    schema["properties"]["attachment_id"] = {
+        "type": "string",
+        "description": "Opaque authorized attachment ID from the user turn; never a local filesystem path or URL.",
+    }
+    schema["required"] = [
+        field for field in schema.get("required", []) if field != "image_path"
+    ]
+    if "attachment_id" not in schema["required"]:
+        schema["required"].append("attachment_id")
+    return Tool(
+        tool.name,
+        tool.description,
+        schema,
+        call,
+        display_name=tool.display_name,
+        group=tool.group,
+    )
 
 
 def register_chart_tools(registry: ToolRegistry, *, attachments: AttachmentRegistry | None = None) -> None:

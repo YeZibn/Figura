@@ -248,8 +248,13 @@ def extract_line_series(image_path: str) -> ToolResult | dict:
 EXTRACT_LINE_SERIES = Tool(
     name="extract_line_series",
     description=(
-        "Extract ordered points from clean single- or multi-series line "
-        "charts, including pixel geometry, axis calibration, and series IDs."
+        "Extract ordered points from a clean authorized single- or multi-series line "
+        "chart and return series IDs, pixel geometry, optional axis calibration, "
+        "confidence, warnings, and a point overlay. Use when trends or plotted "
+        "coordinates must be recovered; do not use for filled areas, dense or "
+        "occluded lines, or as exact numeric truth when axes cannot be calibrated. "
+        "Unresolved labels, pixel-only coordinates, and overlapping or missed "
+        "points are reported as limitations rather than silently inferred."
     ),
     parameters={
         "type": "object",
@@ -263,4 +268,5 @@ EXTRACT_LINE_SERIES = Tool(
         "additionalProperties": False,
     },
     fn=extract_line_series,
+    group="chart-observation",
 )

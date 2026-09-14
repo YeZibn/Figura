@@ -371,9 +371,13 @@ def extract_scatter_points(image_path: str) -> ToolResult | dict:
 EXTRACT_SCATTER_POINTS = Tool(
     name="extract_scatter_points",
     description=(
-        "Extract points from clean two-dimensional scatter charts, including "
-        "series colors, pixel geometry, axis calibration, overlap evidence, "
-        "confidence, and warnings."
+        "Extract points from a clean authorized two-dimensional scatter chart and "
+        "return series colors and IDs, pixel geometry, optional axis calibration, "
+        "overlap evidence, confidence, warnings, and an overlay. Use when plotted "
+        "markers and trends are needed; do not use for dense, overlapping, 3D, or "
+        "non-scatter graphics, or as exact numeric truth when axes are not "
+        "calibrated. Treat missed overlaps, unresolved series labels, and pixel-only "
+        "coordinates as limitations requiring corroboration."
     ),
     parameters={
         "type": "object",
@@ -387,4 +391,5 @@ EXTRACT_SCATTER_POINTS = Tool(
         "additionalProperties": False,
     },
     fn=extract_scatter_points,
+    group="chart-observation",
 )
