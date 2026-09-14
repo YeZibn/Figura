@@ -20,6 +20,7 @@ from chartagent import (
 )
 from chartagent.agent import _assistant_entry, registry_tools
 from chartagent.client.models import NormalizedResult, ToolCall
+from chartagent.agent.review_gate import review_gate_context
 
 
 class ScriptedClient:
@@ -72,6 +73,23 @@ def test_final_answer_returned_no_tools():
     client = ScriptedClient([_final("hello")])
     agent = Agent(client, ToolRegistry(), system="sys")
     assert agent.run("hi") == "hello"
+
+
+def test_review_gate_context_is_bounded_structured_json():
+    context = json.loads(review_gate_context({
+        "pending": [{
+            "candidateId": "cand_1",
+            "reviewId": "review_1",
+            "candidateStatus": "review_pending",
+            "reviewStatus": "pending",
+            "publicationStatus": "unpublished",
+        }],
+        "failed": [],
+        "published": [],
+    }))
+    assert context["type"] == "chart_review_gate"
+    assert context["required_action"] == "review_pending_candidates"
+    assert context["pending"][0]["candidateId"] == "cand_1"
 
 
 def test_multi_step_tool_loop(tmp_path):

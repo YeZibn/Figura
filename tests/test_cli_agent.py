@@ -259,9 +259,10 @@ def test_agent_repl_registers_builtin_and_chart_tools(monkeypatch):
             "extract_pie_slices",
             "extract_scatter_points",
             "assemble_spec",
-            "validate_spec",
-            "render_chart",
-            "load_image",
+        "validate_spec",
+        "render_chart",
+        "load_image",
+        "review_generated_chart",
     }
 
 
@@ -282,17 +283,11 @@ def test_agent_repl_uses_advisory_chart_default(monkeypatch):
 
     assert cli_mod.run_agent_repl() == 0
     assert captured["system"] == cli_mod.AGENT_SYSTEM_PROMPT
-    for capability in (
-        "extract_text",
-        "measure_bars",
-        "extract_line_series",
-        "extract_scatter_points",
-        "assemble_spec",
-        "validate_spec",
-    ):
-        assert capability in captured["system"]
-    assert "Decide freely" in captured["system"]
-    assert "ChartSpec is optional" in captured["system"]
+    assert "evidence" in captured["system"]
+    assert "review_generated_chart" in captured["system"]
+    assert "published_with_warning" in captured["system"]
+    assert "Tool success" in captured["system"] or "Tool execution success" in captured["system"]
+    assert "registered tool descriptions and parameter schemas" in captured["system"]
 
 
 def test_agent_repl_accepts_explicit_system_override(monkeypatch):

@@ -9,8 +9,10 @@ from ..agent import Agent
 from ..attachments import AttachmentRegistry
 from ..client import LLMClient, load_environment
 from ..memory import SQLiteAgentMemory
+from ..review import ChartReviewManager
 from ..trace import TraceSink
 from ..tools.adapters.attachment import load_image_tool
+from ..tools.adapters.review import review_generated_chart_tool
 from ..tools.builtins import register_builtins
 from ..tools.chart import register_chart_tools
 from ..tools.core import GeneratedImage, ToolRegistry
@@ -52,10 +54,13 @@ def create_agent_runtime(
         load=memory.get_attachment if memory else None,
     )
     registry = registry_cls()
+    review_manager = ChartReviewManager(attachments=attachments)
     register_builtins_fn(registry)
     if hasattr(registry, "register"):
         registry.register(load_image_tool(attachments))
         register_chart_tools_fn(registry, attachments=attachments)
+        if registry.get("review_generated_chart") is None:
+            registry.register(review_generated_chart_tool(review_manager))
     else:
         register_chart_tools_fn(registry)
 
@@ -70,6 +75,7 @@ def create_agent_runtime(
     if memory is not None:
         agent_kwargs["memory"] = memory
     agent_kwargs["attachments"] = attachments
+    agent_kwargs["review_manager"] = review_manager
     try:
         agent = agent_cls(actual_client, registry, **agent_kwargs)
     except Exception:

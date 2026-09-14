@@ -215,6 +215,7 @@ def test_trace_preserves_multi_tool_order_and_structured_errors():
         ("tool_call", "ok-1", None),
         ("tool_result", "ok-1", "success"),
     ]
+    assert all(event.payload.get("tool_status") == event.payload.get("status") for event in events if event.kind == "tool_result")
 
 
 def test_trace_records_structured_tool_error_and_budget_termination():

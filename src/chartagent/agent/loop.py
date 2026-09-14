@@ -33,13 +33,19 @@ from ..trace import (
     summarize_result,
 )
 from ..tools.core import ToolRegistry, dispatch_observation, canonical_tool_definition
+from ..tools.core.presentation import get_tool_presentation
 from ..memory import AgentMemory, InMemoryAgentMemory, RunStatus
 from ..review import ChartReviewManager, CandidateStatus, PublicationStatus
 from ..tools.core.result import GeneratedImage
 from .tool_schema import registry_tools, tool_to_openai_schema
 from ..tools.adapters.review import review_generated_chart_tool
 from .messages import assistant_entry, tool_entry
-from .review_gate import _BUDGET_MSG, _REVIEW_REQUIRED_MSG, REVIEW_INCOMPLETE_MESSAGE
+from .review_gate import (
+    _BUDGET_MSG,
+    _REVIEW_REQUIRED_MSG,
+    REVIEW_INCOMPLETE_MESSAGE,
+    review_gate_context,
+)
 from .observations import observation_status
 
 # Sentinel returned when the step budget is exhausted.
@@ -206,16 +212,7 @@ class Agent:
                     self._current_messages.append(assistant_message)
                     self._messages.append(assistant_message)
                     self.memory.append(run, "assistant", {"message": assistant_message})
-                    gate_message = {
-                        "role": "user",
-                        "content": (
-                            "A generated chart review gate is still active. "
-                            "Do not claim publication. Call review_generated_chart "
-                            "for every pending candidate, or explain the bounded "
-                            "failure after the candidate is rejected. Structured state: "
-                            + json.dumps(gate, ensure_ascii=False)
-                        ),
-                    }
+                    gate_message = {"role": "user", "content": review_gate_context(gate)}
                     self._current_messages.append(gate_message)  # type: ignore[arg-type]
                     self._messages.append(gate_message)  # type: ignore[arg-type]
                     self.memory.append(run, "review_gate", {"state": gate})
@@ -243,10 +240,13 @@ class Agent:
             visual_evidence: list[ToolVisualEvidence] = []
             for call in result.tool_calls:
                 if emitter is not None:
+                    presentation = get_tool_presentation(call.name, tool=self.registry.get(call.name))
                     emitter.emit(
                         "tool_call",
                         turn=turn,
                         tool_name=call.name,
+                        tool_display_name=presentation.display_name,
+                        tool_label=presentation.label,
                         call_id=call.id,
                         arguments=summarize_arguments(call.arguments),
                     )
@@ -299,47 +299,53 @@ class Agent:
                         "tool_result",
                         turn=turn,
                         tool_name=call.name,
+                        tool_display_name=presentation.display_name,
+                        tool_label=presentation.label,
                         call_id=call.id,
                         status=observation_status(observation.content),
+                        tool_status=observation_status(observation.content),
                         result=summarize_result(observation.content),
                         image_count=len(observation.images),
                     )
                     review_items = self._review_items(observation.content)
                     for item in review_items:
-                        emitter.emit(
-                            "chart_review_started",
-                            turn=turn,
-                            tool_name=call.name,
-                            call_id=call.id,
-                            candidate_id=item.get("candidateId"),
-                            review_id=item.get("reviewId"),
-                            status=item.get("candidateStatus"),
-                        )
+                        review_status = item.get("reviewStatus")
+                        candidate_status = item.get("candidateStatus")
+                        publication_status = item.get("publicationStatus")
+                        common_review_fields = {
+                            "tool_name": call.name,
+                            "tool_display_name": presentation.display_name,
+                            "tool_label": presentation.label,
+                            "call_id": call.id,
+                            "candidate_id": item.get("candidateId"),
+                            "review_id": item.get("reviewId"),
+                            "candidate_status": candidate_status,
+                            "review_status": review_status,
+                            "publication_status": publication_status,
+                        }
+                        if candidate_status == "review_pending" and review_status in {"pending", "requires_model_decision"}:
+                            emitter.emit(
+                                "chart_review_started",
+                                turn=turn,
+                                **common_review_fields,
+                            )
                         if item.get("reviewStatus") == "completed":
                             emitter.emit(
                                 "chart_review_completed",
                                 turn=turn,
-                                tool_name=call.name,
-                                call_id=call.id,
-                                candidate_id=item.get("candidateId"),
-                                review_id=item.get("reviewId"),
-                                status=item.get("candidateStatus"),
-                                publication_status=item.get("publicationStatus"),
+                                **common_review_fields,
                             )
                             if item.get("publicationStatus") in {"published", "published_with_warning"}:
                                 emitter.emit(
                                     "generated_chart_published",
                                     turn=turn,
-                                    candidate_id=item.get("candidateId"),
-                                    review_id=item.get("reviewId"),
-                                    publication_status=item.get("publicationStatus"),
+                                    **common_review_fields,
                                 )
                             if item.get("publicationStatus") == "rejected":
                                 emitter.emit(
                                     "generated_chart_rejected",
                                     turn=turn,
-                                    candidate_id=item.get("candidateId"),
-                                    review_id=item.get("reviewId"),
+                                    **common_review_fields,
                                     reason="review_failed",
                                 )
                     if observation.images:

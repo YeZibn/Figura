@@ -206,6 +206,36 @@ def test_agent_final_answer_is_rejected_while_source_linked_candidate_is_pending
     assert "review_generated_chart" in {item["function"]["name"] for item in client.calls[1]}
 
 
+def test_pending_review_trace_has_independent_lifecycle_fields():
+    import json
+
+    spec = _bar_spec().to_dict()
+
+    class Client:
+        def __init__(self):
+            self.calls = 0
+
+        def chat(self, _messages, **_kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                return NormalizedResult(
+                    tool_calls=[ToolCall("render", "render_chart", json.dumps({"spec": spec}))]
+                )
+            return NormalizedResult(content="等待审核")
+
+    events = []
+    registry = ToolRegistry()
+    register_chart_tools(registry)
+    result = Agent(Client(), registry, max_steps=2, trace=events.append).run("请重绘 att_source")
+
+    assert result == "*stopped: generated chart review incomplete*"
+    started = next(event for event in events if event.kind == "chart_review_started")
+    assert started.payload["candidate_status"] == "review_pending"
+    assert started.payload["review_status"] == "pending"
+    assert started.payload["publication_status"] == "unpublished"
+    assert "status" not in started.payload
+
+
 def test_gateway_publishes_only_after_direct_candidate_review(tmp_path):
     database = tmp_path / "gateway-review.db"
 
