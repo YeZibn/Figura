@@ -22,7 +22,7 @@ from .memory import SQLiteAgentMemory
 from .runtime import AGENT_SYSTEM_PROMPT, AgentRuntime, create_agent_runtime
 from .trace import JsonlTraceRenderer, TextTraceRenderer, TraceSink
 from .tools import ToolRegistry
-from .tools.builtin import register_builtins
+from .tools.builtins import register_builtins
 from .tools.chart import register_chart_tools
 
 _IMAGE_REF = re.compile(r'@"([^"\r\n]+)"|@(?!")(\S+)')

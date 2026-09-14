@@ -11,7 +11,7 @@ from threading import Condition, RLock
 from typing import Callable, Iterable
 from uuid import uuid4
 
-from ..tools.result import (
+from ..tools.core.result import (
     DEFAULT_MAX_GENERATED_IMAGE_BYTES,
     DEFAULT_MAX_GENERATED_IMAGES,
     GeneratedImage,

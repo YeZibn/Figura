@@ -5,7 +5,7 @@ import json
 import pytest
 
 from chartagent import ToolRegistry, dispatch
-from chartagent.tools.builtin import TOOL_NAMES, register_builtins
+from chartagent.tools.builtins import TOOL_NAMES, register_builtins
 
 
 @pytest.fixture

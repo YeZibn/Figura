@@ -46,7 +46,7 @@ from .tools import (
     dispatch_observation,
     to_mcp_tools,
 )
-from .tools.builtin import register_builtins
+from .tools.builtins import register_builtins
 
 __all__ = [
     "Agent",

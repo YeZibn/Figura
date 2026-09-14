@@ -10,6 +10,7 @@ from .chartspec import (
     DataPoint,
     ValidationIssue,
 )
+from .identity import chart_spec_digest
 
 __all__ = [
     "ChartSpec",
@@ -19,4 +20,5 @@ __all__ = [
     "Axis",
     "DataPoint",
     "ValidationIssue",
+    "chart_spec_digest",
 ]

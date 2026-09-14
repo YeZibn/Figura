@@ -14,7 +14,7 @@ from ..memory.sqlite import default_database_path
 from ..multimodal import build_registered_attachment_turn
 from ..runtime import AgentRuntime, create_agent_runtime, probe_agent_readiness
 from ..agent import REVIEW_INCOMPLETE_MESSAGE
-from ..tools.result import GeneratedImage
+from ..tools.core.result import GeneratedImage
 from ..trace import TraceSink
 from .attachments import AttachmentStoreError, EphemeralAttachmentStore
 from .history import GatewayHistoryStore, HistoryStoreError

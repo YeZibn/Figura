@@ -9,11 +9,11 @@ from PIL import Image
 
 from chartagent.spec import Axes, Axis, ChartMetadata, ChartSpec, ChartType, DataPoint
 from chartagent.tools import ToolRegistry, dispatch_observation
-from chartagent.tools.chart import generation
-from chartagent.tools.chart.generation import MAX_CHART_HEIGHT, render_chart
-from chartagent.tools.chart.register import register_chart_tools
-from chartagent.tools.chart.spec_tools import validate_spec
-from chartagent.tools.result import ToolResult
+from chartagent.tools.chart import rendering
+from chartagent.tools.chart.rendering import MAX_CHART_HEIGHT, render_chart
+from chartagent.tools.chart.catalog import register_chart_tools
+from chartagent.tools.chart.specification import validate_spec
+from chartagent.tools.core.result import ToolResult
 
 
 def _spec(chart_type: ChartType) -> ChartSpec:
@@ -73,8 +73,8 @@ def test_render_chart_preserves_multi_series_metadata():
 
 def test_configured_font_is_used_without_exposing_path(monkeypatch):
     font_path = font_manager.findfont(FontProperties(family="DejaVu Sans"))
-    monkeypatch.setenv(generation.FONT_PATH_ENV, font_path)
-    monkeypatch.setattr(generation, "_font_supports_cjk", lambda _path: True)
+    monkeypatch.setenv(rendering.FONT_PATH_ENV, font_path)
+    monkeypatch.setattr(rendering, "_font_supports_cjk", lambda _path: True)
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", UserWarning)
@@ -92,7 +92,7 @@ def test_configured_font_is_used_without_exposing_path(monkeypatch):
 
 
 def test_invalid_configured_font_returns_bounded_fallback(monkeypatch):
-    monkeypatch.setenv(generation.FONT_PATH_ENV, "/missing/figura-cjk-font.ttf")
+    monkeypatch.setenv(rendering.FONT_PATH_ENV, "/missing/figura-cjk-font.ttf")
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", UserWarning)
@@ -105,7 +105,7 @@ def test_invalid_configured_font_returns_bounded_fallback(monkeypatch):
         "family": None,
     }
     assert len(result.warnings) == 1
-    assert generation.FONT_PATH_ENV in result.warnings[0]
+    assert rendering.FONT_PATH_ENV in result.warnings[0]
     assert "/missing/" not in str(result.data)
 
 
@@ -118,25 +118,25 @@ def test_system_font_resolution_is_ordered_and_reported(monkeypatch):
             return font_path
         family = properties.get_family()[0]
         seen_families.append(family)
-        if family == generation._CJK_FAMILIES[1]:
+        if family == rendering._CJK_FAMILIES[1]:
             return font_path
         raise ValueError("font not found")
 
-    monkeypatch.delenv(generation.FONT_PATH_ENV, raising=False)
-    monkeypatch.setattr(generation.font_manager, "findfont", fake_findfont)
-    monkeypatch.setattr(generation, "_font_supports_cjk", lambda _path: True)
-    monkeypatch.setattr(generation, "_font_name", lambda _properties, _path: "DejaVu Sans")
+    monkeypatch.delenv(rendering.FONT_PATH_ENV, raising=False)
+    monkeypatch.setattr(rendering.font_manager, "findfont", fake_findfont)
+    monkeypatch.setattr(rendering, "_font_supports_cjk", lambda _path: True)
+    monkeypatch.setattr(rendering, "_font_name", lambda _properties, _path: "DejaVu Sans")
 
-    resolved = generation._resolve_font()
+    resolved = rendering._resolve_font()
 
     assert resolved.status == "resolved"
     assert resolved.source == "system"
     assert resolved.family == "DejaVu Sans"
-    assert seen_families == list(generation._CJK_FAMILIES[:2])
+    assert seen_families == list(rendering._CJK_FAMILIES[:2])
 
 
 def test_chinese_specs_keep_font_diagnostics_for_all_chart_types(monkeypatch):
-    monkeypatch.setenv(generation.FONT_PATH_ENV, "")
+    monkeypatch.setenv(rendering.FONT_PATH_ENV, "")
     for chart_type in ChartType:
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
@@ -241,7 +241,7 @@ def test_render_chart_applies_numeric_axis_ranges(monkeypatch):
         observed["limits"] = (tuple(float(value) for value in ax.get_xlim()), tuple(float(value) for value in ax.get_ylim()))
         return []
 
-    monkeypatch.setattr(generation, "_audit_figure", capture)
+    monkeypatch.setattr(rendering, "_audit_figure", capture)
     spec = _spec(ChartType.LINE).to_dict()
     spec["axes"]["x"].update({"min_value": 1, "max_value": 2})
     spec["axes"]["y"].update({"min_value": 0, "max_value": 5})
@@ -264,7 +264,7 @@ def test_render_chart_respects_declared_bar_category_order():
 
 
 def test_artist_fidelity_failure_does_not_publish_image(monkeypatch):
-    monkeypatch.setattr(generation, "_render_bar", lambda ax, spec, font: ax.bar([0], [1]))
+    monkeypatch.setattr(rendering, "_render_bar", lambda ax, spec, font: ax.bar([0], [1]))
 
     result = render_chart(_spec(ChartType.BAR).to_dict())
 
@@ -313,7 +313,7 @@ def test_render_chart_rejects_blank_encoded_png(monkeypatch):
     def blank_savefig(_figure, target, **_kwargs):
         Image.new("RGB", (1200, 800), "white").save(target, format="PNG")
 
-    monkeypatch.setattr(generation.plt.Figure, "savefig", blank_savefig)
+    monkeypatch.setattr(rendering.plt.Figure, "savefig", blank_savefig)
 
     result = render_chart(_spec(ChartType.BAR).to_dict())
 
@@ -325,7 +325,7 @@ def test_render_chart_rejects_malformed_encoded_png(monkeypatch):
     def malformed_savefig(_figure, target, **_kwargs):
         target.write(b"not a png")
 
-    monkeypatch.setattr(generation.plt.Figure, "savefig", malformed_savefig)
+    monkeypatch.setattr(rendering.plt.Figure, "savefig", malformed_savefig)
 
     result = render_chart(_spec(ChartType.BAR).to_dict())
 

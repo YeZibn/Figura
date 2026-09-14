@@ -26,7 +26,7 @@ from chartagent.gateway.runs import ObservationStore, RunManager
 from chartagent.memory import SQLiteAgentMemory, RunStatus
 from chartagent.memory.models import Record, Run
 from chartagent.runtime import AgentRuntime
-from chartagent.tools.result import GeneratedImage
+from chartagent.tools.core.result import GeneratedImage
 from chartagent.trace import TraceEvent
 from chartagent.client.models import NormalizedResult, ToolCall
 from chartagent.tools import Tool, ToolRegistry, ToolResult

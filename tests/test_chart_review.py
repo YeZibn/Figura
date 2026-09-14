@@ -11,11 +11,11 @@ from chartagent.review import (
 )
 import pytest
 from chartagent.spec import Axes, Axis, ChartMetadata, ChartSpec, ChartType, DataPoint
-from chartagent.tools.chart.generation import render_chart
+from chartagent.tools.chart.rendering import render_chart
 from chartagent.agent import Agent
 from chartagent.client.models import NormalizedResult, ToolCall
 from chartagent.tools import ToolRegistry
-from chartagent.tools.chart.register import register_chart_tools
+from chartagent.tools.chart.catalog import register_chart_tools
 from chartagent.gateway.service import GatewayService
 from chartagent.runtime import AgentRuntime
 from chartagent.gateway.history import GatewayHistoryStore

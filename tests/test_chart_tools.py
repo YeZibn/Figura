@@ -9,13 +9,13 @@ from PIL import Image, ImageChops
 
 from chartagent.spec import ChartSpec
 from chartagent.tools import Tool, ToolRegistry, ToolResult, dispatch_observation
-from chartagent.tools.chart import overlays
-from chartagent.tools.chart.geometry import measure_bars
-from chartagent.tools.chart.line import extract_line_series
-from chartagent.tools.chart.ocr import extract_text
-from chartagent.tools.chart.pie import extract_pie_slices
-from chartagent.tools.chart.scatter import extract_scatter_points
-from chartagent.tools.chart.spec_tools import assemble_spec, validate_spec
+from chartagent.tools.chart.observation import overlays
+from chartagent.tools.chart.observation.bars import measure_bars
+from chartagent.tools.chart.observation.line import extract_line_series
+from chartagent.tools.chart.observation.ocr import extract_text
+from chartagent.tools.chart.observation.pie import extract_pie_slices
+from chartagent.tools.chart.observation.scatter import extract_scatter_points
+from chartagent.tools.chart.specification import assemble_spec, validate_spec
 from tests.chart_fixtures import (
     annotated_bar_chart,
     grouped_bar_chart,
@@ -84,7 +84,7 @@ def test_extract_text_no_detections_returns_source_sized_overlay(
         txts = None
         scores = None
 
-    monkeypatch.setattr("chartagent.tools.chart.ocr._engine", lambda _path: _EmptyResult())
+    monkeypatch.setattr("chartagent.tools.chart.observation.ocr._engine", lambda _path: _EmptyResult())
 
     result = extract_text(str(annotated_chart_path))
 
@@ -207,7 +207,7 @@ def test_extract_line_series_preserves_colored_series_and_points(tmp_path, monke
     png_bytes, _ = line_chart()
     chart_path = tmp_path / "lines.png"
     chart_path.write_bytes(png_bytes)
-    monkeypatch.setattr("chartagent.tools.chart.line.extract_text", lambda _path: ToolResult([]))
+    monkeypatch.setattr("chartagent.tools.chart.observation.line.extract_text", lambda _path: ToolResult([]))
 
     result = extract_line_series(str(chart_path))
 
@@ -242,7 +242,7 @@ def test_extract_line_series_calibrates_when_tick_evidence_is_available(tmp_path
         {"text": "6", "bbox": [36, 98, 20, 12], "confidence": 0.99},
     ]
     monkeypatch.setattr(
-        "chartagent.tools.chart.line.extract_text",
+        "chartagent.tools.chart.observation.line.extract_text",
         lambda _path: ToolResult(snippets),
     )
 
@@ -268,7 +268,7 @@ def test_extract_scatter_points_preserves_series_and_calibrated_coordinates(tmp_
         for value, top in zip([0, 2, 4, 6, 8], [418, 325, 233, 140, 48])
     ]
     monkeypatch.setattr(
-        "chartagent.tools.chart.scatter.extract_text",
+        "chartagent.tools.chart.observation.scatter.extract_text",
         lambda _path: ToolResult(snippets),
     )
 
@@ -307,7 +307,7 @@ def test_extract_scatter_points_preserves_pixel_evidence_when_uncalibrated(tmp_p
     chart_path = tmp_path / "uncalibrated-scatter.png"
     chart_path.write_bytes(png_bytes)
     monkeypatch.setattr(
-        "chartagent.tools.chart.scatter.extract_text",
+        "chartagent.tools.chart.observation.scatter.extract_text",
         lambda _path: ToolResult([]),
     )
 
@@ -328,7 +328,7 @@ def test_extract_scatter_points_reports_overlap_and_outlier_evidence(tmp_path, m
     chart_path = tmp_path / "uncertain-scatter.png"
     chart_path.write_bytes(png_bytes)
     monkeypatch.setattr(
-        "chartagent.tools.chart.scatter.extract_text",
+        "chartagent.tools.chart.observation.scatter.extract_text",
         lambda _path: ToolResult([]),
     )
 
@@ -370,7 +370,7 @@ def test_extract_pie_slices_measures_clean_sectors(tmp_path, monkeypatch):
     png_bytes, _ = pie_chart(values=(35, 25, 20, 20))
     chart_path = tmp_path / "pie.png"
     chart_path.write_bytes(png_bytes)
-    monkeypatch.setattr("chartagent.tools.chart.pie.extract_text", lambda _path: ToolResult([]))
+    monkeypatch.setattr("chartagent.tools.chart.observation.pie.extract_text", lambda _path: ToolResult([]))
 
     result = extract_pie_slices(str(chart_path))
 
@@ -395,7 +395,7 @@ def test_extract_pie_slices_preserves_printed_values_separately(tmp_path, monkey
     snippets = [
         {"id": 1, "text": "60%", "bbox": [315, 240, 32, 16], "confidence": 0.98},
     ]
-    monkeypatch.setattr("chartagent.tools.chart.pie.extract_text", lambda _path: ToolResult(snippets))
+    monkeypatch.setattr("chartagent.tools.chart.observation.pie.extract_text", lambda _path: ToolResult(snippets))
 
     result = extract_pie_slices(str(chart_path))
 
@@ -414,7 +414,7 @@ def test_extract_pie_slices_associates_legend_color_and_label(tmp_path, monkeypa
         {"id": 1, "text": "Alpha", "bbox": [435, 201, 40, 14], "confidence": 0.96},
         {"id": 2, "text": "Beta", "bbox": [435, 226, 32, 14], "confidence": 0.96},
     ]
-    monkeypatch.setattr("chartagent.tools.chart.pie.extract_text", lambda _path: ToolResult(snippets))
+    monkeypatch.setattr("chartagent.tools.chart.observation.pie.extract_text", lambda _path: ToolResult(snippets))
 
     result = extract_pie_slices(str(chart_path))
 
@@ -427,9 +427,9 @@ def test_extract_pie_slices_reports_incomplete_sector_totals(tmp_path, monkeypat
     png_bytes, _ = pie_chart(values=(60, 40), labels=("Alpha", "Beta"), show_labels=False)
     chart_path = tmp_path / "incomplete-pie.png"
     chart_path.write_bytes(png_bytes)
-    monkeypatch.setattr("chartagent.tools.chart.pie.extract_text", lambda _path: ToolResult([]))
+    monkeypatch.setattr("chartagent.tools.chart.observation.pie.extract_text", lambda _path: ToolResult([]))
     monkeypatch.setattr(
-        "chartagent.tools.chart.pie._sample_labels",
+        "chartagent.tools.chart.observation.pie._sample_labels",
         lambda _rgb, _circle, _palette: (
             np.concatenate([np.zeros(360, dtype=int), np.full(360, -1, dtype=int)]),
             0.5,

@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
-from .tools.result import GeneratedImage
+from .tools.core.result import GeneratedImage
 
 # Explicit extension -> MIME map: mimetypes can be wrong or absent on some
 # systems, and U0 only needs these formats anyway.

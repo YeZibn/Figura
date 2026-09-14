@@ -182,7 +182,7 @@ def test_agent_restores_multi_series_line_without_fixed_tool_sequence(tmp_path, 
     # The deterministic sensor test focuses on series separation. The scripted
     # model supplies semantic values from the same fixture after observing it.
     monkeypatch.setattr(
-        "chartagent.tools.chart.line.extract_text",
+        "chartagent.tools.chart.observation.line.extract_text",
         lambda _path: __import__("chartagent.tools", fromlist=["ToolResult"]).ToolResult([]),
     )
     registry = ToolRegistry()
@@ -245,7 +245,7 @@ def test_agent_restores_pie_without_cartesian_tool_sequence(tmp_path, monkeypatc
     png_bytes, _ = pie_chart(values=(35, 25, 20, 20))
     image_path = tmp_path / "pie.png"
     image_path.write_bytes(png_bytes)
-    monkeypatch.setattr("chartagent.tools.chart.pie.extract_text", lambda _path: __import__("chartagent.tools", fromlist=["ToolResult"]).ToolResult([]))
+    monkeypatch.setattr("chartagent.tools.chart.observation.pie.extract_text", lambda _path: __import__("chartagent.tools", fromlist=["ToolResult"]).ToolResult([]))
 
     registry = ToolRegistry()
     register_chart_tools(registry)
@@ -316,7 +316,7 @@ def test_agent_restores_scatter_without_fixed_tool_sequence(tmp_path, monkeypatc
     image_path = tmp_path / "scatter.png"
     image_path.write_bytes(png_bytes)
     monkeypatch.setattr(
-        "chartagent.tools.chart.scatter.extract_text",
+        "chartagent.tools.chart.observation.scatter.extract_text",
         lambda _path: __import__("chartagent.tools", fromlist=["ToolResult"]).ToolResult([]),
     )
 

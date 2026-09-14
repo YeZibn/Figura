@@ -8,10 +8,10 @@ from chartagent.memory import SQLiteAgentMemory, RunStatus
 from chartagent.memory.context import build_context, sanitize_payload
 from chartagent.memory.models import Record, Run
 from chartagent.tools import ToolRegistry
-from chartagent.tools.registry import dispatch_observation
+from chartagent.tools.core.registry import dispatch_observation
 from chartagent.agent import Agent
 from chartagent.client.models import NormalizedResult, ToolCall
-from chartagent.tools.tool import Tool
+from chartagent.tools.core.definition import Tool
 
 
 def test_sqlite_reopens_completed_runs_and_interrupts_active(tmp_path):
@@ -113,7 +113,7 @@ def test_chart_sensor_uses_authorized_attachment_id(tmp_path):
 
 def test_authorized_chart_tools_keep_identity_and_hide_local_paths():
     from chartagent.tools.chart import register_chart_tools
-    from chartagent.tools.chart.register import CHART_TOOLS
+    from chartagent.tools.chart.catalog import CHART_TOOLS
 
     attachments = AttachmentRegistry(session_id="session")
     registry = ToolRegistry()
@@ -145,7 +145,7 @@ def test_pie_sensor_uses_authorized_attachment_id(tmp_path, monkeypatch):
 
     image = tmp_path / "pie.png"
     image.write_bytes(pie_chart()[0])
-    monkeypatch.setattr("chartagent.tools.chart.pie.extract_text", lambda _path: __import__("chartagent.tools", fromlist=["ToolResult"]).ToolResult([]))
+    monkeypatch.setattr("chartagent.tools.chart.observation.pie.extract_text", lambda _path: __import__("chartagent.tools", fromlist=["ToolResult"]).ToolResult([]))
     attachments = AttachmentRegistry(session_id="session")
     item = attachments.register(str(image))
     registry = ToolRegistry()
@@ -176,7 +176,7 @@ def test_scatter_sensor_uses_authorized_attachment_id(tmp_path, monkeypatch):
     image = tmp_path / "scatter.png"
     image.write_bytes(scatter_chart()[0])
     monkeypatch.setattr(
-        "chartagent.tools.chart.scatter.extract_text",
+        "chartagent.tools.chart.observation.scatter.extract_text",
         lambda _path: __import__("chartagent.tools", fromlist=["ToolResult"]).ToolResult([]),
     )
     attachments = AttachmentRegistry(session_id="session")
