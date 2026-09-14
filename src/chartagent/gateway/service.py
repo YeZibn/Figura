@@ -13,6 +13,7 @@ from ..memory import SQLiteAgentMemory
 from ..memory.sqlite import default_database_path
 from ..multimodal import build_registered_attachment_turn
 from ..runtime import AgentRuntime, create_agent_runtime, probe_agent_readiness
+from ..agent import REVIEW_INCOMPLETE_MESSAGE
 from ..tools.result import GeneratedImage
 from ..trace import TraceSink
 from .attachments import AttachmentStoreError, EphemeralAttachmentStore
@@ -296,6 +297,21 @@ class GatewayService:
             raise GatewayFault("generated_artifact_unavailable", 404, "Generated chart is unavailable")
         return item
 
+    def get_generated_candidate(
+        self,
+        session_id: object,
+        run_id: object,
+        candidate_id: object,
+    ) -> tuple[bytes, str]:
+        session = self._resolve_session(session_id)
+        run = self.get_run(session.id, run_id)
+        if not isinstance(candidate_id, str) or not candidate_id.strip():
+            raise GatewayFault("invalid_request", 400, "Candidate ID is required")
+        item = self._history.get_candidate(session.id, run.run_id, candidate_id)
+        if item is None:
+            raise GatewayFault("generated_candidate_unavailable", 404, "Generated chart candidate is unavailable")
+        return item
+
     def _start_managed_run(
         self,
         session_id: object,
@@ -369,6 +385,16 @@ class GatewayService:
         finally:
             runtime.close()
 
+        if str(answer) == REVIEW_INCOMPLETE_MESSAGE:
+            run.publish(
+                "run_failed",
+                {
+                    "code": "review_incomplete",
+                    "message": "Generated chart review did not complete within the bounded run",
+                },
+            )
+            run.fail("review_incomplete", 422, "Generated chart review did not complete", "review_incomplete")
+            return
         if not run.has_event("final_answer"):
             run.publish("final_answer", {"answer": str(answer)})
         run.complete(str(answer))
@@ -418,7 +444,23 @@ class GatewayService:
             is_generated_chart = isinstance(metadata, Mapping) and metadata.get("kind") == "generated_chart"
             reference = None
             try:
-                reference = self._history.add_artifact(run.run_id, run.session_id, image)
+                if is_generated_chart and metadata.get("candidateId"):
+                    reference = self._history.add_candidate(run.run_id, run.session_id, image)
+                    publication = str(metadata.get("publicationStatus", "unpublished"))
+                    if reference is not None and publication in {"published", "published_with_warning"}:
+                        reference = self._history.promote_candidate(
+                            run.run_id,
+                            run.session_id,
+                            str(metadata.get("candidateId")),
+                            str(metadata.get("reviewId", "")),
+                            str(metadata.get("chartSpecDigest", "")),
+                            candidate_status=str(metadata.get("candidateStatus", "")),
+                            review_status=str(metadata.get("reviewStatus", "")),
+                            publication_status=publication,
+                            review=metadata.get("review") if isinstance(metadata.get("review"), Mapping) else None,
+                        )
+                else:
+                    reference = self._history.add_artifact(run.run_id, run.session_id, image)
             except Exception:  # noqa: BLE001 - visual evidence must not stop the run
                 reference = None
             if is_generated_chart:

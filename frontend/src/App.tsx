@@ -118,7 +118,7 @@ function normalizeTimeline(events: AgentRunEvent[]): TimelineRow[] {
 }
 
 function generatedArtifacts(events: AgentRunEvent[]): GeneratedChartReference[] {
-  return events
+  const references = events
     .filter((event) => event.kind === 'generated_chart')
     .flatMap((event) => {
       const artifacts = eventPayload(event).artifacts
@@ -126,6 +126,13 @@ function generatedArtifacts(events: AgentRunEvent[]): GeneratedChartReference[] 
         ? artifacts.filter((item): item is GeneratedChartReference => Boolean(item && typeof item === 'object' && (item as Record<string, unknown>).artifactKind === 'generated_chart'))
         : []
     })
+  const byCandidate = new Map<string, GeneratedChartReference>()
+  references.forEach((reference) => {
+    const key = reference.candidateId || reference.artifactId || `${reference.title || 'chart'}-${reference.chartSpecDigest || ''}`
+    const current = byCandidate.get(key)
+    if (!current || (!current.artifactId && reference.artifactId) || (current.status === 'pending' && reference.status !== 'pending')) byCandidate.set(key, reference)
+  })
+  return [...byCandidate.values()]
 }
 
 function mergeEvents(current: AgentRunEvent[], incoming: AgentRunEvent[]): AgentRunEvent[] {
@@ -210,8 +217,8 @@ function GeneratedChartView({ artifact }: { artifact: GeneratedChartReference })
   const [downloadError, setDownloadError] = useState('')
   const [imageFailed, setImageFailed] = useState(false)
   useEffect(() => setImageFailed(false), [artifact.imageUrl])
-  const status = artifact.status === 'failed' ? 'failed' : artifact.status === 'unavailable' || !artifact.imageUrl || imageFailed ? 'unavailable' : 'available'
-  const statusLabel = status === 'available' ? '已生成' : status === 'failed' ? '生成失败' : '暂不可用'
+  const status = artifact.status === 'failed' ? 'failed' : artifact.status === 'pending' ? 'pending' : artifact.status === 'warning' ? 'warning' : artifact.status === 'unavailable' || !artifact.imageUrl || imageFailed ? 'unavailable' : 'available'
+  const statusLabel = status === 'available' ? '已验证' : status === 'warning' ? '已发布·有警告' : status === 'pending' ? '审核中' : status === 'failed' ? '审核未通过' : '暂不可用'
   const metadata = [
     artifact.chartType ? chartTypeLabel(artifact.chartType) : '',
     artifact.width && artifact.height ? `${artifact.width} × ${artifact.height}` : '',
@@ -240,14 +247,14 @@ function GeneratedChartView({ artifact }: { artifact: GeneratedChartReference })
     }
   }
   return <article className={'generated-chart ' + status}>
-    <div className="generated-chart-heading"><div className="observation-label"><BarChart3 size={13} /><strong>生成图表</strong><span>{statusLabel}</span></div>{artifact.downloadUrl && status === 'available' && <button className="chart-download" type="button" onClick={() => void download()} disabled={downloading} title="下载生成图表"><Download size={13} />{downloading ? '正在下载' : '下载 PNG'}</button>}</div>
-    {artifact.imageUrl && status === 'available' ? <img src={artifact.imageUrl} alt={artifact.title || artifact.caption || '生成图表'} onError={() => setImageFailed(true)} /> : <div className="observation-placeholder">{status === 'failed' ? '图表生成失败，未产生可下载文件' : '图表文件已过期或暂不可用'}</div>}
+    <div className="generated-chart-heading"><div className="observation-label"><BarChart3 size={13} /><strong>生成图表</strong><span>{statusLabel}</span></div>{artifact.downloadUrl && (status === 'available' || status === 'warning') && <button className="chart-download" type="button" onClick={() => void download()} disabled={downloading} title="下载生成图表"><Download size={13} />{downloading ? '正在下载' : '下载 PNG'}</button>}</div>
+    {artifact.imageUrl && (status === 'available' || status === 'warning' || status === 'pending') ? <img src={artifact.imageUrl} alt={artifact.title || artifact.caption || '生成图表'} onError={() => setImageFailed(true)} /> : <div className="observation-placeholder">{status === 'failed' ? '图表审核未通过，未产生可下载文件' : '图表文件已过期或暂不可用'}</div>}
     <div className="generated-chart-copy"><strong>{artifact.title || artifact.caption || '未命名图表'}</strong>{metadata && <small>{metadata}</small>}{artifact.reason && <small className="generated-chart-reason">{artifact.reason}</small>}{downloadError && <small className="generated-chart-reason">{downloadError}</small>}</div>
   </article>
 }
 
 function eventLabel(event: AgentRunEvent): string {
-  const labels: Record<string, string> = { run_started: '运行已开始', model_started: '模型轮次开始', model_completed: '模型轮次完成', progress: '处理中', generated_chart: '图表已生成', final_answer: '最终回答已生成', budget_exhausted: '达到预算上限', run_failed: '运行失败', history_gap: '历史记录不完整' }
+  const labels: Record<string, string> = { run_started: '运行已开始', model_started: '模型轮次开始', model_completed: '模型轮次完成', progress: '处理中', generated_chart: '图表状态已更新', chart_review_required: '等待图表审核', generated_chart_published: '图表已发布', chart_review_completed: '图表审核完成', final_answer: '最终回答已生成', budget_exhausted: '达到预算上限', run_failed: '运行失败', history_gap: '历史记录不完整' }
   return labels[event.kind] || event.kind
 }
 

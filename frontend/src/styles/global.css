@@ -1155,6 +1155,8 @@ button:disabled { cursor: not-allowed; }
 .generated-chart.unavailable,
 .generated-chart.failed { border-color: #ead4aa; background: #fffdf7; }
 .generated-chart.failed { border-color: #efcfcc; background: #fff9f8; }
+.generated-chart.pending { border-color: #d8d6b0; background: #fffef5; }
+.generated-chart.warning { border-color: #ead4aa; background: #fffdf7; }
 .generated-chart-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .generated-chart-heading .observation-label { display: flex; align-items: center; gap: 5px; min-width: 0; color: var(--brand); font-size: 10px; }
 .generated-chart-heading .observation-label span { color: var(--muted); }

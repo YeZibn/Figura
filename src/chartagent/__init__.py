@@ -22,6 +22,17 @@ from .trace import (
     TraceEvent,
     TraceLimits,
 )
+from .review import (
+    CandidateStatus,
+    ChartCandidate,
+    ChartReviewManager,
+    PublicationStatus,
+    ReviewPolicy,
+    ReviewResult,
+    ReviewStatus,
+    chart_spec_digest,
+    select_review_policy,
+)
 from .tools import (
     DispatchedObservation,
     GeneratedImage,
@@ -47,6 +58,15 @@ __all__ = [
     "TraceEvent",
     "TraceEmitter",
     "TraceLimits",
+    "CandidateStatus",
+    "ChartCandidate",
+    "ChartReviewManager",
+    "PublicationStatus",
+    "ReviewPolicy",
+    "ReviewResult",
+    "ReviewStatus",
+    "chart_spec_digest",
+    "select_review_policy",
     "TextTraceRenderer",
     "JsonlTraceRenderer",
     "Tool",

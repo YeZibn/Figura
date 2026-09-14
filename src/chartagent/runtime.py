@@ -30,10 +30,15 @@ naturally unless the user asks for structured output; a ChartSpec is optional.
 User image references are registered as opaque attachment IDs. Use load_image
 with an attachment_id when visual inspection is useful; chart sensors accept the
 same authorized ID. Image loading is optional and under your control.
-When a tool provides a generated visual observation, inspect it together with
-the structured result when useful. You may accept it, retry with different
-arguments, switch tools, ignore irrelevant evidence, or answer directly; no
-fixed validation sequence or numeric acceptance threshold is required.
+When render_chart returns a generated chart, it is a candidate, not an
+automatically verified result. The system has already started a mandatory
+review gate. Inspect the candidate and use review_generated_chart with its
+exact candidateId and reviewId before claiming the chart is published. You may
+choose OCR, chart sensors, visual inspection, a revised ChartSpec, or a
+bounded retry in any useful order. A free-form statement that the image looks
+correct never completes the gate, and a pending or failed candidate must not
+be described as verified. If the review result asks for a model decision,
+submit accepted together with evidence_refs naming the supplied evidence.
 """
 
 VisualObservationSink = Callable[[str, str, Sequence[GeneratedImage]], Sequence[dict[str, Any]]]

@@ -62,6 +62,9 @@ export type ObservationReference = {
 export type GeneratedChartReference = {
   artifactKind: 'generated_chart'
   artifactId?: string
+  candidateId?: string
+  reviewId?: string
+  chartSpecDigest?: string
   mediaType: string
   caption: string
   byteCount?: number
@@ -69,7 +72,10 @@ export type GeneratedChartReference = {
   title?: string
   width?: number
   height?: number
-  status?: 'available' | 'unavailable' | 'failed' | string
+  status?: 'available' | 'pending' | 'warning' | 'unavailable' | 'failed' | string
+  candidateStatus?: string
+  reviewStatus?: string
+  publicationStatus?: string
   reason?: string
   imageUrl?: string
   downloadUrl?: string

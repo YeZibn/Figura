@@ -36,10 +36,13 @@ from .trace import (
 )
 from .tools.registry import ToolRegistry, dispatch_observation
 from .memory import AgentMemory, InMemoryAgentMemory, RunStatus
+from .review import ChartReviewManager, CandidateStatus, PublicationStatus
 from .tools.result import GeneratedImage
 
 # Sentinel returned when the step budget is exhausted.
 _BUDGET_MSG = "*stopped: max_steps reached*"
+_REVIEW_REQUIRED_MSG = "*stopped: generated chart review incomplete*"
+REVIEW_INCOMPLETE_MESSAGE = _REVIEW_REQUIRED_MSG
 
 VisualObservationSink = Callable[[str, str, Sequence[GeneratedImage]], Sequence[dict[str, Any]]]
 
@@ -108,6 +111,7 @@ class Agent:
         memory: Optional[AgentMemory] = None,
         attachments: Any = None,
         context_budget: int = 24000,
+        review_manager: Optional[ChartReviewManager] = None,
         **chat_kwargs: Any,
     ) -> None:
         self.client = client
@@ -124,6 +128,7 @@ class Agent:
         self._visual_observation_sink = visual_observation_sink
         self.memory = memory or InMemoryAgentMemory(context_budget=context_budget)
         self.attachments = attachments
+        self._review_manager = review_manager or ChartReviewManager(attachments=attachments)
         self.context_budget = context_budget
         self._messages: List[ChatCompletionMessageParam] = []
         self._current_messages: List[ChatCompletionMessageParam] = []
@@ -163,10 +168,13 @@ class Agent:
         user_message = {"role": "user", "content": user_input}
         self.memory.append(run, "user", {"message": user_message, "text": user_input if isinstance(user_input, str) else "[image attachment turn]"})
         if isinstance(user_input, str):
-            for ordinal, attachment_id in enumerate(re.findall(r"\batt_[A-Za-z0-9]+\b", user_input), start=1):
+            run_attachment_ids = tuple(re.findall(r"\batt_[A-Za-z0-9]+\b", user_input))
+            for ordinal, attachment_id in enumerate(run_attachment_ids, start=1):
                 self.memory.append(run, "attachment", {"attachment_id": attachment_id, "ordinal": ordinal})
                 if self.attachments is not None:
                     self.attachments.bind_run(attachment_id, run.id)
+        else:
+            run_attachment_ids = ()
         self._current_messages.append(user_message)  # type: ignore[arg-type]
         tools = registry_tools(self.registry)
         emitter = (
@@ -228,6 +236,29 @@ class Agent:
 
             if not result.tool_calls:
                 assistant_message = _assistant_entry(result)
+                gate = self._review_manager.gate(run.id)
+                if gate["pending"]:
+                    # Preserve the attempted answer as model context, but do
+                    # not turn it into a terminal record or trace event.
+                    self._current_messages.append(assistant_message)
+                    self._messages.append(assistant_message)
+                    self.memory.append(run, "assistant", {"message": assistant_message})
+                    gate_message = {
+                        "role": "user",
+                        "content": (
+                            "A generated chart review gate is still active. "
+                            "Do not claim publication. Call review_generated_chart "
+                            "for every pending candidate, or explain the bounded "
+                            "failure after the candidate is rejected. Structured state: "
+                            + json.dumps(gate, ensure_ascii=False)
+                        ),
+                    }
+                    self._current_messages.append(gate_message)  # type: ignore[arg-type]
+                    self._messages.append(gate_message)  # type: ignore[arg-type]
+                    self.memory.append(run, "review_gate", {"state": gate})
+                    if emitter is not None:
+                        emitter.emit("chart_review_required", turn=turn, state=gate)
+                    continue
                 self._current_messages.append(assistant_message)
                 self._messages.append(assistant_message)
                 self.memory.append(run, "assistant", {"message": assistant_message})
@@ -259,21 +290,32 @@ class Agent:
                 observation = dispatch_observation(
                     self.registry, call.name, call.arguments
                 )
+                observation = self._apply_generation_review(
+                    observation,
+                    run_id=run.id,
+                    call_id=call.id,
+                    arguments=call.arguments,
+                    source_attachment_ids=run_attachment_ids,
+                )
+                if self.registry.get("review_generated_chart") is not None:
+                    tools = registry_tools(self.registry)
+                review_transition = self._review_transition_image(call.name, observation.content)
                 tool_message = _tool_entry(call, observation.content)
                 self._current_messages.append(tool_message)
                 self._messages.append(tool_message)
                 self.memory.append(run, "tool", {"message": tool_message, "tool_name": call.name, "status": _observation_status(observation.content)})
+                observation_refs: Sequence[dict[str, Any]] = ()
+                sink_images = observation.images or review_transition
+                if self._visual_observation_sink is not None and sink_images:
+                    try:
+                        observation_refs = self._visual_observation_sink(
+                            call.name,
+                            call.id,
+                            sink_images,
+                        )
+                    except Exception:  # noqa: BLE001 - observation diagnostics cannot abort the Agent
+                        observation_refs = ()
                 if emitter is not None:
-                    observation_refs: Sequence[dict[str, Any]] = ()
-                    if self._visual_observation_sink is not None and observation.images:
-                        try:
-                            observation_refs = self._visual_observation_sink(
-                                call.name,
-                                call.id,
-                                observation.images,
-                            )
-                        except Exception:  # noqa: BLE001 - observation diagnostics cannot abort the Agent
-                            observation_refs = ()
                     image_payload = {"images": summarize_images(observation.images)}
                     if observation_refs:
                         generated_refs = [
@@ -299,6 +341,44 @@ class Agent:
                         result=summarize_result(observation.content),
                         image_count=len(observation.images),
                     )
+                    review_items = self._review_items(observation.content)
+                    for item in review_items:
+                        emitter.emit(
+                            "chart_review_started",
+                            turn=turn,
+                            tool_name=call.name,
+                            call_id=call.id,
+                            candidate_id=item.get("candidateId"),
+                            review_id=item.get("reviewId"),
+                            status=item.get("candidateStatus"),
+                        )
+                        if item.get("reviewStatus") == "completed":
+                            emitter.emit(
+                                "chart_review_completed",
+                                turn=turn,
+                                tool_name=call.name,
+                                call_id=call.id,
+                                candidate_id=item.get("candidateId"),
+                                review_id=item.get("reviewId"),
+                                status=item.get("candidateStatus"),
+                                publication_status=item.get("publicationStatus"),
+                            )
+                            if item.get("publicationStatus") in {"published", "published_with_warning"}:
+                                emitter.emit(
+                                    "generated_chart_published",
+                                    turn=turn,
+                                    candidate_id=item.get("candidateId"),
+                                    review_id=item.get("reviewId"),
+                                    publication_status=item.get("publicationStatus"),
+                                )
+                            if item.get("publicationStatus") == "rejected":
+                                emitter.emit(
+                                    "generated_chart_rejected",
+                                    turn=turn,
+                                    candidate_id=item.get("candidateId"),
+                                    review_id=item.get("reviewId"),
+                                    reason="review_failed",
+                                )
                     if observation.images:
                         emitter.emit(
                             "generated_chart" if any(
@@ -310,6 +390,17 @@ class Agent:
                             tool_name=call.name,
                             call_id=call.id,
                             **image_payload,
+                        )
+                    if review_transition and observation_refs:
+                        emitter.emit(
+                            "generated_chart",
+                            turn=turn,
+                            tool_name=call.name,
+                            call_id=call.id,
+                            artifacts=[
+                                reference for reference in observation_refs
+                                if reference.get("artifactKind") == "generated_chart"
+                            ],
                         )
                 visual_evidence.extend(
                     ToolVisualEvidence(call.name, call.id, generated)
@@ -333,16 +424,130 @@ class Agent:
                     },
                 )
 
+        terminal_answer = _BUDGET_MSG
+        terminal_gate = self._review_manager.gate(run.id)
+        if terminal_gate["pending"]:
+            terminal_answer = _REVIEW_REQUIRED_MSG
         if emitter is not None:
             emitter.emit(
                 "budget_exhausted",
                 turn=self.max_steps,
                 max_steps=self.max_steps,
-                answer=_BUDGET_MSG,
+                answer=terminal_answer,
+                review_gate=terminal_gate,
             )
-        self.memory.append(run, "terminal", {"answer": _BUDGET_MSG, "max_steps": self.max_steps})
+        self.memory.append(run, "terminal", {"answer": terminal_answer, "max_steps": self.max_steps, "review_gate": terminal_gate})
         self.memory.finish(run, RunStatus.COMPLETED, "budget")
-        return _BUDGET_MSG
+        return terminal_answer
+
+    @staticmethod
+    def _review_items(content: str) -> list[dict[str, Any]]:
+        try:
+            payload = json.loads(content)
+            data = payload.get("data") if isinstance(payload, dict) else None
+            items = data.get("review") if isinstance(data, dict) else None
+            if not isinstance(items, list):
+                items = payload.get("review") if isinstance(payload, dict) else None
+            if not isinstance(items, list) and isinstance(payload, dict) and isinstance(payload.get("candidate"), dict):
+                items = [payload["candidate"]]
+            return [item for item in items if isinstance(item, dict)] if isinstance(items, list) else []
+        except (TypeError, json.JSONDecodeError):
+            return []
+
+    def _ensure_review_tool(self) -> None:
+        if self.registry.get("review_generated_chart") is None:
+            self.registry.register(self._review_manager.review_tool())
+
+    def _review_transition_image(self, tool_name: str, content: str) -> tuple[GeneratedImage, ...]:
+        """Expose a reviewed candidate to the Gateway promotion boundary."""
+        if tool_name != "review_generated_chart":
+            return ()
+        try:
+            payload = json.loads(content)
+            candidate_payload = payload.get("candidate") if isinstance(payload, dict) else None
+            if not isinstance(candidate_payload, dict):
+                return ()
+            candidate_id = candidate_payload.get("candidateId")
+            review_id = candidate_payload.get("reviewId")
+            candidate = self._review_manager.get(candidate_id, review_id)
+            if candidate is None:
+                return ()
+            metadata = candidate.safe_metadata()
+            metadata["kind"] = "generated_chart"
+            return (GeneratedImage(candidate.content, candidate.media_type, f"生成图表：{candidate.title}", metadata),)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return ()
+
+    def _apply_generation_review(
+        self,
+        observation: Any,
+        *,
+        run_id: str,
+        call_id: str,
+        arguments: str,
+        source_attachment_ids: Sequence[str],
+    ) -> Any:
+        """Run the post-generation hook before tool evidence reaches the model."""
+        if not observation.images:
+            return observation
+        try:
+            args = json.loads(arguments) if arguments.strip() else {}
+        except (TypeError, json.JSONDecodeError):
+            return observation
+        spec_payload = args.get("spec") if isinstance(args, dict) else None
+        if not isinstance(spec_payload, dict):
+            return observation
+        try:
+            from .spec import ChartSpec
+
+            spec = ChartSpec.from_dict(spec_payload)
+        except (TypeError, ValueError, KeyError):
+            return observation
+        generated: list[GeneratedImage] = []
+        review_payloads: list[dict[str, Any]] = []
+        changed = False
+        for image in observation.images:
+            metadata = image.metadata if hasattr(image.metadata, "get") else {}
+            if metadata.get("kind") != "generated_chart":
+                generated.append(image)
+                continue
+            # Legacy custom tools without a ChartSpec digest remain readable;
+            # renderer-produced images always carry the digest and enter this
+            # mandatory lifecycle.
+            if not metadata.get("chart_spec_digest"):
+                generated.append(image)
+                continue
+            candidate = self._review_manager.create_candidate(
+                run_id,
+                call_id,
+                image,
+                spec,
+                source_attachment_ids=source_attachment_ids,
+            )
+            self._ensure_review_tool()
+            if candidate.policy.semantic_required is False:
+                candidate = self._review_manager.process(candidate)
+            generated.append(self._review_manager.decorate_image(image, candidate))
+            review_payloads.append(candidate.safe_metadata())
+            changed = True
+        if not changed:
+            return observation
+        content = observation.content
+        try:
+            payload = json.loads(content)
+            if isinstance(payload, dict):
+                data = payload.get("data")
+                if isinstance(data, dict):
+                    data = dict(data)
+                    data["review"] = review_payloads
+                    payload["data"] = data
+                payload["review"] = review_payloads
+                content = json.dumps(payload, ensure_ascii=False)
+        except (TypeError, json.JSONDecodeError):
+            pass
+        from .tools.result import DispatchedObservation
+
+        return DispatchedObservation(content=content, images=tuple(generated))
 
 
 def _observation_status(content: str) -> str:

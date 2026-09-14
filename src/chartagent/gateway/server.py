@@ -94,6 +94,15 @@ class GatewayRequestHandler(BaseHTTPRequestHandler):
                 )
                 self._send_binary(HTTPStatus.OK, content, media_type)
                 return
+            elif (parts := self._run_candidate_parts(path)) is not None:
+                session_id, run_id, candidate_id = parts
+                content, media_type = self.gateway.get_generated_candidate(
+                    session_id,
+                    run_id,
+                    candidate_id,
+                )
+                self._send_binary(HTTPStatus.OK, content, media_type)
+                return
             elif (parts := self._attachment_content_parts(path)) is not None:
                 session_id, attachment_id = parts
                 content, media_type = self.gateway.get_attachment_content(
@@ -271,6 +280,16 @@ class GatewayRequestHandler(BaseHTTPRequestHandler):
             return None
         parts = path[len(prefix):].split("/")
         if len(parts) == 5 and parts[1] == "runs" and parts[3] == "artifacts":
+            return unquote(parts[0]), unquote(parts[2]), unquote(parts[4])
+        return None
+
+    @staticmethod
+    def _run_candidate_parts(path: str) -> tuple[str, str, str] | None:
+        prefix = f"{API_PREFIX}/sessions/"
+        if not path.startswith(prefix):
+            return None
+        parts = path[len(prefix):].split("/")
+        if len(parts) == 5 and parts[1] == "runs" and parts[3] == "candidates":
             return unquote(parts[0]), unquote(parts[2]), unquote(parts[4])
         return None
 

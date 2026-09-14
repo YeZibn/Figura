@@ -125,7 +125,14 @@ class GatewayHistoryStore:
                   chart_type TEXT,
                   title TEXT,
                   width INTEGER,
-                  height INTEGER
+                  height INTEGER,
+                  candidate_id TEXT,
+                  review_id TEXT,
+                  chart_spec_digest TEXT,
+                  candidate_status TEXT,
+                  review_status TEXT,
+                  publication_status TEXT,
+                  review_json TEXT
                 );
                 CREATE INDEX IF NOT EXISTS idx_gateway_runs_session
                   ON gateway_runs(session_id, created_at);
@@ -149,6 +156,13 @@ class GatewayHistoryStore:
                 ("title", "TEXT"),
                 ("width", "INTEGER"),
                 ("height", "INTEGER"),
+                ("candidate_id", "TEXT"),
+                ("review_id", "TEXT"),
+                ("chart_spec_digest", "TEXT"),
+                ("candidate_status", "TEXT"),
+                ("review_status", "TEXT"),
+                ("publication_status", "TEXT"),
+                ("review_json", "TEXT"),
             ):
                 table = "gateway_runs" if name in {"terminal_code", "terminal_message", "answer_source", "history_warning"} else "gateway_run_artifacts"
                 table_columns = columns if table == "gateway_runs" else {
@@ -171,8 +185,18 @@ class GatewayHistoryStore:
         expired_artifacts = connection.execute(
             "SELECT managed_path FROM gateway_run_artifacts WHERE expires_at <= ?", (now,)
         ).fetchall()
-        artifact_paths.extend(Path(row["managed_path"]) for row in expired_artifacts)
-        connection.execute("DELETE FROM gateway_run_artifacts WHERE expires_at <= ?", (now,))
+        artifact_paths.extend(Path(row["managed_path"]) for row in expired_artifacts if row["managed_path"])
+        connection.execute(
+            """UPDATE gateway_run_artifacts SET managed_path = '', candidate_status = 'expired',
+               review_status = 'timed_out', publication_status = 'rejected', expires_at = ?
+               WHERE expires_at <= ? AND artifact_kind = 'generated_candidate' AND managed_path != ''""",
+            (now + self.retention_seconds, now),
+        )
+        connection.execute(
+            """DELETE FROM gateway_run_artifacts
+               WHERE expires_at <= ? AND (artifact_kind != 'generated_candidate' OR managed_path = '')""",
+            (now,),
+        )
         expired_runs = connection.execute(
             "SELECT run_id FROM gateway_runs WHERE expires_at <= ? AND status != ?",
             (now, RunStatus.RUNNING.value),
@@ -181,7 +205,7 @@ class GatewayHistoryStore:
             paths = connection.execute(
                 "SELECT managed_path FROM gateway_run_artifacts WHERE run_id = ?", (run["run_id"],)
             ).fetchall()
-            artifact_paths.extend(Path(row["managed_path"]) for row in paths)
+            artifact_paths.extend(Path(row["managed_path"]) for row in paths if row["managed_path"])
         connection.executemany(
             "DELETE FROM gateway_runs WHERE run_id = ?",
             [(row["run_id"],) for row in expired_runs],
@@ -368,6 +392,218 @@ class GatewayHistoryStore:
             "historyGap": history_gap,
             "firstSequence": first_sequence,
         }
+
+    @staticmethod
+    def _candidate_reference(row, *, artifact_id: str | None = None) -> dict[str, Any]:
+        publication = row["publication_status"] or "unpublished"
+        candidate_status = row["candidate_status"] or "candidate"
+        visible_status = "available" if publication == "published" else (
+            "warning" if publication == "published_with_warning" else (
+                "failed" if candidate_status in {"review_failed", "timed_out", "retry_exhausted", "expired"} else "pending"
+            )
+        )
+        reference = GeneratedChartReference(
+            artifact_id=artifact_id,
+            media_type=row["media_type"],
+            caption=row["caption"],
+            byte_count=int(row["byte_count"]),
+            chart_type=row["chart_type"] or "",
+            title=row["title"] or row["caption"],
+            width=int(row["width"] or 0),
+            height=int(row["height"] or 0),
+            status=visible_status,
+            reason=("图表仍在审核中" if visible_status == "pending" else "审核未通过" if visible_status == "failed" else None),
+            candidate_id=row["candidate_id"],
+            review_id=row["review_id"],
+            chart_spec_digest=row["chart_spec_digest"],
+            candidate_status=row["candidate_status"],
+            review_status=row["review_status"],
+            publication_status=publication,
+        )
+        return reference.to_dict()
+
+    def add_candidate(self, run_id: str, session_id: str, image: Any) -> dict[str, Any] | None:
+        """Persist a generated candidate without exposing it as a final artifact."""
+        content = getattr(image, "content", None)
+        media_type = str(getattr(image, "media_type", "")).lower()
+        caption = getattr(image, "caption", "")
+        metadata = getattr(image, "metadata", {})
+        if not isinstance(metadata, Mapping):
+            return None
+        candidate_id = metadata.get("candidateId")
+        review_id = metadata.get("reviewId")
+        digest = metadata.get("chartSpecDigest")
+        if (
+            not isinstance(candidate_id, str)
+            or not candidate_id.startswith("cand_")
+            or "/" in candidate_id
+            or not isinstance(review_id, str)
+            or not review_id.startswith("review_")
+            or not isinstance(digest, str)
+            or len(digest) != 64
+            or not isinstance(content, bytes)
+            or not content
+            or len(content) > self.max_artifact_bytes
+            or media_type not in _SUPPORTED_ARTIFACT_TYPES
+            or not isinstance(caption, str)
+            or not caption.strip()
+        ):
+            return None
+        chart_type = str(metadata.get("chartType") or metadata.get("chart_type") or "")[:MAX_ARTIFACT_CHART_TYPE]
+        title = str(metadata.get("title") or caption)[:MAX_ARTIFACT_TITLE]
+        try:
+            width = int(metadata.get("width", 0))
+            height = int(metadata.get("height", 0))
+        except (TypeError, ValueError):
+            return None
+        if not chart_type or not title or width <= 0 or height <= 0:
+            return None
+        candidate_root = self.artifact_root / session_id
+        candidate_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self._restrict_permissions(candidate_root, 0o700)
+        path = candidate_root / f"{candidate_id}.bin"
+        created = utc_timestamp()
+        expires_at = time.time() + self.retention_seconds
+        with self._lock, self._connect() as connection:
+            self._cleanup_connection(connection)
+            existing = connection.execute(
+                """SELECT * FROM gateway_run_artifacts
+                   WHERE run_id = ? AND session_id = ?
+                     AND (observation_id = ? OR candidate_id = ?)
+                   ORDER BY CASE WHEN artifact_kind = 'generated_chart' THEN 0 ELSE 1 END
+                   LIMIT 1""",
+                (run_id, session_id, candidate_id, candidate_id),
+            ).fetchone()
+            if existing is not None:
+                if existing["artifact_kind"] == "generated_chart":
+                    return self._candidate_reference(existing, artifact_id=existing["observation_id"])
+                if existing["candidate_status"] in {"expired", "timed_out", "retry_exhausted", "review_failed"}:
+                    return self._candidate_reference(existing)
+                if (
+                    existing["review_id"] == review_id
+                    and existing["chart_spec_digest"] == digest
+                    and str(metadata.get("reviewStatus", "pending")) == "completed"
+                ):
+                    connection.execute(
+                        """UPDATE gateway_run_artifacts SET candidate_status = ?, review_status = ?,
+                           publication_status = ?, review_json = ?, expires_at = ?
+                           WHERE observation_id = ? AND artifact_kind = 'generated_candidate'""",
+                        (
+                            str(metadata.get("candidateStatus", "review_pending")),
+                            "completed",
+                            str(metadata.get("publicationStatus", "unpublished")),
+                            json.dumps(metadata.get("review", {}), ensure_ascii=False)[:MAX_EVENT_PAYLOAD],
+                            time.time() + self.retention_seconds,
+                            candidate_id,
+                        ),
+                    )
+                    existing = connection.execute(
+                        "SELECT * FROM gateway_run_artifacts WHERE observation_id = ?", (candidate_id,)
+                    ).fetchone()
+                return self._candidate_reference(existing)
+            run = connection.execute(
+                "SELECT 1 FROM gateway_runs WHERE run_id = ? AND session_id = ?", (run_id, session_id)
+            ).fetchone()
+            if run is None:
+                return None
+            count = connection.execute(
+                "SELECT COUNT(*) FROM gateway_run_artifacts WHERE run_id = ?", (run_id,)
+            ).fetchone()[0]
+            if int(count) >= self.max_artifacts:
+                return None
+            candidate_status = str(metadata.get("candidateStatus", "review_pending"))
+            managed_path = str(path) if candidate_status not in {"review_failed", "timed_out", "retry_exhausted", "expired"} else ""
+            try:
+                if managed_path:
+                    path.write_bytes(content)
+                    self._restrict_permissions(path, 0o600)
+                connection.execute(
+                    """INSERT INTO gateway_run_artifacts(
+                       observation_id, run_id, session_id, managed_path, media_type,
+                       caption, byte_count, sha256, created_at, expires_at,
+                       artifact_kind, chart_type, title, width, height,
+                       candidate_id, review_id, chart_spec_digest, candidate_status,
+                       review_status, publication_status, review_json)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'generated_candidate', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        candidate_id, run_id, session_id, managed_path, media_type,
+                        truncate_text(caption, MAX_ARTIFACT_CAPTION), len(content),
+                        hashlib.sha256(content).hexdigest(), created, expires_at,
+                        chart_type, title, width, height, candidate_id, review_id,
+                        digest, candidate_status,
+                        str(metadata.get("reviewStatus", "pending")),
+                        str(metadata.get("publicationStatus", "unpublished")),
+                        json.dumps(metadata.get("review", {}), ensure_ascii=False)[:MAX_EVENT_PAYLOAD],
+                    ),
+                )
+            except Exception:
+                path.unlink(missing_ok=True)
+                raise
+            row = connection.execute(
+                "SELECT * FROM gateway_run_artifacts WHERE observation_id = ?", (candidate_id,)
+            ).fetchone()
+        return self._candidate_reference(row) if row is not None else None
+
+    def promote_candidate(
+        self,
+        run_id: str,
+        session_id: str,
+        candidate_id: str,
+        review_id: str,
+        chart_spec_digest: str,
+        *,
+        candidate_status: str,
+        review_status: str,
+        publication_status: str,
+        review: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        """Atomically convert one matching reviewed candidate into an artifact."""
+        if publication_status not in {"published", "published_with_warning"} or review_status != "completed":
+            return None
+        with self._lock, self._connect() as connection:
+            self._cleanup_connection(connection)
+            row = connection.execute(
+                "SELECT * FROM gateway_run_artifacts WHERE observation_id = ? AND run_id = ? AND session_id = ?",
+                (candidate_id, run_id, session_id),
+            ).fetchone()
+            if row is None:
+                # Idempotent replay after the observation ID was promoted.
+                row = connection.execute(
+                    "SELECT * FROM gateway_run_artifacts WHERE candidate_id = ? AND run_id = ? AND session_id = ? AND artifact_kind = 'generated_chart'",
+                    (candidate_id, run_id, session_id),
+                ).fetchone()
+                if row is None:
+                    return None
+                return self._candidate_reference(row, artifact_id=row["observation_id"])
+            if row["artifact_kind"] != "generated_candidate":
+                return None
+            if row["review_id"] != review_id or row["chart_spec_digest"] != chart_spec_digest:
+                return None
+            if row["candidate_status"] not in {"verified", "warning"}:
+                return None
+            artifact_id = f"artifact_{uuid4().hex}"
+            reason = "审核通过并发布" if publication_status == "published" else "审核通过，但包含明确警告"
+            connection.execute(
+                """UPDATE gateway_run_artifacts SET observation_id = ?, artifact_kind = 'generated_chart',
+                   candidate_status = ?, review_status = ?, publication_status = ?, review_json = ?
+                   WHERE observation_id = ? AND artifact_kind = 'generated_candidate'""",
+                (
+                    artifact_id, candidate_status, review_status, publication_status,
+                    json.dumps(review or {}, ensure_ascii=False)[:MAX_EVENT_PAYLOAD], candidate_id,
+                ),
+            )
+            updated = connection.execute(
+                "SELECT * FROM gateway_run_artifacts WHERE observation_id = ?", (artifact_id,)
+            ).fetchone()
+        if updated is None:
+            return None
+        result = self._candidate_reference(updated, artifact_id=artifact_id)
+        result["reason"] = reason
+        result["status"] = "warning" if publication_status == "published_with_warning" else "available"
+        return result
+
+    def get_candidate(self, session_id: str, run_id: str, candidate_id: str) -> tuple[bytes, str] | None:
+        return self.get_artifact(session_id, run_id, candidate_id, artifact_kind="generated_candidate")
 
     def add_artifact(self, run_id: str, session_id: str, image: Any) -> dict[str, Any] | None:
         content = getattr(image, "content", None)

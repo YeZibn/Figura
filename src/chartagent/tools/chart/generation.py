@@ -21,6 +21,7 @@ from matplotlib.font_manager import FontProperties
 from matplotlib.collections import PathCollection
 from matplotlib.patches import Rectangle, Wedge
 
+from ...review import chart_spec_digest
 from ...spec import ChartSpec, ChartType, DataPoint
 from ..result import GeneratedImage, ToolResult
 from ..tool import Tool
@@ -593,6 +594,7 @@ def render_chart(
             "kind": "generated_chart",
             "chart_type": chart_spec.metadata.chart_type.value,
             "title": title,
+            "chart_spec_digest": chart_spec_digest(chart_spec),
             "media_type": "image/png",
             "byte_count": len(content),
             "width": actual_width,
@@ -622,6 +624,7 @@ def render_chart(
                         "kind": "generated_chart",
                         "chart_type": chart_spec.metadata.chart_type.value,
                         "title": title,
+                        "chart_spec_digest": chart_spec_digest(chart_spec),
                         "width": actual_width,
                         "height": actual_height,
                         "font_status": font.status,

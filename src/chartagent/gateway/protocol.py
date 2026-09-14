@@ -98,7 +98,7 @@ class ObservationReference:
 class GeneratedChartReference:
     """Safe metadata for a durable, user-facing generated chart artifact."""
 
-    artifact_id: str
+    artifact_id: str | None
     media_type: str
     caption: str
     byte_count: int
@@ -108,11 +108,16 @@ class GeneratedChartReference:
     height: int
     status: str = "available"
     reason: str | None = None
+    candidate_id: str | None = None
+    review_id: str | None = None
+    chart_spec_digest: str | None = None
+    candidate_status: str | None = None
+    review_status: str | None = None
+    publication_status: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         result: dict[str, Any] = {
             "artifactKind": "generated_chart",
-            "artifactId": self.artifact_id,
             "mediaType": self.media_type,
             "caption": truncate_text(self.caption, MAX_ARTIFACT_CAPTION),
             "byteCount": max(0, int(self.byte_count)),
@@ -122,6 +127,20 @@ class GeneratedChartReference:
             "height": max(0, int(self.height)),
             "status": self.status,
         }
+        if self.artifact_id:
+            result["artifactId"] = self.artifact_id
+        if self.candidate_id:
+            result["candidateId"] = self.candidate_id
+        if self.review_id:
+            result["reviewId"] = self.review_id
+        if self.chart_spec_digest:
+            result["chartSpecDigest"] = self.chart_spec_digest
+        if self.candidate_status:
+            result["candidateStatus"] = self.candidate_status
+        if self.review_status:
+            result["reviewStatus"] = self.review_status
+        if self.publication_status:
+            result["publicationStatus"] = self.publication_status
         if self.reason:
             result["reason"] = truncate_text(self.reason, MAX_ERROR_MESSAGE)
         return result

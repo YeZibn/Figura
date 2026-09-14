@@ -70,6 +70,10 @@ function generatedArtifactUrl(sessionId: string, runId: string, artifactId: stri
   return `${gatewayBaseUrl}/sessions/${encodeURIComponent(sessionId)}/runs/${encodeURIComponent(runId)}/artifacts/${encodeURIComponent(artifactId)}`
 }
 
+function generatedCandidateUrl(sessionId: string, runId: string, candidateId: string): string {
+  return `${gatewayBaseUrl}/sessions/${encodeURIComponent(sessionId)}/runs/${encodeURIComponent(runId)}/candidates/${encodeURIComponent(candidateId)}`
+}
+
 function mapAttachment(item: GatewayAttachment, sessionId?: string): Attachment {
   return {
     id: item.attachment_id,
@@ -108,9 +112,13 @@ function mapRunEvent(event: GatewayRunEvent, sessionId: string): AgentRunEvent {
     payload.artifacts = payload.artifacts.map((item) => {
       if (!item || typeof item !== 'object') return item
       const reference = item as Partial<GeneratedChartReference>
-      if (!reference.artifactId || reference.status === 'unavailable' || reference.status === 'failed') return item
-      const url = generatedArtifactUrl(sessionId, event.runId, reference.artifactId)
-      return { ...reference, imageUrl: url, downloadUrl: url }
+      if (reference.status === 'unavailable' || reference.status === 'failed') return item
+      const url = reference.artifactId
+        ? generatedArtifactUrl(sessionId, event.runId, reference.artifactId)
+        : reference.candidateId
+          ? generatedCandidateUrl(sessionId, event.runId, reference.candidateId)
+          : ''
+      return url ? { ...reference, imageUrl: url, downloadUrl: reference.artifactId ? url : undefined } : item
     })
   }
   return { runId: event.runId, sequence: event.sequence, kind: event.kind, timestamp: event.timestamp, payload }
@@ -125,6 +133,11 @@ const streamEventKinds = [
   'tool_result',
   'visual_observation',
   'generated_chart',
+  'chart_review_started',
+  'chart_review_completed',
+  'generated_chart_rejected',
+  'chart_review_required',
+  'generated_chart_published',
   'reasoning',
   'budget_exhausted',
   'final_answer',
