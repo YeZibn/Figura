@@ -14,12 +14,13 @@ from chartagent.spec import Axes, Axis, ChartMetadata, ChartSpec, ChartType, Dat
 from chartagent.tools.chart.rendering import render_chart
 from chartagent.agent import Agent
 from chartagent.client.models import NormalizedResult, ToolCall
-from chartagent.tools import ToolRegistry
+from chartagent.tools import ToolRegistry, ToolResult
 from chartagent.tools.chart.catalog import register_chart_tools
 from chartagent.gateway.service import GatewayService
 from chartagent.runtime import AgentRuntime
 from chartagent.gateway.history import GatewayHistoryStore
 from chartagent.memory.sqlite import SQLiteAgentMemory
+from tests.chart_fixtures import line_chart
 
 
 def _bar_spec() -> ChartSpec:
@@ -89,6 +90,28 @@ def test_independent_reviewer_supports_all_rendered_chart_types(chart_type):
     candidate = manager.create_candidate("run-types", f"call-{chart_type.value}", rendered.images[0], spec)
     reviewed = manager.process(candidate)
     assert reviewed.publication_status is not PublicationStatus.REJECTED, reviewed.review.to_dict() if reviewed.review else None
+
+
+def test_line_reviewer_consumes_trace_and_confirmed_point_evidence(monkeypatch):
+    png_bytes, payload = line_chart()
+    spec = ChartSpec.from_dict(payload)
+    monkeypatch.setattr(
+        "chartagent.tools.chart.observation.line.extract_text",
+        lambda _path: ToolResult([]),
+    )
+
+    result = review_candidate_bytes(
+        spec,
+        png_bytes,
+        media_type="image/png",
+        declared_width=720,
+        declared_height=480,
+    )
+
+    geometry = next(item for item in result.evidence if item["kind"] == "line_geometry")
+    assert geometry["traceCount"] == 2
+    assert geometry["traceVertexCount"] > 0
+    assert geometry["pointCount"] >= 2
 
 
 def test_source_linked_candidate_cannot_finish_before_review_tool():

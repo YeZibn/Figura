@@ -43,54 +43,118 @@ detected text regions so the multimodal model can inspect their placement.
 ### Requirement: Bar geometry measurement tool
 
 The system SHALL provide a `measure_bars` tool that deterministically detects
-bars in clean Cartesian bar-chart images and returns, per bar, its bounding box,
-pixel height, stable visual identifier, and height ratio normalized to the
-shortest detected bar. The tool SHALL support a single series, grouped bars,
-and supported stacked bars while preserving the existing single-series fields.
-It SHALL also produce a generated overlay that marks each returned bar, its
-series identity when known, and the detected baseline or stack boundaries.
+two-dimensional bar charts and returns a unified, orientation-independent
+geometry result. A successful result SHALL include `image_size`, `orientation`
+(`vertical`, `horizontal`, `oblique`, or `unknown`), `bar_mode` (`single`,
+`grouped`, `stacked`, or `unknown`), a `plot_area` when detectable, a fitted
+`baseline` when reliable, series evidence, bars, bounded confidence, and
+warnings. Each bar SHALL include a stable `id`, `category_index` when
+available, `series_id` when available, `geometry` with `bbox_px` and
+`polygon_px`, and `measure` with signed `value_length_px` and normalized
+`ratio`. Stacked segments MAY include a `stack` object with their segment index
+and total stack length.
 
-#### Scenario: Single-series ratios remain backward compatible
+The tool SHALL infer the zero baseline from visible chart evidence or shared
+bar edges rather than treating a fixed heuristic crop boundary as the baseline.
+The baseline SHALL be represented by source-image pixel endpoints, fit
+residual, and confidence. The tool SHALL support vertical and horizontal
+positive bars, single and grouped bars, supported stacked bars, and small
+affine rotations of flat two-dimensional charts. Positive and negative bars
+SHALL use the signed value-axis measurement when the zero baseline is reliably
+detected.
 
-- **WHEN** `measure_bars` is called with a synthetic single-series bar chart
-  whose values are known
-- **THEN** the result contains the existing `bars`, `baseline_y`, `id`, `bbox`,
-  `h_px`, and `ratio` fields
-- **AND** the number of detected bars equals the true count
-- **AND** each bar's height ratio equals the true value ratio within 10%
+The tool SHALL use one half-open source-image coordinate convention for
+detection and serialization, converting to inclusive drawing endpoints only in
+the overlay. The generated overlay SHALL mark each returned bar, its stable
+identity, the fitted baseline or stack boundaries, and material uncertainty
+while preserving source dimensions. The legacy fields `baseline_y`, `h_px`,
+`stacked`, per-bar `series`, flat per-bar `bbox`, flat per-bar `ratio`, and
+`stack_total_h_px` SHALL NOT be emitted.
+
+#### Scenario: Upright single-series bars use the real zero baseline
+
+- **WHEN** `measure_bars` is called with a clean upright single-series chart
+  whose bars share a visible zero axis
+- **THEN** the result returns one unified bar entry per visible bar
+- **AND** each bar's `measure.ratio` matches the source value ratio within 10%
   relative tolerance
-- **AND** a generated overlay with the source image dimensions visibly marks
-  every returned bar, its identifier, and the detected baseline
+- **AND** `baseline.points_px` overlaps the actual zero axis and bar bottoms
+  within the declared pixel residual
+- **AND** the overlay visibly aligns the baseline and bar polygons with the
+  source image
+
+#### Scenario: Rotated vertical bars preserve all candidates
+
+- **WHEN** `measure_bars` is called with a flat vertical bar chart rotated by
+  a small affine angle within the supported range
+- **THEN** the result preserves the true bar count instead of filtering bars
+  solely because their bottom pixels have different y coordinates
+- **AND** the baseline contains two source-image endpoints describing the
+  oblique zero axis
+- **AND** each bar contains polygon geometry and a value-axis length
+- **AND** a large fit residual or ambiguous orientation becomes a warning and
+  lowers confidence rather than silently dropping bars
+
+#### Scenario: Horizontal bars use the same contract
+
+- **WHEN** `measure_bars` is called with a clean horizontal bar chart
+- **THEN** `orientation` is `horizontal`
+- **AND** the baseline is represented as a vertical source-image line
+- **AND** each bar's `measure.value_length_px` is measured along the horizontal
+  value axis rather than taken from its bounding-box height
+- **AND** category and series associations remain available when detectable
+
+#### Scenario: Positive and negative bars share a zero baseline
+
+- **WHEN** `measure_bars` is called with a clean chart containing positive,
+  negative, or mixed-sign bars and a reliably visible zero axis
+- **THEN** each returned bar preserves the sign of `measure.value_length_px`
+- **AND** ratios are normalized using absolute value-axis lengths
+- **AND** bars extending in opposite directions are not merged solely because
+  they share the zero baseline
+- **AND** ambiguous zero-axis evidence is reported as a warning without
+  fabricating signed measurements
 
 #### Scenario: Grouped bars retain category and series distinctions
 
 - **WHEN** `measure_bars` is called with a clean grouped bar chart containing
-  multiple legend-defined series for each category
-- **THEN** every returned bar has a stable bar identifier and enough geometry
-  to associate it with one category and one series
-- **AND** the result does not merge adjacent bars solely because they share a
-  category or baseline
-- **AND** the overlay marks the individual bars and their resolved series
-  identities when those identities are available
+  multiple color-distinguished series
+- **THEN** every returned bar has a stable identifier, category index, and
+  series identifier when the association is detectable
+- **AND** adjacent bars are not merged solely because they share a baseline
+- **AND** the overlay marks individual bar polygons and series identities
+  when available
 
-#### Scenario: Supported stacked bars expose stack evidence
+#### Scenario: Stacked bars expose segment and total evidence
 
 - **WHEN** `measure_bars` is called with a clean stacked bar chart whose stack
   segments have distinguishable colors
-- **THEN** the result exposes the individual segments and their parent category
-  when the segments can be separated reliably
-- **AND** the result preserves the total stack geometry even when a segment
-  label or legend association is unresolved
-- **AND** unresolved associations are reported as warnings rather than being
-  silently presented as certain data
+- **THEN** the result returns separable segments with their parent category
+  and optional stack index
+- **AND** each segment retains its value-axis length while its `stack` object
+  exposes the total stack geometry when reliable
+- **AND** unresolved series or segment associations are reported as warnings
+  rather than silently presented as certain
+
+#### Scenario: Unsupported perspective or 3D bars remain bounded
+
+- **WHEN** the image contains strong perspective distortion, 3D styling, or an
+  orientation that cannot be reliably classified
+- **THEN** the tool returns only reliable partial geometry or an empty bars list
+- **AND** it includes a material warning naming the unsupported or ambiguous
+  condition
+- **AND** it does not fabricate a baseline, signed value length, or semantic
+  ratio
+- **AND** any generated overlay preserves the source image and marks the
+  uncertainty
 
 #### Scenario: Non-chart image remains inspectable
 
 - **WHEN** `measure_bars` is called with an image containing no detectable bars
-- **THEN** the tool returns an empty bars list (not an error), so the agent can
-  observe "no bars found" and re-plan
-- **AND** the generated overlay preserves the source image and indicates that
-  no baseline or bars were detected
+- **THEN** the result returns an empty `bars` list rather than an exception
+- **AND** baseline and plot geometry are absent or null
+- **AND** the generated overlay preserves the source dimensions and indicates
+  that no reliable bars were detected
 
 #### Scenario: Missing image reports a structured error
 
@@ -233,48 +297,135 @@ Attachment failures SHALL be bounded structured errors without visual artifacts.
 
 ### Requirement: Line-series extraction tool
 
-The system SHALL provide an `extract_line_series` tool for clean single-series
-and multi-series line charts. The tool SHALL return structured series with
-stable series identifiers, ordered points, pixel locations, calibrated values
-when the axes are readable, and optional legend labels and colors. It SHALL
-return bounded visual evidence that marks the detected plot area, series, and
-points so the multimodal model can inspect the associations.
+The system SHALL provide an `extract_line_series` tool for clean two-
+dimensional single-series and multi-series line charts. The tool SHALL return a
+unified source-image evidence result containing `image_size`, an `orientation`
+(`upright`, `oblique`, or `unknown`), a detectable `plot_frame`, x/y axis and
+tick calibration evidence, stable series identities, ordered trace geometry,
+bounded confidence, and warnings. Each series SHALL include a stable `id`, a
+resolved label when available, a color or stable fallback identity, and its
+trace evidence. Each confirmed point SHALL include a stable identifier, a
+source-image pixel position, a point source (`marker` or `tick_sample`), and
+calibrated numeric `x` and `y` values only when both axes are reliably
+calibrated. The result MAY retain trace geometry without semantic points when
+sampling or calibration is unavailable.
 
-#### Scenario: Single-series line points are returned
+The tool SHALL infer the plot frame and axis directions from visible axes,
+ticks, grid or trace evidence rather than treating a fixed crop boundary as
+ground truth. It SHALL preserve trace and axis geometry in source-image
+coordinates, support small affine rotations of flat two-dimensional charts,
+and report fit residuals or confidence for materially uncertain frame and
+calibration evidence. A trace crossing, overlap, or color-preserving series
+intersection SHALL NOT merge distinct series solely because their pixels are
+nearby.
 
-- **WHEN** `extract_line_series` is called with a synthetic line chart with
-  readable axes and known points
-- **THEN** the result contains one series with ordered points whose calibrated
-  x and y values match the fixture ground truth within the declared tolerance
-- **AND** each point contains a stable identifier or index and its pixel
-  location
-- **AND** the generated overlay preserves the source dimensions and marks the
-  detected line and points
+The tool SHALL distinguish marker-derived points from points sampled at
+reliable x-axis anchors. It SHALL NOT treat arbitrary pixel-density peaks,
+unanchored local extrema, or a continuous trace as confirmed data points. When
+the chart uses categorical x labels without a reliable numeric mapping to the
+supported ChartSpec coordinate model, the tool SHALL preserve the labels or
+pixel evidence and report a warning instead of fabricating numeric x values.
 
-#### Scenario: Multiple line series remain distinct
+The generated overlay SHALL preserve source dimensions and mark the inferred
+frame, axis evidence, measured traces, confirmed points, stable identities,
+calibration status, and material uncertainty. Invalid, unsupported, or
+ambiguous inputs SHALL produce bounded structured errors or partial evidence
+without uncaught exceptions or fabricated semantic values.
 
-- **WHEN** `extract_line_series` is called with a chart containing multiple
-  colored lines and a legend
-- **THEN** the result contains one series entry per resolved line
-- **AND** points from different lines are not merged even when their x values
-  overlap
-- **AND** each series carries its legend label or a stable fallback identity,
-  plus its resolved color when available
+#### Scenario: Upright marker line points are returned
 
-#### Scenario: Uncalibrated line evidence is bounded and inspectable
+- **WHEN** `extract_line_series` is called with a clean upright single-series
+  line chart containing visible markers, readable numeric axes, and known
+  points
+- **THEN** the result contains one stable series and one confirmed point per
+  reliably visible marker
+- **AND** each point contains source-image coordinates, `source: "marker"`,
+  and calibrated numeric x/y values within the declared fixture tolerance
+- **AND** the fitted plot frame and axis calibration evidence are returned with
+  bounded residual or confidence metadata
+- **AND** the source-sized overlay marks the trace, points, and point IDs
+
+#### Scenario: Markerless lines use reliable x-axis anchors
+
+- **WHEN** `extract_line_series` is called with a clean line chart without
+  markers but with readable numeric x-axis ticks or equivalent ordered anchors
+- **THEN** the result returns continuous trace geometry
+- **AND** it emits points only at reliable anchors using `source: "tick_sample"`
+- **AND** it does not create extra points from unanchored density peaks or
+  local slope changes
+- **AND** the result reports any unresolved sampling limitation in warnings
+
+#### Scenario: Multiple series remain distinct through crossings
+
+- **WHEN** a line chart contains multiple color-distinguished series that
+  cross, overlap, or share x positions
+- **THEN** the result contains one series entry per reliably resolved trace
+- **AND** points and trace fragments from different series are not merged
+  solely because their pixels are adjacent or intersect
+- **AND** each series carries its legend label when reliably associated, or a
+  stable color-based identity with an explicit association warning
+
+#### Scenario: Rotated line charts preserve source geometry
+
+- **WHEN** `extract_line_series` is called with a flat line chart rotated by a
+  small affine angle within the supported range
+- **THEN** the result reports `orientation: "oblique"` and retains trace,
+  frame, axis, and point positions in source-image coordinates
+- **AND** calibrated values are produced only when the rotated frame and both
+  axis transforms meet the declared confidence threshold
+- **AND** large frame residual or ambiguous orientation lowers confidence and
+  produces a warning rather than silently dropping the trace
+
+#### Scenario: Incomplete calibration preserves pixel evidence
 
 - **WHEN** line geometry is detected but one or both axes cannot be calibrated
   reliably
-- **THEN** the result preserves pixel points and any partial series evidence
+- **THEN** the result preserves ordered pixel trace geometry and any reliable
+  marker or anchor points
+- **AND** it omits semantic x/y values for points whose calibration is not
+  reliable
 - **AND** it reports a warning identifying the missing calibration
-- **AND** it does not fabricate semantic numeric values
+- **AND** the generated overlay remains source-sized and inspectable
+
+#### Scenario: Positive, negative, and zero-crossing values retain sign
+
+- **WHEN** a clean calibrated line chart contains values above, below, or
+  crossing the y=0 level
+- **THEN** calibrated point y values preserve their signed numeric values
+- **AND** the result does not infer sign from image height alone when the zero
+  level is not established by axis or tick evidence
+- **AND** ambiguous zero calibration is reported as a warning without
+  fabricating signed values
+
+#### Scenario: Dense, merged, or occluded traces remain bounded
+
+- **WHEN** the chart contains dense sampling, marker overlap, local occlusion,
+  dashed or fragmented evidence, or a trace that cannot be separated reliably
+- **THEN** the result retains reliable trace fragments and confirmed points
+- **AND** it marks merged, missing, or uncertain sections through warnings or
+  bounded confidence
+- **AND** it does not claim a complete point count or fabricate missing values
+
+#### Scenario: Unsupported perspective or non-line geometry remains inspectable
+
+- **WHEN** the image contains strong perspective distortion, 3D styling,
+  filled-area geometry, or no reliably classifiable line trace
+- **THEN** the tool returns reliable partial trace evidence or an empty series
+  collection
+- **AND** it includes a material warning naming the unsupported or ambiguous
+  condition
+- **AND** it does not fabricate a frame, semantic point values, or series
+  associations
+- **AND** any generated overlay preserves the source dimensions and marks the
+  uncertainty
 
 #### Scenario: Invalid line input reports a structured error
 
 - **WHEN** `extract_line_series` receives a missing, unauthorized, malformed,
   or non-image input
-- **THEN** it returns a bounded structured error without exposing a local source
-  path or producing a visual artifact
+- **THEN** it returns a bounded structured error without exposing an internal
+  local source path or producing a visual artifact
+- **AND** no uncaught exception escapes into the agent loop
 
 ### Requirement: Shared Cartesian layout and series evidence
 
@@ -327,33 +478,78 @@ an unstructured exception solely because it is uncertain.
 
 ### Requirement: Independent pie-sector extraction tool
 
-The system SHALL provide an `extract_pie_slices` tool for clean, non-donut pie
-charts. The tool SHALL detect a circular plot region and return one structured
-entry per reliably detected sector, including a stable sector identifier,
-color, center/radius evidence, start and end angles, angular size, and a
-normalized ratio. The tool SHALL preserve partial geometry when some labels or
-associations cannot be resolved.
+The system SHALL provide an `extract_pie_slices` tool for ordinary two-
+dimensional pie charts. The tool SHALL return a unified source-image evidence
+result containing image dimensions, bounded orientation or transform evidence,
+a detected plot region, circular geometry, and one structured entry per
+reliably detected sector. Each sector SHALL include a stable identifier,
+source-image boundary or polygon evidence, color evidence, start and end
+angles, angular size, and a normalized ratio only when the geometry evidence
+passes the tool's support and residual gates. The tool SHALL preserve partial
+geometry and pixel evidence when some sectors, boundaries, or associations
+cannot be resolved.
 
-#### Scenario: Clean pie sectors are measured
+The tool SHALL treat ordinary circular pies as the supported geometry. It MUST
+remain bounded for translated, resized, and supported rotated images, and MUST
+mark strong perspective, elliptical, three-dimensional, donut, exploded,
+nested, or otherwise unsupported geometry instead of fabricating a complete
+flat pie measurement.
 
-- **WHEN** `extract_pie_slices` is called with a synthetic pie chart whose
+#### Scenario: Clean pie sectors are measured with source geometry
+
+- **WHEN** `extract_pie_slices` is called with a clean synthetic pie chart whose
   sectors have distinguishable colors
-- **THEN** the result contains the true number of sectors within the declared
-  fixture tolerance
-- **AND** each sector contains a stable ID, color, angle evidence, and a ratio
-  whose value matches the ground truth within the declared tolerance
-- **AND** the result contains detected center and radius evidence
+- **THEN** the result contains the true number of reliably detected sectors
+  within the declared fixture tolerance
+- **AND** each sector contains a stable ID, source-image boundary evidence,
+  color evidence, angle evidence, and a ratio matching the ground truth within
+  the declared tolerance
+- **AND** the result contains detected plot-region, center, radius, and
+  source-image size evidence
 
-#### Scenario: Pie geometry is independent of Cartesian axes
+#### Scenario: Translated, resized, or rotated pies preserve geometry
+
+- **WHEN** the same ordinary pie chart is translated, resized, or rotated
+  within the supported image transformation range
+- **THEN** the sensor keeps sector identities, angular spans, and ratios
+  stable within the declared tolerance
+- **AND** all serialized geometry and generated overlay coordinates remain
+  aligned with the transformed source image
+- **AND** the result records the supported transform or orientation evidence
+  rather than treating a fixed crop boundary as the chart geometry
+
+#### Scenario: Narrow, anti-aliased, or separated sectors remain bounded
+
+- **WHEN** sector boundaries contain anti-aliasing, separator gaps, narrow
+  sectors, or small color-sampling interruptions
+- **THEN** the sensor uses consistent multi-radius or boundary support to
+  preserve a sector when evidence is sufficient
+- **AND** it reports boundary support, residual, or uncertainty when the
+  measured span is incomplete or ambiguous
+- **AND** it does not split, merge, or assign a ratio solely from an
+  unsupported single-pixel gap or color match
+
+#### Scenario: Cartesian axes are not required
 
 - **WHEN** a pie chart has no x-axis, y-axis, or numeric tick labels
-- **THEN** the sensor still measures sector angles and ratios
+- **THEN** the sensor still measures sector geometry and ratios when circular
+  evidence passes its gates
 - **AND** it does not report missing Cartesian calibration as a sensor failure
+
+#### Scenario: Unsupported pie geometry remains inspectable
+
+- **WHEN** the input is a strong-perspective, elliptical, three-dimensional,
+  donut, exploded, nested, or otherwise unsupported circular graphic
+- **THEN** the result preserves any bounded plot-region or partial pixel
+  evidence that can be established
+- **AND** it marks the geometry as unsupported or low confidence with a
+  material warning
+- **AND** it does not emit a complete flat-pie sector ratio dataset
 
 #### Scenario: Non-pie image remains inspectable
 
 - **WHEN** the input contains no reliable circular pie region
-- **THEN** the tool returns an empty `slices` list with a bounded warning rather
+- **THEN** the tool returns an empty sector list with a bounded warning rather
   than fabricating sectors or raising an exception
 - **AND** any generated overlay preserves the source dimensions and explains
   that no reliable pie region was found
@@ -368,18 +564,31 @@ associations cannot be resolved.
 ### Requirement: Pie labels and legend associations are explicit
 
 The pie sensor SHALL return detected legend entries, OCR snippets, and
-label-to-sector associations as bounded evidence when available. A resolved
-association SHALL include its source or confidence; an unresolved or
-ambiguous association SHALL remain null or uncertain and SHALL be reported in
-warnings instead of being silently guessed. Printed percentages or numeric
-values SHALL be retained separately from geometry ratios.
+label-to-sector associations as bounded evidence when available. Association
+search SHALL support labels and legends around the detected plot region rather
+than assuming one fixed side. A resolved association SHALL include its source,
+support, or confidence; an unresolved or ambiguous association SHALL remain
+null or uncertain and SHALL be reported in warnings instead of being silently
+guessed. Printed percentages or numeric values SHALL be retained separately
+from geometry-derived ratios.
 
 #### Scenario: Legend labels are associated with sectors
 
-- **WHEN** a clean pie chart has a legend whose colors match the sectors
+- **WHEN** a clean pie chart has a legend whose colors match the sectors and
+  the legend is placed on any supported side or layout
 - **THEN** the result associates each reliably matched legend label with the
   corresponding stable sector ID
-- **AND** sector color and label evidence remain available for Agent review
+- **AND** sector color, legend geometry, label source, and association evidence
+  remain available for Agent review
+
+#### Scenario: External labels and leader lines retain evidence
+
+- **WHEN** a pie chart places labels outside the circle and connects them to
+  sectors with leader lines or spatial ordering
+- **THEN** the sensor preserves the label location and the geometric or
+  leader-line evidence used for the association
+- **AND** it marks the association unresolved or ambiguous when the evidence
+  cannot distinguish between sectors
 
 #### Scenario: Printed values are distinguished from inferred ratios
 
@@ -391,19 +600,22 @@ values SHALL be retained separately from geometry ratios.
 
 #### Scenario: Ambiguous association is surfaced
 
-- **WHEN** two sectors or labels have insufficiently distinguishable color or
-  spatial evidence
+- **WHEN** two sectors or labels have insufficiently distinguishable color,
+  spatial, OCR, or leader-line evidence
 - **THEN** the affected association is unresolved or marked uncertain
 - **AND** the result contains a warning naming the ambiguity
 
 ### Requirement: Pie totals, confidence, and visual evidence are validated
 
-Every successful pie sensor result SHALL include bounded confidence metadata
-and warnings. It SHALL report angle and ratio totals, and SHALL identify when
-the reliably detected sectors do not account for approximately 360 degrees or
-100 percent within the configured tolerance. The sensor SHALL generate a
-source-sized overlay marking the circular region, sector boundaries, stable
-IDs, colors, and unresolved associations when present.
+Every pie sensor result SHALL include bounded confidence metadata and warnings
+for geometry, sector support, association, and total consistency. It SHALL
+report angle and ratio totals, per-sector support or residual evidence when
+available, and SHALL identify when the reliably detected sectors do not
+account for approximately 360 degrees or 100 percent within the configured
+tolerance. The sensor SHALL generate a source-sized overlay marking the
+detected plot region, center/radius or boundary geometry, sector boundaries,
+stable IDs, colors, resolved associations, and unresolved or unsupported
+evidence when present.
 
 #### Scenario: Consistent pie totals pass
 
@@ -411,20 +623,33 @@ IDs, colors, and unresolved associations when present.
   tolerance of 1.0
 - **THEN** the result marks the totals as consistent, keeps all confidence
   values within `[0, 1]`, and returns the source-sized overlay
+- **AND** the geometry, sector support, and association status are available
+  separately from the overall confidence
 
 #### Scenario: Incomplete sectors produce a warning
 
-- **WHEN** sector boundaries are occluded, merged, or otherwise leave an angle
-  or ratio total outside tolerance
+- **WHEN** sector boundaries are occluded, merged, narrow beyond reliable
+  resolution, or otherwise leave an angle or ratio total outside tolerance
 - **THEN** the result preserves the detected sectors and reports a bounded
   total-consistency warning
 - **AND** it does not present the incomplete result as a certain complete pie
+
+#### Scenario: Overlay uses one source-image coordinate convention
+
+- **WHEN** the pie sensor returns valid or partial geometry
+- **THEN** the overlay draws the same center, boundary, sector IDs, and labels
+  represented in the serialized result
+- **AND** its dimensions match the original source image
+- **AND** material residuals, unresolved associations, or unsupported geometry
+  are visible without changing the source dimensions
 
 #### Scenario: Generated evidence is model-visible
 
 - **WHEN** the pie sensor returns structured data and a valid overlay
 - **THEN** the existing Agent visual-observation path presents the overlay on
   the next model turn while keeping the structured result available
+- **AND** richer pie evidence does not require a new Gateway route or a new
+  frontend preview protocol
 
 ### Requirement: Pie restoration remains freely planned
 
@@ -460,11 +685,33 @@ output for descriptive image questions.
 ### Requirement: Independent scatter-point extraction tool
 
 The system SHALL provide an `extract_scatter_points` tool for clean two-
-dimensional Cartesian scatter charts. The tool SHALL detect a plot region and
-return structured series with stable identities and points that include pixel
-locations, bounded point geometry evidence, and calibrated x/y values when
-both axes are readable. The tool SHALL preserve partial pixel evidence when
-semantic calibration or series association is unavailable.
+dimensional Cartesian scatter charts. The tool SHALL return a unified
+source-image evidence result containing `image_size`, an `orientation`
+(`upright`, `oblique`, or `unknown`), a detectable `plot_frame`, x/y axis and
+tick calibration evidence, stable series identities, marker geometry, bounded
+confidence, and warnings. Each series SHALL include a stable identifier, a
+resolved label when available, a color or stable fallback identity, and its
+point evidence. Each point SHALL include a stable identifier, source-image
+`x_px`/`y_px`, bounded appearance evidence, and calibrated numeric `x`/`y`
+values only when both axis transforms meet the declared support, residual, and
+confidence thresholds. The result MAY retain pixel-only points when semantic
+calibration or series association is unavailable.
+
+The tool SHALL infer the plot frame and axis directions from visible axes,
+ticks, grid or marker evidence rather than treating a fixed proportional crop
+as ground truth. It SHALL preserve frame, axis, tick, and point geometry in
+source-image coordinates, support clean upright charts and small affine
+rotations of flat two-dimensional charts, and report fit support, residuals, or
+confidence for materially uncertain calibration. Color-distinguished series
+and shared coordinates SHALL remain separate when the source evidence supports
+that distinction.
+
+The tool SHALL preserve partial pixel evidence for incomplete OCR, missing
+axes, ambiguous legends, dense markers, or unsupported perspective/3D styling.
+It SHALL not fabricate numeric values from image position alone. Missing,
+malformed, unauthorized, unsupported, or non-scatter inputs SHALL return a
+bounded structured error or inspectable partial evidence without exposing an
+internal local source path or raising an uncaught exception.
 
 #### Scenario: Clean single-series scatter points are measured
 
@@ -476,6 +723,17 @@ semantic calibration or series association is unavailable.
   matching the fixture ground truth within the declared tolerance
 - **AND** the result contains detected plot-area and axis-calibration evidence
 
+#### Scenario: Rotated scatter geometry remains source-aligned
+
+- **WHEN** `extract_scatter_points` is called with a flat scatter chart rotated
+  by a small affine angle within the supported range
+- **THEN** the result reports `orientation: "oblique"` and retains frame, axis,
+  and point positions in source-image coordinates
+- **AND** calibrated values are produced only when the rotated axis transforms
+  satisfy the declared support, residual, and confidence thresholds
+- **AND** ambiguous orientation or excessive residual lowers confidence and
+  produces a warning rather than silently dropping points
+
 #### Scenario: Multiple scatter series remain distinct
 
 - **WHEN** a clean scatter chart contains multiple color-distinguished series
@@ -483,16 +741,18 @@ semantic calibration or series association is unavailable.
 - **THEN** the result contains one series entry per reliably detected series
 - **AND** points from different series are not merged solely because their
   coordinates overlap
-- **AND** each series carries its legend label or a stable color-based fallback
-  identity and its resolved color when available
+- **AND** each series carries its legend label when reliably associated, or a
+  stable color-based identity with an explicit association warning
 
 #### Scenario: Partial calibration remains inspectable
 
 - **WHEN** point geometry is detected but one or both axes cannot be calibrated
   reliably
-- **THEN** the result preserves pixel points and any partial series evidence
-- **AND** it reports a warning identifying the missing calibration
-- **AND** it does not fabricate semantic numeric x/y values
+- **THEN** the result preserves pixel points, appearance evidence, and any
+  partial series association
+- **AND** it omits semantic x/y values unless both axes are reliable
+- **AND** it reports a warning identifying the missing or insufficient
+  calibration
 
 #### Scenario: Non-scatter image remains inspectable
 
@@ -502,20 +762,36 @@ semantic calibration or series association is unavailable.
 - **AND** any generated overlay preserves the source dimensions and explains
   that no reliable scatter evidence was found
 
+#### Scenario: Unsupported or non-scatter geometry remains bounded
+
+- **WHEN** the image contains strong perspective distortion, 3D styling, a
+  filled or line-only graphic, or no reliable scatter point population
+- **THEN** the tool returns reliable partial point evidence or an empty series
+  and points collection
+- **AND** it includes a material warning naming the unsupported or ambiguous
+  condition
+- **AND** it does not fabricate a frame, semantic coordinates, or series
+  associations
+- **AND** any generated overlay preserves the source dimensions and marks the
+  uncertainty
+
 #### Scenario: Missing or malformed input is bounded
 
 - **WHEN** `extract_scatter_points` receives a missing, unauthorized,
   malformed, or non-image input
 - **THEN** it returns a structured error without exposing a local source path
   or producing a visual artifact
+- **AND** no uncaught exception escapes into the agent loop
 
 ### Requirement: Scatter overlap, size, and outlier evidence is explicit
 
 The scatter sensor SHALL preserve bounded evidence about point size, opacity,
-nearby or overlapping markers, and potential outliers when those properties
-can be observed. It SHALL distinguish a reliably counted point from a merged
-or occluded point, report unresolved cases in warnings or confidence metadata,
-and SHALL not silently discard a potential outlier from the returned evidence.
+nearby or overlapping markers, dense sampling, local occlusion, and potential
+outliers when those properties can be observed. It SHALL distinguish a
+reliably counted point from a merged, oversized, or occluded point, report
+unresolved cases in warnings or confidence metadata, and SHALL not silently
+discard a potential outlier or claim a complete point count from incomplete
+evidence.
 
 #### Scenario: Overlapping markers are surfaced
 
@@ -534,6 +810,15 @@ and SHALL not silently discard a potential outlier from the returned evidence.
 - **AND** it does not convert those appearance differences into unverified
   numeric fields in the semantic dataset
 
+#### Scenario: Dense or occluded evidence remains partial
+
+- **WHEN** markers are dense, locally occluded, anti-aliased into one region,
+  or separated only by uncertain color evidence
+- **THEN** the result retains reliable components and bounded partial counts
+- **AND** it marks missing, merged, or uncertain regions through warnings or
+  reduced confidence
+- **AND** it does not fabricate hidden points or semantic values
+
 #### Scenario: Potential outliers remain available for review
 
 - **WHEN** one or more points are far from the dominant spatial population
@@ -545,11 +830,12 @@ and SHALL not silently discard a potential outlier from the returned evidence.
 ### Requirement: Scatter confidence and visual evidence are validated
 
 Every successful scatter sensor result SHALL include bounded confidence
-metadata and warnings. The sensor SHALL generate a source-sized overlay that
-marks the plot region, detected points, stable IDs, series colors, calibration
-status, and unresolved or potential-outlier evidence when present. Confidence
-values SHALL remain within `[0, 1]`, and low-confidence evidence SHALL remain
-usable for another Agent action.
+metadata and a warnings collection. The sensor SHALL generate a source-sized
+overlay that marks the inferred plot frame, axis evidence, detected points,
+stable IDs, series colors, calibration status, merged or overlapping evidence,
+and potential-outlier evidence when present. Confidence values SHALL remain
+within `[0, 1]`, and low-confidence evidence SHALL remain usable for another
+Agent action.
 
 #### Scenario: Complete scatter evidence reports bounded confidence
 
@@ -557,7 +843,8 @@ usable for another Agent action.
   and separable markers
 - **THEN** the result contains confidence values in `[0, 1]`, calibrated axis
   evidence, and the source-sized overlay
-- **AND** the overlay visibly marks each returned point and its stable identity
+- **AND** the overlay visibly marks the frame, axes, each returned point, and
+  its stable identity
 
 #### Scenario: Incomplete scatter evidence produces warnings
 
@@ -573,15 +860,16 @@ usable for another Agent action.
 - **WHEN** the scatter sensor returns structured data and a valid overlay
 - **THEN** the existing Agent visual-observation path presents the overlay on
   the next model turn while keeping the structured result available
+- **AND** preview and observation transport behavior remains unchanged
 
 ### Requirement: Scatter restoration remains freely planned
 
 The system SHALL enable the Agent, given a clean annotated or legend-defined
 scatter chart through the normal authorized attachment path, to use scatter
-evidence, assemble a coordinate-based scatter ChartSpec with axes, and
-independently validate it. The infrastructure MUST NOT force a fixed
-scatter-tool sequence or require ChartSpec output for descriptive image
-questions.
+evidence, OCR, visual inspection, assemble a coordinate-based scatter
+ChartSpec with axes, and independently validate it. The infrastructure MUST
+NOT force a fixed scatter-tool sequence or require ChartSpec output for
+descriptive image questions.
 
 #### Scenario: Agent restores a clean scatter chart
 
@@ -589,9 +877,10 @@ questions.
   data
 - **THEN** the Agent can choose `extract_scatter_points`, visual inspection,
   OCR, `assemble_spec`, and `validate_spec` in an order it determines
-- **AND** the resulting dataset preserves the resolved series identities and
-  the calibrated x/y coordinates, with uncertain points explicitly retained
-  or flagged
+- **AND** the resulting dataset preserves resolved series identities and
+  calibrated x/y coordinates when reliable
+- **AND** uncertain or pixel-only points remain explicitly retained or flagged
+  before semantic assembly
 
 #### Scenario: Scatter ChartSpec requires valid Cartesian axes
 

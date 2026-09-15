@@ -74,6 +74,7 @@ def line_chart(
     x_label: str = "Time",
     y_label: str = "Value",
     source: str = "synthetic-line",
+    markers: bool = True,
 ) -> tuple[bytes, dict]:
     """Render a clean, marked line chart with explicit multi-series truth."""
     series_values = values_by_series or {
@@ -90,7 +91,7 @@ def line_chart(
             list(x_values),
             [float(value) for value in values],
             color=colors[index % len(colors)],
-            marker="o",
+            marker="o" if markers else None,
             linewidth=2,
             label=label,
         )

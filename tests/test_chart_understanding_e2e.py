@@ -66,7 +66,7 @@ class _UnderstandingClient:
             geometry = last_tool_data()
             values = [point["value"] for point in self.ground_truth["dataset"]]
             expected_ratios = [value / min(values) for value in values]
-            measured_ratios = [bar["ratio"] for bar in geometry["bars"]]
+            measured_ratios = [bar["measure"]["ratio"] for bar in geometry["bars"]]
             assert measured_ratios == pytest.approx(expected_ratios, rel=0.1)
             result = _call(
                 "assemble",
@@ -143,6 +143,12 @@ class _MultiSeriesUnderstandingClient:
         elif self.stage == 1:
             observed = last_tool_data()
             assert {entry["id"] for entry in observed["series"]} == {"series_1", "series_2"}
+            assert all(entry["trace"]["polyline_px"] for entry in observed["series"])
+            assert all(
+                point["source"] in {"marker", "tick_sample"}
+                for entry in observed["series"]
+                for point in entry["points"]
+            )
             points = [
                 {
                     "x": point["x"],

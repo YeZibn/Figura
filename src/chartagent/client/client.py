@@ -187,7 +187,16 @@ class LLMClient:
         trace_run_id: Optional[str] = None,
         **overrides: Any,
     ) -> None:
-        resolved = resolve_config(**overrides) if overrides else (config or resolve_config())
+        if overrides:
+            resolved_overrides = dict(overrides)
+            # An explicit ``None`` is useful to assert that no credential is
+            # available. Keep the no-override path environment-aware for the
+            # normal CLI/runtime startup flow.
+            if "api_key" in resolved_overrides and resolved_overrides["api_key"] is None:
+                resolved_overrides["api_key"] = ""
+            resolved = resolve_config(**resolved_overrides)
+        else:
+            resolved = config or resolve_config()
         self.config = resolved
         if not self.config.api_key:
             raise ValueError(f"An API key is required for provider {self.config.provider}.")

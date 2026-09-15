@@ -264,7 +264,11 @@ def _compare_sensor(spec: ChartSpec, data: Mapping[str, Any] | None, sensor_erro
         evidence.append({"kind": "bar_geometry", "count": actual_count})
         if actual_count != expected_count:
             issues.append(_issue("bar_count_mismatch", "bars", f"expected {expected_count} bars, detected {actual_count}"))
-        actual = [_finite(item.get("h_px")) for item in items or () if isinstance(item, Mapping)]
+        actual = [
+            _finite((item.get("measure") or {}).get("value_length_px"))
+            for item in items or ()
+            if isinstance(item, Mapping) and isinstance(item.get("measure"), Mapping)
+        ]
         actual_values = [value for value in actual if value is not None]
         expected_values = [_finite(point.value) for point in spec.dataset]
         expected_values = [value for value in expected_values if value is not None]
@@ -272,28 +276,157 @@ def _compare_sensor(spec: ChartSpec, data: Mapping[str, Any] | None, sensor_erro
             if any(not _close_enough(a, e, 0.24) for a, e in zip(_ratios(actual_values), _ratios(expected_values))):
                 issues.append(_issue("bar_value_mismatch", "dataset", "detected bar proportions do not match the ChartSpec"))
     elif chart_type is ChartType.PIE:
-        items = data.get("slices")
+        items = data.get("sectors")
         actual_count = len(items) if isinstance(items, list) else 0
         expected_count = _expected_points(spec)
-        evidence.append({"kind": "pie_geometry", "count": actual_count})
+        totals = data.get("totals") if isinstance(data.get("totals"), Mapping) else {}
+        evidence.append({
+            "kind": "pie_geometry",
+            "count": actual_count,
+            "totals": dict(totals),
+            "confidence": data.get("confidence"),
+        })
+        sensor_warnings = data.get("warnings")
+        unreliable = (
+            isinstance(sensor_warnings, list)
+            and any(isinstance(item, str) for item in sensor_warnings)
+        ) or totals.get("consistent") is not True
         if actual_count != expected_count:
-            sensor_warnings = data.get("warnings")
-            unreliable = isinstance(sensor_warnings, list) and any(isinstance(item, str) for item in sensor_warnings)
-            issues.append(_issue("pie_evidence_unresolved" if unreliable else "pie_count_mismatch", "slices", f"expected {expected_count} sectors, detected {actual_count}", "warning" if unreliable else "error"))
-        actual = [_finite(item.get("ratio")) for item in items or () if isinstance(item, Mapping)]
+            issues.append(_issue(
+                "pie_evidence_unresolved" if unreliable else "pie_count_mismatch",
+                "sectors",
+                f"expected {expected_count} sectors, detected {actual_count}",
+                "warning" if unreliable else "error",
+            ))
+        actual = [
+            _finite((item.get("measure") or {}).get("ratio"))
+            for item in items or ()
+            if isinstance(item, Mapping) and isinstance(item.get("measure"), Mapping)
+        ]
         actual_values = [value for value in actual if value is not None]
         expected_total = sum((_finite(point.value) or 0.0) for point in spec.dataset)
         expected_values = [((_finite(point.value) or 0.0) / expected_total) for point in spec.dataset] if expected_total else []
-        if len(actual_values) == len(expected_values) and any(not _close_enough(a, e, 0.12) for a, e in zip(sorted(actual_values), sorted(expected_values))):
-            issues.append(_issue("pie_value_mismatch", "dataset", "detected sector proportions do not match the ChartSpec"))
+        if len(actual_values) == len(expected_values) and totals.get("consistent") is True:
+            if any(not _close_enough(a, e, 0.12) for a, e in zip(sorted(actual_values), sorted(expected_values))):
+                issues.append(_issue("pie_value_mismatch", "dataset", "detected sector proportions do not match the ChartSpec"))
+        elif actual_count or not expected_values:
+            issues.append(_issue(
+                "pie_ratio_unresolved",
+                "sectors",
+                "one or more pie sector ratios are unavailable or incomplete",
+                "warning",
+            ))
     else:
         series = data.get("series")
         series = series if isinstance(series, list) else []
-        actual_points = sum(len(item.get("points", [])) for item in series if isinstance(item, Mapping) and isinstance(item.get("points"), list))
+        is_line = chart_type is ChartType.LINE
+        is_scatter = chart_type is ChartType.SCATTER
+        actual_points = sum(
+            len(item.get("points", []))
+            for item in series
+            if isinstance(item, Mapping) and isinstance(item.get("points"), list)
+        )
+        trace_count = sum(
+            1
+            for item in series
+            if isinstance(item, Mapping)
+            and isinstance(item.get("trace"), Mapping)
+            and isinstance(item.get("trace", {}).get("polyline_px"), list)
+            and item.get("trace", {}).get("polyline_px")
+        )
+        trace_vertex_count = sum(
+            len(item.get("trace", {}).get("polyline_px", []))
+            for item in series
+            if isinstance(item, Mapping)
+            and isinstance(item.get("trace"), Mapping)
+            and isinstance(item.get("trace", {}).get("polyline_px"), list)
+        )
         expected_points = _expected_points(spec)
-        evidence.append({"kind": f"{chart_type.value}_geometry", "seriesCount": len(series), "pointCount": actual_points})
+        evidence.append(
+            {
+                "kind": f"{chart_type.value}_geometry",
+                "seriesCount": len(series),
+                "pointCount": actual_points,
+                **(
+                    {
+                        "traceCount": trace_count,
+                        "traceVertexCount": trace_vertex_count,
+                    }
+                    if is_line
+                    else {}
+                ),
+            }
+        )
+        if is_scatter:
+            scatter_points = [
+                point
+                for item in series
+                if isinstance(item, Mapping) and isinstance(item.get("points"), list)
+                for point in item["points"]
+                if isinstance(point, Mapping)
+            ]
+            calibrated_points = sum(
+                1
+                for point in scatter_points
+                if _finite(point.get("x")) is not None and _finite(point.get("y")) is not None
+            )
+            pixel_only_points = len(scatter_points) - calibrated_points
+            uncertain_points = sum(
+                1
+                for point in scatter_points
+                if any(point.get(field) for field in ("merged_candidate", "overlap_candidate", "dense_candidate", "occluded_candidate", "outlier_candidate"))
+            )
+            evidence[-1].update(
+                {
+                    "calibratedPointCount": calibrated_points,
+                    "pixelOnlyPointCount": pixel_only_points,
+                    "uncertainPointCount": uncertain_points,
+                }
+            )
+            if pixel_only_points:
+                issues.append(
+                    _issue(
+                        "scatter_calibration_unresolved",
+                        "dataset.coordinates",
+                        f"{pixel_only_points} scatter points retain pixel-only evidence",
+                        "warning",
+                    )
+                )
+            if uncertain_points:
+                issues.append(
+                    _issue(
+                        "scatter_point_uncertainty",
+                        "dataset.points",
+                        f"{uncertain_points} scatter points carry overlap, density, occlusion, or outlier evidence",
+                        "warning",
+                    )
+                )
+        if is_line and series and trace_count != len(series):
+            issues.append(
+                _issue(
+                    "trace_evidence_unresolved",
+                    "series.trace",
+                    f"expected trace evidence for {len(series)} series, detected {trace_count}",
+                    "warning",
+                )
+            )
         if actual_points != expected_points:
-            unreliable = actual_points == 0 and isinstance(data.get("warnings"), list) and bool(data.get("warnings"))
+            unreliable = (
+                isinstance(data.get("warnings"), list)
+                and bool(data.get("warnings"))
+                and (
+                    actual_points == 0
+                    or is_line
+                    and any(
+                        isinstance(warning, str)
+                        and any(
+                            marker in warning
+                            for marker in ("sampling", "calibration", "fragmented", "overlap", "unresolved")
+                        )
+                        for warning in data["warnings"]
+                    )
+                )
+            )
             issues.append(_issue("point_evidence_unresolved" if unreliable else "point_count_mismatch", "dataset", f"expected {expected_points} points, detected {actual_points}", "warning" if unreliable else "error"))
         expected_series = {point.series or "default" for point in spec.dataset}
         if len(series) != len(expected_series):
