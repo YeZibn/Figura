@@ -132,6 +132,8 @@ class ManagedRun:
         self,
         session_id: str,
         *,
+        provider: str | None = None,
+        model: str | None = None,
         max_events: int = DEFAULT_MAX_RUN_EVENTS,
         retention_seconds: float = DEFAULT_RUN_RETENTION_SECONDS,
         history_store: GatewayHistoryStore | None = None,
@@ -139,6 +141,8 @@ class ManagedRun:
     ) -> None:
         self.run_id = run_id or f"run_{uuid4().hex}"
         self.session_id = session_id
+        self.provider = provider
+        self.model = model
         self.status = RunStatus.RUNNING
         self.answer: str | None = None
         self.error_code: str | None = None
@@ -156,7 +160,7 @@ class ManagedRun:
 
     @property
     def accepted(self) -> RunAccepted:
-        return RunAccepted(self.run_id, self.session_id, self.status)
+        return RunAccepted(self.run_id, self.session_id, self.status, self.provider, self.model)
 
     @property
     def terminal(self) -> bool:
@@ -326,6 +330,8 @@ class HistoricalRun:
         self.error_code = summary.get("terminalCode")
         self.error_message = summary.get("terminalMessage")
         self.history_warning = summary.get("historyWarning")
+        self.provider = summary.get("provider")
+        self.model = summary.get("model")
         self.history_store = history_store
 
     @property
@@ -371,7 +377,7 @@ class RunManager:
         self._lock = RLock()
         self._executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="chartagent-run")
 
-    def create(self, session_id: str) -> ManagedRun:
+    def create(self, session_id: str, *, provider: str | None = None, model: str | None = None) -> ManagedRun:
         with self._lock:
             self.cleanup()
             active_count = sum(not run.terminal for run in self._runs.values())
@@ -379,6 +385,8 @@ class RunManager:
                 raise RuntimeError("active run limit exceeded")
             run = ManagedRun(
                 session_id,
+                provider=provider,
+                model=model,
                 max_events=self.max_events,
                 retention_seconds=self.retention_seconds,
                 history_store=self.history_store,
@@ -386,10 +394,20 @@ class RunManager:
             self._runs[run.run_id] = run
             if self.history_store is not None:
                 try:
-                    self.history_store.create_run(run.run_id, session_id)
+                    self.history_store.create_run(
+                        run.run_id,
+                        session_id,
+                        provider=provider,
+                        model=model,
+                    )
                 except Exception:  # noqa: BLE001 - keep the live run usable
                     run._mark_history_warning()
-            run.publish("run_started", {"status": RunStatus.RUNNING.value})
+            payload = {"status": RunStatus.RUNNING.value}
+            if provider:
+                payload["provider"] = provider
+            if model:
+                payload["model"] = model
+            run.publish("run_started", payload)
             return run
 
     @contextmanager
@@ -406,8 +424,8 @@ class RunManager:
                 for run in self._runs.values()
             )
 
-    def start(self, session_id: str, worker: Callable[[ManagedRun], None]) -> ManagedRun:
-        run = self.create(session_id)
+    def start(self, session_id: str, worker: Callable[[ManagedRun], None], *, provider: str | None = None, model: str | None = None) -> ManagedRun:
+        run = self.create(session_id, provider=provider, model=model)
         self._executor.submit(worker, run)
         return run
 

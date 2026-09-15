@@ -168,6 +168,7 @@ class GatewayRequestHandler(BaseHTTPRequestHandler):
                     session_id,
                     body.get("text"),
                     body.get("attachmentIds"),
+                    body.get("provider"),
                 )
                 self._send_json(HTTPStatus.ACCEPTED, payload)
                 return
@@ -180,6 +181,7 @@ class GatewayRequestHandler(BaseHTTPRequestHandler):
                     session_id,
                     body.get("text"),
                     body.get("attachmentIds"),
+                    body.get("provider"),
                 )
             self._send_json(HTTPStatus.OK, payload)
         except GatewayFault as exc:

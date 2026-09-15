@@ -135,6 +135,7 @@ def backend_factory():
         try:
             return client_mod.LLMClient(
                 api_key=client_kwargs.pop("api_key", "test-key"),
+                provider=client_kwargs.pop("provider", "openai"),
                 **client_kwargs,
             )
         finally:

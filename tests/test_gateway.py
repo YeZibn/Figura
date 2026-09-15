@@ -18,7 +18,7 @@ from chartagent.attachments import AttachmentRegistry
 from chartagent.agent import Agent
 from chartagent.gateway.attachments import AttachmentStoreError, EphemeralAttachmentStore
 from chartagent.gateway.history import GatewayHistoryStore
-from chartagent.gateway.protocol import GatewayFault, RunEvent, validate_message_text, validate_session_name
+from chartagent.gateway.protocol import GatewayFault, RunEvent, validate_message_text, validate_provider, validate_session_name
 from chartagent.gateway.projection import project_completed_runs
 from chartagent.gateway.server import GatewayHTTPServer, serve
 from chartagent.gateway.service import GatewayService
@@ -26,6 +26,7 @@ from chartagent.gateway.runs import ObservationStore, RunManager
 from chartagent.memory import SQLiteAgentMemory, RunStatus
 from chartagent.memory.models import Record, Run
 from chartagent.runtime import AgentRuntime
+import chartagent.runtime.readiness as readiness_module
 from chartagent.tools.core.result import GeneratedImage
 from chartagent.trace import TraceEvent
 from chartagent.client.models import NormalizedResult, ToolCall
@@ -87,6 +88,144 @@ def test_gateway_health_redacts_unknown_readiness_reason():
     health = service.health()
     assert health["agent"] == {"status": "unavailable", "reason": "initialization_failed"}
     assert "secret-value" not in json.dumps(health)
+
+
+def test_gateway_health_sanitizes_provider_statuses():
+    service = GatewayService(
+        readiness_probe=lambda: {
+            "status": "ready",
+            "provider": "openai",
+            "providers": {
+                "openai": {"status": "ready", "model": "relay-model"},
+                "qwen": {"status": "unavailable", "reason": "QWEN_API_KEY=sentinel-secret"},
+            },
+        }
+    )
+
+    health = service.health()
+
+    assert health["agent"]["providers"]["qwen"] == {
+        "status": "unavailable",
+        "provider": "qwen",
+        "reason": "initialization_failed",
+    }
+    assert "sentinel-secret" not in json.dumps(health)
+
+
+def test_agent_readiness_rejects_invalid_default_provider(monkeypatch):
+    monkeypatch.setenv("CHARTAGENT_PROVIDER", "unsupported-provider")
+    monkeypatch.setenv("OPENAI_API_KEY", "dummy-key")
+    monkeypatch.setattr(readiness_module, "load_environment", lambda: None)
+
+    result = readiness_module.probe_agent_readiness()
+
+    assert result == {
+        "status": "unavailable",
+        "reason": "invalid_configuration",
+        "providers": {},
+    }
+
+
+def test_gateway_readiness_failure_is_bounded_before_run(tmp_path):
+    called = False
+
+    def runtime_factory(name, **kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("runtime must not be constructed")
+
+    service = GatewayService(
+        database=tmp_path / "sessions.db",
+        runtime_factory=runtime_factory,
+        readiness_probe=lambda: (_ for _ in ()).throw(RuntimeError("probe failed")),
+    )
+    session_id = service.create_session("readiness-failure")["session"]["id"]
+
+    with pytest.raises(GatewayFault) as error:
+        service.start_run(session_id, "hello")
+
+    assert error.value.code == "agent_unavailable"
+    assert error.value.reason == "initialization_failed"
+    assert called is False
+
+
+def test_gateway_provider_selection_is_snapshotted_and_persisted(tmp_path):
+    database = tmp_path / "sessions.db"
+    captured: list[dict[str, object]] = []
+
+    class FakeAgent:
+        def run(self, text):
+            return "provider run complete"
+
+    class FakeRuntime:
+        agent = FakeAgent()
+
+        def close(self):
+            return None
+
+    def runtime_factory(name, *, provider=None, model=None, run_id=None, trace_sink=None, visual_observation_sink=None):
+        captured.append({"name": name, "provider": provider, "model": model, "run_id": run_id})
+        return FakeRuntime()
+
+    readiness = lambda: {
+        "status": "ready",
+        "provider": "openai",
+        "providers": {
+            "openai": {"status": "ready", "provider": "openai", "model": "relay-model"},
+            "qwen": {"status": "ready", "provider": "qwen", "model": "qwen3.8-flash"},
+        },
+    }
+    service = GatewayService(database=database, runtime_factory=runtime_factory, readiness_probe=readiness)
+    session_id = service.create_session("provider-selection")["session"]["id"]
+    accepted = service.start_run(session_id, "use qwen", raw_provider="qwen")
+    run_id = accepted["run"]["runId"]
+    run = service.get_run(session_id, run_id)
+    assert run.wait_terminal(timeout=2)
+    assert accepted["run"]["provider"] == "qwen"
+    assert accepted["run"]["model"] == "qwen3.8-flash"
+    assert captured[0]["provider"] == "qwen"
+    assert captured[0]["model"] == "qwen3.8-flash"
+    history = service.get_run_history(session_id, run_id)
+    assert history["run"]["provider"] == "qwen"
+    assert history["run"]["model"] == "qwen3.8-flash"
+    assert history["events"][0]["payload"]["provider"] == "qwen"
+    assert history["events"][0]["payload"]["model"] == "qwen3.8-flash"
+
+
+def test_gateway_rejects_unavailable_provider_before_runtime(tmp_path):
+    database = tmp_path / "sessions.db"
+    called = False
+
+    def runtime_factory(name, **kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("runtime must not be constructed")
+
+    service = GatewayService(
+        database=database,
+        runtime_factory=runtime_factory,
+        readiness_probe=lambda: {
+            "status": "ready",
+            "provider": "openai",
+            "providers": {
+                "openai": {"status": "ready", "model": "relay-model"},
+                "qwen": {"status": "unavailable", "reason": "missing_configuration"},
+            },
+        },
+    )
+    session_id = service.create_session("provider-unavailable")["session"]["id"]
+    with pytest.raises(GatewayFault) as error:
+        service.start_run(session_id, "run", raw_provider="qwen")
+    assert error.value.code == "agent_unavailable"
+    assert error.value.reason == "missing_configuration"
+    assert called is False
+
+
+def test_gateway_provider_validation_is_bounded():
+    assert validate_provider(" QWEN ") == "qwen"
+    with pytest.raises(GatewayFault) as error:
+        validate_provider({"provider": "qwen"})
+    assert error.value.code == "invalid_provider"
 
 
 def test_completed_projection_omits_partial_runs_and_sensitive_records(tmp_path):

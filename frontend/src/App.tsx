@@ -6,7 +6,7 @@ import { mockClient } from './api/mockClient'
 import { formatBytes, mediaTypeForFile, validateImageFile } from './attachments'
 import { getGatewayRuntimeStatus, type GatewayRuntimeStatus } from './runtime'
 import { createGatewayPreviewLoader, releasePreview, usePreviewResource, type PreviewResourceLoader } from './previewResources'
-import type { AgentRunEvent, Attachment, AttachmentStatus, ConversationItem, GatewayHealth, GeneratedChartReference, RunState, RunSummary, Session, SessionData } from './types/protocol'
+import type { AgentRunEvent, Attachment, AttachmentStatus, ConversationItem, GatewayHealth, GeneratedChartReference, Provider, RunState, RunSummary, Session, SessionData } from './types/protocol'
 import './styles/global.css'
 import './styles/error.css'
 
@@ -46,6 +46,22 @@ function runStateLabel(state: RunState): string {
   if (state === 'interrupted') return '已中断'
   if (state === 'unavailable') return '服务不可用'
   return '准备就绪'
+}
+
+const providerLabels: Record<Provider, string> = {
+  openai: 'OpenAI（中转站）',
+  qwen: 'Qwen（DashScope）',
+}
+
+function providerLabel(provider?: Provider | null): string {
+  return provider ? providerLabels[provider] : ''
+}
+
+function providerStatus(health: GatewayHealth | null, provider: Provider, mode: 'mock' | 'gateway'): 'ready' | 'unavailable' | 'unknown' {
+  const status = health?.agent?.providers?.[provider]?.status
+  if (status) return status
+  if (health?.agent?.provider === provider) return health.agent.status
+  return health || mode === 'gateway' ? 'unknown' : 'ready'
 }
 
 function currentTime(): string {
@@ -289,7 +305,7 @@ function RunTimeline({ timeline, expanded, onToggle, previewLoader }: { timeline
   const status = summary.status
   const statusText = status === 'completed' ? '已完成' : status === 'failed' ? '失败' : status === 'interrupted' ? '已中断' : '运行中'
   return <section className={'run-timeline ' + status + (expanded ? ' expanded' : '')}>
-    <button className="run-summary" onClick={onToggle} aria-expanded={expanded} aria-controls={`trace-${summary.runId}`}><span className="run-arrow">{expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}</span><span className="run-summary-icon"><Terminal size={14} /></span><span className="run-summary-copy"><strong>执行过程</strong><small>{timestampLabel(summary.createdAt)} · {summary.eventCount || timeline.events.length} 个事件</small></span><span className={'run-status ' + status}>{statusText}</span></button>
+    <button className="run-summary" onClick={onToggle} aria-expanded={expanded} aria-controls={`trace-${summary.runId}`}><span className="run-arrow">{expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}</span><span className="run-summary-icon"><Terminal size={14} /></span><span className="run-summary-copy"><strong>执行过程</strong><small>{timestampLabel(summary.createdAt)} · {summary.eventCount || timeline.events.length} 个事件{summary.provider ? ` · ${providerLabel(summary.provider)}${summary.model ? ` · ${summary.model}` : ''}` : ''}</small></span><span className={'run-status ' + status}>{statusText}</span></button>
     {expanded && <div className="run-trace" id={`trace-${summary.runId}`}>
       {summary.historyWarning && <div className="trace-warning" role="status">部分执行记录未能持久化，当前显示的过程可能不完整。</div>}
       {timeline.historyGap && <div className="trace-warning" role="status">历史记录存在缺口，未显示缺失的执行步骤。</div>}
@@ -356,7 +372,7 @@ function RunBlock(props: {
   </section>
 }
 
-function ConversationPanel(props: { data: SessionData | null; timelines: RunTimeline[]; pendingUser: ConversationItem | null; runState: RunState; selectedAttachmentIds: string[]; onSubmit: (text: string, attachmentIds: string[]) => Promise<boolean>; loading: boolean; loadingSession: boolean; error: string | null; onToggleRun: (runId: string, status: RunSummary['status']) => void; expandedRuns: Set<string>; previewLoader?: PreviewResourceLoader | null }) {
+function ConversationPanel(props: { data: SessionData | null; timelines: RunTimeline[]; pendingUser: ConversationItem | null; runState: RunState; selectedAttachmentIds: string[]; provider: Provider; health: GatewayHealth | null; mode: 'mock' | 'gateway'; onProviderChange: (provider: Provider) => void; onSubmit: (text: string, attachmentIds: string[]) => Promise<boolean>; loading: boolean; loadingSession: boolean; error: string | null; onToggleRun: (runId: string, status: RunSummary['status']) => void; expandedRuns: Set<string>; previewLoader?: PreviewResourceLoader | null }) {
   const [text, setText] = useState('')
   const [expanded, setExpanded] = useState<string | null>(null)
   const previewLoader = props.previewLoader || null
@@ -378,7 +394,7 @@ function ConversationPanel(props: { data: SessionData | null; timelines: RunTime
   })
   const orphanMessages = messages.filter((item) => !linkedMessageIds.has(item.id))
   const toggleMessage = (id: string) => setExpanded((current) => current === id ? null : id)
-  return <main className="conversation panel"><header className="conversation-header"><div className="conversation-title"><span className="eyebrow">当前会话</span><h1>{props.data?.session.name ?? (props.loadingSession ? '正在加载会话' : '暂无活动会话')}</h1>{props.data && <span className="conversation-meta">{props.data.session.runCount} 次运行 · 执行记录保存在本机</span>}</div><span className={'run-chip ' + props.runState}><span className="status-dot" />{runStateLabel(props.runState)} · {props.data?.session.runCount ?? 0} 次运行</span></header><div className="message-scroll">{props.loadingSession ? <div className="loading-state"><span className="spinner" />正在加载会话...</div> : props.error && !props.data && messages.length === 0 ? <div className="error-state"><div className="empty-icon"><MessageSquare size={22} /></div><h2>无法连接本地服务</h2><p>{props.error}</p></div> : !props.data && messages.length === 0 ? <div className="empty-conversation"><div className="empty-icon"><MessageSquare size={22} /></div><h2>创建第一个会话</h2><p>请从左侧新建会话，开始使用 Figura。</p></div> : messages.length === 0 && props.timelines.length === 0 ? <div className="empty-conversation"><div className="empty-icon"><MessageSquare size={22} /></div><p>提出问题或添加图片，开始使用 Figura。</p></div> : <>{runBlocks.map(({ timeline, user, assistant }) => <RunBlock key={timeline.summary.runId} timeline={timeline} user={user} assistant={assistant} expanded={props.expandedRuns.has(timeline.summary.runId) || timeline.summary.status === 'running'} onToggleRun={() => props.onToggleRun(timeline.summary.runId, timeline.summary.status)} expandedMessage={expanded} onToggleMessage={toggleMessage} previewLoader={previewLoader} />)}{orphanMessages.map((item) => <Message key={item.id} item={item} expanded={expanded === item.id} onToggle={toggleMessage} previewLoader={previewLoader} />)}</>}{props.loading && <div className="typing"><span /><span /><span /> Figura Agent 正在思考</div>}{props.error && <div className="error-banner" role="alert">{props.error}</div>}</div><div className="composer"><div className="composer-label"><Sparkles size={13} /><span>向 Figura Agent 提问</span></div><textarea value={text} onChange={(event) => setText(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void send() } }} placeholder="例如：比较这张图中各系列的变化趋势..." rows={1} /><div className="composer-actions"><span className="composer-hint">Enter 发送 · Shift + Enter 换行</span><button className="send-button" onClick={() => void send()} disabled={!text.trim() || props.loading || props.loadingSession} title="发送消息" aria-label="发送消息"><Send size={16} /> </button></div></div></main>
+  return <main className="conversation panel"><header className="conversation-header"><div className="conversation-title"><span className="eyebrow">当前会话</span><h1>{props.data?.session.name ?? (props.loadingSession ? '正在加载会话' : '暂无活动会话')}</h1>{props.data && <span className="conversation-meta">{props.data.session.runCount} 次运行 · 执行记录保存在本机</span>}</div><div className="conversation-header-actions"><label className="provider-selector"><span>下一次运行</span><select aria-label="选择下一次运行的模型来源" value={props.provider} onChange={(event) => props.onProviderChange(event.target.value as Provider)} disabled={props.loadingSession}>{(['openai', 'qwen'] as Provider[]).map((provider) => { const status = providerStatus(props.health, provider, props.mode); return <option key={provider} value={provider} disabled={status === 'unavailable'}>{providerLabels[provider]}{status === 'unavailable' ? '（不可用）' : ''}</option> })}</select></label><span className={'run-chip ' + props.runState}><span className="status-dot" />{runStateLabel(props.runState)} · {props.data?.session.runCount ?? 0} 次运行</span></div></header><div className="message-scroll">{props.loadingSession ? <div className="loading-state"><span className="spinner" />正在加载会话...</div> : props.error && !props.data && messages.length === 0 ? <div className="error-state"><div className="empty-icon"><MessageSquare size={22} /></div><h2>无法连接本地服务</h2><p>{props.error}</p></div> : !props.data && messages.length === 0 ? <div className="empty-conversation"><div className="empty-icon"><MessageSquare size={22} /></div><h2>创建第一个会话</h2><p>请从左侧新建会话，开始使用 Figura。</p></div> : messages.length === 0 && props.timelines.length === 0 ? <div className="empty-conversation"><div className="empty-icon"><MessageSquare size={22} /></div><p>提出问题或添加图片，开始使用 Figura。</p></div> : <>{runBlocks.map(({ timeline, user, assistant }) => <RunBlock key={timeline.summary.runId} timeline={timeline} user={user} assistant={assistant} expanded={props.expandedRuns.has(timeline.summary.runId) || timeline.summary.status === 'running'} onToggleRun={() => props.onToggleRun(timeline.summary.runId, timeline.summary.status)} expandedMessage={expanded} onToggleMessage={toggleMessage} previewLoader={previewLoader} />)}{orphanMessages.map((item) => <Message key={item.id} item={item} expanded={expanded === item.id} onToggle={toggleMessage} previewLoader={previewLoader} />)}</>}{props.loading && <div className="typing"><span /><span /><span /> Figura Agent 正在思考</div>}{props.error && <div className="error-banner" role="alert">{props.error}</div>}</div><div className="composer"><div className="composer-label"><Sparkles size={13} /><span>向 Figura Agent 提问</span></div><textarea value={text} onChange={(event) => setText(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void send() } }} placeholder="例如：比较这张图中各系列的变化趋势..." rows={1} /><div className="composer-actions"><span className="composer-hint">Enter 发送 · Shift + Enter 换行</span><button className="send-button" onClick={() => void send()} disabled={!text.trim() || props.loading || props.loadingSession} title="发送消息" aria-label="发送消息"><Send size={16} /> </button></div></div></main>
 }
 
 function AttachmentPreview({ attachment, loader }: { attachment: Attachment; loader: PreviewResourceLoader | null }) {
@@ -418,6 +434,7 @@ export default function App() {
   const [deleting, setDeleting] = useState(false)
   const [gatewayUrl, setGatewayUrl] = useState(() => currentGatewayBaseUrl())
   const [gatewayReady, setGatewayReady] = useState(mode !== 'gateway')
+  const [provider, setProvider] = useState<Provider>('openai')
   const activeIdRef = useRef(activeId)
   const localPreviews = useRef(new Map<string, string>())
   const subscriptionRef = useRef<RunSubscription | null>(null)
@@ -427,6 +444,19 @@ export default function App() {
   )
 
   useEffect(() => { activeIdRef.current = activeId }, [activeId])
+  useEffect(() => {
+    if (!activeId) return
+    const stored = window.localStorage.getItem(`figura.provider.${activeId}`)
+    if (stored === 'openai' || stored === 'qwen') setProvider(stored)
+    else if (data?.session.id === activeId && data.runs.length > 0) {
+      const latest = [...data.runs].reverse().find((run) => run.provider)
+      if (latest?.provider) setProvider(latest.provider)
+      else if (gatewayHealth?.agent?.provider === 'qwen') setProvider('qwen')
+      else setProvider('openai')
+    }
+    else if (gatewayHealth?.agent?.provider === 'qwen') setProvider('qwen')
+    else setProvider('openai')
+  }, [activeId, data, gatewayHealth])
   useEffect(() => () => { subscriptionRef.current?.close(); localPreviews.current.forEach((url) => URL.revokeObjectURL(url)); localPreviews.current.clear() }, [])
   useEffect(() => {
     if (mode !== 'gateway') return
@@ -621,14 +651,23 @@ export default function App() {
     setRunState('connecting')
     setError(null)
     setSelectedIds([])
-    setPendingUser({ id: `pending-${Date.now()}`, kind: 'user', text, timestamp: currentTime(), attachmentIds: attachmentIds.length ? attachmentIds : undefined })
     try {
-      const handle = await client.startRun(sessionId, text, attachmentIds)
+      const selectedStatus = providerStatus(gatewayHealth, provider, mode)
+      if (selectedStatus !== 'ready') {
+        setError(selectedStatus === 'unavailable'
+          ? `${providerLabels[provider]}当前不可用，请切换来源或检查 Gateway 配置。`
+          : '正在确认 Gateway 的模型来源状态，请稍后重试。')
+        setRunState('unavailable')
+        setLoading(false)
+        return false
+      }
+      const handle = await client.startRun(sessionId, text, attachmentIds, provider)
+      window.localStorage.setItem(`figura.provider.${sessionId}`, provider)
       if (activeIdRef.current !== sessionId) return false
-      setPendingUser((current) => current ? { ...current, id: `${handle.runId}:user` } : current)
+      setPendingUser({ id: `${handle.runId}:user`, kind: 'user', text, timestamp: currentTime(), attachmentIds: attachmentIds.length ? attachmentIds : undefined })
       setRunState('running')
       const startedAt = new Date().toISOString()
-      setTimelines((current) => current.some((item) => item.summary.runId === handle.runId) ? current : [...current, { summary: { runId: handle.runId, sessionId, status: 'running', createdAt: startedAt, updatedAt: startedAt, eventCount: 0 }, events: [], historyGap: false }])
+      setTimelines((current) => current.some((item) => item.summary.runId === handle.runId) ? current : [...current, { summary: { runId: handle.runId, sessionId, status: 'running', createdAt: startedAt, updatedAt: startedAt, eventCount: 0, provider: handle.provider || provider, model: handle.model }, events: [], historyGap: false }])
       let terminalFailure = false
       let reconnectAttempts = 0
       const applyHistory = (history: Awaited<ReturnType<ChartAgentClient['getRunHistory']>>) => {
@@ -696,7 +735,8 @@ export default function App() {
   }
 
   const toggleRun = (runId: string, status: RunSummary['status']) => setExpandedRuns((current) => { const next = new Set(current); if (status === 'running') { next.has(runId) ? next.delete(runId) : next.add(runId) } else { next.has(runId) ? next.delete(runId) : next.add(runId) } return next })
-  return <><div className="app-shell"><SessionSidebar sessions={sessions} activeId={activeId} onSelect={selectSession} onCreate={create} onDelete={requestDeleteSession} mode={mode} runtimeStatus={runtimeStatus} health={gatewayHealth} /><ConversationPanel data={data} timelines={timelines} pendingUser={pendingUser} runState={runState} selectedAttachmentIds={selectedIds} onSubmit={submit} loading={loading} loadingSession={loadingSession} error={error} onToggleRun={toggleRun} expandedRuns={expandedRuns} previewLoader={previewLoader} /><AttachmentPanel attachments={data?.attachments ?? []} pending={pending} selectedIds={selectedIds} error={attachmentError} onAdd={addFiles} onToggle={toggleAttachment} onRemovePending={removePending} onRetryPending={(item) => void uploadPending(item)} onRemove={requestDeleteAttachment} previewLoader={previewLoader} /></div>{creatingSession && <div className="dialog-backdrop"><form className="session-dialog" onSubmit={(event) => void confirmCreate(event)}><h2>新建会话</h2><label htmlFor="session-name">会话名称</label><input id="session-name" value={newSessionName} onChange={(event) => setNewSessionName(event.target.value)} placeholder="例如：季度销售分析" autoFocus /><div className="dialog-actions"><button type="button" className="dialog-secondary" onClick={() => setCreatingSession(false)}>取消</button><button type="submit" className="dialog-primary" disabled={!newSessionName.trim()}>创建会话</button></div></form></div>}{confirmAction && <div className="dialog-backdrop"><div className="session-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-dialog-title"><h2 id="delete-dialog-title">{confirmAction.kind === 'session' ? '删除会话？' : '删除附件？'}</h2><p className="dialog-message">{confirmAction.kind === 'session' ? `将永久删除“${confirmAction.session.name}”及其运行记录和附件。` : `将删除“${confirmAction.attachment.filename}”及其源文件。`}</p><div className="dialog-actions"><button type="button" className="dialog-secondary" onClick={() => setConfirmAction(null)} disabled={deleting}>取消</button><button type="button" className="dialog-danger" onClick={() => void confirmDelete()} disabled={deleting}><Trash2 size={13} />{deleting ? '正在删除' : '确认删除'}</button></div></div></div>}</>
+  const changeProvider = (next: Provider) => { setProvider(next); if (activeId) window.localStorage.setItem(`figura.provider.${activeId}`, next); if (loading) setError('当前运行不会切换来源，新选择将应用于下一次运行。') }
+  return <><div className="app-shell"><SessionSidebar sessions={sessions} activeId={activeId} onSelect={selectSession} onCreate={create} onDelete={requestDeleteSession} mode={mode} runtimeStatus={runtimeStatus} health={gatewayHealth} /><ConversationPanel data={data} timelines={timelines} pendingUser={pendingUser} runState={runState} selectedAttachmentIds={selectedIds} provider={provider} health={gatewayHealth} mode={mode} onProviderChange={changeProvider} onSubmit={submit} loading={loading} loadingSession={loadingSession} error={error} onToggleRun={toggleRun} expandedRuns={expandedRuns} previewLoader={previewLoader} /><AttachmentPanel attachments={data?.attachments ?? []} pending={pending} selectedIds={selectedIds} error={attachmentError} onAdd={addFiles} onToggle={toggleAttachment} onRemovePending={removePending} onRetryPending={(item) => void uploadPending(item)} onRemove={requestDeleteAttachment} previewLoader={previewLoader} /></div>{creatingSession && <div className="dialog-backdrop"><form className="session-dialog" onSubmit={(event) => void confirmCreate(event)}><h2>新建会话</h2><label htmlFor="session-name">会话名称</label><input id="session-name" value={newSessionName} onChange={(event) => setNewSessionName(event.target.value)} placeholder="例如：季度销售分析" autoFocus /><div className="dialog-actions"><button type="button" className="dialog-secondary" onClick={() => setCreatingSession(false)}>取消</button><button type="submit" className="dialog-primary" disabled={!newSessionName.trim()}>创建会话</button></div></form></div>}{confirmAction && <div className="dialog-backdrop"><div className="session-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-dialog-title"><h2 id="delete-dialog-title">{confirmAction.kind === 'session' ? '删除会话？' : '删除附件？'}</h2><p className="dialog-message">{confirmAction.kind === 'session' ? `将永久删除“${confirmAction.session.name}”及其运行记录和附件。` : `将删除“${confirmAction.attachment.filename}”及其源文件。`}</p><div className="dialog-actions"><button type="button" className="dialog-secondary" onClick={() => setConfirmAction(null)} disabled={deleting}>取消</button><button type="button" className="dialog-danger" onClick={() => void confirmDelete()} disabled={deleting}><Trash2 size={13} />{deleting ? '正在删除' : '确认删除'}</button></div></div></div>}</>
 }
 
 function toUserMessage(error: unknown): string {
@@ -705,6 +745,7 @@ function toUserMessage(error: unknown): string {
     if (error.code === 'agent_unavailable' && error.reason === 'missing_configuration') return 'Agent 未配置，请检查项目根目录 .env 中的模型配置。'
     if (error.code === 'agent_unavailable' && error.reason === 'invalid_configuration') return 'Agent 配置无效，请检查模型地址和参数。'
     if (error.code === 'agent_unavailable') return 'Agent 当前不可用，请稍后重试。'
+    if (error.code === 'invalid_provider') return '模型来源不受支持，请重新选择 OpenAI 或 Qwen。'
     if (error.code === 'session_not_found') return '会话不存在，可能已被删除。'
     if (error.code === 'session_exists') return '会话名称已存在，请换一个名称。'
     if (error.code === 'session_busy') return '会话正在运行 Agent，请等待本次运行结束后再删除。'

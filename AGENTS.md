@@ -15,9 +15,21 @@ optional Tauri shell. OpenSpec files are under `openspec/`.
 Use the `agent` Conda environment for Python commands:
 
 ```bash
-conda run -n agent pytest -q
+conda run -n agent python -m pytest -q
 conda run -n agent python -m chartagent --agent
 ```
+
+The `agent` environment is the canonical Python runtime for this repository.
+It already provides `rapidocr`, which is a required dependency for OCR and
+chart-understanding tests. If Python reports `No module named 'rapidocr'`,
+first verify the active environment with:
+
+```bash
+conda run -n agent python -c "import rapidocr"
+```
+
+Do not diagnose this as a missing project dependency or switch to the system
+Python interpreter before checking the `agent` environment.
 
 For the frontend:
 

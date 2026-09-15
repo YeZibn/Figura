@@ -24,6 +24,7 @@ VisualObservationSink = Callable[[str, str, Sequence[GeneratedImage]], Sequence[
 
 def create_agent_runtime(
     *,
+    provider: str | None = None,
     model: str | None = None,
     system: str = AGENT_SYSTEM_PROMPT,
     trace_sink: Optional[TraceSink] = None,
@@ -42,7 +43,7 @@ def create_agent_runtime(
 ) -> AgentRuntime:
     """Build one runtime while allowing CLI tests to inject constructors."""
     load_env()
-    actual_client = client if client is not None else llm_client_cls()
+    actual_client = client if client is not None else llm_client_cls(provider=provider) if provider is not None else llm_client_cls()
     memory = (
         SQLiteAgentMemory(session_name, database=database)
         if session_name is not None

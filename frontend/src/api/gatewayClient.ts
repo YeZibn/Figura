@@ -1,5 +1,5 @@
 import type { ChartAgentClient, RunEventCallbacks, RunSubscription } from './client'
-import type { AgentRunEvent, Attachment, GatewayHealth, GeneratedChartReference, ObservationReference, PreviewResource, RunHandle, RunHistory, RunSummary, Session, SessionData } from '../types/protocol'
+import type { AgentRunEvent, Attachment, GatewayHealth, GeneratedChartReference, ObservationReference, PreviewResource, Provider, RunHandle, RunHistory, RunSummary, Session, SessionData } from '../types/protocol'
 import { mediaTypeForFile } from '../attachments'
 
 type GatewaySessionList = { sessions: Session[] }
@@ -13,7 +13,7 @@ type GatewayAttachment = {
   preview_available?: boolean
 }
 type GatewaySessionData = Omit<SessionData, 'attachments'> & { attachments: GatewayAttachment[] }
-type GatewayRunResponse = { run: { runId: string; sessionId: string; status: 'running' } }
+type GatewayRunResponse = { run: { runId: string; sessionId: string; status: 'running'; provider?: Provider; model?: string } }
 type GatewayRunEvent = { runId: string; sequence: number; kind: string; timestamp: string; payload?: Record<string, unknown> }
 type GatewayRunHistory = { run: RunSummary; events: GatewayRunEvent[]; historyGap: boolean; firstSequence?: number | null }
 type GatewayHealthResponse = GatewayHealth
@@ -228,10 +228,10 @@ export const gatewayClient: ChartAgentClient = {
     return generatedArtifactUrl(sessionId, runId, artifactId)
   },
 
-  async startRun(sessionId, text, attachmentIds = []) {
+  async startRun(sessionId, text, attachmentIds = [], provider) {
     return mapRun(await request<GatewayRunResponse>(`/sessions/${encodeURIComponent(sessionId)}/runs`, {
       method: 'POST',
-      body: JSON.stringify({ text, attachmentIds }),
+      body: JSON.stringify({ text, attachmentIds, ...(provider ? { provider } : {}) }),
     }))
   },
 
@@ -284,10 +284,10 @@ export const gatewayClient: ChartAgentClient = {
     }
   },
 
-  async submitMessage(sessionId, text, attachmentIds = []) {
+  async submitMessage(sessionId, text, attachmentIds = [], provider) {
     return mapSessionData(await request<GatewaySessionData>(`/sessions/${encodeURIComponent(sessionId)}/messages`, {
       method: 'POST',
-      body: JSON.stringify({ text, attachmentIds }),
+      body: JSON.stringify({ text, attachmentIds, ...(provider ? { provider } : {}) }),
     }))
   },
 }

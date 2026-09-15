@@ -8,22 +8,29 @@ Provide a local, browser-compatible gateway that lets the ChartAgent desktop cli
 
 ### Requirement: Gateway is available only as a local HTTP service
 
-The system SHALL provide a versioned HTTP/JSON gateway bound to a loopback interface. It SHALL expose a health response that identifies HTTP Gateway availability and a bounded Agent readiness status without exposing credentials or provider payloads. It SHALL reject malformed JSON, unsupported methods, and unsupported routes with JSON error responses. The gateway MUST NOT bind to a non-loopback address by default.
+The system SHALL provide a versioned loopback HTTP/JSON Gateway with bounded
+Agent readiness for each supported provider. Health responses MAY identify
+`openai` and `qwen`, the safe availability state of each, and the default
+provider, but MUST NOT expose credentials, raw endpoint values, or provider
+payloads.
 
-#### Scenario: Local client verifies gateway and Agent availability
+#### Scenario: Health reports provider capabilities
 
-- **WHEN** a local desktop or browser client requests the gateway health endpoint
-- **THEN** it receives a successful JSON response identifying a compatible gateway version, HTTP service status, and a safe Agent readiness state
+- **WHEN** a local client requests Gateway health
+- **THEN** it receives HTTP service status plus bounded per-provider readiness
+  and the default provider
 
-#### Scenario: Agent configuration is missing
+#### Scenario: Provider readiness is unavailable
 
-- **WHEN** the Gateway is running but required provider configuration is unavailable
-- **THEN** the health response remains usable for diagnosing the local service, reports Agent readiness as unavailable with a stable safe reason code, and contains no credential value or raw exception
+- **WHEN** one provider lacks valid server configuration
+- **THEN** health reports that provider as unavailable with a stable safe reason
+  while the Gateway remains diagnosable
 
-#### Scenario: Unsupported request is bounded
+#### Scenario: Unsupported provider request is bounded
 
-- **WHEN** a client sends malformed JSON, an unsupported method, or an unknown route
-- **THEN** the gateway returns a JSON error with an appropriate client error status and no traceback or credential material
+- **WHEN** a client submits an unsupported provider value
+- **THEN** the Gateway returns a structured validation error without traceback,
+  secrets, or starting a run
 
 ### Requirement: Gateway exposes named session lifecycle and transcript reads
 
@@ -101,48 +108,100 @@ The Gateway SHALL provide a session-scoped attachment deletion operation. It SHA
 
 ### Requirement: Gateway executes a text turn in a named session
 
-The gateway SHALL accept a non-empty text message and optional authorized attachment IDs for a named session, execute the existing tool-capable Agent against that session, and support both the existing synchronous response and an asynchronous run-oriented response. The synchronous operation SHALL remain available for compatibility and return the refreshed completed transcript with the resulting final answer. The asynchronous operation SHALL return a stable opaque run ID before Agent completion and expose the run's eventual terminal result through the run protocol. Only completed runs SHALL enter the session's completed transcript.
+The Gateway SHALL accept an optional bounded provider on synchronous and
+asynchronous text-turn requests. It SHALL resolve the provider before starting
+the Agent, snapshot the effective provider and model on the run, and preserve
+the existing transcript and attachment behavior. Omitting provider SHALL use
+the configured default provider. A selected provider that is unavailable SHALL
+fail before Agent execution with a safe configuration error.
+
+#### Scenario: Run uses the requested provider
+
+- **WHEN** a valid run request specifies `qwen`
+- **THEN** the accepted run and Agent runtime use Qwen configuration and the
+  run metadata identifies `qwen`
+
+#### Scenario: Omitted provider uses the default
+
+- **WHEN** a valid run request omits provider
+- **THEN** the Gateway uses the configured default provider and records the
+  effective value on the run
+
+#### Scenario: Provider selection does not expose secrets
+
+- **WHEN** a run request contains provider selection
+- **THEN** only the bounded provider identifier is accepted from the client;
+  client-supplied key, endpoint, model, or arbitrary provider body is ignored or
+  rejected
+
+#### Scenario: Unavailable provider does not start execution
+
+- **WHEN** the selected provider is unavailable
+- **THEN** the Gateway returns or emits `agent_unavailable` with a safe reason,
+  preserves prior history, and does not invoke the Agent
 
 #### Scenario: Successful synchronous text turn is returned
 
-- **WHEN** a client submits valid text to the existing synchronous message operation for an existing named session and the Agent completes
-- **THEN** the response contains the submitted user text and final assistant answer in chronological order and increments the session's completed-run count
+- **WHEN** a client submits valid text to the existing synchronous message
+  operation for an existing named session and the Agent completes
+- **THEN** the response contains the submitted user text and final assistant
+  answer in chronological order and increments the session's completed-run
+  count
 
 #### Scenario: Asynchronous text turn is accepted
 
-- **WHEN** a client submits valid text and optional attachment IDs to the run-oriented operation for an existing named session
-- **THEN** the Gateway returns a run ID and initial running state before the Agent has completed, and the run remains associated with that session
+- **WHEN** a client submits valid text and optional attachment IDs to the
+  run-oriented operation for an existing named session
+- **THEN** the Gateway returns a run ID and initial running state before the
+  Agent has completed, and the run remains associated with that session
 
 #### Scenario: Asynchronous run completes
 
 - **WHEN** an accepted run reaches a final answer
-- **THEN** the run emits a terminal success event and the session transcript becomes readable with the completed user and assistant records
+- **THEN** the run emits a terminal success event and the session transcript
+  becomes readable with the completed user and assistant records
 
 #### Scenario: Agent configuration failure is isolated and safe
 
-- **WHEN** provider setup fails because the Agent configuration is missing or invalid
-- **THEN** the Gateway emits or returns a bounded `agent_unavailable` failure with a stable safe reason code, does not include credentials or raw exception text, marks the run unsuccessful, and keeps prior completed session history readable
+- **WHEN** provider setup fails because the Agent configuration is missing or
+  invalid
+- **THEN** the Gateway emits or returns a bounded `agent_unavailable` failure
+  with a stable safe reason code, does not include credentials or raw exception
+  text, marks the run unsuccessful, and keeps prior completed session history
+  readable
 
 #### Scenario: Agent execution failure is isolated
 
-- **WHEN** the configured Agent fails while executing a provider request or tool-capable run
-- **THEN** the Gateway emits or returns a bounded Agent execution failure, marks the run unsuccessful, and keeps prior completed session history readable
+- **WHEN** the configured Agent fails while executing a provider request or
+  tool-capable run
+- **THEN** the Gateway emits or returns a bounded Agent execution failure,
+  marks the run unsuccessful, and keeps prior completed session history
+  readable
 
 #### Scenario: Empty message is rejected before execution
 
 - **WHEN** a client submits blank or whitespace-only text
-- **THEN** the Gateway returns a validation error and does not create or begin an Agent run
+- **THEN** the Gateway returns a validation error and does not create or begin
+  an Agent run
 
 ### Requirement: Gateway exposes a bounded ordered run event stream
 
-The Gateway SHALL expose a local event stream and historical event retrieval
-for an accepted run. Events SHALL carry the run ID, a monotonically increasing
-sequence, a bounded event name and payload, and enough session-safe metadata
-for a client to render model turns, progress content when available, tool
-calls, tool results, visual observations, final answers, and failures in
-execution order. Events SHALL be persisted for the configured run-history
-retention policy. A run SHALL emit exactly one terminal success or failure
-event.
+Run summaries, live events, and historical events SHALL include the effective
+provider and model where available, using bounded machine fields. These fields
+MUST remain stable after acceptance and MUST NOT contain credentials, endpoint
+URLs, or raw provider responses.
+
+#### Scenario: Live event identifies provider
+
+- **WHEN** a run emits its start or model-turn event
+- **THEN** the event exposes the snapshotted provider and model for safe UI
+  presentation
+
+#### Scenario: Reload preserves provider metadata
+
+- **WHEN** a client retrieves a completed or failed run history
+- **THEN** the run summary and relevant events retain the same provider and
+  model metadata
 
 #### Scenario: Tool trajectory is streamed
 
@@ -154,7 +213,9 @@ event.
 #### Scenario: Visual observation is streamed safely
 
 - **WHEN** a tool produces a valid generated visual observation
-- **THEN** the stream emits a caption, media type, bounded dimensions or size metadata, and an opaque temporary observation ID without embedding raw image bytes or data URLs in the event JSON
+- **THEN** the stream emits a caption, media type, bounded dimensions or size
+  metadata, and an opaque temporary observation ID without embedding raw image
+  bytes or data URLs in the event JSON
 
 #### Scenario: Client hydrates and reconnects by sequence
 
@@ -174,8 +235,11 @@ event.
 
 #### Scenario: Event payload exceeds a configured limit
 
-- **WHEN** reasoning, tool arguments, tool results, or other event content exceeds its configured display limit
-- **THEN** the Gateway sends a bounded representation with an explicit truncation marker and never sends credentials, raw provider responses, or unbounded data
+- **WHEN** reasoning, tool arguments, tool results, or other event content
+  exceeds its configured display limit
+- **THEN** the Gateway sends a bounded representation with an explicit
+  truncation marker and never sends credentials, raw provider responses, or
+  unbounded data
 
 ### Requirement: Gateway serves temporary visual observations by authorized reference
 

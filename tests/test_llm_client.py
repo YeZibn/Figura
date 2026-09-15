@@ -6,6 +6,7 @@ All tests run offline against a fake transport injected via ``_openai_factory``.
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -17,6 +18,7 @@ from chartagent.client.config import DEFAULT_BASE_URL, DEFAULT_MAX_RETRIES, DEFA
 from .conftest import non_streaming, streaming, streaming_with_tool_calls, tool_call
 
 _PROVIDER_ENV_NAMES = (
+    "CHARTAGENT_PROVIDER",
     "OPENAI_API_KEY",
     "OPENAI_BASE_URL",
     "OPENAI_MODEL",
@@ -25,13 +27,19 @@ _PROVIDER_ENV_NAMES = (
     "DASHSCOPE_API_KEY",
     "DASHSCOPE_BASE_URL",
     "DASH_MODEL",
+    "QWEN_API_KEY",
+    "QWEN_BASE_URL",
+    "QWEN_MODEL",
+    "QWEN_TIMEOUT",
+    "QWEN_MAX_RETRIES",
+    "QWEN_ENABLE_THINKING",
 )
 
 
 # --- 1. config layering ------------------------------------------------------- #
 def test_config_explicit_beats_env_beats_default():
-    env = {"DASHSCOPE_API_KEY": "env-key", "DASHSCOPE_BASE_URL": "http://env"}
-    cfg = resolve_config(api_key="explicit", base_url=None, timeout=None, env=env)
+    env = {"QWEN_API_KEY": "env-key", "QWEN_BASE_URL": "http://env"}
+    cfg = resolve_config(provider="qwen", api_key="explicit", base_url=None, timeout=None, env=env)
     assert cfg.api_key == "explicit"
     assert cfg.base_url == "http://env"  # env fills the key omitted explicitly
     assert cfg.timeout == DEFAULT_TIMEOUT  # default fills the rest
@@ -56,11 +64,12 @@ def test_config_canonical_openai_env_beats_legacy_env():
 def test_config_all_from_env():
     cfg = resolve_config(
         env={
+            "CHARTAGENT_PROVIDER": "qwen",
             "DASHSCOPE_API_KEY": "k",
             "DASHSCOPE_BASE_URL": "http://e",
             "DASH_MODEL": "m",
-            "OPENAI_TIMEOUT": "9",
-            "OPENAI_MAX_RETRIES": "7",
+            "QWEN_TIMEOUT": "9",
+            "QWEN_MAX_RETRIES": "7",
         }
     )
     assert cfg.api_key == "k"
@@ -93,10 +102,45 @@ def test_config_defaults_when_nothing_set():
     assert cfg.max_retries == DEFAULT_MAX_RETRIES
 
 
+def test_unknown_provider_is_rejected():
+    with pytest.raises(ValueError, match="Unsupported provider"):
+        resolve_config(provider="anthropic", env={})
+
+
+def test_qwen_uses_scoped_configuration_and_thinking_default():
+    cfg = resolve_config(
+        provider="qwen",
+        env={
+            "QWEN_API_KEY": "qwen-key",
+            "QWEN_BASE_URL": "http://qwen",
+            "QWEN_MODEL": "qwen3.8-flash",
+        },
+    )
+    assert cfg.provider == "qwen"
+    assert cfg.api_key == "qwen-key"
+    assert cfg.base_url == "http://qwen"
+    assert cfg.model == "qwen3.8-flash"
+    assert cfg.enable_thinking is True
+
+
+def test_openai_does_not_fallback_to_dashscope():
+    cfg = resolve_config(
+        provider="openai",
+        env={"DASHSCOPE_API_KEY": "qwen-key", "DASHSCOPE_BASE_URL": "http://qwen"},
+    )
+    assert cfg.api_key is None
+    assert cfg.base_url == DEFAULT_BASE_URL
+
+
+def test_qwen_thinking_can_be_disabled():
+    cfg = resolve_config(provider="qwen", enable_thinking=False, env={})
+    assert cfg.enable_thinking is False
+
+
 def test_environment_file_contract_is_stable_across_launch_directories(tmp_path, monkeypatch):
     env_file = tmp_path / ".env"
     env_file.write_text(
-        "DASHSCOPE_API_KEY=file-key\nDASHSCOPE_BASE_URL=http://file\nDASH_MODEL=file-model\n",
+        "CHARTAGENT_PROVIDER=qwen\nDASHSCOPE_API_KEY=file-key\nDASHSCOPE_BASE_URL=http://file\nDASH_MODEL=file-model\n",
         encoding="utf-8",
     )
     for directory in (tmp_path, tmp_path / "frontend"):
@@ -114,7 +158,7 @@ def test_environment_file_contract_is_stable_across_launch_directories(tmp_path,
 
 def test_process_environment_beats_environment_file(tmp_path, monkeypatch):
     env_file = tmp_path / ".env"
-    env_file.write_text("DASHSCOPE_API_KEY=file-key\nDASHSCOPE_BASE_URL=http://file\n", encoding="utf-8")
+    env_file.write_text("CHARTAGENT_PROVIDER=qwen\nDASHSCOPE_API_KEY=file-key\nDASHSCOPE_BASE_URL=http://file\n", encoding="utf-8")
     for name in _PROVIDER_ENV_NAMES:
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("CHARTAGENT_ENV_FILE", str(env_file))
@@ -243,6 +287,75 @@ def test_tool_definitions_propagate(backend_factory):
     assert backend.calls[0]["tools"] == tools
 
 
+def test_qwen_request_uses_thinking_without_openai_only_fields(backend_factory):
+    client, backend = backend_factory(
+        [lambda _: streaming(["ok"])],
+        provider="qwen",
+        model="qwen3.8-flash",
+        reasoning_effort="high",
+    )
+    client.chat([{"role": "user", "content": "x"}], stream=True, model="qwen3.8-flash")
+    request = backend.calls[0]
+    assert request["extra_body"] == {"enable_thinking": True}
+    assert "reasoning_effort" not in request
+    assert "stream_options" not in request
+
+
+def test_qwen_request_omits_thinking_when_disabled(backend_factory):
+    client, backend = backend_factory(
+        [lambda _: non_streaming("ok")],
+        provider="qwen",
+        enable_thinking=False,
+    )
+    client.chat([{"role": "user", "content": "x"}], stream=False, model="qwen3.8-flash")
+    assert "extra_body" not in backend.calls[0]
+
+
+def test_qwen_preserves_multimodal_tool_call_contract(backend_factory):
+    deltas = [
+        [SimpleNamespace(index=0, id="qwen-call", function=SimpleNamespace(name="inspect", arguments='{"image_id":"'))],
+        [SimpleNamespace(index=0, id=None, function=SimpleNamespace(name=None, arguments='att_1"}'))],
+    ]
+    tools = [{"type": "function", "function": {"name": "inspect", "parameters": {}}}]
+    messages = [{
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "检查图片"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,hidden"}},
+        ],
+    }]
+    client, backend = backend_factory(
+        [lambda _: streaming_with_tool_calls(deltas)],
+        provider="qwen",
+        enable_thinking=False,
+    )
+
+    result = client.chat(messages, stream=True, model="qwen3.8-flash", tools=tools)
+
+    assert result.tool_calls[0].id == "qwen-call"
+    assert result.tool_calls[0].name == "inspect"
+    assert result.tool_calls[0].arguments == '{"image_id":"att_1"}'
+    assert backend.calls[0]["messages"] == messages
+    assert backend.calls[0]["tools"] == tools
+
+
+def test_provider_request_trace_does_not_copy_exception_details(backend_factory):
+    traces = []
+    client, _ = backend_factory(
+        [lambda _: (_ for _ in ()).throw(RuntimeError("endpoint=https://provider.invalid api_key=sentinel-secret"))],
+        provider="qwen",
+        trace_sink=traces.append,
+    )
+
+    with pytest.raises(RuntimeError):
+        client.chat([{"role": "user", "content": "x"}], stream=False, model="qwen3.8-flash")
+
+    encoded = json.dumps([event.to_dict() for event in traces], ensure_ascii=False)
+    assert "sentinel-secret" not in encoded
+    assert "provider.invalid" not in encoded
+    assert traces[-1].payload["error_code"] == "provider_request_failed"
+
+
 def test_retry_and_timeout_passed_as_explicit_conn(backend_factory):
     client, backend = backend_factory([lambda _: non_streaming("ok")], max_retries=5, timeout=3.5)
     client.chat([{"role": "user", "content": "x"}], stream=False, model="m")
@@ -260,6 +373,7 @@ def test_observation_sink_emitted_without_secrets(backend_factory):
     client._observe = sink
     client.chat([{"role": "user", "content": "x"}], stream=False, model="m")
     entry = seen[0]
+    assert entry["provider"] == "openai"
     assert entry["model"] == "m"
     assert entry["content_len"] == 2
     assert entry["reasoning_len"] == 1

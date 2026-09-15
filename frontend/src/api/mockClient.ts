@@ -1,5 +1,5 @@
 import type { ChartAgentClient, RunEventCallbacks, RunSubscription } from './client'
-import type { AgentRunEvent, Attachment, ConversationItem, RunHandle, RunHistory, RunSummary, Session, SessionData } from '../types/protocol'
+import type { AgentRunEvent, Attachment, ConversationItem, Provider, RunHandle, RunHistory, RunSummary, Session, SessionData } from '../types/protocol'
 
 const image = 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360"%3E%3Crect width="640" height="360" fill="%23f7f9fb"/%3E%3Cpath d="M74 292h492M110 260V104m130 156V68m130 192V126m130 134V92" stroke="%232e8c82" stroke-width="54" stroke-linecap="round"/%3E%3Cpath d="M60 48h520" stroke="%23dbe3e8"/%3E%3C/svg%3E'
 const attachments: Attachment[] = [{ id: 'att_demo_chart', filename: '季度销售.png', mediaType: 'image/png', byteCount: 16299, previewUrl: image, status: 'observation' }]
@@ -8,9 +8,9 @@ const baseMessages: ConversationItem[] = [
   { id: 'run_mock_demo:assistant', kind: 'assistant', text: '这张图表包含三个类别：Alpha 为 8，Beta 为 16，Gamma 为 24。测量得到的柱高约为 1:2:3，与图中打印的数值一致。', timestamp: '10:40' },
 ]
 
-const demoRun: RunSummary = { runId: 'run_mock_demo', sessionId: 'chart-analysis', status: 'completed', createdAt: '2026-09-13T10:39:00+08:00', updatedAt: '2026-09-13T10:40:00+08:00', eventCount: 10, answer: '这张图表包含三个类别：Alpha 为 8，Beta 为 16，Gamma 为 24。测量得到的柱高约为 1:2:3，与图中打印的数值一致。' }
+const demoRun: RunSummary = { runId: 'run_mock_demo', sessionId: 'chart-analysis', status: 'completed', createdAt: '2026-09-13T10:39:00+08:00', updatedAt: '2026-09-13T10:40:00+08:00', eventCount: 10, provider: 'openai', model: 'gpt-4o-mini', answer: '这张图表包含三个类别：Alpha 为 8，Beta 为 16，Gamma 为 24。测量得到的柱高约为 1:2:3，与图中打印的数值一致。' }
 const demoEvents: AgentRunEvent[] = [
-  { runId: demoRun.runId, sequence: 1, kind: 'run_started', timestamp: '2026-09-13T10:39:00+08:00', payload: { status: 'running' } },
+  { runId: demoRun.runId, sequence: 1, kind: 'run_started', timestamp: '2026-09-13T10:39:00+08:00', payload: { status: 'running', provider: 'openai', model: 'gpt-4o-mini' } },
   { runId: demoRun.runId, sequence: 2, kind: 'tool_call', timestamp: '2026-09-13T10:39:20+08:00', payload: { tool_name: 'load_image', call_id: 'demo-load', arguments: { attachment_id: 'att_demo_chart' } } },
   { runId: demoRun.runId, sequence: 3, kind: 'tool_result', timestamp: '2026-09-13T10:39:30+08:00', payload: { tool_name: 'load_image', call_id: 'demo-load', status: 'success', result: { observations: 1 } } },
   { runId: demoRun.runId, sequence: 4, kind: 'visual_observation', timestamp: '2026-09-13T10:39:31+08:00', payload: { tool_name: 'load_image', call_id: 'demo-load', observations: [{ observationId: 'demo-load-image', mediaType: 'image/svg+xml', caption: '已加载附件：季度销售.png', byteCount: image.length, imageUrl: image }] } },
@@ -35,7 +35,7 @@ const clone = <T,>(value: T): T => structuredClone(value)
 
 export const mockClient: ChartAgentClient = {
   async getHealth() {
-    return { version: 'v1', status: 'ok', service: 'Figura Gateway（模拟）', agent: { status: 'ready' as const } }
+    return { version: 'v1', status: 'ok', service: 'Figura Gateway（模拟）', agent: { status: 'ready' as const, provider: 'openai', model: 'gpt-4o-mini', providers: { openai: { status: 'ready' as const, provider: 'openai', model: 'gpt-4o-mini' }, qwen: { status: 'ready' as const, provider: 'qwen', model: 'qwen3.8-flash' } } } }
   },
 
   async listSessions() { await wait(120); return Object.values(data).map((entry) => clone(entry.session)) },
@@ -64,13 +64,13 @@ export const mockClient: ChartAgentClient = {
   generatedArtifactUrl(_sessionId, _runId, _artifactId) {
     return image
   },
-  async startRun(sessionId, text, attachmentIds = []) {
+  async startRun(sessionId, text, attachmentIds = [], provider: Provider = 'openai') {
     await wait(90)
     const runId = `run_mock_${Date.now()}`
     pendingRuns.set(runId, { text, attachmentIds })
     const target = data[sessionId]
-    if (target) target.runs.push({ runId, sessionId, status: 'running', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), eventCount: 0 })
-    return { runId, sessionId, status: 'running' }
+    if (target) target.runs.push({ runId, sessionId, status: 'running', provider, model: provider === 'qwen' ? 'qwen3.8-flash' : 'gpt-4o-mini', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), eventCount: 0 })
+    return { runId, sessionId, status: 'running', provider, model: provider === 'qwen' ? 'qwen3.8-flash' : 'gpt-4o-mini' }
   },
   async getRunHistory(sessionId, runId, afterSequence = 0): Promise<RunHistory> {
     await wait(40)
@@ -95,8 +95,10 @@ export const mockClient: ChartAgentClient = {
       if (sequence > afterSequence) callbacks.onEvent(event)
     }
     const schedule = (delay: number, action: () => void) => timers.push(setTimeout(action, delay))
-    schedule(20, () => emit('run_started', 1, { status: 'running' }))
-    schedule(130, () => emit('model_started', 2, { turn: 1 }))
+    const provider = target?.runs.find((item) => item.runId === runId)?.provider || 'openai'
+    const model = target?.runs.find((item) => item.runId === runId)?.model || (provider === 'qwen' ? 'qwen3.8-flash' : 'gpt-4o-mini')
+    schedule(20, () => emit('run_started', 1, { status: 'running', provider, model }))
+    schedule(130, () => emit('model_started', 2, { turn: 1, provider, model }))
     schedule(260, () => emit('tool_call', 3, { tool_name: 'measure_bars', call_id: 'mock-call-1', arguments: { attachment_id: 'selected' } }))
     schedule(430, () => emit('tool_result', 4, { tool_name: 'measure_bars', call_id: 'mock-call-1', status: 'success', result: { bars: 3 } }))
     schedule(560, () => emit('visual_observation', 5, {
@@ -130,5 +132,5 @@ export const mockClient: ChartAgentClient = {
       },
     }
   },
-  async submitMessage(sessionId, text, attachmentIds = []) { await wait(700); const target = data[sessionId]; target.messages.push({ id: 'user-' + Date.now(), kind: 'user', text, timestamp: '10:42', attachmentIds: attachmentIds.length ? attachmentIds : undefined }); target.messages.push({ id: 'assistant-' + Date.now(), kind: 'assistant', text: '模拟回复：已收到你的请求。', timestamp: '10:42' }); target.session = { ...target.session, updatedAt: '刚刚', runCount: target.session.runCount + 1 }; return clone(target) },
+  async submitMessage(sessionId, text, attachmentIds = [], _provider?: Provider) { await wait(700); const target = data[sessionId]; target.messages.push({ id: 'user-' + Date.now(), kind: 'user', text, timestamp: '10:42', attachmentIds: attachmentIds.length ? attachmentIds : undefined }); target.messages.push({ id: 'assistant-' + Date.now(), kind: 'assistant', text: '模拟回复：已收到你的请求。', timestamp: '10:42' }); target.session = { ...target.session, updatedAt: '刚刚', runCount: target.session.runCount + 1 }; return clone(target) },
 }

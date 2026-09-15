@@ -19,6 +19,7 @@ MAX_ATTACHMENT_ID = 128
 MAX_RUN_ID = 128
 MAX_EVENT_KIND = 64
 MAX_EVENT_PAYLOAD = 12000
+SUPPORTED_PROVIDERS = ("openai", "qwen")
 MAX_ARTIFACT_CAPTION = 500
 MAX_ARTIFACT_TITLE = 240
 MAX_ARTIFACT_CHART_TYPE = 64
@@ -67,13 +68,20 @@ class RunAccepted:
     run_id: str
     session_id: str
     status: RunStatus = RunStatus.RUNNING
+    provider: str | None = None
+    model: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        result = {
             "runId": self.run_id,
             "sessionId": self.session_id,
             "status": self.status.value,
         }
+        if self.provider:
+            result["provider"] = self.provider
+        if self.model:
+            result["model"] = self.model
+        return result
 
 
 @dataclass(frozen=True)
@@ -217,6 +225,14 @@ def validate_attachment_ids(value: object) -> tuple[str, ...]:
             raise GatewayFault("invalid_request", 400, "attachmentIds contains duplicate IDs")
         result.append(item)
     return tuple(result)
+
+
+def validate_provider(value: object, *, allow_none: bool = True) -> str | None:
+    if value is None and allow_none:
+        return None
+    if not isinstance(value, str) or value.strip().lower() not in SUPPORTED_PROVIDERS:
+        raise GatewayFault("invalid_provider", 400, "provider must be openai or qwen")
+    return value.strip().lower()
 
 
 @dataclass(frozen=True)

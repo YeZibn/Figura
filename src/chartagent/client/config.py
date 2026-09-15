@@ -14,19 +14,31 @@ from typing import Mapping, Optional
 
 from dotenv import load_dotenv
 
-# Default target: the official OpenAI-compatible Chat Completions endpoint.
+# The OpenAI endpoint is deployment-configured. This default remains for
+# backwards compatibility when a local caller has not supplied a relay URL.
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
+DEFAULT_QWEN_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+DEFAULT_QWEN_MODEL = "qwen3.8-flash"
+DEFAULT_PROVIDER = "openai"
+SUPPORTED_PROVIDERS = ("openai", "qwen")
 DEFAULT_TIMEOUT = 60.0
 DEFAULT_MAX_RETRIES = 2
 
-_ENV_API_KEY = "OPENAI_API_KEY"
-_ENV_BASE_URL = "OPENAI_BASE_URL"
-_ENV_MODEL = "OPENAI_MODEL"
+_ENV_PROVIDER = "CHARTAGENT_PROVIDER"
+_OPENAI_API_KEY = "OPENAI_API_KEY"
+_OPENAI_BASE_URL = "OPENAI_BASE_URL"
+_OPENAI_MODEL = "OPENAI_MODEL"
+_OPENAI_TIMEOUT = "OPENAI_TIMEOUT"
+_OPENAI_MAX_RETRIES = "OPENAI_MAX_RETRIES"
+_QWEN_API_KEY = "QWEN_API_KEY"
+_QWEN_BASE_URL = "QWEN_BASE_URL"
+_QWEN_MODEL = "QWEN_MODEL"
+_QWEN_TIMEOUT = "QWEN_TIMEOUT"
+_QWEN_MAX_RETRIES = "QWEN_MAX_RETRIES"
+_QWEN_ENABLE_THINKING = "QWEN_ENABLE_THINKING"
 _LEGACY_ENV_API_KEY = "DASHSCOPE_API_KEY"
 _LEGACY_ENV_BASE_URL = "DASHSCOPE_BASE_URL"
 _LEGACY_ENV_MODEL = "DASH_MODEL"
-_ENV_TIMEOUT = "OPENAI_TIMEOUT"
-_ENV_MAX_RETRIES = "OPENAI_MAX_RETRIES"
 _ENV_FILE = "CHARTAGENT_ENV_FILE"
 
 
@@ -60,21 +72,25 @@ class ClientConfig:
     layer above can trust it without re-deriving sources.
     """
 
+    provider: str = DEFAULT_PROVIDER
     api_key: Optional[str] = None
     base_url: str = DEFAULT_BASE_URL
     model: str = ""
     timeout: float = DEFAULT_TIMEOUT
     max_retries: int = DEFAULT_MAX_RETRIES
     reasoning_effort: Optional[str] = None
+    enable_thinking: bool = False
 
 
 def resolve_config(
+    provider: Optional[str] = None,
     api_key: Optional[str] = None,
     base_url: Optional[str] = None,
     model: Optional[str] = None,
     timeout: Optional[float] = None,
     max_retries: Optional[int] = None,
     reasoning_effort: Optional[str] = None,
+    enable_thinking: Optional[bool] = None,
     env: Optional[Mapping[str, str]] = None,
 ) -> ClientConfig:
     """Merge explicit params > env > defaults into a single ClientConfig.
@@ -90,31 +106,70 @@ def resolve_config(
                 return value
         return None
 
-    def _env_float(name: str) -> Optional[float]:
-        raw = env.get(name)
-        return float(raw) if raw is not None and raw != "" else None
+    def _env_float(*names: str) -> Optional[float]:
+        raw = _env_value(*names)
+        return float(raw) if raw is not None else None
 
-    def _env_int(name: str) -> Optional[int]:
-        raw = env.get(name)
-        return int(raw) if raw is not None and raw != "" else None
+    def _env_int(*names: str) -> Optional[int]:
+        raw = _env_value(*names)
+        return int(raw) if raw is not None else None
 
-    env_timeout = _env_float(_ENV_TIMEOUT)
-    env_max_retries = _env_int(_ENV_MAX_RETRIES)
+    def _env_bool(*names: str) -> Optional[bool]:
+        raw = _env_value(*names)
+        if raw is None:
+            return None
+        normalized = raw.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+        raise ValueError(f"Invalid boolean configuration for {names[0]}")
+
+    selected_provider = provider if provider is not None else (_env_value(_ENV_PROVIDER) or DEFAULT_PROVIDER)
+    if not isinstance(selected_provider, str):
+        raise ValueError("Unsupported provider; expected openai or qwen")
+    selected_provider = selected_provider.strip().lower()
+    if selected_provider not in SUPPORTED_PROVIDERS:
+        raise ValueError("Unsupported provider; expected openai or qwen")
+
+    if selected_provider == "qwen":
+        key_names = (_QWEN_API_KEY, _LEGACY_ENV_API_KEY)
+        base_names = (_QWEN_BASE_URL, _LEGACY_ENV_BASE_URL)
+        model_names = (_QWEN_MODEL, _LEGACY_ENV_MODEL)
+        timeout_names = (_QWEN_TIMEOUT,)
+        retry_names = (_QWEN_MAX_RETRIES,)
+        default_base_url = DEFAULT_QWEN_BASE_URL
+        default_model = DEFAULT_QWEN_MODEL
+        default_thinking = True
+    else:
+        key_names = (_OPENAI_API_KEY,)
+        base_names = (_OPENAI_BASE_URL,)
+        model_names = (_OPENAI_MODEL,)
+        timeout_names = (_OPENAI_TIMEOUT,)
+        retry_names = (_OPENAI_MAX_RETRIES,)
+        default_base_url = DEFAULT_BASE_URL
+        default_model = ""
+        default_thinking = False
+
+    env_timeout = _env_float(*timeout_names)
+    env_max_retries = _env_int(*retry_names)
+    env_thinking = _env_bool(_QWEN_ENABLE_THINKING) if selected_provider == "qwen" else None
     return ClientConfig(
+        provider=selected_provider,
         api_key=(
             api_key
             if api_key is not None
-            else _env_value(_ENV_API_KEY, _LEGACY_ENV_API_KEY)
+            else _env_value(*key_names)
         ),
         base_url=(
             base_url
             if base_url is not None
-            else _env_value(_ENV_BASE_URL, _LEGACY_ENV_BASE_URL) or DEFAULT_BASE_URL
+            else _env_value(*base_names) or default_base_url
         ),
         model=(
             model
             if model is not None
-            else _env_value(_ENV_MODEL, _LEGACY_ENV_MODEL) or ""
+            else _env_value(*model_names) or default_model
         ),
         timeout=(
             timeout
@@ -127,6 +182,11 @@ def resolve_config(
             else (env_max_retries if env_max_retries is not None else DEFAULT_MAX_RETRIES)
         ),
         reasoning_effort=reasoning_effort,
+        enable_thinking=(
+            enable_thinking
+            if enable_thinking is not None
+            else (env_thinking if env_thinking is not None else default_thinking)
+        ),
     )
 
 

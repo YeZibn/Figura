@@ -7,6 +7,7 @@ from .protocol import (
     SessionTranscript,
     validate_message_text,
     validate_session_name,
+    validate_provider,
 )
 from .service import GatewayService
 
@@ -18,4 +19,5 @@ __all__ = [
     "SessionTranscript",
     "validate_message_text",
     "validate_session_name",
+    "validate_provider",
 ]

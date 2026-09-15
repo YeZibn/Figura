@@ -15,7 +15,7 @@ from ..multimodal import build_registered_attachment_turn
 from ..runtime import AgentRuntime, create_agent_runtime, probe_agent_readiness
 from ..agent import REVIEW_INCOMPLETE_MESSAGE
 from ..tools.core.result import GeneratedImage
-from ..trace import TraceSink
+from ..trace import TraceSink, truncate_text
 from .attachments import AttachmentStoreError, EphemeralAttachmentStore
 from .history import GatewayHistoryStore, HistoryStoreError
 from .projection import project_completed_runs, session_summary
@@ -25,11 +25,71 @@ from .protocol import (
     GatewayFault,
     SessionTranscript,
     SessionSummary,
+    SUPPORTED_PROVIDERS,
     success,
     validate_attachment_ids,
     validate_message_text,
     validate_session_name,
+    validate_provider,
 )
+
+
+_SAFE_PROVIDER_STATUSES = frozenset({"ready", "unavailable", "unknown"})
+_SAFE_READINESS_REASONS = frozenset({
+    "missing_configuration",
+    "invalid_configuration",
+    "initialization_failed",
+})
+_MAX_PROVIDER_MODEL = 128
+
+
+def _safe_reason(value: object) -> str:
+    return value if isinstance(value, str) and value in _SAFE_READINESS_REASONS else "initialization_failed"
+
+
+def _safe_model(value: object) -> str | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return truncate_text(value.strip(), _MAX_PROVIDER_MODEL)
+
+
+def _safe_provider_status(provider: str, value: object) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        return {"status": "unknown", "provider": provider, "reason": "initialization_failed"}
+    raw_status = value.get("status")
+    status = raw_status if isinstance(raw_status, str) and raw_status in _SAFE_PROVIDER_STATUSES else "unknown"
+    result: dict[str, Any] = {"status": status, "provider": provider}
+    if status == "ready":
+        model = _safe_model(value.get("model"))
+        if model is not None:
+            result["model"] = model
+    else:
+        result["reason"] = _safe_reason(value.get("reason"))
+    return result
+
+
+def _safe_readiness(value: object) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        return {"status": "unavailable", "reason": "initialization_failed"}
+    raw_status = value.get("status")
+    status = raw_status if isinstance(raw_status, str) and raw_status in _SAFE_PROVIDER_STATUSES else "unavailable"
+    result: dict[str, Any] = {"status": status}
+    if status != "ready":
+        result["reason"] = _safe_reason(value.get("reason"))
+    provider = value.get("provider")
+    if provider in SUPPORTED_PROVIDERS:
+        result["provider"] = provider
+    model = _safe_model(value.get("model"))
+    if model is not None:
+        result["model"] = model
+    if "providers" in value:
+        raw_providers = value.get("providers")
+        result["providers"] = {
+            name: _safe_provider_status(name, raw_providers[name])
+            for name in SUPPORTED_PROVIDERS
+            if isinstance(raw_providers, Mapping) and name in raw_providers
+        }
+    return result
 
 
 class GatewayService:
@@ -46,7 +106,7 @@ class GatewayService:
         attachment_root: str | Path | None = None,
         run_manager: RunManager | None = None,
         history_store: GatewayHistoryStore | None = None,
-        readiness_probe: Callable[[], dict[str, str]] | None = None,
+        readiness_probe: Callable[[], dict[str, Any]] | None = None,
     ) -> None:
         self.database = Path(database).expanduser() if database is not None else default_database_path()
         self.model = model
@@ -70,14 +130,18 @@ class GatewayService:
         self,
         name: str,
         *,
+        provider: str | None = None,
+        model: str | None = None,
         run_id: str | None = None,
         trace_sink: TraceSink | None = None,
         visual_observation_sink: Callable[[str, str, Sequence[GeneratedImage]], Sequence[dict[str, Any]]] | None = None,
     ) -> AgentRuntime:
+        effective_model = model if model is not None else self.model
         return create_agent_runtime(
+            provider=provider,
             session_name=name,
             database=self.database,
-            model=self.model,
+            model=effective_model,
             run_id=run_id,
             trace_sink=trace_sink,
             visual_observation_sink=visual_observation_sink,
@@ -85,17 +149,20 @@ class GatewayService:
 
     def health(self) -> dict[str, Any]:
         try:
-            readiness = self._readiness_probe()
+            readiness = _safe_readiness(self._readiness_probe())
         except Exception:
             readiness = {"status": "unavailable", "reason": "initialization_failed"}
         status = "ready" if readiness.get("status") == "ready" else "unavailable"
-        agent: dict[str, str] = {"status": status}
+        agent: dict[str, Any] = {"status": status}
         if status != "ready":
             reason = readiness.get("reason")
             if reason in {"missing_configuration", "invalid_configuration", "initialization_failed"}:
                 agent["reason"] = reason
             else:
                 agent["reason"] = "initialization_failed"
+        for key in ("provider", "model", "providers"):
+            if key in readiness and readiness[key] is not None:
+                agent[key] = readiness[key]
         return success({"status": "ok", "service": "Figura Gateway", "agent": agent})
 
     def list_sessions(self) -> dict[str, Any]:
@@ -192,8 +259,9 @@ class GatewayService:
         session_id: object,
         raw_text: object,
         raw_attachment_ids: object = None,
+        raw_provider: object = None,
     ) -> dict[str, Any]:
-        run = self._start_managed_run(session_id, raw_text, raw_attachment_ids)
+        run = self._start_managed_run(session_id, raw_text, raw_attachment_ids, raw_provider)
         if not run.wait_terminal(timeout=3600):
             run.fail("run_timeout", 504, "Agent run timed out")
         if run.status.value == "failed":
@@ -215,8 +283,9 @@ class GatewayService:
         session_id: object,
         raw_text: object,
         raw_attachment_ids: object = None,
+        raw_provider: object = None,
     ) -> dict[str, Any]:
-        run = self._start_managed_run(session_id, raw_text, raw_attachment_ids)
+        run = self._start_managed_run(session_id, raw_text, raw_attachment_ids, raw_provider)
         return success({"run": run.accepted.to_dict()})
 
     def get_run(self, session_id: object, run_id: object) -> ManagedRun:
@@ -333,14 +402,71 @@ class GatewayService:
         session_id: object,
         raw_text: object,
         raw_attachment_ids: object,
+        raw_provider: object = None,
     ) -> ManagedRun:
         session, prompt = self._prepare_prompt(session_id, raw_text, raw_attachment_ids)
+        requested_provider = validate_provider(raw_provider)
+        try:
+            readiness = _safe_readiness(self._readiness_probe())
+        except Exception as exc:
+            raise GatewayFault(
+                "agent_unavailable",
+                503,
+                "Agent service is unavailable",
+                "initialization_failed",
+            ) from exc
+        if requested_provider is not None:
+            provider = requested_provider
+        elif readiness.get("provider") in SUPPORTED_PROVIDERS:
+            provider = readiness["provider"]
+        elif readiness.get("status") == "ready" and "providers" not in readiness:
+            # Preserve the legacy top-level readiness hook, which represented
+            # only the OpenAI-compatible default before provider discovery.
+            provider = "openai"
+        else:
+            raise GatewayFault(
+                "agent_unavailable",
+                503,
+                "Agent service is unavailable",
+                readiness.get("reason", "initialization_failed"),
+            )
+        validate_provider(provider, allow_none=False)
+        if "providers" in readiness:
+            provider_status = readiness["providers"].get(provider)
+            if not isinstance(provider_status, Mapping):
+                raise GatewayFault(
+                    "agent_unavailable",
+                    503,
+                    "Agent service is unavailable",
+                    "invalid_configuration",
+                )
+        else:
+            if requested_provider is not None and readiness.get("provider") not in (None, provider):
+                raise GatewayFault(
+                    "agent_unavailable",
+                    503,
+                    "Agent service is unavailable",
+                    "invalid_configuration",
+                )
+            if requested_provider == "qwen" and readiness.get("provider") is None:
+                raise GatewayFault(
+                    "agent_unavailable",
+                    503,
+                    "Agent service is unavailable",
+                    "invalid_configuration",
+                )
+            provider_status = readiness
+        if provider_status.get("status") != "ready":
+            raise GatewayFault("agent_unavailable", 503, "Agent service is unavailable", provider_status.get("reason", "missing_configuration"))
+        model = _safe_model(provider_status.get("model")) or (_safe_model(self.model) if provider == "openai" else None)
         try:
             with self._runs.session_operation():
                 current = self._resolve_session(session.id)
                 return self._runs.start(
                     current.id,
                     lambda run: self._execute_run(run, current.name, prompt),
+                    provider=provider,
+                    model=model,
                 )
         except RuntimeError as exc:
             raise GatewayFault("run_limit", 429, "Too many Agent runs are active") from exc
@@ -432,6 +558,8 @@ class GatewayService:
         factory = self._runtime_factory
         kwargs: dict[str, Any] = {
             "run_id": run.run_id,
+            "provider": run.provider,
+            "model": run.model,
             "trace_sink": run.publish_trace,
             "visual_observation_sink": visual_sink,
         }

@@ -100,7 +100,9 @@ class GatewayHistoryStore:
                   terminal_code TEXT,
                   terminal_message TEXT,
                   answer_source TEXT,
-                  history_warning TEXT
+                  history_warning TEXT,
+                  provider TEXT,
+                  model TEXT
                 );
                 CREATE TABLE IF NOT EXISTS gateway_run_events (
                   run_id TEXT NOT NULL REFERENCES gateway_runs(run_id) ON DELETE CASCADE,
@@ -151,6 +153,8 @@ class GatewayHistoryStore:
                 ("terminal_message", "TEXT"),
                 ("answer_source", "TEXT"),
                 ("history_warning", "TEXT"),
+                ("provider", "TEXT"),
+                ("model", "TEXT"),
                 ("artifact_kind", "TEXT NOT NULL DEFAULT 'visual_observation'"),
                 ("chart_type", "TEXT"),
                 ("title", "TEXT"),
@@ -164,7 +168,14 @@ class GatewayHistoryStore:
                 ("publication_status", "TEXT"),
                 ("review_json", "TEXT"),
             ):
-                table = "gateway_runs" if name in {"terminal_code", "terminal_message", "answer_source", "history_warning"} else "gateway_run_artifacts"
+                table = "gateway_runs" if name in {
+                    "terminal_code",
+                    "terminal_message",
+                    "answer_source",
+                    "history_warning",
+                    "provider",
+                    "model",
+                } else "gateway_run_artifacts"
                 table_columns = columns if table == "gateway_runs" else {
                     row["name"] for row in connection.execute("PRAGMA table_info(gateway_run_artifacts)")
                 }
@@ -222,7 +233,7 @@ class GatewayHistoryStore:
         except (OSError, ValueError):
             return None
 
-    def create_run(self, run_id: str, session_id: str) -> None:
+    def create_run(self, run_id: str, session_id: str, *, provider: str | None = None, model: str | None = None) -> None:
         now = utc_timestamp()
         expires_at = time.time() + self.retention_seconds
         with self._lock, self._connect() as connection:
@@ -233,8 +244,8 @@ class GatewayHistoryStore:
             if int(count) >= self.max_runs:
                 raise HistoryStoreError("Gateway run history limit exceeded")
             connection.execute(
-                "INSERT INTO gateway_runs(run_id, session_id, status, created_at, updated_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)",
-                (run_id, session_id, RunStatus.RUNNING.value, now, now, expires_at),
+                "INSERT INTO gateway_runs(run_id, session_id, status, created_at, updated_at, expires_at, provider, model) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (run_id, session_id, RunStatus.RUNNING.value, now, now, expires_at, provider, model),
             )
 
     def append_event(self, event: RunEvent) -> None:
@@ -326,7 +337,7 @@ class GatewayHistoryStore:
             rows = connection.execute(
                 """SELECT run_id, session_id, status, created_at, updated_at,
                           expires_at,
-                          terminal_code, terminal_message, answer_source, history_warning,
+                          terminal_code, terminal_message, answer_source, history_warning, provider, model,
                           (SELECT COUNT(*) FROM gateway_run_events e WHERE e.run_id = r.run_id) AS event_count
                      FROM gateway_runs r WHERE session_id = ? ORDER BY created_at""",
                 (session_id,),
@@ -337,7 +348,7 @@ class GatewayHistoryStore:
         with self._lock, self._connect() as connection:
             self._cleanup_connection(connection)
             row = connection.execute(
-                "SELECT run_id, session_id, status, created_at, updated_at, expires_at, terminal_code, terminal_message, answer_source, history_warning, (SELECT COUNT(*) FROM gateway_run_events e WHERE e.run_id = r.run_id) AS event_count FROM gateway_runs r WHERE run_id = ? AND session_id = ?",
+                "SELECT run_id, session_id, status, created_at, updated_at, expires_at, terminal_code, terminal_message, answer_source, history_warning, provider, model, (SELECT COUNT(*) FROM gateway_run_events e WHERE e.run_id = r.run_id) AS event_count FROM gateway_runs r WHERE run_id = ? AND session_id = ?",
                 (run_id, session_id),
             ).fetchone()
         return self._run_summary(row) if row else None
@@ -356,6 +367,8 @@ class GatewayHistoryStore:
             "terminalMessage": row["terminal_message"],
             "answer": row["answer_source"],
             "historyWarning": row["history_warning"],
+            "provider": row["provider"],
+            "model": row["model"],
         }
 
     def list_events(self, session_id: str, run_id: str, after_sequence: int = 0) -> list[RunEvent]:

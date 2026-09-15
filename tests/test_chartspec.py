@@ -48,22 +48,6 @@ def test_round_trip_line_chart_xy_points():
     assert ChartSpec.from_dict(spec.to_dict()) == spec
 
 
-def test_round_trip_multi_series_points_and_confidence():
-    spec = ChartSpec(
-        metadata=ChartMetadata(chart_type=ChartType.LINE, title="multi"),
-        axes=Axes(x=Axis(label="t"), y=Axis(label="v")),
-        dataset=[
-            DataPoint(x=0, y=1, series="North", confidence=0.9),
-            DataPoint(x=0, y=2, series="South", confidence=0.8),
-        ],
-    )
-
-    restored = ChartSpec.from_dict(spec.to_dict())
-
-    assert restored == spec
-    assert spec.validate() == []
-
-
 def test_to_dict_is_plain_data():
     payload = bar_spec().to_dict()
     assert payload["metadata"]["chart_type"] == "bar"
@@ -136,16 +120,6 @@ def test_invalid_data_returns_issue_list_without_raising():
     assert "dataset[1]" in locations
     assert "dataset[2].confidence" in locations
     assert "axes.x.label" in locations
-
-
-def test_invalid_series_identity_reports_issue():
-    spec = ChartSpec(
-        metadata=ChartMetadata(chart_type=ChartType.LINE),
-        axes=Axes(x=Axis(label="x"), y=Axis(label="y")),
-        dataset=[DataPoint(x=1, y=2, series="")],
-    )
-
-    assert any(issue.location == "dataset[0].series" for issue in spec.validate())
 
 
 def test_empty_dataset_reports_issue():

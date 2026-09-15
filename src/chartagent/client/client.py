@@ -32,9 +32,14 @@ ObservationSink = Callable[[Mapping[str, Any]], None]
 _openai_factory: _CompletionFactory = OpenAI
 
 
+def _safe_exception_type(error: BaseException) -> str:
+    """Return bounded exception metadata without copying provider details."""
+    return (type(error).__name__ or "Exception")[:64]
+
+
 def _default_observation_sink(entry: Mapping[str, Any]) -> None:
     """Emit a sanitized observation entry via stdlib logging (no secrets)."""
-    logger.info("llm_call model=%s", entry.get("model"))
+    logger.info("llm_call provider=%s model=%s", entry.get("provider"), entry.get("model"))
 
 
 # --------------------------------------------------------------------------- #
@@ -63,7 +68,7 @@ def append_to_history(
 # --------------------------------------------------------------------------- #
 def _non_streaming_tool_calls(message: Any) -> List[ToolCall]:
     calls = []
-    for tc in message.tool_calls or []:
+    for tc in getattr(message, "tool_calls", None) or []:
         calls.append(
             ToolCall(
                 id=tc.id or "",
@@ -185,7 +190,7 @@ class LLMClient:
         resolved = resolve_config(**overrides) if overrides else (config or resolve_config())
         self.config = resolved
         if not self.config.api_key:
-            raise ValueError("An API key is required (explicit or OPENAI_API_KEY).")
+            raise ValueError(f"An API key is required for provider {self.config.provider}.")
         self._observe = observe or _default_observation_sink
         self._trace = (
             TraceEmitter(trace_sink, run_id=trace_run_id)
@@ -219,7 +224,7 @@ class LLMClient:
             "messages": list(messages),
             "stream": stream,
         }
-        if stream:
+        if stream and cfg.provider == "openai":
             # The SDK omits usage on streaming unless explicitly requested.
             request["stream_options"] = {"include_usage": True}
         if tools:
@@ -229,8 +234,10 @@ class LLMClient:
         if temperature is not None:
             request["temperature"] = temperature
         effort = reasoning_effort if reasoning_effort is not None else cfg.reasoning_effort
-        if effort is not None:
+        if cfg.provider == "openai" and effort is not None:
             request["reasoning_effort"] = effort
+        if cfg.provider == "qwen" and cfg.enable_thinking:
+            request["extra_body"] = {"enable_thinking": True}
 
         trace = self._trace
         if trace_sink is not None:
@@ -243,6 +250,7 @@ class LLMClient:
             trace.emit(
                 "model_started",
                 turn=trace_turn,
+                provider=cfg.provider,
                 model=use_model,
                 message_count=len(messages),
                 tool_count=len(tools or ()),
@@ -257,10 +265,12 @@ class LLMClient:
                 trace.emit(
                     "model_completed",
                     turn=trace_turn,
+                    provider=cfg.provider,
                     model=use_model,
                     status="error",
                     elapsed_ms=int((time.monotonic() - started) * 1000),
-                    error=str(exc),
+                    error_code="provider_request_failed",
+                    error_type=_safe_exception_type(exc),
                 )
             raise
         result = _collect_streaming_deltas(completion) if stream else normalize_non_streaming(completion)
@@ -270,6 +280,7 @@ class LLMClient:
             trace.emit(
                 "model_completed",
                 turn=trace_turn,
+                provider=cfg.provider,
                 model=use_model,
                 status="ok",
                 elapsed_ms=elapsed_ms,
@@ -289,6 +300,7 @@ class LLMClient:
         elapsed_ms: int,
     ) -> None:
         entry = {
+            "provider": self.config.provider,
             "model": model,
             "elapsed_ms": elapsed_ms,
             "finish_reason": result.finish_reason,

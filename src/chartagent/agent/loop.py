@@ -174,14 +174,15 @@ class Agent:
             try:
                 result = self.client.chat(self._messages, tools=tools, **chat_kwargs)
             except Exception as exc:
-                self.memory.append(run, "error", {"text": str(exc)})
+                self.memory.append(run, "error", {"error_code": "agent_call_failed", "error_type": type(exc).__name__[:64]})
                 self.memory.finish(run, RunStatus.FAILED, "error")
                 if emitter is not None and not isinstance(self.client, LLMClient):
                     emitter.emit(
                         "model_completed",
                         turn=turn,
                         status="error",
-                        error=str(exc),
+                        error_code="agent_call_failed",
+                        error_type=type(exc).__name__[:64],
                     )
                 raise
 

@@ -7,6 +7,12 @@ context: |
   environment explicitly before running commands. Do not silently use the
   system Python interpreter or create another environment unless the user
   explicitly requests it.
+  Run pytest as `conda run -n agent python -m pytest` so the test runner and
+  installed packages such as `rapidocr` use the same interpreter.
+  The `agent` environment already includes `rapidocr`, a required dependency
+  for OCR and chart-understanding tests. If `rapidocr` cannot be imported,
+  verify the environment with `conda run -n agent python -c "import rapidocr"`
+  before diagnosing a project dependency problem or using another interpreter.
 
 # Project context (optional)
 # This is shown to AI when creating artifacts.

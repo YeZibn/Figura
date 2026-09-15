@@ -43,6 +43,7 @@ export type ConversationItem =
 export type SessionData = { session: Session; messages: ConversationItem[]; attachments: Attachment[]; runs: RunSummary[] }
 export type RunStatus = 'running' | 'completed' | 'failed' | 'interrupted'
 export type RunState = 'idle' | 'connecting' | 'running' | 'completed' | 'failed' | 'interrupted' | 'unavailable'
+export type Provider = 'openai' | 'qwen'
 
 export type RunSummary = {
   runId: string
@@ -56,12 +57,16 @@ export type RunSummary = {
   terminalMessage?: string | null
   answer?: string | null
   historyWarning?: string | null
+  provider?: Provider | null
+  model?: string | null
 }
 
 export type RunHandle = {
   runId: string
   sessionId: string
   status: 'running'
+  provider?: Provider | null
+  model?: string | null
 }
 
 export type ObservationReference = {
@@ -114,11 +119,22 @@ export type RunHistory = {
 export type GatewayAgentStatus = {
   status: 'ready' | 'unavailable' | 'unknown'
   reason?: string
+  provider?: Provider
+  model?: string
+}
+
+export type GatewayProviderStatus = {
+  status: 'ready' | 'unavailable' | 'unknown'
+  reason?: string
+  provider?: Provider
+  model?: string
 }
 
 export type GatewayHealth = {
   version: 'v1'
   status: 'ok'
   service: string
-  agent?: GatewayAgentStatus
+  agent?: GatewayAgentStatus & {
+    providers?: Partial<Record<Provider, GatewayProviderStatus>>
+  }
 }
