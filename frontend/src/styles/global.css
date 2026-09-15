@@ -866,6 +866,168 @@ button:disabled { cursor: not-allowed; }
   text-align: center;
 }
 
+.preview-trigger {
+  display: block;
+  width: 100%;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: zoom-in;
+}
+
+.preview-trigger:hover { border-color: #9fc2bc; }
+.preview-trigger:focus-visible { border-color: var(--brand); box-shadow: var(--focus); }
+.preview-trigger img { display: block; width: 100%; }
+
+.attachment-preview-trigger {
+  border: 0;
+  border-bottom: 1px solid var(--line-soft);
+  border-radius: 0;
+}
+
+.attachment-preview-trigger:hover { border-color: #9fc2bc; }
+
+.preview-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: clamp(12px, 4vw, 42px);
+  background: rgba(19, 31, 29, .72);
+}
+
+.interactive-preview {
+  display: flex;
+  flex-direction: column;
+  width: min(960px, 100%);
+  height: min(760px, 100%);
+  max-height: 100%;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, .22);
+  border-radius: 9px;
+  outline: none;
+  background: #f8fbf9;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, .32);
+}
+
+.interactive-preview-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 15px 18px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel-strong);
+}
+
+.interactive-preview-heading {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.interactive-preview-heading h2 {
+  overflow: hidden;
+  margin: 0;
+  color: var(--ink);
+  font-size: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.interactive-preview-status {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.preview-close,
+.preview-control,
+.preview-fit {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 30px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--panel-strong);
+  color: #5d716b;
+  cursor: pointer;
+}
+
+.preview-close {
+  width: 32px;
+  flex: none;
+}
+
+.preview-close:hover,
+.preview-control:hover:not(:disabled),
+.preview-fit:hover:not(:disabled) {
+  border-color: #9fc2bc;
+  color: var(--brand);
+}
+
+.preview-viewport {
+  position: relative;
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  overflow: auto;
+  padding: 22px;
+  background: #263a37;
+}
+
+.interactive-preview-image {
+  display: block;
+  width: auto;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  transition: width .15s ease, max-width .15s ease;
+}
+
+.preview-overlay-message {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  max-width: min(360px, 100%);
+  color: #e5f1ed;
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: center;
+}
+
+.interactive-preview-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--line);
+  background: var(--panel-strong);
+}
+
+.preview-zoom-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.preview-control { width: 30px; }
+.preview-fit { gap: 5px; padding: 0 9px; font-size: 10px; }
+.preview-control:disabled,
+.preview-fit:disabled { cursor: not-allowed; opacity: .45; }
+.preview-control-hint { color: var(--subtle); font-size: 10px; }
+
 .loading-preview { color: var(--brand); }
 
 .preview-retry {
@@ -1391,4 +1553,14 @@ button:disabled { cursor: not-allowed; }
   .run-chip { max-width: 100%; }
   .attachment-list { grid-template-columns: 1fr; }
   .message-body { max-width: calc(100% - 39px); }
+}
+
+@media (max-width: 600px) {
+  .preview-backdrop { padding: 8px; }
+  .interactive-preview { border-radius: 6px; }
+  .interactive-preview-header { padding: 12px; }
+  .preview-viewport { padding: 10px; }
+  .interactive-preview-controls { align-items: stretch; flex-direction: column; }
+  .preview-zoom-controls { justify-content: center; }
+  .preview-control-hint { text-align: center; }
 }
