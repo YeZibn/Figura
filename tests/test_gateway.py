@@ -976,6 +976,95 @@ def test_generated_chart_http_artifact_route_and_session_cascade(tmp_path):
     service.close()
 
 
+def test_chart_preview_route_follows_candidate_promotion_and_exposes_binary_headers(tmp_path):
+    database = tmp_path / "sessions.db"
+    store = GatewayHistoryStore(database, artifact_root=tmp_path / "run-artifacts")
+    service = GatewayService(database=database, history_store=store)
+    session_id = service.create_session("chart-preview")["session"]["id"]
+    other_session_id = service.create_session("chart-preview-other")["session"]["id"]
+    store.create_run("run_preview", session_id)
+    candidate_id = "cand_preview"
+    candidate = store.add_candidate(
+        "run_preview",
+        session_id,
+        GeneratedImage(
+            _png_bytes(),
+            "image/png",
+            "待审核图表",
+            metadata={
+                "kind": "generated_chart",
+                "candidateId": candidate_id,
+                "reviewId": "review_preview",
+                "chartSpecDigest": "a" * 64,
+                "candidateStatus": "verified",
+                "reviewStatus": "pending",
+                "publicationStatus": "unpublished",
+                "chart_type": "bar",
+                "title": "待审核图表",
+                "width": 640,
+                "height": 480,
+            },
+        ),
+    )
+    assert candidate is not None
+    server = GatewayHTTPServer(
+        ("127.0.0.1", 0),
+        service,
+        allowed_origins={"http://tauri.localhost"},
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    preview_path = f"/api/v1/sessions/{session_id}/runs/run_preview/chart-previews/{candidate_id}"
+    try:
+        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=3)
+        connection.request("GET", preview_path, headers={"Origin": "http://tauri.localhost"})
+        response = connection.getresponse()
+        body = response.read()
+        assert response.status == 200
+        assert body == _png_bytes()
+        assert response.getheader("Content-Type") == "image/png"
+        assert response.getheader("Content-Length") == str(len(_png_bytes()))
+        assert response.getheader("Content-Disposition") == "inline"
+        assert response.getheader("Cache-Control") == "no-store"
+        assert response.getheader("X-Content-Type-Options") == "nosniff"
+        assert response.getheader("Access-Control-Allow-Origin") == "http://tauri.localhost"
+        connection.close()
+
+        promoted = store.promote_candidate(
+            "run_preview",
+            session_id,
+            candidate_id,
+            "review_preview",
+            "a" * 64,
+            candidate_status="verified",
+            review_status="completed",
+            publication_status="published",
+        )
+        assert promoted is not None
+        assert promoted["artifactId"].startswith("artifact_")
+
+        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=3)
+        connection.request("GET", preview_path)
+        response = connection.getresponse()
+        assert response.status == 200
+        assert response.read() == _png_bytes()
+        connection.close()
+
+        status, body, _ = _request(
+            port,
+            "GET",
+            f"/api/v1/sessions/{other_session_id}/runs/run_preview/chart-previews/{candidate_id}",
+        )
+        assert status == 404
+        assert body["error"]["code"] == "run_unavailable"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=3)
+    service.close()
+
+
 def test_generated_chart_artifact_expires_without_becoming_readable(tmp_path):
     database = tmp_path / "sessions.db"
     store = GatewayHistoryStore(database, artifact_root=tmp_path / "run-artifacts", retention_seconds=0)

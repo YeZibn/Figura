@@ -16,7 +16,20 @@ export type Attachment = {
   previewUrl?: string
   status: AttachmentStatus
   previewAvailable?: boolean
+  previewResource?: PreviewResource
   error?: string
+}
+
+export type PreviewResource =
+  | { kind: 'attachment'; sessionId: string; attachmentId: string }
+  | { kind: 'observation'; sessionId: string; runId: string; observationId: string }
+  | { kind: 'candidate'; sessionId: string; runId: string; candidateId: string }
+  | { kind: 'artifact'; sessionId: string; runId: string; artifactId: string }
+
+export type PreviewLoadResult = {
+  url: string
+  contentType?: string
+  temporary: boolean
 }
 
 export type ConversationItem =
@@ -24,7 +37,7 @@ export type ConversationItem =
   | { id: string; kind: 'assistant'; text: string; timestamp: string; associationStatus?: string }
   | { id: string; kind: 'tool_call'; toolName: string; status: 'success' | 'running' | 'error'; detail: string; timestamp: string }
   | { id: string; kind: 'tool_result'; toolName: string; status: 'success' | 'error'; detail: string; timestamp: string }
-  | { id: string; kind: 'visual_observation'; toolName: string; caption: string; imageUrl?: string; timestamp: string }
+  | { id: string; kind: 'visual_observation'; toolName: string; caption: string; imageUrl?: string; previewResource?: PreviewResource; timestamp: string }
   | { id: string; kind: 'error'; text: string; timestamp: string }
 
 export type SessionData = { session: Session; messages: ConversationItem[]; attachments: Attachment[]; runs: RunSummary[] }
@@ -57,6 +70,7 @@ export type ObservationReference = {
   caption: string
   byteCount: number
   imageUrl?: string
+  previewResource?: PreviewResource
 }
 
 export type GeneratedChartReference = {
@@ -79,6 +93,7 @@ export type GeneratedChartReference = {
   reason?: string
   imageUrl?: string
   downloadUrl?: string
+  previewResource?: PreviewResource
 }
 
 export type AgentRunEvent = {

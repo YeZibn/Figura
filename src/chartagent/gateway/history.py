@@ -605,6 +605,32 @@ class GatewayHistoryStore:
     def get_candidate(self, session_id: str, run_id: str, candidate_id: str) -> tuple[bytes, str] | None:
         return self.get_artifact(session_id, run_id, candidate_id, artifact_kind="generated_candidate")
 
+    def get_chart_preview(self, session_id: str, run_id: str, reference_id: str) -> tuple[bytes, str] | None:
+        """Read the current bytes for an artifact or candidate reference.
+
+        A candidate reference remains stable for the client-facing preview
+        route even after promotion, when its row becomes a generated artifact.
+        """
+        with self._lock, self._connect() as connection:
+            self._cleanup_connection(connection)
+            row = connection.execute(
+                """SELECT observation_id, artifact_kind FROM gateway_run_artifacts
+                   WHERE run_id = ? AND session_id = ?
+                     AND (observation_id = ? OR candidate_id = ?)
+                     AND artifact_kind IN ('generated_chart', 'generated_candidate')
+                   ORDER BY CASE WHEN artifact_kind = 'generated_chart' THEN 0 ELSE 1 END
+                   LIMIT 1""",
+                (run_id, session_id, reference_id, reference_id),
+            ).fetchone()
+        if row is None:
+            return None
+        return self.get_artifact(
+            session_id,
+            run_id,
+            row["observation_id"],
+            artifact_kind=row["artifact_kind"],
+        )
+
     def add_artifact(self, run_id: str, session_id: str, image: Any) -> dict[str, Any] | None:
         content = getattr(image, "content", None)
         media_type = str(getattr(image, "media_type", "")).lower()

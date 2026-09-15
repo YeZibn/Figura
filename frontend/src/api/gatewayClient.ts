@@ -1,5 +1,5 @@
 import type { ChartAgentClient, RunEventCallbacks, RunSubscription } from './client'
-import type { AgentRunEvent, Attachment, GatewayHealth, GeneratedChartReference, ObservationReference, RunHandle, RunHistory, RunSummary, Session, SessionData } from '../types/protocol'
+import type { AgentRunEvent, Attachment, GatewayHealth, GeneratedChartReference, ObservationReference, PreviewResource, RunHandle, RunHistory, RunSummary, Session, SessionData } from '../types/protocol'
 import { mediaTypeForFile } from '../attachments'
 
 type GatewaySessionList = { sessions: Session[] }
@@ -32,7 +32,16 @@ export class GatewayClientError extends Error {
   }
 }
 
-const gatewayBaseUrl = (import.meta.env.VITE_CHARTAGENT_GATEWAY_URL || 'http://127.0.0.1:8765/api/v1').replace(/\/$/, '')
+let gatewayBaseUrl = (import.meta.env.VITE_CHARTAGENT_GATEWAY_URL || 'http://127.0.0.1:8765/api/v1').replace(/\/$/, '')
+
+export function configureGatewayBaseUrl(value?: string): string {
+  if (value) gatewayBaseUrl = value.replace(/\/$/, '')
+  return gatewayBaseUrl
+}
+
+export function currentGatewayBaseUrl(): string {
+  return gatewayBaseUrl
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let response: Response
@@ -66,12 +75,22 @@ function attachmentContentUrl(sessionId: string, attachmentId: string): string {
   return `${gatewayBaseUrl}/sessions/${encodeURIComponent(sessionId)}/attachments/${encodeURIComponent(attachmentId)}/content`
 }
 
+function attachmentPreviewResource(sessionId: string, attachmentId: string): PreviewResource {
+  return { kind: 'attachment', sessionId, attachmentId }
+}
+
 function generatedArtifactUrl(sessionId: string, runId: string, artifactId: string): string {
   return `${gatewayBaseUrl}/sessions/${encodeURIComponent(sessionId)}/runs/${encodeURIComponent(runId)}/artifacts/${encodeURIComponent(artifactId)}`
 }
 
 function generatedCandidateUrl(sessionId: string, runId: string, candidateId: string): string {
   return `${gatewayBaseUrl}/sessions/${encodeURIComponent(sessionId)}/runs/${encodeURIComponent(runId)}/candidates/${encodeURIComponent(candidateId)}`
+}
+
+function chartPreviewResource(sessionId: string, runId: string, reference: GeneratedChartReference): PreviewResource | undefined {
+  if (reference.artifactId) return { kind: 'artifact', sessionId, runId, artifactId: reference.artifactId }
+  if (reference.candidateId) return { kind: 'candidate', sessionId, runId, candidateId: reference.candidateId }
+  return undefined
 }
 
 function mapAttachment(item: GatewayAttachment, sessionId?: string): Attachment {
@@ -83,7 +102,8 @@ function mapAttachment(item: GatewayAttachment, sessionId?: string): Attachment 
     sha256: item.sha256,
     status: item.status || 'registered',
     previewAvailable: item.preview_available || false,
-    previewUrl: item.preview_available && sessionId ? attachmentContentUrl(sessionId, item.attachment_id) : '',
+    previewUrl: '',
+    previewResource: item.preview_available && sessionId ? attachmentPreviewResource(sessionId, item.attachment_id) : undefined,
   }
 }
 
@@ -104,7 +124,7 @@ function mapRunEvent(event: GatewayRunEvent, sessionId: string): AgentRunEvent {
       if (!reference.observationId) return item
       return {
         ...reference,
-        imageUrl: `${gatewayBaseUrl}/sessions/${encodeURIComponent(sessionId)}/runs/${encodeURIComponent(event.runId)}/observations/${encodeURIComponent(reference.observationId)}`,
+        previewResource: { kind: 'observation', sessionId, runId: event.runId, observationId: reference.observationId },
       }
     })
   }
@@ -113,12 +133,14 @@ function mapRunEvent(event: GatewayRunEvent, sessionId: string): AgentRunEvent {
       if (!item || typeof item !== 'object') return item
       const reference = item as Partial<GeneratedChartReference>
       if (reference.status === 'unavailable' || reference.status === 'failed') return item
+      const chartReference = reference as GeneratedChartReference
+      const resource = chartPreviewResource(sessionId, event.runId, chartReference)
       const url = reference.artifactId
         ? generatedArtifactUrl(sessionId, event.runId, reference.artifactId)
         : reference.candidateId
           ? generatedCandidateUrl(sessionId, event.runId, reference.candidateId)
           : ''
-      return url ? { ...reference, imageUrl: url, downloadUrl: reference.artifactId ? url : undefined } : item
+      return resource ? { ...reference, previewResource: resource, imageUrl: url, downloadUrl: reference.artifactId ? url : undefined } : item
     })
   }
   return { runId: event.runId, sequence: event.sequence, kind: event.kind, timestamp: event.timestamp, payload }

@@ -312,6 +312,22 @@ class GatewayService:
             raise GatewayFault("generated_candidate_unavailable", 404, "Generated chart candidate is unavailable")
         return item
 
+    def get_generated_chart_preview(
+        self,
+        session_id: object,
+        run_id: object,
+        reference_id: object,
+    ) -> tuple[bytes, str]:
+        """Resolve either a candidate or its current published artifact."""
+        session = self._resolve_session(session_id)
+        run = self.get_run(session.id, run_id)
+        if not isinstance(reference_id, str) or not reference_id.strip():
+            raise GatewayFault("invalid_request", 400, "Chart preview reference is required")
+        item = self._history.get_chart_preview(session.id, run.run_id, reference_id)
+        if item is None:
+            raise GatewayFault("generated_chart_preview_unavailable", 404, "Generated chart preview is unavailable")
+        return item
+
     def _start_managed_run(
         self,
         session_id: object,

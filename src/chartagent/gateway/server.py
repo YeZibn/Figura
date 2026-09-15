@@ -21,7 +21,13 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
 MAX_REQUEST_BYTES = 1024 * 1024
 MAX_BINARY_REQUEST_BYTES = DEFAULT_MAX_ATTACHMENT_BYTES
-DEFAULT_ALLOWED_ORIGINS = frozenset({"http://127.0.0.1:1420", "http://localhost:1420"})
+DEFAULT_ALLOWED_ORIGINS = frozenset({
+    "http://127.0.0.1:1420",
+    "http://localhost:1420",
+    "http://tauri.localhost",
+    "https://tauri.localhost",
+    "tauri://localhost",
+})
 
 
 def configured_origins(value: str | None = None) -> frozenset[str]:
@@ -100,6 +106,15 @@ class GatewayRequestHandler(BaseHTTPRequestHandler):
                     session_id,
                     run_id,
                     candidate_id,
+                )
+                self._send_binary(HTTPStatus.OK, content, media_type)
+                return
+            elif (parts := self._run_chart_preview_parts(path)) is not None:
+                session_id, run_id, reference_id = parts
+                content, media_type = self.gateway.get_generated_chart_preview(
+                    session_id,
+                    run_id,
+                    reference_id,
                 )
                 self._send_binary(HTTPStatus.OK, content, media_type)
                 return
@@ -294,6 +309,16 @@ class GatewayRequestHandler(BaseHTTPRequestHandler):
         return None
 
     @staticmethod
+    def _run_chart_preview_parts(path: str) -> tuple[str, str, str] | None:
+        prefix = f"{API_PREFIX}/sessions/"
+        if not path.startswith(prefix):
+            return None
+        parts = path[len(prefix):].split("/")
+        if len(parts) == 5 and parts[1] == "runs" and parts[3] == "chart-previews":
+            return unquote(parts[0]), unquote(parts[2]), unquote(parts[4])
+        return None
+
+    @staticmethod
     def _attachment_content_parts(path: str) -> tuple[str, str] | None:
         prefix = f"{API_PREFIX}/sessions/"
         if not path.startswith(prefix):
@@ -419,6 +444,9 @@ class GatewayRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", media_type)
         self.send_header("Content-Length", str(len(content)))
         self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Disposition", "inline")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Access-Control-Expose-Headers", "Content-Type, Content-Length")
         self._send_cors_headers()
         self.end_headers()
         self.wfile.write(content)

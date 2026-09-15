@@ -823,6 +823,31 @@ button:disabled { cursor: not-allowed; }
   font-size: 10px;
 }
 
+.preview-placeholder {
+  display: grid;
+  min-height: 80px;
+  place-items: center;
+  align-content: center;
+  gap: 6px;
+  color: var(--subtle);
+  font-size: 10px;
+  text-align: center;
+}
+
+.loading-preview { color: var(--brand); }
+
+.preview-retry {
+  padding: 2px 6px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--panel-strong);
+  color: var(--brand);
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.preview-retry:hover { border-color: var(--brand); }
+
 .attachment-info {
   min-width: 0;
   padding: 10px;

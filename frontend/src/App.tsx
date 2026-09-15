@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { BarChart3, Check, ChevronDown, ChevronRight, Download, FileImage, LoaderCircle, MessageSquare, Paperclip, Plus, RefreshCw, Send, Sparkles, Terminal, Trash2, X } from 'lucide-react'
-import { GatewayClientError, gatewayClient } from './api/gatewayClient'
+import { GatewayClientError, configureGatewayBaseUrl, currentGatewayBaseUrl, gatewayClient } from './api/gatewayClient'
 import type { ChartAgentClient, RunSubscription } from './api/client'
 import { mockClient } from './api/mockClient'
 import { formatBytes, mediaTypeForFile, validateImageFile } from './attachments'
 import { getGatewayRuntimeStatus, type GatewayRuntimeStatus } from './runtime'
+import { createGatewayPreviewLoader, releasePreview, usePreviewResource, type PreviewResourceLoader } from './previewResources'
 import type { AgentRunEvent, Attachment, AttachmentStatus, ConversationItem, GatewayHealth, GeneratedChartReference, RunState, RunSummary, Session, SessionData } from './types/protocol'
 import './styles/global.css'
 import './styles/error.css'
@@ -204,25 +205,34 @@ function SafeMarkdown({ source }: { source: string }) {
   return <div className="markdown-content">{blocks}</div>
 }
 
-function ObservationView({ observation }: { observation: Record<string, unknown> }) {
-  const imageUrl = typeof observation.imageUrl === 'string' ? observation.imageUrl : ''
+function PreviewImage({ loader, resource, fallbackUrl, alt, className, onError }: { loader: PreviewResourceLoader | null; resource?: import('./types/protocol').PreviewResource; fallbackUrl?: string; alt: string; className?: string; onError?: () => void }) {
+  const preview = usePreviewResource(loader, resource, fallbackUrl)
+  const [imageError, setImageError] = useState(false)
+  useEffect(() => setImageError(false), [preview.url])
+  if (preview.status === 'loading') return <div className="preview-placeholder loading-preview"><LoaderCircle className="spin-icon" size={18} />正在加载预览</div>
+  if (preview.status === 'available' && preview.url && !imageError) return <img className={className} src={preview.url} alt={alt} onError={() => { setImageError(true); onError?.() }} />
+  return <div className="preview-placeholder">{preview.status === 'invalid' || imageError ? '预览格式无效' : '预览资源不可用或已过期'}{preview.error?.retryable && <button type="button" className="preview-retry" onClick={preview.retry}>重试</button>}</div>
+}
+
+function ObservationView({ observation, loader }: { observation: Record<string, unknown>; loader: PreviewResourceLoader | null }) {
   const caption = String(observation.caption || '视觉观察')
-  return <div className="trace-observation"><div className="observation-label"><FileImage size={13} /><strong>视觉观察</strong></div>{imageUrl ? <img src={imageUrl} alt={caption} /> : <div className="observation-placeholder">视觉证据不可用或已过期</div>}<small>{caption}</small></div>
+  const resource = observation.previewResource as import('./types/protocol').PreviewResource | undefined
+  return <div className="trace-observation"><div className="observation-label"><FileImage size={13} /><strong>视觉观察</strong></div><PreviewImage loader={loader} resource={resource} fallbackUrl={typeof observation.imageUrl === 'string' ? observation.imageUrl : undefined} alt={caption} /><small>{caption}</small></div>
 }
 
 function chartTypeLabel(value: string): string {
   return ({ bar: '柱状图', line: '折线图', pie: '饼图', scatter: '散点图' } as Record<string, string>)[value] || value || '图表'
 }
 
-function GeneratedChartView({ artifact }: { artifact: GeneratedChartReference }) {
+function GeneratedChartView({ artifact, loader }: { artifact: GeneratedChartReference; loader: PreviewResourceLoader | null }) {
   const [downloading, setDownloading] = useState(false)
   const [downloadError, setDownloadError] = useState('')
   const [imageFailed, setImageFailed] = useState(false)
-  useEffect(() => setImageFailed(false), [artifact.imageUrl])
+  useEffect(() => setImageFailed(false), [artifact.imageUrl, artifact.previewResource])
   const publicationStatus = artifact.publicationStatus || ''
   const reviewStatus = artifact.reviewStatus || ''
   const candidateStatus = artifact.candidateStatus || ''
-  const status = publicationStatus === 'published' ? 'available' : publicationStatus === 'published_with_warning' ? 'warning' : publicationStatus === 'rejected' || candidateStatus === 'review_failed' || candidateStatus === 'timed_out' || candidateStatus === 'retry_exhausted' ? 'failed' : reviewStatus === 'pending' || reviewStatus === 'requires_model_decision' || candidateStatus === 'review_pending' || artifact.status === 'pending' ? 'pending' : artifact.status === 'unavailable' || !artifact.imageUrl || imageFailed ? 'unavailable' : artifact.status === 'warning' ? 'warning' : 'available'
+  const status = publicationStatus === 'published' ? 'available' : publicationStatus === 'published_with_warning' ? 'warning' : publicationStatus === 'rejected' || candidateStatus === 'review_failed' || candidateStatus === 'timed_out' || candidateStatus === 'retry_exhausted' ? 'failed' : reviewStatus === 'pending' || reviewStatus === 'requires_model_decision' || candidateStatus === 'review_pending' || artifact.status === 'pending' ? 'pending' : artifact.status === 'unavailable' || (!artifact.imageUrl && !artifact.previewResource) || imageFailed ? 'unavailable' : artifact.status === 'warning' ? 'warning' : 'available'
   const statusLabel = status === 'available' ? '已发布' : status === 'warning' ? '已发布·有警告' : status === 'pending' ? '待审核' : status === 'failed' ? '未发布·审核未通过' : '暂不可用'
   const metadata = [
     artifact.chartType ? chartTypeLabel(artifact.chartType) : '',
@@ -230,21 +240,30 @@ function GeneratedChartView({ artifact }: { artifact: GeneratedChartReference })
     typeof artifact.byteCount === 'number' ? formatBytes(artifact.byteCount) : '',
   ].filter(Boolean).join(' · ')
   const download = async () => {
-    if (!artifact.downloadUrl || downloading) return
+    if ((!artifact.downloadUrl && !artifact.previewResource) || downloading) return
     setDownloading(true)
     setDownloadError('')
     try {
-      const response = await fetch(artifact.downloadUrl)
-      if (!response.ok) throw new Error('download failed')
-      const blob = await response.blob()
-      const objectUrl = URL.createObjectURL(blob)
+      let objectUrl = artifact.downloadUrl || ''
+      let temporary = false
+      if (loader && artifact.previewResource) {
+        const result = await loader(artifact.previewResource)
+        objectUrl = result.url
+        temporary = result.temporary
+      } else {
+        const response = await fetch(objectUrl)
+        if (!response.ok) throw new Error('download failed')
+        const blob = await response.blob()
+        objectUrl = URL.createObjectURL(blob)
+        temporary = true
+      }
       const link = document.createElement('a')
       link.href = objectUrl
       link.download = `${artifact.title || 'figura-chart'}.png`
       document.body.appendChild(link)
       link.click()
       link.remove()
-      URL.revokeObjectURL(objectUrl)
+      if (temporary) releasePreview({ url: objectUrl, temporary })
     } catch {
       setDownloadError('下载失败，请稍后重试')
     } finally {
@@ -252,8 +271,8 @@ function GeneratedChartView({ artifact }: { artifact: GeneratedChartReference })
     }
   }
   return <article className={'generated-chart ' + status}>
-    <div className="generated-chart-heading"><div className="observation-label"><BarChart3 size={13} /><strong>生成图表</strong><span>{statusLabel}</span></div>{artifact.downloadUrl && (status === 'available' || status === 'warning') && <button className="chart-download" type="button" onClick={() => void download()} disabled={downloading} title="下载生成图表"><Download size={13} />{downloading ? '正在下载' : '下载 PNG'}</button>}</div>
-    {artifact.imageUrl && (status === 'available' || status === 'warning' || status === 'pending') ? <img src={artifact.imageUrl} alt={artifact.title || artifact.caption || '生成图表'} onError={() => setImageFailed(true)} /> : <div className="observation-placeholder">{status === 'failed' ? '图表审核未通过，未产生可下载文件' : '图表文件已过期或暂不可用'}</div>}
+    <div className="generated-chart-heading"><div className="observation-label"><BarChart3 size={13} /><strong>生成图表</strong><span>{statusLabel}</span></div>{(artifact.downloadUrl || artifact.previewResource) && (status === 'available' || status === 'warning') && <button className="chart-download" type="button" onClick={() => void download()} disabled={downloading} title="下载生成图表"><Download size={13} />{downloading ? '正在下载' : '下载 PNG'}</button>}</div>
+    {(artifact.imageUrl || artifact.previewResource) && (status === 'available' || status === 'warning' || status === 'pending') ? <PreviewImage loader={loader} resource={artifact.previewResource} fallbackUrl={artifact.previewResource ? undefined : artifact.imageUrl} alt={artifact.title || artifact.caption || '生成图表'} onError={() => setImageFailed(true)} /> : <div className="observation-placeholder">{status === 'failed' ? '图表审核未通过，未产生可下载文件' : '图表文件已过期或暂不可用'}</div>}
     <div className="generated-chart-copy"><strong>{artifact.title || artifact.caption || '未命名图表'}</strong>{metadata && <small>{metadata}</small>}{artifact.reason && <small className="generated-chart-reason">{artifact.reason}</small>}{downloadError && <small className="generated-chart-reason">{downloadError}</small>}</div>
   </article>
 }
@@ -263,7 +282,7 @@ function eventLabel(event: AgentRunEvent): string {
   return labels[event.kind] || event.kind
 }
 
-function RunTimeline({ timeline, expanded, onToggle }: { timeline: RunTimeline; expanded: boolean; onToggle: () => void }) {
+function RunTimeline({ timeline, expanded, onToggle, previewLoader }: { timeline: RunTimeline; expanded: boolean; onToggle: () => void; previewLoader: PreviewResourceLoader | null }) {
   const [expandedSteps, setExpandedSteps] = useState<Set<string>>(new Set())
   const rows = normalizeTimeline(timeline.events)
   const summary = timeline.summary
@@ -275,7 +294,7 @@ function RunTimeline({ timeline, expanded, onToggle }: { timeline: RunTimeline; 
       {summary.historyWarning && <div className="trace-warning" role="status">部分执行记录未能持久化，当前显示的过程可能不完整。</div>}
       {timeline.historyGap && <div className="trace-warning" role="status">历史记录存在缺口，未显示缺失的执行步骤。</div>}
       {rows.length === 0 && <div className="trace-empty">没有可恢复的执行事件。</div>}
-      {rows.map((row) => row.kind === 'event' ? <div className={'trace-event ' + (row.event.kind === 'run_failed' || row.event.kind === 'history_gap' ? 'error' : '')} key={`${row.event.runId}-${row.event.sequence}`}><span className="trace-event-dot" /><span className="trace-event-copy"><strong>{eventLabel(row.event)}</strong><small>{timestampLabel(row.event.timestamp)}</small><span>{textDetail(eventPayload(row.event).message || eventPayload(row.event).status || eventPayload(row.event).publication_status || eventPayload(row.event).reason || (row.event.kind === 'generated_chart' ? '生成图表结果已移至最终结果区域' : ''))}</span></span></div> : <div className="trace-tool" key={row.step.id}><button className="trace-tool-header" onClick={() => setExpandedSteps((current) => { const next = new Set(current); next.has(row.step.id) ? next.delete(row.step.id) : next.add(row.step.id); return next })} aria-expanded={expandedSteps.has(row.step.id)}><span className="trace-event-dot" /><span className="trace-tool-name"><strong>{row.step.toolLabel || row.step.toolName}</strong><small>{row.step.toolName} · {row.step.callId}</small></span><span className={'run-status ' + row.step.status}>{row.step.status === 'running' ? '运行中' : row.step.status === 'success' ? '完成' : '失败'}</span>{expandedSteps.has(row.step.id) ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</button>{expandedSteps.has(row.step.id) && <div className="trace-tool-detail">{row.step.call && <div><label>调用参数</label><pre>{textDetail(eventPayload(row.step.call).arguments)}</pre></div>}{row.step.result && <div><label>工具结果</label><pre>{textDetail(eventPayload(row.step.result).result || eventPayload(row.step.result).message)}</pre></div>}{row.step.observations.map((observation, index) => <ObservationView key={index} observation={observation} />)}</div>}</div>)}
+      {rows.map((row) => row.kind === 'event' ? <div className={'trace-event ' + (row.event.kind === 'run_failed' || row.event.kind === 'history_gap' ? 'error' : '')} key={`${row.event.runId}-${row.event.sequence}`}><span className="trace-event-dot" /><span className="trace-event-copy"><strong>{eventLabel(row.event)}</strong><small>{timestampLabel(row.event.timestamp)}</small><span>{textDetail(eventPayload(row.event).message || eventPayload(row.event).status || eventPayload(row.event).publication_status || eventPayload(row.event).reason || (row.event.kind === 'generated_chart' ? '生成图表结果已移至最终结果区域' : ''))}</span></span></div> : <div className="trace-tool" key={row.step.id}><button className="trace-tool-header" onClick={() => setExpandedSteps((current) => { const next = new Set(current); next.has(row.step.id) ? next.delete(row.step.id) : next.add(row.step.id); return next })} aria-expanded={expandedSteps.has(row.step.id)}><span className="trace-event-dot" /><span className="trace-tool-name"><strong>{row.step.toolLabel || row.step.toolName}</strong><small>{row.step.toolName} · {row.step.callId}</small></span><span className={'run-status ' + row.step.status}>{row.step.status === 'running' ? '运行中' : row.step.status === 'success' ? '完成' : '失败'}</span>{expandedSteps.has(row.step.id) ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</button>{expandedSteps.has(row.step.id) && <div className="trace-tool-detail">{row.step.call && <div><label>调用参数</label><pre>{textDetail(eventPayload(row.step.call).arguments)}</pre></div>}{row.step.result && <div><label>工具结果</label><pre>{textDetail(eventPayload(row.step.result).result || eventPayload(row.step.result).message)}</pre></div>}{row.step.observations.map((observation, index) => <ObservationView key={index} observation={observation} loader={previewLoader} />)}</div>}</div>)}
     </div>}
   </section>
 }
@@ -301,12 +320,12 @@ function SessionSidebar(props: { sessions: Session[]; activeId: string; onSelect
   </aside>
 }
 
-function Message(props: { item: ConversationItem; expanded: boolean; onToggle: (id: string) => void }) {
+function Message(props: { item: ConversationItem; expanded: boolean; onToggle: (id: string) => void; previewLoader?: PreviewResourceLoader | null }) {
   const item = props.item
   const associationWarning = (item.kind === 'user' || item.kind === 'assistant') && item.associationStatus === 'legacy_unassociated' ? <span className="message-association-warning">历史关联不完整</span> : null
   if (item.kind === 'user') return <div className="message-row user-row"><div className="avatar user-avatar">我</div><div className="message-body"><div className="message-meta"><strong>你</strong>{associationWarning}<time>{item.timestamp}</time></div><div className="bubble user-bubble">{item.text}{item.attachmentIds?.length ? <div className="inline-attachment"><Paperclip size={13} /> {item.attachmentIds.length} 个附件</div> : null}</div></div></div>
   if (item.kind === 'assistant') return <div className="message-row assistant-row"><div className="avatar agent-avatar"><Sparkles size={15} /></div><div className="message-body"><div className="message-meta"><strong>Figura Agent</strong>{associationWarning}<time>{item.timestamp}</time></div><div className="bubble assistant-bubble"><SafeMarkdown source={item.text} /><details className="answer-source"><summary>查看原文</summary><pre>{item.text.slice(0, 12000)}</pre></details></div></div></div>
-  if (item.kind === 'visual_observation') return <div className="visual-observation"><div className="observation-label"><FileImage size={14} /> <strong>视觉观察</strong><span>{item.toolName}</span></div>{item.imageUrl ? <img src={item.imageUrl} alt={item.caption} /> : <div className="observation-placeholder">临时视觉证据不可用</div>}<small>{item.caption}</small></div>
+  if (item.kind === 'visual_observation') return <div className="visual-observation"><div className="observation-label"><FileImage size={14} /> <strong>视觉观察</strong><span>{item.toolName}</span></div><PreviewImage loader={props.previewLoader || null} resource={item.previewResource} fallbackUrl={item.imageUrl} alt={item.caption} /><small>{item.caption}</small></div>
   if (item.kind === 'error') return <div className="error-banner" role="alert">{item.text}</div>
   const label = item.kind === 'tool_call' ? '工具调用' : '工具结果'
   return <div className={'execution-item ' + (props.expanded ? 'expanded' : '')}><button className="execution-header" onClick={() => props.onToggle(item.id)} aria-expanded={props.expanded}><span className="execution-icon"><Terminal size={14} /></span><span><strong>{label}</strong><b>{item.toolName}</b></span><span className={'execution-status ' + item.status}>{toolStatusLabel(item.status)}</span>{props.expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}</button>{props.expanded && <div className="execution-detail">{item.detail}</div>}</div>
@@ -320,25 +339,27 @@ function RunBlock(props: {
   onToggleRun: () => void
   expandedMessage: string | null
   onToggleMessage: (id: string) => void
+  previewLoader: PreviewResourceLoader | null
 }) {
   const { timeline, user, assistant } = props
   const answer = assistant?.kind === 'assistant' ? assistant.text : timeline.summary.answer || ''
   const answerTimestamp = assistant?.kind === 'assistant' ? assistant.timestamp : timestampLabel(timeline.summary.updatedAt)
   const artifacts = generatedArtifacts(timeline.events)
   return <section className={'run-block run-' + timeline.summary.status}>
-    {user && <Message item={user} expanded={props.expandedMessage === user.id} onToggle={props.onToggleMessage} />}
-    <RunTimeline timeline={timeline} expanded={props.expanded} onToggle={props.onToggleRun} />
+    {user && <Message item={user} expanded={props.expandedMessage === user.id} onToggle={props.onToggleMessage} previewLoader={props.previewLoader} />}
+    <RunTimeline timeline={timeline} expanded={props.expanded} onToggle={props.onToggleRun} previewLoader={props.previewLoader} />
     {(answer || artifacts.length > 0) && <section className="run-result" aria-label="最终结果">
       <div className="run-result-heading"><Sparkles size={14} /><strong>最终结果</strong><span>{answer ? answerTimestamp : '图表输出'}</span></div>
-      {answer && <Message item={{ id: `${timeline.summary.runId}:assistant`, kind: 'assistant', text: answer, timestamp: answerTimestamp }} expanded={props.expandedMessage === `${timeline.summary.runId}:assistant`} onToggle={props.onToggleMessage} />}
-      {artifacts.length > 0 && <div className="run-result-artifacts">{artifacts.map((artifact, index) => <GeneratedChartView key={`${timeline.summary.runId}-artifact-${artifact.artifactId || index}`} artifact={artifact} />)}</div>}
+      {answer && <Message item={{ id: `${timeline.summary.runId}:assistant`, kind: 'assistant', text: answer, timestamp: answerTimestamp }} expanded={props.expandedMessage === `${timeline.summary.runId}:assistant`} onToggle={props.onToggleMessage} previewLoader={props.previewLoader} />}
+      {artifacts.length > 0 && <div className="run-result-artifacts">{artifacts.map((artifact, index) => <GeneratedChartView key={`${timeline.summary.runId}-artifact-${artifact.artifactId || index}`} artifact={artifact} loader={props.previewLoader} />)}</div>}
     </section>}
   </section>
 }
 
-function ConversationPanel(props: { data: SessionData | null; timelines: RunTimeline[]; pendingUser: ConversationItem | null; runState: RunState; selectedAttachmentIds: string[]; onSubmit: (text: string, attachmentIds: string[]) => Promise<boolean>; loading: boolean; loadingSession: boolean; error: string | null; onToggleRun: (runId: string, status: RunSummary['status']) => void; expandedRuns: Set<string> }) {
+function ConversationPanel(props: { data: SessionData | null; timelines: RunTimeline[]; pendingUser: ConversationItem | null; runState: RunState; selectedAttachmentIds: string[]; onSubmit: (text: string, attachmentIds: string[]) => Promise<boolean>; loading: boolean; loadingSession: boolean; error: string | null; onToggleRun: (runId: string, status: RunSummary['status']) => void; expandedRuns: Set<string>; previewLoader?: PreviewResourceLoader | null }) {
   const [text, setText] = useState('')
   const [expanded, setExpanded] = useState<string | null>(null)
+  const previewLoader = props.previewLoader || null
   const messages = [...(props.data?.messages ?? []), ...(props.pendingUser ? [props.pendingUser] : [])]
   const linkedMessageIds = new Set<string>()
   const send = async () => {
@@ -357,23 +378,25 @@ function ConversationPanel(props: { data: SessionData | null; timelines: RunTime
   })
   const orphanMessages = messages.filter((item) => !linkedMessageIds.has(item.id))
   const toggleMessage = (id: string) => setExpanded((current) => current === id ? null : id)
-  return <main className="conversation panel"><header className="conversation-header"><div className="conversation-title"><span className="eyebrow">当前会话</span><h1>{props.data?.session.name ?? (props.loadingSession ? '正在加载会话' : '暂无活动会话')}</h1>{props.data && <span className="conversation-meta">{props.data.session.runCount} 次运行 · 执行记录保存在本机</span>}</div><span className={'run-chip ' + props.runState}><span className="status-dot" />{runStateLabel(props.runState)} · {props.data?.session.runCount ?? 0} 次运行</span></header><div className="message-scroll">{props.loadingSession ? <div className="loading-state"><span className="spinner" />正在加载会话...</div> : props.error && !props.data && messages.length === 0 ? <div className="error-state"><div className="empty-icon"><MessageSquare size={22} /></div><h2>无法连接本地服务</h2><p>{props.error}</p></div> : !props.data && messages.length === 0 ? <div className="empty-conversation"><div className="empty-icon"><MessageSquare size={22} /></div><h2>创建第一个会话</h2><p>请从左侧新建会话，开始使用 Figura。</p></div> : messages.length === 0 && props.timelines.length === 0 ? <div className="empty-conversation"><div className="empty-icon"><MessageSquare size={22} /></div><h2>开始新的分析</h2><p>提出问题或添加图片，开始使用 Figura。</p></div> : <>{runBlocks.map(({ timeline, user, assistant }) => <RunBlock key={timeline.summary.runId} timeline={timeline} user={user} assistant={assistant} expanded={props.expandedRuns.has(timeline.summary.runId) || timeline.summary.status === 'running'} onToggleRun={() => props.onToggleRun(timeline.summary.runId, timeline.summary.status)} expandedMessage={expanded} onToggleMessage={toggleMessage} />)}{orphanMessages.map((item) => <Message key={item.id} item={item} expanded={expanded === item.id} onToggle={toggleMessage} />)}</>}{props.loading && <div className="typing"><span /><span /><span /> Figura Agent 正在思考</div>}{props.error && <div className="error-banner" role="alert">{props.error}</div>}</div><div className="composer"><div className="composer-label"><Sparkles size={13} /><span>向 Figura Agent 提问</span></div><textarea value={text} onChange={(event) => setText(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void send() } }} placeholder="例如：比较这张图中各系列的变化趋势..." rows={1} /><div className="composer-actions"><span className="composer-hint">Enter 发送 · Shift + Enter 换行</span><button className="send-button" onClick={() => void send()} disabled={!text.trim() || props.loading || props.loadingSession} title="发送消息" aria-label="发送消息"><Send size={16} /></button></div></div></main>
+  return <main className="conversation panel"><header className="conversation-header"><div className="conversation-title"><span className="eyebrow">当前会话</span><h1>{props.data?.session.name ?? (props.loadingSession ? '正在加载会话' : '暂无活动会话')}</h1>{props.data && <span className="conversation-meta">{props.data.session.runCount} 次运行 · 执行记录保存在本机</span>}</div><span className={'run-chip ' + props.runState}><span className="status-dot" />{runStateLabel(props.runState)} · {props.data?.session.runCount ?? 0} 次运行</span></header><div className="message-scroll">{props.loadingSession ? <div className="loading-state"><span className="spinner" />正在加载会话...</div> : props.error && !props.data && messages.length === 0 ? <div className="error-state"><div className="empty-icon"><MessageSquare size={22} /></div><h2>无法连接本地服务</h2><p>{props.error}</p></div> : !props.data && messages.length === 0 ? <div className="empty-conversation"><div className="empty-icon"><MessageSquare size={22} /></div><h2>创建第一个会话</h2><p>请从左侧新建会话，开始使用 Figura。</p></div> : messages.length === 0 && props.timelines.length === 0 ? <div className="empty-conversation"><div className="empty-icon"><MessageSquare size={22} /></div><p>提出问题或添加图片，开始使用 Figura。</p></div> : <>{runBlocks.map(({ timeline, user, assistant }) => <RunBlock key={timeline.summary.runId} timeline={timeline} user={user} assistant={assistant} expanded={props.expandedRuns.has(timeline.summary.runId) || timeline.summary.status === 'running'} onToggleRun={() => props.onToggleRun(timeline.summary.runId, timeline.summary.status)} expandedMessage={expanded} onToggleMessage={toggleMessage} previewLoader={previewLoader} />)}{orphanMessages.map((item) => <Message key={item.id} item={item} expanded={expanded === item.id} onToggle={toggleMessage} previewLoader={previewLoader} />)}</>}{props.loading && <div className="typing"><span /><span /><span /> Figura Agent 正在思考</div>}{props.error && <div className="error-banner" role="alert">{props.error}</div>}</div><div className="composer"><div className="composer-label"><Sparkles size={13} /><span>向 Figura Agent 提问</span></div><textarea value={text} onChange={(event) => setText(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void send() } }} placeholder="例如：比较这张图中各系列的变化趋势..." rows={1} /><div className="composer-actions"><span className="composer-hint">Enter 发送 · Shift + Enter 换行</span><button className="send-button" onClick={() => void send()} disabled={!text.trim() || props.loading || props.loadingSession} title="发送消息" aria-label="发送消息"><Send size={16} /> </button></div></div></main>
 }
 
-function AttachmentPreview({ attachment }: { attachment: Attachment }) {
-  const [failed, setFailed] = useState(false)
-  useEffect(() => setFailed(false), [attachment.previewUrl])
-  return attachment.previewUrl && !failed ? <img src={attachment.previewUrl} alt={attachment.filename} onError={() => setFailed(true)} /> : <div className="attachment-placeholder"><FileImage size={24} /><span>{attachment.status === 'unavailable' || failed ? '源文件不可用' : '暂无预览'}</span></div>
+function AttachmentPreview({ attachment, loader }: { attachment: Attachment; loader: PreviewResourceLoader | null }) {
+  const preview = usePreviewResource(loader, attachment.previewResource, attachment.previewUrl)
+  if (preview.status === 'loading') return <div className="attachment-placeholder preview-placeholder loading-preview"><LoaderCircle className="spin-icon" size={18} /><span>正在加载预览</span></div>
+  if (preview.status === 'available' && preview.url) return <img src={preview.url} alt={attachment.filename} />
+  return <div className="attachment-placeholder preview-placeholder"><FileImage size={24} /><span>{attachment.status === 'unavailable' || preview.status === 'invalid' ? '源文件不可用' : '暂无预览'}</span>{preview.error?.retryable && <button type="button" className="preview-retry" onClick={preview.retry}>重试</button>}</div>
 }
 
-function AttachmentPanel(props: { attachments: Attachment[]; pending: PendingAttachment[]; selectedIds: string[]; error: string | null; onAdd: (files: File[]) => void; onToggle: (id: string) => void; onRemovePending: (key: string) => void; onRetryPending: (item: PendingAttachment) => void; onRemove: (attachment: Attachment) => void }) {
+function AttachmentPanel(props: { attachments: Attachment[]; pending: PendingAttachment[]; selectedIds: string[]; error: string | null; onAdd: (files: File[]) => void; onToggle: (id: string) => void; onRemovePending: (key: string) => void; onRetryPending: (item: PendingAttachment) => void; onRemove: (attachment: Attachment) => void; previewLoader?: PreviewResourceLoader | null }) {
   const inputRef = useRef<HTMLInputElement>(null)
-  return <aside className="right-panel panel"><div className="panel-heading"><div><span className="eyebrow">会话数据</span><h2>附件</h2></div><button className="attachment-add" onClick={() => inputRef.current?.click()} title="添加图片"><Plus size={14} />添加图片</button><input ref={inputRef} className="visually-hidden" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple onChange={(event) => { props.onAdd(Array.from(event.currentTarget.files ?? [])); event.currentTarget.value = '' }} /></div>{props.error && <div className="attachment-error" role="alert">{props.error}</div>}{props.pending.length === 0 && props.attachments.length === 0 ? <div className="empty-attachments"><Paperclip size={19} /><span>暂无附件</span><small>选择图片后会显示在这里。</small></div> : <div className="attachment-list">{props.pending.map((item) => <div className="attachment-card pending-card" key={item.key}><img src={item.previewUrl} alt={item.file.name} /><div className="attachment-info"><strong>{item.file.name}</strong><span>{mediaTypeForFile(item.file).replace('image/', '').toUpperCase()} · {formatBytes(item.file.size)}</span><div className={'attachment-status ' + (item.status === 'error' ? 'error' : '')}>{item.status === 'uploading' ? <><LoaderCircle className="spin-icon" size={12} />正在上传</> : <><X size={12} />{item.error || '上传失败'}</>}</div><div className="attachment-actions">{item.status === 'error' && <button className="small-action" onClick={() => props.onRetryPending(item)} title="重新上传"><RefreshCw size={12} />重试</button>}<button className="small-action" onClick={() => props.onRemovePending(item.key)} title="移除待处理附件"><X size={12} />移除</button></div></div></div>)}{props.attachments.map((attachment) => { const selectable = attachment.status !== 'unavailable'; const selected = props.selectedIds.includes(attachment.id); return <div className={'attachment-card ' + (selected ? 'selected' : '')} key={attachment.id}><AttachmentPreview attachment={attachment} /><div className="attachment-info"><strong>{attachment.filename}</strong><span>{attachment.mediaType.replace('image/', '').toUpperCase()} · {formatBytes(attachment.byteCount)}</span><div className={'attachment-status ' + (attachment.status === 'unavailable' ? 'error' : '')}><span className="status-dot" />{statusLabel(attachment.status)}{attachment.previewUrl && <em>可预览</em>}</div>{selectable && <label className="attachment-select"><input type="checkbox" checked={selected} onChange={() => props.onToggle(attachment.id)} />附加到下一条消息{selected && <Check size={12} />}</label>}<div className="attachment-actions"><button className="small-action danger-action" onClick={() => props.onRemove(attachment)} title="删除附件"><Trash2 size={12} />删除</button></div></div></div> })}</div>}<div className="details-divider" /><div className="panel-heading compact"><h2>执行详情</h2><span className="detail-count">{props.attachments.length ? `${props.attachments.length} 个附件` : '—'}</span></div><p className="details-note">工具活动和视觉观察会在后续运行中显示。</p></aside>
+  const previewLoader = props.previewLoader || null
+  return <aside className="right-panel panel"><div className="panel-heading"><div><span className="eyebrow">会话数据</span><h2>附件</h2></div><button className="attachment-add" onClick={() => inputRef.current?.click()} title="添加图片"><Plus size={14} />添加图片</button><input ref={inputRef} className="visually-hidden" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple onChange={(event) => { props.onAdd(Array.from(event.currentTarget.files ?? [])); event.currentTarget.value = '' }} /></div>{props.error && <div className="attachment-error" role="alert">{props.error}</div>}{props.pending.length === 0 && props.attachments.length === 0 ? <div className="empty-attachments"><Paperclip size={19} /><span>暂无附件</span><small>选择图片后会显示在这里。</small></div> : <div className="attachment-list">{props.pending.map((item) => <div className="attachment-card pending-card" key={item.key}><img src={item.previewUrl} alt={item.file.name} /><div className="attachment-info"><strong>{item.file.name}</strong><span>{mediaTypeForFile(item.file).replace('image/', '').toUpperCase()} · {formatBytes(item.file.size)}</span><div className={'attachment-status ' + (item.status === 'error' ? 'error' : '')}>{item.status === 'uploading' ? <><LoaderCircle className="spin-icon" size={12} />正在上传</> : <><X size={12} />{item.error || '上传失败'}</>}</div><div className="attachment-actions">{item.status === 'error' && <button className="small-action" onClick={() => props.onRetryPending(item)} title="重新上传"><RefreshCw size={12} />重试</button>}<button className="small-action" onClick={() => props.onRemovePending(item.key)} title="移除待处理附件"><X size={12} />移除</button></div></div></div>)}{props.attachments.map((attachment) => { const selectable = attachment.status !== 'unavailable'; const selected = props.selectedIds.includes(attachment.id); return <div className={'attachment-card ' + (selected ? 'selected' : '')} key={attachment.id}><AttachmentPreview attachment={attachment} loader={previewLoader} /><div className="attachment-info"><strong>{attachment.filename}</strong><span>{attachment.mediaType.replace('image/', '').toUpperCase()} · {formatBytes(attachment.byteCount)}</span><div className={'attachment-status ' + (attachment.status === 'unavailable' ? 'error' : '')}><span className="status-dot" />{statusLabel(attachment.status)}{(attachment.previewUrl || attachment.previewResource) && <em>可预览</em>}</div>{selectable && <label className="attachment-select"><input type="checkbox" checked={selected} onChange={() => props.onToggle(attachment.id)} />附加到下一条消息{selected && <Check size={12} />}</label>}<div className="attachment-actions"><button className="small-action danger-action" onClick={() => props.onRemove(attachment)} title="删除附件"><Trash2 size={12} />删除</button></div></div></div> })}</div>}<div className="details-divider" /><div className="panel-heading compact"><h2>执行详情</h2><span className="detail-count">{props.attachments.length ? `${props.attachments.length} 个附件` : '—'}</span></div><p className="details-note">工具活动和视觉观察会在后续运行中显示。</p></aside>
 }
 
 export default function App() {
   const mode = import.meta.env.VITE_CHARTAGENT_MODE === 'gateway' ? 'gateway' : 'mock'
-  const client: ChartAgentClient = mode === 'gateway' ? gatewayClient : mockClient
+  const client: ChartAgentClient = useMemo(() => mode === 'gateway' ? gatewayClient : mockClient, [mode])
   const [runtimeStatus, setRuntimeStatus] = useState<GatewayRuntimeStatus | null>(null)
   const [gatewayHealth, setGatewayHealth] = useState<GatewayHealth | null>(null)
   const [sessions, setSessions] = useState<Session[]>([])
@@ -393,18 +416,31 @@ export default function App() {
   const [newSessionName, setNewSessionName] = useState('')
   const [confirmAction, setConfirmAction] = useState<ConfirmAction | null>(null)
   const [deleting, setDeleting] = useState(false)
+  const [gatewayUrl, setGatewayUrl] = useState(() => currentGatewayBaseUrl())
+  const [gatewayReady, setGatewayReady] = useState(mode !== 'gateway')
   const activeIdRef = useRef(activeId)
   const localPreviews = useRef(new Map<string, string>())
   const subscriptionRef = useRef<RunSubscription | null>(null)
+  const previewLoader = useMemo(
+    () => mode === 'gateway' ? createGatewayPreviewLoader(gatewayUrl) : null,
+    [mode, gatewayUrl],
+  )
 
   useEffect(() => { activeIdRef.current = activeId }, [activeId])
   useEffect(() => () => { subscriptionRef.current?.close(); localPreviews.current.forEach((url) => URL.revokeObjectURL(url)); localPreviews.current.clear() }, [])
   useEffect(() => {
     if (mode !== 'gateway') return
     let current = true
-    void getGatewayRuntimeStatus().then((status) => { if (current) setRuntimeStatus(status) })
-    void gatewayClient.getHealth().then((health) => {
+    void getGatewayRuntimeStatus().then((status) => {
+      if (!current) return null
+      const effectiveUrl = configureGatewayBaseUrl(status?.url || currentGatewayBaseUrl())
+      setGatewayUrl(effectiveUrl)
+      setRuntimeStatus(status)
+      setGatewayReady(true)
+      return gatewayClient.getHealth()
+    }).then((health) => {
       if (!current) return
+      if (!health) return
       setGatewayHealth(health)
       if (health.agent?.status === 'unavailable') {
         setError(toUserMessage(new GatewayClientError('agent_unavailable', 'Agent service is unavailable', 503, health.agent.reason)))
@@ -415,7 +451,11 @@ export default function App() {
 
   const withLocalPreviews = (value: SessionData): SessionData => ({ ...value, attachments: value.attachments.map((attachment) => ({ ...attachment, previewUrl: attachment.previewUrl || localPreviews.current.get(attachment.id) || '' })) })
 
-  useEffect(() => { setLoadingSession(true); client.listSessions().then((items) => { setSessions(items); setActiveId(items[0]?.id ?? '') }).catch((reason) => setError(toUserMessage(reason))).finally(() => setLoadingSession(false)) }, [client])
+  useEffect(() => {
+    if (!gatewayReady) return
+    setLoadingSession(true)
+    client.listSessions().then((items) => { setSessions(items); setActiveId(items[0]?.id ?? '') }).catch((reason) => setError(toUserMessage(reason))).finally(() => setLoadingSession(false))
+  }, [client, gatewayReady])
   useEffect(() => {
     if (!activeId) { setData(null); setTimelines([]); return }
     setData(null)
@@ -474,7 +514,7 @@ export default function App() {
         }
       }
     }).catch((reason) => setError(toUserMessage(reason))).finally(() => setLoadingSession(false))
-  }, [activeId, client])
+  }, [activeId, client, gatewayReady])
 
   const clearPending = () => { pending.forEach((item) => URL.revokeObjectURL(item.previewUrl)); setPending([]) }
   const selectSession = (id: string) => { subscriptionRef.current?.close(); subscriptionRef.current = null; clearPending(); setSelectedIds([]); setPendingUser(null); setTimelines([]); setExpandedRuns(new Set()); setRunState('idle'); setAttachmentError(null); setError(null); setActiveId(id) }
@@ -656,7 +696,7 @@ export default function App() {
   }
 
   const toggleRun = (runId: string, status: RunSummary['status']) => setExpandedRuns((current) => { const next = new Set(current); if (status === 'running') { next.has(runId) ? next.delete(runId) : next.add(runId) } else { next.has(runId) ? next.delete(runId) : next.add(runId) } return next })
-  return <><div className="app-shell"><SessionSidebar sessions={sessions} activeId={activeId} onSelect={selectSession} onCreate={create} onDelete={requestDeleteSession} mode={mode} runtimeStatus={runtimeStatus} health={gatewayHealth} /><ConversationPanel data={data} timelines={timelines} pendingUser={pendingUser} runState={runState} selectedAttachmentIds={selectedIds} onSubmit={submit} loading={loading} loadingSession={loadingSession} error={error} onToggleRun={toggleRun} expandedRuns={expandedRuns} /><AttachmentPanel attachments={data?.attachments ?? []} pending={pending} selectedIds={selectedIds} error={attachmentError} onAdd={addFiles} onToggle={toggleAttachment} onRemovePending={removePending} onRetryPending={(item) => void uploadPending(item)} onRemove={requestDeleteAttachment} /></div>{creatingSession && <div className="dialog-backdrop"><form className="session-dialog" onSubmit={(event) => void confirmCreate(event)}><h2>新建会话</h2><label htmlFor="session-name">会话名称</label><input id="session-name" value={newSessionName} onChange={(event) => setNewSessionName(event.target.value)} placeholder="例如：季度销售分析" autoFocus /><div className="dialog-actions"><button type="button" className="dialog-secondary" onClick={() => setCreatingSession(false)}>取消</button><button type="submit" className="dialog-primary" disabled={!newSessionName.trim()}>创建会话</button></div></form></div>}{confirmAction && <div className="dialog-backdrop"><div className="session-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-dialog-title"><h2 id="delete-dialog-title">{confirmAction.kind === 'session' ? '删除会话？' : '删除附件？'}</h2><p className="dialog-message">{confirmAction.kind === 'session' ? `将永久删除“${confirmAction.session.name}”及其运行记录和附件。` : `将删除“${confirmAction.attachment.filename}”及其源文件。`}</p><div className="dialog-actions"><button type="button" className="dialog-secondary" onClick={() => setConfirmAction(null)} disabled={deleting}>取消</button><button type="button" className="dialog-danger" onClick={() => void confirmDelete()} disabled={deleting}><Trash2 size={13} />{deleting ? '正在删除' : '确认删除'}</button></div></div></div>}</>
+  return <><div className="app-shell"><SessionSidebar sessions={sessions} activeId={activeId} onSelect={selectSession} onCreate={create} onDelete={requestDeleteSession} mode={mode} runtimeStatus={runtimeStatus} health={gatewayHealth} /><ConversationPanel data={data} timelines={timelines} pendingUser={pendingUser} runState={runState} selectedAttachmentIds={selectedIds} onSubmit={submit} loading={loading} loadingSession={loadingSession} error={error} onToggleRun={toggleRun} expandedRuns={expandedRuns} previewLoader={previewLoader} /><AttachmentPanel attachments={data?.attachments ?? []} pending={pending} selectedIds={selectedIds} error={attachmentError} onAdd={addFiles} onToggle={toggleAttachment} onRemovePending={removePending} onRetryPending={(item) => void uploadPending(item)} onRemove={requestDeleteAttachment} previewLoader={previewLoader} /></div>{creatingSession && <div className="dialog-backdrop"><form className="session-dialog" onSubmit={(event) => void confirmCreate(event)}><h2>新建会话</h2><label htmlFor="session-name">会话名称</label><input id="session-name" value={newSessionName} onChange={(event) => setNewSessionName(event.target.value)} placeholder="例如：季度销售分析" autoFocus /><div className="dialog-actions"><button type="button" className="dialog-secondary" onClick={() => setCreatingSession(false)}>取消</button><button type="submit" className="dialog-primary" disabled={!newSessionName.trim()}>创建会话</button></div></form></div>}{confirmAction && <div className="dialog-backdrop"><div className="session-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-dialog-title"><h2 id="delete-dialog-title">{confirmAction.kind === 'session' ? '删除会话？' : '删除附件？'}</h2><p className="dialog-message">{confirmAction.kind === 'session' ? `将永久删除“${confirmAction.session.name}”及其运行记录和附件。` : `将删除“${confirmAction.attachment.filename}”及其源文件。`}</p><div className="dialog-actions"><button type="button" className="dialog-secondary" onClick={() => setConfirmAction(null)} disabled={deleting}>取消</button><button type="button" className="dialog-danger" onClick={() => void confirmDelete()} disabled={deleting}><Trash2 size={13} />{deleting ? '正在删除' : '确认删除'}</button></div></div></div>}</>
 }
 
 function toUserMessage(error: unknown): string {
