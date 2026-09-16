@@ -203,6 +203,55 @@ def numeric_ticks(
     return unique(x_ticks), unique(y_ticks)
 
 
+def ordered_text_anchors(
+    snippets: list[dict[str, Any]],
+    plot_area: Sequence[int],
+    *,
+    region: Sequence[int] | None = None,
+    axis: str = "x",
+) -> list[dict[str, Any]]:
+    """Keep ordered X text anchors without pretending labels are numeric."""
+    x, y, width, height = map(float, plot_area)
+    if region is not None and len(region) >= 4:
+        region_x, region_y, region_width, region_height = map(float, region[:4])
+    else:
+        if axis == "y":
+            region_x, region_y, region_width, region_height = x - max(60.0, width * 0.15), y, max(60.0, width * 0.15), height
+        else:
+            region_x, region_y, region_width, region_height = x, y + height - 8.0, width, max(60.0, min(180.0, height * 0.15))
+    candidates: list[dict[str, Any]] = []
+    for snippet in snippets:
+        text = str(snippet.get("text", "")).strip()
+        bbox = snippet.get("bbox")
+        if not text or not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+            continue
+        left, top, box_width, box_height = map(float, bbox)
+        center_x = left + box_width / 2.0
+        center_y = top + box_height / 2.0
+        if not (region_x - 8 <= center_x <= region_x + region_width + 8 and region_y - 8 <= center_y <= region_y + region_height + 8):
+            continue
+        candidates.append(
+            {
+                "text": text,
+                "bbox_px": [round(left, 3), round(top, 3), round(box_width, 3), round(box_height, 3)],
+                "point_px": [round(center_x, 3), round(center_y, 3)],
+                "confidence": max(0.0, min(1.0, float(snippet.get("confidence", 0.0)))),
+                "numeric_value": numeric_text(text),
+            }
+        )
+    coordinate_index = 1 if axis == "y" else 0
+    candidates.sort(key=lambda item: (float(item["point_px"][coordinate_index]), float(item["point_px"][1 - coordinate_index])))
+    result: list[dict[str, Any]] = []
+    for candidate in candidates:
+        if result and abs(float(candidate["point_px"][coordinate_index]) - float(result[-1]["point_px"][coordinate_index])) <= max(8.0, width * 0.006):
+            if float(candidate["confidence"]) > float(result[-1]["confidence"]):
+                result[-1] = candidate
+            continue
+        candidate["order"] = len(result) + 1
+        result.append(candidate)
+    return result
+
+
 def fit_ticks(ticks: list[dict[str, Any]]) -> Callable[[float], float] | None:
     """Fit the historical one-dimensional pixel-to-value transform."""
     if len(ticks) < 2:
@@ -283,9 +332,10 @@ def evidence_envelope(
     legend: list[dict[str, Any]] | None = None,
     series: list[dict[str, Any]] | None = None,
     confidence: dict[str, float] | None = None,
+    layout_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the historical common Cartesian-compatible fields."""
-    return {
+    result = {
         "image_size": image_size(rgb),
         "plot_area": {"bbox": list(map(int, plot_area))} if plot_area else None,
         "axes": axes
@@ -297,6 +347,9 @@ def evidence_envelope(
         "series": series or [],
         "confidence": confidence or confidence_map(overall=0.0),
     }
+    if layout_context is not None:
+        result["layout_context"] = layout_context
+    return result
 
 
 def build_common_evidence(
@@ -308,9 +361,10 @@ def build_common_evidence(
     series: list[dict[str, Any]] | None = None,
     confidence: dict[str, float] | None = None,
     warnings: list[str] | None = None,
+    layout_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Compose the neutral evidence envelope used by all chart sensors."""
-    return {
+    evidence = {
         "image_size": image_size(rgb),
         "coordinate_system": coordinate_system,
         "frame": frame,
@@ -319,6 +373,9 @@ def build_common_evidence(
         "confidence": confidence or confidence_map(overall=0.0),
         "warnings": list(warnings or []),
     }
+    if layout_context is not None:
+        evidence["layout_context"] = layout_context
+    return evidence
 
 
 __all__ = [
@@ -337,6 +394,7 @@ __all__ = [
     "image_size",
     "numeric_text",
     "numeric_ticks",
+    "ordered_text_anchors",
     "rgb_to_hex",
     "series_entry",
     "stable_evidence_id",

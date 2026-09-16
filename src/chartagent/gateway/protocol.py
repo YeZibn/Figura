@@ -169,10 +169,13 @@ class RunEvent:
         payload = sanitize_payload(self.payload or {})
         encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
         if len(encoded) > MAX_EVENT_PAYLOAD:
-            payload = {
-                "truncated": True,
-                "preview": truncate_text(encoded, MAX_EVENT_PAYLOAD // 2),
-            }
+            if self.kind == "tool_result":
+                payload = _truncate_tool_result_payload(payload)
+            else:
+                payload = {
+                    "truncated": True,
+                    "preview": truncate_text(encoded, MAX_EVENT_PAYLOAD // 2),
+                }
         object.__setattr__(self, "payload", payload)
         object.__setattr__(self, "timestamp", self.timestamp or utc_timestamp())
 
@@ -187,6 +190,50 @@ class RunEvent:
 
     def to_json(self) -> str:
         return json.dumps(self.to_dict(), ensure_ascii=False, separators=(",", ":"))
+
+
+def _truncate_tool_result_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Bound only the diagnostic body while retaining call correlation fields."""
+    identity_fields = (
+        "tool_name",
+        "tool_display_name",
+        "tool_label",
+        "call_id",
+        "status",
+        "tool_status",
+        "turn",
+    )
+    identity = {
+        field: payload[field] if isinstance(payload[field], (bool, int, float)) else truncate_text(payload[field], 160)
+        for field in identity_fields
+        if field in payload
+    }
+    optional = {
+        field: payload[field]
+        for field in ("image_count", "observations", "artifacts")
+        if field in payload
+    }
+    body = payload.get("result")
+    encoded_body = json.dumps(body, ensure_ascii=False, separators=(",", ":"))
+    base = dict(identity)
+    base.update(optional)
+    base["result"] = {"truncated": True, "preview": ""}
+    available = max(256, MAX_EVENT_PAYLOAD - len(json.dumps(base, ensure_ascii=False)) - 32)
+    base["result"] = {
+        "truncated": True,
+        "preview": truncate_text(encoded_body, available),
+    }
+    encoded = json.dumps(base, ensure_ascii=False, separators=(",", ":"))
+    if len(encoded) <= MAX_EVENT_PAYLOAD:
+        return base
+    # Optional visual metadata is useful but less important than identity.
+    base = dict(identity)
+    preview_budget = max(128, MAX_EVENT_PAYLOAD - len(json.dumps(base, ensure_ascii=False)) - 64)
+    base["result"] = {
+        "truncated": True,
+        "preview": truncate_text(encoded_body, preview_budget),
+    }
+    return base
 
 
 def _validate_text(value: object, *, field: str, limit: int) -> str:

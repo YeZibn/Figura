@@ -106,6 +106,54 @@ def test_multi_step_tool_loop(tmp_path):
     assert client.calls[-1]["n_messages"] == 3
 
 
+def test_layout_preflight_context_is_cached_and_injected_into_sensor():
+    context = {
+        "context_id": "layout_test",
+        "validation": {"status": "accepted", "accepted_for_measurement": True, "confidence": 0.9},
+        "measurement_frame": {"bbox_px": [10, 10, 80, 60]},
+    }
+    seen: list[dict[str, Any] | None] = []
+    registry = ToolRegistry()
+    registry.register(
+        Tool(
+            "inspect_chart_layout",
+            "inspect layout",
+            {"type": "object", "properties": {"attachment_id": {"type": "string"}}, "required": ["attachment_id"]},
+            lambda attachment_id: ToolResult({"layout_context": context}),
+        )
+    )
+
+    def sensor(attachment_id: str, layout_context: dict[str, Any] | None = None):
+        seen.append(layout_context)
+        return {"attachment_id": attachment_id, "has_layout": layout_context is not None}
+
+    registry.register(
+        Tool(
+            "extract_line_series",
+            "extract line",
+            {
+                "type": "object",
+                "properties": {
+                    "attachment_id": {"type": "string"},
+                    "layout_context": {"type": "object", "additionalProperties": True},
+                },
+                "required": ["attachment_id"],
+            },
+            sensor,
+        )
+    )
+    client = ScriptedClient([
+        _call("inspect_chart_layout", '{"attachment_id":"att_chart"}', "layout-1"),
+        _call("extract_line_series", '{"attachment_id":"att_chart"}', "line-1"),
+        _final("done"),
+    ])
+
+    assert Agent(client, registry).run("analyze att_chart") == "done"
+    assert seen[0]["context_id"] == context["context_id"]
+    assert seen[0]["measurement_frame"] == context["measurement_frame"]
+    assert seen[0]["source_attachment_id"] == "att_chart"
+
+
 def test_tool_error_fed_back_as_observation():
     script = [
         _call("read_file", '{"path": "/definitely/missing/xyz"}'),

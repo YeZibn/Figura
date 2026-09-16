@@ -19,6 +19,14 @@ order of OCR, chart sensors, visual inspection, ChartSpec construction or
 validation, and correction actions. Do not call unrelated tools merely to make
 the process look complete."""
 
+_LAYOUT_POLICY = """When measuring a chart, load the authorized image first and
+then call inspect_chart_layout before a bar, line, scatter, or pie sensor when
+the layout is visually ambiguous, rotated, horizontal, or contains dense
+annotations. Give it only normalized 0..1 regions and axis points if you can
+identify them; otherwise let it return its deterministic fallback. Its context
+is advisory evidence: geometry sensors validate it, and you must not turn it
+into chart values, dates, or calibration without independent evidence."""
+
 _GENERATION_POLICY = """For chart generation, construct or validate a ChartSpec
 before rendering when the request requires a chart. A render result is a
 candidate image, not automatically a verified or published artifact. A
@@ -44,6 +52,7 @@ AGENT_SYSTEM_PROMPT = "\n\n".join(
         _ROLE_AND_GOAL,
         _EVIDENCE_POLICY,
         _TOOL_POLICY,
+        _LAYOUT_POLICY,
         _GENERATION_POLICY,
         _REVIEW_POLICY,
         _ANSWER_POLICY,

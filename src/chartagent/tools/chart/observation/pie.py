@@ -22,6 +22,7 @@ from .foundation import (
 from .coordinates import polar_frame
 from .ocr import extract_text
 from .overlays import render_pie_overlay
+from .layout import context_for_evidence, context_frame
 
 _ANGLE_SAMPLES = 720
 _RADII = (0.58, 0.70, 0.82, 0.91, 0.97)
@@ -92,9 +93,18 @@ def _nearest_palette(rgb: np.ndarray, palette: list[np.ndarray]) -> tuple[np.nda
     return labels, nearest
 
 
-def _pie_palette(rgb: np.ndarray, *, max_colors: int = 12) -> list[np.ndarray]:
+def _pie_palette(
+    rgb: np.ndarray,
+    *,
+    region: Sequence[int] | None = None,
+    max_colors: int = 12,
+) -> list[np.ndarray]:
     """Find pie colors without dropping small but real sectors."""
-    flat = rgb.reshape(-1, 3).astype(np.int16)
+    if region is not None and len(region) >= 4:
+        left, top, width, height = map(int, region[:4])
+        flat = rgb[max(0, top) : min(rgb.shape[0], top + height), max(0, left) : min(rgb.shape[1], left + width)].reshape(-1, 3).astype(np.int16)
+    else:
+        flat = rgb.reshape(-1, 3).astype(np.int16)
     if not len(flat):
         return []
     spread = flat.max(axis=1) - flat.min(axis=1)
@@ -545,6 +555,7 @@ def _empty_result(
     image: Image.Image,
     warning: str,
     plot_region: dict[str, Any] | None = None,
+    layout_context: dict[str, Any] | None = None,
 ) -> ToolResult:
     safe_region = (
         {key: value for key, value in plot_region.items() if not key.startswith("_")}
@@ -561,6 +572,7 @@ def _empty_result(
             frame=polar_frame(safe_region, warnings=[warning]) if safe_region else None,
             confidence=confidence,
             warnings=[warning],
+            layout_context=context_for_evidence(layout_context),
         ),
         "orientation": "unknown",
         "transform": {"kind": "unresolved", "rotation_deg": None},
@@ -595,7 +607,10 @@ def _error(reason: str) -> dict[str, str]:
     return {"error": f"extract_pie_slices: {reason}"}
 
 
-def extract_pie_slices(image_path: str) -> ToolResult | dict:
+def extract_pie_slices(
+    image_path: str,
+    layout_context: dict[str, Any] | None = None,
+) -> ToolResult | dict:
     """Extract source-image sector evidence and gated pie ratios."""
     path = Path(image_path)
     if not path.is_file():
@@ -607,17 +622,36 @@ def extract_pie_slices(image_path: str) -> ToolResult | dict:
     except Exception as exc:  # noqa: BLE001 - tool boundary
         return _error(f"input is not a readable image ({type(exc).__name__})")
 
-    palette = _pie_palette(rgb)
+    layout = context_frame(layout_context) if isinstance(layout_context, dict) and layout_context.get("coordinate_system") == "polar_2d" else None
+    palette = _pie_palette(rgb, region=layout.get("bbox_px") if layout else None)
     plot_region = _circle_candidate(rgb, palette)
     if plot_region is None:
-        return _empty_result(chart_image, "no reliable pie region detected")
+        return _empty_result(chart_image, "no reliable pie region detected", layout_context=layout_context)
     if plot_region.get("status") != "supported" or plot_region.get("shape") != "circle":
         reason = "unsupported pie geometry detected"
         if plot_region.get("shape") == "donut_or_exploded":
             reason = "donut or exploded pie geometry is unsupported"
         elif plot_region.get("shape") == "elliptical_or_perspective":
             reason = "elliptical or perspective pie geometry is unsupported"
-        return _empty_result(chart_image, reason, plot_region)
+        return _empty_result(chart_image, reason, plot_region, layout_context)
+
+    polar_hint = layout_context.get("polar_region") if isinstance(layout_context, dict) else None
+    if isinstance(polar_hint, dict):
+        detected_center = np.asarray(_region_center(plot_region), dtype=float)
+        hinted_center = np.asarray(polar_hint.get("center_px", []), dtype=float)
+        detected_radius = float(_region_radius(plot_region))
+        hinted_radius = float(polar_hint.get("radius_px", 0.0) or 0.0)
+        if len(hinted_center) >= 2 and hinted_radius > 0:
+            center_error = float(np.linalg.norm(detected_center - hinted_center[:2]))
+            radius_error = abs(detected_radius - hinted_radius)
+            if center_error > max(12.0, detected_radius * 0.18) or radius_error > max(12.0, detected_radius * 0.18):
+                warnings = ["polar layout hint conflicts with detected circle geometry"]
+            else:
+                warnings = ["polar layout hint agrees with detected circle geometry"]
+        else:
+            warnings = ["polar layout region has no usable center/radius evidence"]
+    else:
+        warnings = []
 
     labels, coverage, support, radial_consistency = _sample_labels(rgb, plot_region, palette)
     labels = _fill_gaps(labels)
@@ -653,7 +687,12 @@ def extract_pie_slices(image_path: str) -> ToolResult | dict:
             }
         )
 
-    warnings: list[str] = []
+    if isinstance(layout_context, dict):
+        validation = layout_context.get("validation") if isinstance(layout_context.get("validation"), dict) else {}
+        if validation.get("status") == "rejected":
+            warnings.append("layout context rejected; using pie pixel evidence fallback")
+        elif validation.get("status") == "partial":
+            warnings.append("layout context partially validated; pie geometry remains partial")
     if coverage < _MIN_SECTOR_COVERAGE:
         warnings.append("sector color coverage is incomplete; semantic ratios are partial")
     if radial_consistency < 0.70:
@@ -725,6 +764,7 @@ def extract_pie_slices(image_path: str) -> ToolResult | dict:
         calibration=calibration_confidence,
         association=association_confidence,
     )
+    layout_evidence = context_for_evidence(layout_context)
     data = {
         "image_size": image_size(rgb),
         "evidence": build_common_evidence(
@@ -735,10 +775,12 @@ def extract_pie_slices(image_path: str) -> ToolResult | dict:
             series=[],
             confidence=confidence,
             warnings=warnings,
+            layout_context=layout_evidence,
         ),
         "orientation": "upright",
         "transform": {"kind": "circular_invariant", "rotation_deg": None},
         "plot_region": plot_region,
+        "layout_context": layout_evidence,
         "sectors": sectors,
         "legend": legend,
         "ocr": snippets,
@@ -782,7 +824,12 @@ EXTRACT_PIE_SLICES = Tool(
             "image_path": {
                 "type": "string",
                 "description": "Internal image path used only by the callable; authorized registrations replace this with attachment_id.",
-            }
+            },
+            "layout_context": {
+                "type": "object",
+                "description": "Optional validated chart layout context; model hints remain advisory.",
+                "additionalProperties": True,
+            },
         },
         "required": ["image_path"],
         "additionalProperties": False,

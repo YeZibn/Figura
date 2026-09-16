@@ -31,6 +31,7 @@ _PRESENTATIONS: dict[str, tuple[str, str | None, str]] = {
     "read_json_file": ("读取 JSON 文件", "read_json_file", "data"),
     "load_image": ("加载图片", "load_image", "attachment"),
     "extract_text": ("提取图中文字", "extract_text", "chart-observation"),
+    "inspect_chart_layout": ("检查图表布局", "inspect_chart_layout", "chart-observation"),
     "measure_bars": ("测量柱状图", "measure_bars", "chart-observation"),
     "extract_line_series": ("提取折线系列", "extract_line_series", "chart-observation"),
     "extract_pie_slices": ("提取饼图扇区", "extract_pie_slices", "chart-observation"),

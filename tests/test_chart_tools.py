@@ -2,6 +2,7 @@
 
 from io import BytesIO
 import json
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -21,6 +22,7 @@ from chartagent.tools.chart.observation.foundation import (
     associate_series_labels,
     build_common_evidence,
 )
+from chartagent.tools.chart.observation.layout import validate_layout_hint
 from chartagent.tools.chart.observation.line import extract_line_series
 from chartagent.tools.chart.observation.ocr import extract_text
 from chartagent.tools.chart.observation.pie import extract_pie_slices
@@ -102,6 +104,110 @@ def test_generic_series_association_consumes_text_evidence_without_ocr():
     assert associated[0]["label"] == "Revenue"
     assert associated[0]["association"]["source"] == "text_evidence"
     assert associated[0]["association"]["status"] == "candidate"
+
+
+def test_model_layout_context_is_normalized_and_validated():
+    rgb = np.full((100, 200, 3), 255, dtype=np.uint8)
+    rgb[84:87, 20:181] = [225, 65, 65]
+    context = validate_layout_hint(
+        rgb,
+        {
+            "coordinate_system": "cartesian_2d",
+            "orientation": "upright",
+            "confidence": 0.96,
+            "measurement_frame": {
+                "bbox_norm": [0.10, 0.10, 0.80, 0.76],
+                "confidence": 0.96,
+            },
+            "axes": {
+                "x": {"points_norm": [[0.10, 0.84], [0.90, 0.84]], "confidence": 0.9},
+                "y": {"points_norm": [[0.10, 0.84], [0.10, 0.10]], "confidence": 0.9},
+            },
+            "annotation_regions": {
+                "x_ticks": {"bbox_norm": [0.08, 0.86, 0.84, 0.12], "confidence": 0.8},
+            },
+        },
+        palette=[np.asarray([225, 65, 65])],
+    )
+    assert context["validation"]["status"] == "accepted"
+    assert context["validation"]["accepted_for_measurement"] is True
+    assert context["measurement_frame"]["bbox_px"] == [20, 10, 160, 76]
+    assert context["axes"]["x"]["points_px"][0] == [20.0, 84.0]
+    assert context["annotation_regions"]["x_ticks"]["bbox_px"] == [16, 86, 168, 12]
+
+
+def test_invalid_model_layout_context_is_rejected_without_fabricated_frame():
+    rgb = np.full((80, 120, 3), 255, dtype=np.uint8)
+    context = validate_layout_hint(
+        rgb,
+        {
+            "coordinate_system": "cartesian_2d",
+            "confidence": 0.9,
+            "measurement_frame": {"bbox_norm": [0.8, 0.8, 0.4, 0.4]},
+        },
+    )
+    assert context["validation"]["status"] == "rejected"
+    assert context["measurement_frame"] is None
+    assert context["validation"]["accepted_for_measurement"] is False
+
+
+def test_model_layout_aliases_are_normalized_to_shared_fields():
+    rgb = np.full((100, 200, 3), 255, dtype=np.uint8)
+    rgb[83:86, 20:181] = [225, 65, 65]
+    context = validate_layout_hint(
+        rgb,
+        {
+            "plot_area": [0.10, 0.10, 0.80, 0.76],
+            "x_axis": [0.10, 0.84, 0.80, 0.10],
+            "y_axis": [0.02, 0.10, 0.08, 0.74],
+            "title": [0.30, 0.01, 0.40, 0.05],
+            "legend": [0.30, 0.06, 0.40, 0.04],
+            "confidence": 0.9,
+        },
+        palette=[np.asarray([225, 65, 65])],
+        chart_type="line",
+    )
+    assert context["measurement_frame"]["bbox_norm"] == [0.1, 0.1, 0.8, 0.76]
+    assert context["axes"]["x"]["points_norm"] == [[0.1, 0.84], [0.9, 0.84]]
+    assert context["axes"]["y"]["points_norm"] == [[0.1, 0.1], [0.1, 0.84]]
+    assert context["annotation_regions"]["legend"]["bbox_norm"] == [0.3, 0.06, 0.4, 0.04]
+    assert context["validation"]["status"] == "accepted"
+
+
+def test_flat_model_axis_endpoints_are_normalized():
+    rgb = np.full((100, 200, 3), 255, dtype=np.uint8)
+    rgb[84:87, 20:181] = [225, 65, 65]
+    context = validate_layout_hint(
+        rgb,
+        {
+            "coordinate_system": "cartesian_2d",
+            "confidence": 0.96,
+            "measurement_frame": {"bbox_norm": [0.10, 0.10, 0.80, 0.76]},
+            "axes": {
+                "x": {"points_norm": [0.10, 0.84, 0.90, 0.84]},
+                "y": {"points_norm": [0.10, 0.84, 0.10, 0.10]},
+            },
+        },
+        palette=[np.asarray([225, 65, 65])],
+        chart_type="line",
+    )
+    assert context["axes"]["x"]["points_norm"] == [[0.1, 0.84], [0.9, 0.84]]
+    assert context["axes"]["y"]["points_norm"] == [[0.1, 0.84], [0.1, 0.1]]
+    assert context["validation"]["status"] == "accepted"
+
+
+def test_real_rotated_label_line_chart_uses_true_axes_and_anchor_sampling():
+    image_path = Path(__file__).parents[1] / "photo" / "股东人数与前复权股价折线图.png"
+    if not image_path.is_file():
+        pytest.skip("real chart attachment is not present")
+    result = extract_line_series(str(image_path))
+    assert isinstance(result, ToolResult)
+    data = result.data
+    assert data["orientation"] == "upright"
+    assert abs(data["plot_frame"]["y_axis"]["slope"]) < 0.02
+    assert data["x_anchors"]
+    assert all(point["source"] == "tick_sample" for series in data["series"] for point in series["points"])
+    assert not any("斜" in warning for warning in data["warnings"])
 
 
 def test_extract_text_contains_annotations(annotated_chart_path, monkeypatch):

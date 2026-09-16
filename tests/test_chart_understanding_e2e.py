@@ -35,6 +35,7 @@ class _UnderstandingClient:
         }
         assert tool_names == {
             "extract_text",
+            "inspect_chart_layout",
             "measure_bars",
             "extract_line_series",
             "extract_pie_slices",

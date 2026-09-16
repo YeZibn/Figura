@@ -120,20 +120,22 @@ def test_authorized_chart_tools_keep_identity_and_hide_local_paths():
     register_chart_tools(registry, attachments=attachments)
     source_by_name = {tool.name: tool for tool in CHART_TOOLS}
 
-    for name in (
-        "extract_text",
-        "measure_bars",
-        "extract_line_series",
-        "extract_pie_slices",
-        "extract_scatter_points",
-    ):
+    expected_fields = {
+        "extract_text": {"attachment_id"},
+        "inspect_chart_layout": {"attachment_id", "layout_hint", "chart_type"},
+        "measure_bars": {"attachment_id"},
+        "extract_line_series": {"attachment_id"},
+        "extract_pie_slices": {"attachment_id"},
+        "extract_scatter_points": {"attachment_id"},
+    }
+    for name, fields in expected_fields.items():
         public = registry.get(name)
         source = source_by_name[name]
         assert public is not None
         assert public.name == source.name
         assert public.description == source.description
         assert public.group == source.group == "chart-observation"
-        assert set(public.parameters["properties"]) == {"attachment_id"}
+        assert set(public.parameters["properties"]) == fields
         assert "image_path" not in json.dumps(public.parameters)
         assert "image_path" not in public.description
 

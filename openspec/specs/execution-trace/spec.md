@@ -77,6 +77,12 @@ intermediate evidence when the final answer is available, while allowing
 generated chart artifacts to be displayed as final Run results instead of
 duplicated as ordinary tool-step content.
 
+Each tool-result event SHALL keep its bounded `tool_name`, `call_id`, execution
+status, and turn/run correlation in the outer event envelope even when the
+structured result body is truncated. Truncation SHALL apply to the diagnostic
+result payload rather than replacing the identity needed for client
+correlation.
+
 #### Scenario: One canonical identity is used across a Run
 
 - **WHEN** the Gateway accepts a message and starts an Agent run
@@ -92,6 +98,17 @@ duplicated as ordinary tool-step content.
 - **THEN** the client can render one step with running, success, or error state
   and expandable arguments and result details
 - **AND** the step remains associated with its parent canonical Run
+
+#### Scenario: Oversized result preserves tool identity
+
+- **WHEN** a tool result contains a trace, polyline, OCR collection, or other
+  diagnostic payload larger than the event body limit
+- **THEN** the event retains its bounded tool name, call identifier, status,
+  turn, and run correlation
+- **AND** only the oversized result content is represented as truncated or
+  summarized data
+- **AND** clients do not create an unknown or orphan tool step solely because
+  the result body was truncated
 
 #### Scenario: Visual evidence remains attached to its tool context
 

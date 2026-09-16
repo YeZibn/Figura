@@ -14,11 +14,16 @@ def authorized_chart_tool(tool: Tool, attachments: AttachmentRegistry) -> Tool:
         item, error = attachments.validate(attachment_id)
         if error or item is None:
             return {"error": error or "attachment is not authorized"}
+        if tool.name == "inspect_chart_layout":
+            kwargs.setdefault("attachment_id", attachment_id)
         return original(image_path=item.canonical_path, **kwargs)
 
     schema = dict(tool.parameters)
     schema["properties"] = dict(schema.get("properties", {}))
     schema["properties"].pop("image_path", None)
+    # Layout context is an internal, run-scoped evidence injection. It is not
+    # exposed as a model argument on the attachment-authorized wrapper.
+    schema["properties"].pop("layout_context", None)
     schema["properties"]["attachment_id"] = {
         "type": "string",
         "description": "Opaque authorized attachment ID from the user turn; never a local filesystem path or URL.",

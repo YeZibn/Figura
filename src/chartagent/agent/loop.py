@@ -50,6 +50,10 @@ from .observations import observation_status
 
 # Sentinel returned when the step budget is exhausted.
 VisualObservationSink = Callable[[str, str, Sequence[GeneratedImage]], Sequence[dict[str, Any]]]
+_LAYOUT_TOOL_NAME = "inspect_chart_layout"
+_GEOMETRY_TOOL_NAMES = frozenset(
+    {"measure_bars", "extract_line_series", "extract_scatter_points", "extract_pie_slices"}
+)
 
 
 class Agent:
@@ -134,6 +138,7 @@ class Agent:
         run = self.memory.begin_run(self._run_id) if self._run_id is not None else self.memory.begin_run()
         self._messages = []
         self._current_messages = []
+        layout_contexts: dict[str, dict[str, Any]] = {}
         user_message = {"role": "user", "content": user_input}
         self.memory.append(run, "user", {"message": user_message, "text": user_input if isinstance(user_input, str) else "[image attachment turn]"})
         if isinstance(user_input, str):
@@ -251,9 +256,26 @@ class Agent:
                         call_id=call.id,
                         arguments=summarize_arguments(call.arguments),
                     )
-                observation = dispatch_observation(
-                    self.registry, call.name, call.arguments
+                self._ensure_layout_context(
+                    call.name,
+                    call.arguments,
+                    layout_contexts,
+                    self.registry,
                 )
+                dispatch_arguments = self._layout_arguments(
+                    call.name,
+                    call.arguments,
+                    layout_contexts,
+                )
+                observation = dispatch_observation(
+                    self.registry, call.name, dispatch_arguments
+                )
+                if call.name == _LAYOUT_TOOL_NAME:
+                    self._remember_layout_context(
+                        observation.content,
+                        call.arguments,
+                        layout_contexts,
+                    )
                 observation = self._apply_generation_review(
                     observation,
                     run_id=run.id,
@@ -409,6 +431,91 @@ class Agent:
         self.memory.append(run, "terminal", {"answer": terminal_answer, "max_steps": self.max_steps, "review_gate": terminal_gate})
         self.memory.finish(run, RunStatus.COMPLETED, "budget")
         return terminal_answer
+
+    @staticmethod
+    def _layout_arguments(
+        tool_name: str,
+        arguments: str,
+        layout_contexts: dict[str, dict[str, Any]],
+    ) -> str:
+        """Inject one cached validated layout into a geometry call."""
+        if tool_name not in _GEOMETRY_TOOL_NAMES or not layout_contexts:
+            return arguments
+        try:
+            parsed = json.loads(arguments) if arguments.strip() else {}
+        except json.JSONDecodeError:
+            return arguments
+        if not isinstance(parsed, dict) or parsed.get("layout_context") is not None:
+            return arguments
+        attachment_id = parsed.get("attachment_id")
+        context = layout_contexts.get(attachment_id) if isinstance(attachment_id, str) else None
+        if context is None and len(layout_contexts) == 1:
+            context = next(iter(layout_contexts.values()))
+        if context is None:
+            return arguments
+        parsed["layout_context"] = context
+        return json.dumps(parsed, ensure_ascii=False, separators=(",", ":"))
+
+    @staticmethod
+    def _ensure_layout_context(
+        tool_name: str,
+        arguments: str,
+        layout_contexts: dict[str, dict[str, Any]],
+        registry: ToolRegistry,
+    ) -> None:
+        """Create a deterministic fallback when a model skips layout preflight."""
+        if tool_name not in _GEOMETRY_TOOL_NAMES or registry.get(_LAYOUT_TOOL_NAME) is None:
+            return
+        try:
+            parsed = json.loads(arguments) if arguments.strip() else {}
+        except json.JSONDecodeError:
+            return
+        if not isinstance(parsed, dict):
+            return
+        attachment_id = parsed.get("attachment_id")
+        if not isinstance(attachment_id, str) or not attachment_id:
+            return
+        if attachment_id in layout_contexts:
+            return
+        chart_type = {
+            "measure_bars": "bar",
+            "extract_line_series": "line",
+            "extract_scatter_points": "scatter",
+            "extract_pie_slices": "pie",
+        }.get(tool_name)
+        preflight = dispatch_observation(
+            registry,
+            _LAYOUT_TOOL_NAME,
+            json.dumps(
+                {"attachment_id": attachment_id, "chart_type": chart_type},
+                ensure_ascii=False,
+            ),
+        )
+        Agent._remember_layout_context(preflight.content, json.dumps({"attachment_id": attachment_id}), layout_contexts)
+
+    @staticmethod
+    def _remember_layout_context(
+        content: str,
+        arguments: str,
+        layout_contexts: dict[str, dict[str, Any]],
+    ) -> None:
+        try:
+            payload = json.loads(content)
+            parsed_arguments = json.loads(arguments) if arguments.strip() else {}
+        except (json.JSONDecodeError, TypeError):
+            return
+        if not isinstance(payload, dict) or not isinstance(parsed_arguments, dict):
+            return
+        data = payload.get("data")
+        context = data.get("layout_context") if isinstance(data, dict) else None
+        if not isinstance(context, dict):
+            return
+        attachment_id = parsed_arguments.get("attachment_id")
+        if not isinstance(attachment_id, str) or not attachment_id:
+            return
+        cached = dict(context)
+        cached["source_attachment_id"] = attachment_id
+        layout_contexts[attachment_id] = cached
 
     @staticmethod
     def _review_items(content: str) -> list[dict[str, Any]]:

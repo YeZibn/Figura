@@ -7,6 +7,7 @@ from typing import Any, Sequence
 import numpy as np
 
 from .foundation import bounded_source_point, color_mask, numeric_text
+from .layout import context_frame
 
 _DARK_PIXEL = 112
 _MAX_AXIS_SLOPE = 0.18
@@ -77,10 +78,86 @@ def apply_axis_transform(model: dict[str, Any] | None, point: Sequence[float]) -
     return round(float(model["slope"] * scalar + model["intercept"]), 6)
 
 
-def fit_dominant_axis_line(rgb: np.ndarray, *, axis: str) -> dict[str, Any] | None:
+def _neutral_axis_line(
+    rgb: np.ndarray,
+    *,
+    axis: str,
+    search_area: Sequence[int] | None = None,
+) -> dict[str, Any] | None:
+    """Find a long low-saturation gray axis, including light renderer spines."""
+    height, width = rgb.shape[:2]
+    channels = rgb.astype(np.int16)
+    brightness = channels.mean(axis=2)
+    spread = channels.max(axis=2) - channels.min(axis=2)
+    neutral = (spread <= 8) & (brightness >= 120) & (brightness <= 248)
+    if axis == "x":
+        row_start = max(0, int(height * 0.58))
+        row_end = min(height, int(height * 0.97))
+        col_start = max(0, int(width * 0.04))
+        col_end = min(width, int(width * 0.98))
+        candidates = []
+        for row in range(row_start, row_end):
+            indices = np.flatnonzero(neutral[row, col_start:col_end]) + col_start
+            if len(indices) < width * 0.35:
+                continue
+            span = float(np.ptp(indices))
+            if span >= width * 0.45:
+                candidates.append((row, indices, span))
+        if not candidates:
+            return None
+        row, indices, span = max(candidates, key=lambda item: (item[0], item[2]))
+        fit_slope, intercept = np.polyfit(indices.astype(float), np.full(len(indices), float(row)), 1)
+        residual_values = float(row) - (fit_slope * indices + intercept)
+        return {
+            "points_px": [[round(float(indices.min()), 2), round(float(fit_slope * indices.min() + intercept), 2)], [round(float(indices.max()), 2), round(float(fit_slope * indices.max() + intercept), 2)]],
+            "slope": float(fit_slope),
+            "intercept": float(intercept),
+            "residual_px": round(float(np.sqrt(np.mean(residual_values**2))), 4),
+            "support": int(len(indices)),
+            "span_px": span,
+            "source": "neutral_axis_pixels",
+        }
+
+    col_start = max(0, int(width * 0.04))
+    col_end = min(width, int(width * 0.48))
+    row_start = max(0, int(height * 0.05))
+    row_end = min(height, int(height * 0.96))
+    candidates = []
+    for column in range(col_start, col_end):
+        indices = np.flatnonzero(neutral[row_start:row_end, column]) + row_start
+        if len(indices) < height * 0.25:
+            continue
+        span = float(np.ptp(indices))
+        if span >= height * 0.45:
+            candidates.append((column, indices, span))
+    if not candidates:
+        return None
+    column, indices, span = min(candidates, key=lambda item: (item[0], -item[2]))
+    fit_slope, intercept = np.polyfit(indices.astype(float), np.full(len(indices), float(column)), 1)
+    residual_values = float(column) - (fit_slope * indices + intercept)
+    return {
+        "points_px": [[round(float(fit_slope * indices.min() + intercept), 2), round(float(indices.min()), 2)], [round(float(fit_slope * indices.max() + intercept), 2), round(float(indices.max()), 2)]],
+        "slope": float(fit_slope),
+        "intercept": float(intercept),
+        "residual_px": round(float(np.sqrt(np.mean(residual_values**2))), 4),
+        "support": int(len(indices)),
+        "span_px": span,
+        "source": "neutral_axis_pixels",
+    }
+
+
+def fit_dominant_axis_line(
+    rgb: np.ndarray,
+    *,
+    axis: str,
+    search_area: Sequence[int] | None = None,
+) -> dict[str, Any] | None:
     """Find a long dark x or y axis and retain its source-image geometry."""
     if axis not in {"x", "y"}:
         raise ValueError("axis must be x or y")
+    neutral = _neutral_axis_line(rgb, axis=axis, search_area=search_area)
+    if neutral is not None:
+        return neutral
     dark = np.max(rgb, axis=2) <= _DARK_PIXEL
     height, width = dark.shape
     yy, xx = np.nonzero(dark)
@@ -121,7 +198,15 @@ def fit_dominant_axis_line(rgb: np.ndarray, *, axis: str) -> dict[str, Any] | No
             minimum_span = width * 0.38 if axis == "x" else height * 0.38
             if span < minimum_span:
                 continue
-            score = span + support * 0.35
+            expected = (
+                float(search_area[1] + search_area[3])
+                if axis == "x" and search_area and len(search_area) >= 4
+                else float(search_area[0])
+                if axis == "y" and search_area and len(search_area) >= 4
+                else float(height * 0.88 if axis == "x" else width * 0.11)
+            )
+            distance = abs(float(np.median(projected)) - expected)
+            score = span + support * 0.35 - distance * 0.65
             if best is not None and score <= best["score"]:
                 continue
             if axis == "x":
@@ -290,6 +375,7 @@ def detect_cartesian_frame(
     search_area: Sequence[int],
     palette: list[np.ndarray] | None = None,
     snippets: list[dict[str, Any]] | None = None,
+    layout_context: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any] | None, str, list[int]]:
     """Infer a source-image Cartesian frame from axes and colored evidence.
 
@@ -299,8 +385,42 @@ def detect_cartesian_frame(
     height, width = rgb.shape[:2]
     palette = palette or []
     snippets = snippets or []
-    x_axis = fit_dominant_axis_line(rgb, axis="x")
-    y_axis = fit_dominant_axis_line(rgb, axis="y")
+    accepted_layout = context_frame(layout_context)
+    x_axis = fit_dominant_axis_line(rgb, axis="x", search_area=search_area)
+    y_axis = fit_dominant_axis_line(rgb, axis="y", search_area=search_area)
+    layout_validation = layout_context.get("validation", {}) if isinstance(layout_context, dict) else {}
+    layout_checks = layout_validation.get("checks", {}) if isinstance(layout_validation, dict) else {}
+    context_axes = layout_context.get("axes", {}) if isinstance(layout_context, dict) else {}
+    verified_layout_axes = bool(
+        accepted_layout
+        and isinstance(context_axes, dict)
+        and context_axes.get("x")
+        and context_axes.get("y")
+        and layout_checks.get("axis_relation") is True
+    )
+    if accepted_layout and verified_layout_axes:
+        context_x = context_axes.get("x") if isinstance(context_axes, dict) else None
+        context_y = context_axes.get("y") if isinstance(context_axes, dict) else None
+        x_axis = context_x or x_axis
+        y_axis = context_y or y_axis
+        context_bbox = accepted_layout.get("bbox_px")
+        if isinstance(context_bbox, (list, tuple)) and len(context_bbox) >= 4:
+            context_polygon = accepted_layout.get("polygon_px")
+            frame = cartesian_frame(
+                bbox=context_bbox,
+                polygon=context_polygon,
+                x_axis=x_axis,
+                y_axis=y_axis,
+                orientation=str(layout_context.get("orientation", "unknown")),
+                confidence=float((layout_context.get("validation") or {}).get("confidence", 0.0)),
+                evidence=["validated_layout_context", *list(layout_context.get("evidence") or [])[:6]],
+            )
+            frame["bbox"] = list(map(int, context_bbox[:4]))
+            frame["layout_context_id"] = str(layout_context.get("context_id", ""))[:80]
+            frame["marker_extent_px"] = _colored_extent(rgb, palette, frame["bbox"], context_polygon)
+            if frame["marker_extent_px"] is not None:
+                frame["evidence"].append("colored_extents")
+            return frame, frame["orientation"], frame["bbox"]
     x_geometry = axis_geometry(x_axis)
     y_geometry = axis_geometry(y_axis)
     evidence = [name for name, value in (("x_axis", x_axis), ("y_axis", y_axis)) if value]

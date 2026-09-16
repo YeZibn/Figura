@@ -19,12 +19,14 @@ from .foundation import (
     detect_color_palette,
     evidence_envelope,
     numeric_ticks,
+    ordered_text_anchors,
     rgb_to_hex,
     series_entry,
 )
 from .coordinates import apply_axis_transform, axis_output, detect_cartesian_frame, fit_axis_transform
 from .ocr import extract_text
 from .overlays import render_line_overlay
+from .layout import context_for_evidence, context_region
 
 _TRACE_TOLERANCE = 30
 
@@ -158,7 +160,12 @@ def _legend_entries(
     return entries
 
 
-def _trace_vertices(mask: np.ndarray, plot_area: list[int]) -> tuple[list[list[int]], list[list[list[int]]]]:
+def _trace_vertices(
+    mask: np.ndarray,
+    plot_area: list[int],
+    *,
+    orientation: str = "upright",
+) -> tuple[list[list[int]], list[list[list[int]]]]:
     x, y, width, height = plot_area
     left = max(0, x)
     top = max(0, y)
@@ -167,14 +174,21 @@ def _trace_vertices(mask: np.ndarray, plot_area: list[int]) -> tuple[list[list[i
     if right <= left or bottom <= top:
         return [], []
     points: list[list[int]] = []
-    for pixel_x in range(left, right):
-        rows = np.flatnonzero(mask[top:bottom, pixel_x])
-        if len(rows):
-            points.append([pixel_x, top + int(round(float(np.median(rows))))])
+    if orientation == "horizontal":
+        for pixel_y in range(top, bottom):
+            columns = np.flatnonzero(mask[pixel_y, left:right])
+            if len(columns):
+                points.append([left + int(round(float(np.median(columns)))), pixel_y])
+    else:
+        for pixel_x in range(left, right):
+            rows = np.flatnonzero(mask[top:bottom, pixel_x])
+            if len(rows):
+                points.append([pixel_x, top + int(round(float(np.median(rows))))])
     fragments: list[list[list[int]]] = []
     current: list[list[int]] = []
+    coordinate_index = 1 if orientation == "horizontal" else 0
     for point in points:
-        if current and point[0] - current[-1][0] > 4:
+        if current and point[coordinate_index] - current[-1][coordinate_index] > 4:
             if len(current) >= 2:
                 fragments.append(current)
             current = []
@@ -201,7 +215,13 @@ def _is_filled_region(mask: np.ndarray, plot_area: list[int]) -> bool:
     return float(np.median(active)) >= max(10.0, height * 0.08) or filled_columns >= 0.28
 
 
-def _marker_candidates(mask: np.ndarray, plot_area: list[int], trace_points: list[list[int]]) -> list[list[int]]:
+def _marker_candidates(
+    mask: np.ndarray,
+    plot_area: list[int],
+    trace_points: list[list[int]],
+    *,
+    orientation: str = "upright",
+) -> list[list[int]]:
     x, y, width, height = plot_area
     left = max(0, x)
     top = max(0, y)
@@ -209,18 +229,27 @@ def _marker_candidates(mask: np.ndarray, plot_area: list[int], trace_points: lis
     bottom = min(mask.shape[0], y + height)
     if right <= left or bottom <= top or not trace_points:
         return []
-    counts = mask[top:bottom, left:right].sum(axis=0).astype(float)
+    horizontal = orientation == "horizontal"
+    counts = mask[top:bottom, left:right].sum(axis=1 if horizontal else 0).astype(float)
     if not len(counts) or float(counts.max()) < 5.0:
         return []
     active = counts[counts > 0]
     baseline = float(np.median(active)) if len(active) else 0.0
-    threshold = max(8.0, float(np.percentile(active, 85)))
+    threshold = max(10.0, float(np.percentile(active, 92)), baseline * 2.0)
     candidates: list[int] = []
     for index in range(2, len(counts) - 2):
         window = counts[index - 2 : index + 3]
         if counts[index] < threshold or counts[index] != max(window):
             continue
-        if counts[index] - baseline < 4.0:
+        if counts[index] - baseline < 6.0:
+            continue
+        left_peak = index
+        while left_peak > 0 and counts[left_peak - 1] >= threshold * 0.72:
+            left_peak -= 1
+        right_peak = index
+        while right_peak + 1 < len(counts) and counts[right_peak + 1] >= threshold * 0.72:
+            right_peak += 1
+        if right_peak - left_peak + 1 > 13:
             continue
         if candidates and index - candidates[-1] < 16:
             if counts[index] > counts[candidates[-1]]:
@@ -230,12 +259,20 @@ def _marker_candidates(mask: np.ndarray, plot_area: list[int], trace_points: lis
 
     result: list[list[int]] = []
     for local_x in candidates:
-        pixel_x = left + local_x
-        nearby = [point for point in trace_points if abs(point[0] - pixel_x) <= 5]
+        coordinate = top + local_x if horizontal else left + local_x
+        nearby = [
+            point
+            for point in trace_points
+            if abs(point[1 if horizontal else 0] - coordinate) <= 5
+        ]
         if not nearby:
             continue
-        pixel_y = int(round(float(np.median([point[1] for point in nearby]))))
-        result.append([pixel_x, pixel_y])
+        if horizontal:
+            pixel_x = int(round(float(np.median([point[0] for point in nearby]))))
+            result.append([pixel_x, coordinate])
+        else:
+            pixel_y = int(round(float(np.median([point[1] for point in nearby]))))
+            result.append([coordinate, pixel_y])
     return result
 
 
@@ -257,25 +294,61 @@ def _anchor_points(trace_points: list[list[int]], x_ticks: list[dict[str, float]
     return result
 
 
+def _anchor_records(
+    trace_points: list[list[int]],
+    anchors: list[dict[str, Any]],
+    *,
+    axis: str = "x",
+) -> list[tuple[list[int], dict[str, Any]]]:
+    """Project ordered date/category anchors onto a continuous trace."""
+    if not anchors or not trace_points:
+        return []
+    trace_array = np.asarray(trace_points, dtype=float)
+    result: list[tuple[list[int], dict[str, Any]]] = []
+    for anchor in anchors:
+        point = anchor.get("point_px")
+        if not isinstance(point, (list, tuple)) or len(point) < 2:
+            continue
+        coordinate_index = 1 if axis == "y" else 0
+        coordinate = int(round(float(point[coordinate_index])))
+        nearby = trace_array[np.abs(trace_array[:, coordinate_index] - coordinate) <= 20]
+        if len(nearby) == 0:
+            continue
+        if coordinate_index == 1:
+            pixel_x = int(round(float(np.median(nearby[:, 0]))))
+            result.append(([pixel_x, coordinate], anchor))
+        else:
+            pixel_y = int(round(float(np.median(nearby[:, 1]))))
+            result.append(([coordinate, pixel_y], anchor))
+    return result
+
+
 def _point_records(
     *,
     trace_points: list[list[int]],
     mask: np.ndarray,
     plot_area: list[int],
     x_ticks: list[dict[str, float]],
+    x_anchors: list[dict[str, Any]],
     x_model: dict[str, Any] | None,
     y_model: dict[str, Any] | None,
     series_id: str,
+    trace_axis: str = "x",
 ) -> list[dict[str, Any]]:
-    markers = _marker_candidates(mask, plot_area, trace_points)
+    markers = _marker_candidates(
+        mask,
+        plot_area,
+        trace_points,
+        orientation="horizontal" if trace_axis == "y" else "upright",
+    )
     sources: list[tuple[list[int], str, float]] = [
         (point, "marker", 0.88) for point in markers
     ]
+    anchor_metadata: dict[tuple[int, int], dict[str, Any]] = {}
     if not sources:
-        sources = [
-            (point, "tick_sample", 0.72)
-            for point in _anchor_points(trace_points, x_ticks)
-        ]
+        anchored = _anchor_records(trace_points, x_anchors, axis=trace_axis)
+        sources = [(point, "tick_sample", 0.72) for point, _ in anchored]
+        anchor_metadata = {tuple(point): anchor for point, anchor in anchored}
     records: list[dict[str, Any]] = []
     for index, (point, source, confidence) in enumerate(sources, start=1):
         record: dict[str, Any] = {
@@ -290,6 +363,11 @@ def _point_records(
         if calibrated_x is not None and calibrated_y is not None:
             record["x"] = calibrated_x
             record["y"] = calibrated_y
+        anchor = anchor_metadata.get((int(point[0]), int(point[1])))
+        if anchor is not None:
+            record["x_label"] = anchor.get("text")
+            record["x_order"] = anchor.get("order")
+            record["x_anchor"] = anchor.get("point_px")
         records.append(record)
     return records
 
@@ -317,7 +395,11 @@ def _traces_overlap(series: list[dict[str, Any]], tolerance_px: float = 2.5) -> 
     return False
 
 
-def _empty_result(image: Image.Image, warning: str) -> ToolResult:
+def _empty_result(
+    image: Image.Image,
+    warning: str,
+    layout_context: dict[str, Any] | None = None,
+) -> ToolResult:
     rgb = np.asarray(image.convert("RGB"))
     confidence = confidence_map(
         overall=0.0,
@@ -333,6 +415,7 @@ def _empty_result(image: Image.Image, warning: str) -> ToolResult:
             frame=None,
             confidence=confidence,
             warnings=[warning],
+            layout_context=context_for_evidence(layout_context),
         ),
         "orientation": "unknown",
         "plot_area": None,
@@ -359,7 +442,10 @@ def _empty_result(image: Image.Image, warning: str) -> ToolResult:
     )
 
 
-def extract_line_series(image_path: str) -> ToolResult | dict:
+def extract_line_series(
+    image_path: str,
+    layout_context: dict[str, Any] | None = None,
+) -> ToolResult | dict:
     """Extract source-image line traces and evidence-backed data points."""
     path = Path(image_path)
     if not path.is_file():
@@ -377,6 +463,7 @@ def extract_line_series(image_path: str) -> ToolResult | dict:
         rgb,
         search_area,
         preliminary_palette,
+        layout_context=layout_context,
     )
     plot_area = list(frame.get("bbox") if frame else detection_area)
     if frame is None:
@@ -392,7 +479,15 @@ def extract_line_series(image_path: str) -> ToolResult | dict:
         }
     palette = _line_palette(rgb, plot_area)
     snippets = _ocr_snippets(path)
-    x_ticks, y_ticks = numeric_ticks(snippets, search_area)
+    x_ticks, y_ticks = numeric_ticks(snippets, plot_area)
+    x_tick_region = context_region(layout_context, "x_ticks")
+    x_anchors = ordered_text_anchors(
+        snippets,
+        plot_area,
+        region=x_tick_region.get("bbox_px") if x_tick_region else None,
+        axis="y" if orientation == "horizontal" else "x",
+    )
+    trace_axis = "y" if orientation == "horizontal" else "x"
     x_axis_points = frame.get("x_axis", {}).get("points_px") if frame.get("x_axis") else None
     y_axis_points = frame.get("y_axis", {}).get("points_px") if frame.get("y_axis") else None
     x_model = fit_axis_transform(x_ticks, x_axis_points)
@@ -406,7 +501,11 @@ def extract_line_series(image_path: str) -> ToolResult | dict:
         if _is_filled_region(mask, plot_area):
             filled_region_detected = True
             continue
-        trace_points, fragments = _trace_vertices(mask, plot_area)
+        trace_points, fragments = _trace_vertices(
+            mask,
+            plot_area,
+            orientation="horizontal" if trace_axis == "y" else "upright",
+        )
         if not trace_points:
             continue
         series_id = f"series_{index}"
@@ -418,9 +517,11 @@ def extract_line_series(image_path: str) -> ToolResult | dict:
             mask=mask,
             plot_area=plot_area,
             x_ticks=x_ticks,
+            x_anchors=x_anchors,
             x_model=x_model,
             y_model=y_model,
             series_id=series_id,
+            trace_axis=trace_axis,
         )
         entry["trace"] = {
             "polyline_px": trace_points,
@@ -431,6 +532,12 @@ def extract_line_series(image_path: str) -> ToolResult | dict:
         series.append(entry)
 
     warnings: list[str] = []
+    if isinstance(layout_context, dict):
+        validation = layout_context.get("validation") if isinstance(layout_context.get("validation"), dict) else {}
+        if validation.get("status") == "rejected":
+            warnings.append("layout context rejected; using pixel evidence fallback")
+        elif validation.get("status") == "partial":
+            warnings.append("layout context partially validated; preserving uncertainty")
     if filled_region_detected:
         warnings.append("filled or bar-like color regions were excluded from line traces")
     if frame.get("x_axis") is None or frame.get("y_axis") is None:
@@ -439,7 +546,7 @@ def extract_line_series(image_path: str) -> ToolResult | dict:
         warnings.append("x-axis calibration unavailable; preserving pixel x coordinates")
     if not y_model or not y_model.get("calibrated"):
         warnings.append("y-axis calibration unavailable; preserving pixel y coordinates")
-    if not x_ticks and series:
+    if not x_ticks and not x_anchors and series:
         warnings.append("x-axis anchors unavailable; confirmed sampling positions may be incomplete")
     if len(series) > 1 and not any(entry.get("label") for entry in series):
         warnings.append("series labels unresolved; using stable color-based identities")
@@ -448,7 +555,7 @@ def extract_line_series(image_path: str) -> ToolResult | dict:
     if any(len(entry.get("trace", {}).get("fragments", [])) > 1 for entry in series):
         warnings.append("one or more series contain fragmented trace evidence")
     if not series:
-        return _empty_result(chart_image, "no reliable line series detected")
+        return _empty_result(chart_image, "no reliable line series detected", layout_context)
 
     geometry_confidence = 0.9 if all(entry.get("trace", {}).get("polyline_px") for entry in series) else 0.35
     frame_confidence = 0.9 if frame.get("x_axis") and frame.get("y_axis") else 0.35
@@ -472,6 +579,9 @@ def extract_line_series(image_path: str) -> ToolResult | dict:
         calibration=calibration_confidence,
         association=association_confidence,
     )
+    x_axis_output = axis_output(x_ticks, x_model)
+    x_axis_output["anchors"] = x_anchors
+    layout_evidence = context_for_evidence(layout_context)
     data = {
         "evidence": build_common_evidence(
             rgb,
@@ -481,12 +591,13 @@ def extract_line_series(image_path: str) -> ToolResult | dict:
             series=series,
             confidence=confidence,
             warnings=warnings,
+            layout_context=layout_evidence,
         ),
         **evidence_envelope(
             rgb,
             plot_area=plot_area,
             axes={
-                "x": axis_output(x_ticks, x_model),
+                "x": x_axis_output,
                 "y": axis_output(y_ticks, y_model),
             },
             legend=[
@@ -495,9 +606,12 @@ def extract_line_series(image_path: str) -> ToolResult | dict:
             ],
             series=series,
             confidence=confidence,
+            layout_context=layout_evidence,
         ),
         "orientation": orientation,
         "plot_frame": frame,
+        "x_anchors": x_anchors,
+        "layout_context": layout_evidence,
         "series": series,
         "warnings": warnings,
     }
@@ -546,7 +660,12 @@ EXTRACT_LINE_SERIES = Tool(
             "image_path": {
                 "type": "string",
                 "description": "Path to the local chart image.",
-            }
+            },
+            "layout_context": {
+                "type": "object",
+                "description": "Optional validated chart layout context; model hints remain advisory.",
+                "additionalProperties": True,
+            },
         },
         "required": ["image_path"],
         "additionalProperties": False,

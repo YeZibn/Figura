@@ -799,6 +799,29 @@ def test_run_manager_replays_ordered_events_and_expires_observations():
     manager.close()
 
 
+def test_oversized_tool_result_retains_outer_call_identity():
+    event = RunEvent(
+        "run-identity",
+        7,
+        "tool_result",
+        {
+            "tool_name": "extract_line_series",
+            "call_id": "line-call-7",
+            "status": "success",
+            "tool_status": "success",
+            "turn": 3,
+            "result": {"polyline": ["trace-" + ("x" * 2000) for _ in range(32)]},
+        },
+    )
+    payload = event.to_dict()["payload"]
+    assert payload["tool_name"] == "extract_line_series"
+    assert payload["call_id"] == "line-call-7"
+    assert payload["status"] == "success"
+    assert payload["turn"] == 3
+    assert payload["result"]["truncated"] is True
+    assert len(event.to_json()) <= 13000
+
+
 def test_async_gateway_run_streams_trace_and_scoped_visual_observation(tmp_path):
     database = tmp_path / "sessions.db"
 

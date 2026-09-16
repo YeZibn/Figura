@@ -31,6 +31,7 @@ from .coordinates import (
 )
 from .ocr import extract_text
 from .overlays import render_scatter_overlay
+from .layout import context_for_evidence
 
 _COLOR_TOLERANCE = 34
 _MAX_MARKER_SIDE_RATIO = 0.12
@@ -321,7 +322,11 @@ def _build_series(
     return series, overlaps, warnings, legend
 
 
-def _empty_result(image: Image.Image, warning: str) -> ToolResult:
+def _empty_result(
+    image: Image.Image,
+    warning: str,
+    layout_context: dict[str, Any] | None = None,
+) -> ToolResult:
     data = {
         "image_size": image_size(np.asarray(image.convert("RGB"))),
         "evidence": build_common_evidence(
@@ -330,6 +335,7 @@ def _empty_result(image: Image.Image, warning: str) -> ToolResult:
             frame=None,
             confidence=confidence_map(overall=0.0, geometry=0.0, calibration=0.0, association=0.0),
             warnings=[warning],
+            layout_context=context_for_evidence(layout_context),
         ),
         "orientation": "unknown",
         "plot_frame": None,
@@ -368,7 +374,10 @@ def _error(reason: str) -> dict[str, str]:
     return {"error": f"extract_scatter_points: {reason}"}
 
 
-def extract_scatter_points(image_path: str) -> ToolResult | dict:
+def extract_scatter_points(
+    image_path: str,
+    layout_context: dict[str, Any] | None = None,
+) -> ToolResult | dict:
     """Extract source-image marker evidence and optionally calibrated points."""
     path = Path(image_path)
     if not path.is_file():
@@ -389,13 +398,14 @@ def extract_scatter_points(image_path: str) -> ToolResult | dict:
         search_area,
         palette,
         snippets,
+        layout_context=layout_context,
     )
     x_axis_points = frame.get("x_axis", {}).get("points_px") if frame and frame.get("x_axis") else None
     y_axis_points = frame.get("y_axis", {}).get("points_px") if frame and frame.get("y_axis") else None
     x_model = fit_axis_transform(x_ticks, x_axis_points) if x_axis_points else None
     y_model = fit_axis_transform(y_ticks, y_axis_points) if y_axis_points else None
     if not palette:
-        return _empty_result(chart_image, "no reliable scatter point population detected")
+        return _empty_result(chart_image, "no reliable scatter point population detected", layout_context)
 
     series, overlaps, warnings, legend = _build_series(
         rgb,
@@ -407,10 +417,16 @@ def extract_scatter_points(image_path: str) -> ToolResult | dict:
         y_model=y_model,
     )
     if not series:
-        return _empty_result(chart_image, "no reliable scatter point population detected")
+        return _empty_result(chart_image, "no reliable scatter point population detected", layout_context)
 
     if frame is None:
         warnings.append("scatter plot frame unresolved; preserving source pixel geometry")
+    if isinstance(layout_context, dict):
+        validation = layout_context.get("validation") if isinstance(layout_context.get("validation"), dict) else {}
+        if validation.get("status") == "rejected":
+            warnings.append("layout context rejected; using scatter pixel evidence fallback")
+        elif validation.get("status") == "partial":
+            warnings.append("layout context partially validated; scatter geometry remains partial")
     if orientation == "unknown":
         warnings.append("scatter orientation unresolved or unsupported")
     if x_model is None or not x_model.get("calibrated"):
@@ -449,6 +465,7 @@ def extract_scatter_points(image_path: str) -> ToolResult | dict:
         calibration=calibration_confidence,
         association=association_confidence,
     )
+    layout_evidence = context_for_evidence(layout_context)
     data = {
         "image_size": image_size(rgb),
         "evidence": build_common_evidence(
@@ -459,9 +476,11 @@ def extract_scatter_points(image_path: str) -> ToolResult | dict:
             series=series,
             confidence=confidence,
             warnings=warnings,
+            layout_context=layout_evidence,
         ),
         "orientation": orientation,
         "plot_frame": frame,
+        "layout_context": layout_evidence,
         "axes": {
             "x": axis_output(x_ticks, x_model),
             "y": axis_output(y_ticks, y_model),
@@ -510,7 +529,12 @@ EXTRACT_SCATTER_POINTS = Tool(
             "image_path": {
                 "type": "string",
                 "description": "Path to the local scatter-chart image.",
-            }
+            },
+            "layout_context": {
+                "type": "object",
+                "description": "Optional validated chart layout context; model hints remain advisory.",
+                "additionalProperties": True,
+            },
         },
         "required": ["image_path"],
         "additionalProperties": False,

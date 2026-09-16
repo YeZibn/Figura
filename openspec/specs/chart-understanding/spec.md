@@ -470,8 +470,8 @@ resolved label when available, a color or stable fallback identity, and its
 trace evidence. Each confirmed point SHALL include a stable identifier, a
 source-image pixel position, a point source (`marker` or `tick_sample`), and
 calibrated numeric `x` and `y` values only when both axes are reliably
-calibrated. The result MAY retain trace geometry without semantic points when
-sampling or calibration is unavailable.
+calibrated. Date or categorical X labels MAY be retained as ordered labels and
+pixel anchors without being converted to fabricated numeric values.
 
 The tool SHALL infer the plot frame and axis directions from visible axes,
 ticks, grid or trace evidence rather than treating a fixed crop boundary as
@@ -483,11 +483,11 @@ intersection SHALL NOT merge distinct series solely because their pixels are
 nearby.
 
 The tool SHALL distinguish marker-derived points from points sampled at
-reliable x-axis anchors. It SHALL NOT treat arbitrary pixel-density peaks,
-unanchored local extrema, or a continuous trace as confirmed data points. When
-the chart uses categorical x labels without a reliable numeric mapping to the
-supported ChartSpec coordinate model, the tool SHALL preserve the labels or
-pixel evidence and report a warning instead of fabricating numeric x values.
+reliable X-axis anchors. It SHALL NOT treat arbitrary pixel-density peaks,
+unanchored local extrema, annotations, or a continuous trace as confirmed data
+points. When no reliable sampling anchor exists, it SHALL preserve trace
+geometry and report the sampling limitation instead of claiming a complete
+point count.
 
 The generated overlay SHALL preserve source dimensions and mark the inferred
 frame, axis evidence, measured traces, confirmed points, stable identities,
@@ -511,12 +511,25 @@ without uncaught exceptions or fabricated semantic values.
 #### Scenario: Markerless lines use reliable x-axis anchors
 
 - **WHEN** `extract_line_series` is called with a clean line chart without
-  markers but with readable numeric x-axis ticks or equivalent ordered anchors
+  markers but with readable numeric, date, or categorical X-axis ticks or
+  equivalent ordered anchors
 - **THEN** the result returns continuous trace geometry
 - **AND** it emits points only at reliable anchors using `source: "tick_sample"`
+  or an equivalent explicit anchor source
 - **AND** it does not create extra points from unanchored density peaks or
   local slope changes
 - **AND** the result reports any unresolved sampling limitation in warnings
+
+#### Scenario: Model-guided framing excludes rotated labels
+
+- **WHEN** a chart has a validated layout context with a horizontal plot frame
+  and vertically rotated date labels outside that frame
+- **THEN** the line trace and axis geometry are measured inside the accepted
+  frame
+- **AND** rotated labels, legend swatches, and label text do not create axis
+  slopes, trace fragments, or marker points
+- **AND** the result reports a material warning if the pixel evidence still
+  conflicts with the layout context
 
 #### Scenario: Multiple series remain distinct through crossings
 
@@ -595,10 +608,45 @@ without uncaught exceptions or fabricated semantic values.
 Cartesian chart sensors SHALL expose a common evidence envelope containing the
 source image dimensions, a plot-area bounding box when detected, axis labels or
 tick calibration evidence when available, resolved legend entries, and series
-identities. Missing or ambiguous fields SHALL be represented as absent or
-uncertain values rather than invented values. The envelope SHALL be sufficient
-for the agent to associate geometry, OCR, axes, and legend evidence without a
-mandatory sensor order.
+identities. When a validated layout context is available, the envelope SHALL
+also identify the accepted layout context, its orientation, region roles, and
+validation confidence. Missing or ambiguous fields SHALL be represented as
+absent or uncertain values rather than invented values. The envelope SHALL be
+sufficient for the agent to associate geometry, OCR, axes, and legend evidence
+without requiring one chart detector to invoke another.
+
+The shared layout SHALL distinguish the measurement frame from surrounding
+annotation regions. It SHALL support date and categorical tick labels as
+ordered positional evidence even when they cannot be converted to numeric
+ChartSpec coordinates. Model-provided layout hints SHALL remain advisory until
+they pass deterministic validation.
+
+#### Scenario: Validated model layout is shared by Cartesian sensors
+
+- **WHEN** the Agent has accepted a layout context for a bar, line, or scatter
+  chart
+- **THEN** each applicable sensor uses the same source-image frame and region
+  roles in its evidence envelope
+- **AND** title, legend, tick labels, and data annotations outside the frame do
+  not become mark geometry solely because they are dark or colorful
+
+#### Scenario: Date and categorical ticks remain positional evidence
+
+- **WHEN** a Cartesian chart uses ordered date or category labels instead of
+  numeric X-axis values
+- **THEN** the result preserves their text, source positions, and ordering when
+  detectable
+- **AND** it omits numeric X values unless a reliable semantic mapping exists
+- **AND** it reports the missing numeric calibration explicitly
+
+#### Scenario: Partial layout evidence is retained
+
+- **WHEN** a chart has detectable geometry but an axis, legend, model layout
+  hint, or plot boundary is partially occluded or unreadable
+- **THEN** the sensor returns the reliable geometry it can measure
+- **AND** marks the missing or conflicting association in warnings or
+  confidence metadata
+- **AND** the result remains valid JSON suitable for another agent action
 
 #### Scenario: Clean axes and legend are correlated
 
@@ -608,14 +656,6 @@ mandatory sensor order.
   the available axis and legend evidence
 - **AND** the series identifiers used in geometry and overlays are consistent
   across the returned evidence
-
-#### Scenario: Partial layout evidence is retained
-
-- **WHEN** a chart has detectable geometry but an axis, legend, or plot boundary
-  is partially occluded or unreadable
-- **THEN** the sensor returns the reliable geometry it can measure
-- **AND** marks the missing association in warnings or confidence metadata
-- **AND** the result remains valid JSON suitable for another agent action
 
 ### Requirement: Cartesian sensor confidence and warnings
 

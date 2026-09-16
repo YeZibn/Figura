@@ -26,7 +26,8 @@ from .foundation import (
     image_size,
     rgb_to_hex,
 )
-from .coordinates import cartesian_frame, fit_dominant_axis_line
+from .coordinates import axis_geometry, cartesian_frame, fit_dominant_axis_line
+from .layout import context_for_evidence, context_frame
 from .overlays import render_bar_overlay
 
 Orientation = Literal["vertical", "horizontal"]
@@ -35,6 +36,7 @@ Orientation = Literal["vertical", "horizontal"]
 def _empty_result(
     chart_image: Image.Image,
     warnings: list[str] | None = None,
+    layout_context: dict[str, Any] | None = None,
 ) -> ToolResult:
     warning_list = warnings or ["no bar geometry or baseline detected"]
     rgb = np.asarray(chart_image)
@@ -52,6 +54,7 @@ def _empty_result(
             frame=None,
             confidence=confidence,
             warnings=warning_list,
+            layout_context=context_for_evidence(layout_context),
         ),
         "orientation": "unknown",
         "bar_mode": "unknown",
@@ -223,10 +226,18 @@ def _bar_candidates(
     *,
     orientation: Orientation = "vertical",
 ) -> list[dict[str, Any]]:
-    """Return candidates using the whole image, retaining the old helper API."""
-    del plot_area
+    """Return bar candidates scoped to the supplied measurement frame."""
+    mask = color_mask(rgb, color, tolerance=28)
+    if plot_area is not None:
+        left, top, width, height = map(int, plot_area)
+        scoped = np.zeros_like(mask)
+        right = min(mask.shape[1], left + width)
+        bottom = min(mask.shape[0], top + height)
+        if right > left and bottom > top:
+            scoped[max(0, top) : bottom, max(0, left) : right] = mask[max(0, top) : bottom, max(0, left) : right]
+        mask = scoped
     return _projection_candidates(
-        color_mask(rgb, color, tolerance=28), series_index, orientation
+        mask, series_index, orientation
     )
 
 
@@ -694,13 +705,18 @@ def _stack_evidence(
     return evidence
 
 
-def _measure_chart(rgb: np.ndarray) -> dict[str, Any]:
-    palette = detect_color_palette(rgb, max_colors=8)
+def _measure_chart(
+    rgb: np.ndarray,
+    layout_context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    layout = context_frame(layout_context)
+    measurement_area = layout.get("bbox_px") if layout else None
+    palette = detect_color_palette(rgb, region=measurement_area, max_colors=8)
     vertical_candidates: list[dict[str, Any]] = []
     horizontal_candidates: list[dict[str, Any]] = []
     for series_index, color in enumerate(palette, start=1):
-        vertical_candidates.extend(_bar_candidates(rgb, color, series_index, orientation="vertical"))
-        horizontal_candidates.extend(_bar_candidates(rgb, color, series_index, orientation="horizontal"))
+        vertical_candidates.extend(_bar_candidates(rgb, color, series_index, measurement_area, orientation="vertical"))
+        horizontal_candidates.extend(_bar_candidates(rgb, color, series_index, measurement_area, orientation="horizontal"))
     vertical_score = _orientation_score(vertical_candidates, "vertical")
     horizontal_score = _orientation_score(horizontal_candidates, "horizontal")
     if not vertical_candidates and not horizontal_candidates:
@@ -712,6 +728,7 @@ def _measure_chart(rgb: np.ndarray) -> dict[str, Any]:
             "plot_area": None,
             "palette": palette,
             "warnings": ["no bar geometry or baseline detected"],
+            "layout_context": layout_context,
         }
     orientation: Orientation = "vertical" if vertical_score >= horizontal_score else "horizontal"
     candidates = vertical_candidates if orientation == "vertical" else horizontal_candidates
@@ -774,7 +791,7 @@ def _measure_chart(rgb: np.ndarray) -> dict[str, Any]:
     if any(candidate["_shape_variation"] > 0.48 for candidate in candidates):
         baseline = None
         warnings.append("unsupported perspective or 3D-like bar geometry detected")
-    plot_area = _plot_bbox(candidates)
+    plot_area = measurement_area or _plot_bbox(candidates)
     slope = abs(float(baseline["slope"])) if baseline else 0.0
     resolved_orientation = "oblique" if slope > 0.025 else orientation
     if baseline is None and len(candidates) < 2:
@@ -792,10 +809,14 @@ def _measure_chart(rgb: np.ndarray) -> dict[str, Any]:
         "plot_area": plot_area,
         "palette": palette,
         "warnings": warnings,
+        "layout_context": layout_context,
     }
 
 
-def measure_bars(image_path: str) -> ToolResult | dict:
+def measure_bars(
+    image_path: str,
+    layout_context: dict[str, Any] | None = None,
+) -> ToolResult | dict:
     """Measure two-dimensional bars with source-image geometry evidence."""
     path = Path(image_path)
     if not path.is_file():
@@ -808,11 +829,11 @@ def measure_bars(image_path: str) -> ToolResult | dict:
     except Exception as exc:  # noqa: BLE001 - tool boundary
         return {"error": f"measure_bars failed for {image_path}: {exc}"}
 
-    measured = _measure_chart(rgb)
+    measured = _measure_chart(rgb, layout_context)
     candidates = measured["candidates"]
     baseline = measured["baseline"]
     if not candidates:
-        return _empty_result(chart_image, measured["warnings"])
+        return _empty_result(chart_image, measured["warnings"], layout_context)
 
     orientation: Orientation = measured.get("axis_orientation", "vertical")
     stacked = measured["bar_mode"] == "stacked"
@@ -867,6 +888,12 @@ def measure_bars(image_path: str) -> ToolResult | dict:
         bars.append(bar)
 
     warnings = list(measured["warnings"])
+    if isinstance(layout_context, dict):
+        validation = layout_context.get("validation") if isinstance(layout_context.get("validation"), dict) else {}
+        if validation.get("status") == "rejected":
+            warnings.append("layout context rejected; using bar pixel evidence fallback")
+        elif validation.get("status") == "partial":
+            warnings.append("layout context partially validated; bar geometry remains partial")
     if baseline is None:
         for bar in bars:
             bar["measure"]["value_length_px"] = None
@@ -896,6 +923,17 @@ def measure_bars(image_path: str) -> ToolResult | dict:
         if measured["plot_area"]
         else None
     )
+    layout_frame = context_frame(layout_context)
+    if layout_frame is not None:
+        frame = dict(layout_frame)
+        frame["bbox"] = list(map(int, layout_frame["bbox_px"][:4]))
+        frame["coordinate_system"] = "cartesian_2d"
+        context_axes = ((layout_context.get("axes") or {}) if isinstance(layout_context, dict) else {})
+        frame["x_axis"] = axis_geometry(context_axes.get("x")) if isinstance(context_axes, dict) else None
+        frame["y_axis"] = axis_geometry(context_axes.get("y")) if isinstance(context_axes, dict) else None
+        frame["orientation"] = str(layout_context.get("orientation", measured["orientation"]))
+        frame["evidence"] = ["validated_layout_context"]
+        frame["confidence"] = float((layout_context.get("validation") or {}).get("confidence", 0.0))
     if frame is not None:
         frame["baseline"] = baseline is not None
     public_baseline = (
@@ -915,6 +953,7 @@ def measure_bars(image_path: str) -> ToolResult | dict:
             series=series,
             confidence=confidence,
             warnings=warnings,
+            layout_context=context_for_evidence(layout_context),
         ),
         "orientation": measured["orientation"],
         "bar_mode": measured["bar_mode"],
@@ -925,6 +964,7 @@ def measure_bars(image_path: str) -> ToolResult | dict:
         "bars": bars,
         "confidence": confidence,
         "warnings": warnings,
+        "layout_context": context_for_evidence(layout_context),
     }
     return ToolResult(
         data,
@@ -957,7 +997,12 @@ MEASURE_BARS = Tool(
             "image_path": {
                 "type": "string",
                 "description": "Path to the local chart image.",
-            }
+            },
+            "layout_context": {
+                "type": "object",
+                "description": "Optional validated chart layout context; model hints remain advisory.",
+                "additionalProperties": True,
+            },
         },
         "required": ["image_path"],
         "additionalProperties": False,

@@ -106,6 +106,7 @@ type ToolStep = {
   toolLabel?: string
   call?: AgentRunEvent
   result?: AgentRunEvent
+  resultTruncated?: boolean
   observations: Record<string, unknown>[]
   status: 'running' | 'success' | 'error'
 }
@@ -124,17 +125,30 @@ function normalizeTimeline(events: AgentRunEvent[]): TimelineRow[] {
   for (const event of [...events].sort((left, right) => left.sequence - right.sequence)) {
     const payload = eventPayload(event)
     if (event.kind === 'tool_call' || event.kind === 'tool_result') {
-      const callId = typeof payload.call_id === 'string' && payload.call_id ? payload.call_id : `sequence-${event.sequence}`
-      let step = steps.get(callId)
+      const callId = typeof payload.call_id === 'string' && payload.call_id ? payload.call_id : ''
+      if (!callId && event.kind === 'tool_result' && payload.truncated === true) {
+        rows.push({ kind: 'event', event })
+        continue
+      }
+      const stableCallId = callId || `sequence-${event.sequence}`
+      let step = steps.get(stableCallId)
       if (!step) {
-        step = { id: `${event.runId}-${callId}`, callId, toolName: String(payload.tool_name || '未知工具'), toolLabel: typeof payload.tool_label === 'string' ? payload.tool_label : undefined, observations: [], status: 'running' }
-        steps.set(callId, step)
+        step = { id: `${event.runId}-${stableCallId}`, callId: stableCallId, toolName: String(payload.tool_name || '未知工具'), toolLabel: typeof payload.tool_label === 'string' ? payload.tool_label : undefined, observations: [], status: 'running' }
+        steps.set(stableCallId, step)
         rows.push({ kind: 'tool', step })
       }
       step.toolName = String(payload.tool_name || step.toolName)
       if (typeof payload.tool_label === 'string') step.toolLabel = payload.tool_label
       if (event.kind === 'tool_call') step.call = event
-      else { step.result = event; step.status = payload.status === 'error' ? 'error' : 'success' }
+      else {
+        step.result = event
+        const result = payload.result
+        step.resultTruncated = Boolean(
+          payload.truncated === true
+          || (result && typeof result === 'object' && (result as Record<string, unknown>).truncated === true),
+        )
+        step.status = payload.status === 'error' ? 'error' : 'success'
+      }
       continue
     }
     if (event.kind === 'visual_observation') {
@@ -398,7 +412,7 @@ function GeneratedChartView({ artifact, loader, onPreview }: { artifact: Generat
 }
 
 function eventLabel(event: AgentRunEvent): string {
-  const labels: Record<string, string> = { run_started: '运行已开始', model_started: '模型轮次开始', model_completed: '模型轮次完成', progress: '处理中', generated_chart: '图表状态已更新', chart_review_started: '图表审核已开始', chart_review_required: '等待图表审核', generated_chart_published: '图表已发布', generated_chart_rejected: '图表未发布', chart_review_completed: '图表审核完成', final_answer: '最终回答已生成', budget_exhausted: '达到预算上限', run_failed: '运行失败', history_gap: '历史记录不完整' }
+  const labels: Record<string, string> = { run_started: '运行已开始', model_started: '模型轮次开始', model_completed: '模型轮次完成', progress: '处理中', generated_chart: '图表状态已更新', chart_review_started: '图表审核已开始', chart_review_required: '等待图表审核', generated_chart_published: '图表已发布', generated_chart_rejected: '图表未发布', chart_review_completed: '图表审核完成', final_answer: '最终回答已生成', budget_exhausted: '达到预算上限', run_failed: '运行失败', history_gap: '历史记录不完整', tool_result: '工具结果（历史记录不完整）' }
   return labels[event.kind] || event.kind
 }
 
@@ -414,7 +428,7 @@ function RunTimeline({ timeline, expanded, onToggle, previewLoader, onPreview }:
       {summary.historyWarning && <div className="trace-warning" role="status">部分执行记录未能持久化，当前显示的过程可能不完整。</div>}
       {timeline.historyGap && <div className="trace-warning" role="status">历史记录存在缺口，未显示缺失的执行步骤。</div>}
       {rows.length === 0 && <div className="trace-empty">没有可恢复的执行事件。</div>}
-      {rows.map((row) => row.kind === 'event' ? <div className={'trace-event ' + (row.event.kind === 'run_failed' || row.event.kind === 'history_gap' ? 'error' : '')} key={`${row.event.runId}-${row.event.sequence}`}><span className="trace-event-dot" /><span className="trace-event-copy"><strong>{eventLabel(row.event)}</strong><small>{timestampLabel(row.event.timestamp)}</small><span>{textDetail(eventPayload(row.event).message || eventPayload(row.event).status || eventPayload(row.event).publication_status || eventPayload(row.event).reason || (row.event.kind === 'generated_chart' ? '生成图表结果已移至最终结果区域' : ''))}</span></span></div> : <div className="trace-tool" key={row.step.id}><button className="trace-tool-header" onClick={() => setExpandedSteps((current) => { const next = new Set(current); next.has(row.step.id) ? next.delete(row.step.id) : next.add(row.step.id); return next })} aria-expanded={expandedSteps.has(row.step.id)}><span className="trace-event-dot" /><span className="trace-tool-name"><strong>{row.step.toolLabel || row.step.toolName}</strong><small>{row.step.toolName} · {row.step.callId}</small></span><span className={'run-status ' + row.step.status}>{row.step.status === 'running' ? '运行中' : row.step.status === 'success' ? '完成' : '失败'}</span>{expandedSteps.has(row.step.id) ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</button>{expandedSteps.has(row.step.id) && <div className="trace-tool-detail">{row.step.call && <div><label>调用参数</label><pre>{textDetail(eventPayload(row.step.call).arguments)}</pre></div>}{row.step.result && <div><label>工具结果</label><pre>{textDetail(eventPayload(row.step.result).result || eventPayload(row.step.result).message)}</pre></div>}{row.step.observations.map((observation, index) => <ObservationView key={index} observation={observation} loader={previewLoader} onPreview={onPreview} />)}</div>}</div>)}
+      {rows.map((row) => row.kind === 'event' ? <div className={'trace-event ' + (row.event.kind === 'run_failed' || row.event.kind === 'history_gap' ? 'error' : '')} key={`${row.event.runId}-${row.event.sequence}`}><span className="trace-event-dot" /><span className="trace-event-copy"><strong>{eventLabel(row.event)}</strong><small>{timestampLabel(row.event.timestamp)}</small><span>{textDetail(eventPayload(row.event).message || eventPayload(row.event).status || eventPayload(row.event).publication_status || eventPayload(row.event).reason || (row.event.kind === 'generated_chart' ? '生成图表结果已移至最终结果区域' : ''))}</span></span></div> : <div className="trace-tool" key={row.step.id}><button className="trace-tool-header" onClick={() => setExpandedSteps((current) => { const next = new Set(current); next.has(row.step.id) ? next.delete(row.step.id) : next.add(row.step.id); return next })} aria-expanded={expandedSteps.has(row.step.id)}><span className="trace-event-dot" /><span className="trace-tool-name"><strong>{row.step.toolLabel || row.step.toolName}</strong><small>{row.step.toolName} · {row.step.callId}</small></span><span className={'run-status ' + row.step.status}>{row.step.status === 'running' ? '运行中' : row.step.status === 'success' ? '完成' : '失败'}</span>{expandedSteps.has(row.step.id) ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</button>{expandedSteps.has(row.step.id) && <div className="trace-tool-detail">{row.step.call && <div><label>调用参数</label><pre>{textDetail(eventPayload(row.step.call).arguments)}</pre></div>}{row.step.result && <div><label>工具结果</label>{row.step.resultTruncated && <small className="trace-warning">工具结果已截断，仅保留有限诊断内容。</small>}<pre>{textDetail(eventPayload(row.step.result).result || eventPayload(row.step.result).message)}</pre></div>}{row.step.observations.map((observation, index) => <ObservationView key={index} observation={observation} loader={previewLoader} onPreview={onPreview} />)}</div>}</div>)}
     </div>}
   </section>
 }

@@ -165,6 +165,39 @@ def test_agent_trace_orders_tools_visuals_and_keeps_reasoning_out_of_history():
     assert all("private plan" not in message for message in agent.messages)
 
 
+def test_layout_tool_trace_uses_localized_frontend_label():
+    registry = ToolRegistry()
+    registry.register(
+        Tool(
+            "inspect_chart_layout",
+            "Use this tool to inspect a chart layout when needed; do not use it for unrelated work. The result is bounded layout evidence.",
+            {"type": "object"},
+            lambda: {"layout_context": {"validation": {"status": "accepted"}}},
+        )
+    )
+    client = _ScriptedClient(
+        [
+            NormalizedResult(
+                tool_calls=[ToolCall("layout-1", "inspect_chart_layout", "{}")]
+            ),
+            NormalizedResult(content="done"),
+        ]
+    )
+    events = []
+
+    assert Agent(client, registry, trace=events.append).run("inspect") == "done"
+
+    tool_events = [event for event in events if event.kind in {"tool_call", "tool_result"}]
+    assert [event.payload["tool_label"] for event in tool_events] == [
+        "检查图表布局 (inspect_chart_layout)",
+        "检查图表布局 (inspect_chart_layout)",
+    ]
+    assert [event.payload["tool_display_name"] for event in tool_events] == [
+        "检查图表布局",
+        "检查图表布局",
+    ]
+
+
 def test_trace_is_a_side_channel_and_does_not_change_agent_messages_or_answer():
     def run(trace=None):
         registry = ToolRegistry()

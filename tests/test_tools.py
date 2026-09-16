@@ -67,6 +67,12 @@ def test_tool_presentation_has_known_names_and_unknown_fallback():
     assert known.english_name == "render_chart"
     assert known.label == "生成图表 (render_chart)"
 
+    layout = get_tool_presentation("inspect_chart_layout")
+    assert layout.display_name == "检查图表布局"
+    assert layout.english_name == "inspect_chart_layout"
+    assert layout.label == "检查图表布局 (inspect_chart_layout)"
+    assert layout.group == "chart-observation"
+
     unknown = get_tool_presentation("future_tool")
     assert unknown.display_name == "future_tool"
     assert unknown.english_name == "future_tool"
