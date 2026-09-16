@@ -11,6 +11,16 @@ from chartagent.spec import ChartSpec
 from chartagent.tools import Tool, ToolRegistry, ToolResult, dispatch_observation
 from chartagent.tools.chart.observation import overlays
 from chartagent.tools.chart.observation.bars import measure_bars
+from chartagent.tools.chart.observation.coordinates import (
+    apply_axis_transform,
+    cartesian_frame,
+    fit_axis_transform,
+    polar_frame,
+)
+from chartagent.tools.chart.observation.foundation import (
+    associate_series_labels,
+    build_common_evidence,
+)
 from chartagent.tools.chart.observation.line import extract_line_series
 from chartagent.tools.chart.observation.ocr import extract_text
 from chartagent.tools.chart.observation.pie import extract_pie_slices
@@ -43,6 +53,55 @@ def annotated_chart_path(tmp_path):
     path = tmp_path / "annotated-bars.png"
     path.write_bytes(png_bytes)
     return path
+
+
+def test_common_chart_evidence_separates_coordinate_models_and_calibration():
+    rgb = np.zeros((40, 60, 3), dtype=np.uint8)
+    frame = cartesian_frame(
+        bbox=[4, 5, 50, 30],
+        orientation="oblique",
+        confidence=0.8,
+        evidence=["x_axis"],
+    )
+    evidence = build_common_evidence(
+        rgb,
+        coordinate_system="cartesian_2d",
+        frame=frame,
+        confidence={"overall": 0.8},
+        warnings=["calibration unavailable"],
+    )
+    assert evidence["image_size"] == [60, 40]
+    assert evidence["coordinate_system"] == "cartesian_2d"
+    assert evidence["frame"]["orientation"] == "oblique"
+    assert evidence["warnings"] == ["calibration unavailable"]
+
+    polar = polar_frame(
+        {"bbox_px": [10, 8, 24, 24], "center_px": [22, 20], "radius_px": 12, "confidence": 0.9}
+    )
+    assert polar["coordinate_system"] == "polar_2d"
+    assert polar["center_px"] == [22.0, 20.0]
+
+    short_fit = fit_axis_transform(
+        [
+            {"pixel": 10, "value": 0, "point_px": [10, 20]},
+            {"pixel": 20, "value": 10, "point_px": [20, 20]},
+        ],
+        [[10, 20], [20, 20]],
+    )
+    assert short_fit is not None
+    assert short_fit["calibrated"] is False
+    assert apply_axis_transform(short_fit, [15, 20]) is None
+
+
+def test_generic_series_association_consumes_text_evidence_without_ocr():
+    entries = [{"id": "series_1", "color": "#ff0000", "geometry": {"bbox_px": [8, 10, 12, 8]}}]
+    associated = associate_series_labels(
+        entries,
+        [{"text": "Revenue", "bbox": [26, 9, 48, 12]}],
+    )
+    assert associated[0]["label"] == "Revenue"
+    assert associated[0]["association"]["source"] == "text_evidence"
+    assert associated[0]["association"]["status"] == "candidate"
 
 
 def test_extract_text_contains_annotations(annotated_chart_path, monkeypatch):
@@ -125,6 +184,9 @@ def test_measure_bars_matches_true_ratios(annotated_chart_path, monkeypatch):
     data = result.data
     assert data["orientation"] == "vertical"
     assert data["bar_mode"] == "single"
+    assert data["evidence"]["coordinate_system"] == "cartesian_2d"
+    assert data["evidence"]["frame"]["bbox_px"]
+    assert data["baseline_cross_check"]["consistent"] is True
     assert data["baseline"]["points_px"] == [[115, 426], [623, 426]]
     assert len(data["bars"]) == 3
     assert [bar["id"] for bar in data["bars"]] == [1, 2, 3]
@@ -216,6 +278,9 @@ def test_measure_stacked_bars_preserves_segments_and_total_height(tmp_path):
         for bar in data["bars"]
     )
     assert data["warnings"]
+    assert data["evidence"]["coordinate_system"] == "cartesian_2d"
+    assert data["evidence"]["frame"]["coordinate_system"] == "cartesian_2d"
+    assert "center_px" not in data["evidence"]["frame"]
 
 
 def _axis_bar_chart(*, horizontal: bool = False, mixed: bool = False) -> Image.Image:
@@ -379,6 +444,9 @@ def test_extract_line_series_returns_trace_and_marker_sources(tmp_path, monkeypa
     assert isinstance(result, ToolResult)
     data = result.data
     assert data["orientation"] == "upright"
+    assert data["evidence"]["coordinate_system"] == "cartesian_2d"
+    assert data["evidence"]["frame"]["coordinate_system"] == "cartesian_2d"
+    assert "center_px" not in data["evidence"]["frame"]
     assert data["plot_frame"]["polygon_px"]
     assert all(entry["trace"]["polyline_px"] for entry in data["series"])
     assert all(point["source"] == "marker" for entry in data["series"] for point in entry["points"])
@@ -602,6 +670,8 @@ def test_extract_scatter_points_preserves_series_and_calibrated_coordinates(tmp_
     assert data["axes"]["x"]["calibrated"] is True
     assert data["axes"]["y"]["calibrated"] is True
     assert data["orientation"] == "upright"
+    assert data["evidence"]["coordinate_system"] == "cartesian_2d"
+    assert "center_px" not in data["evidence"]["frame"]
     assert data["plot_frame"]["polygon_px"]
     assert data["plot_frame"]["x_axis"]["direction"]
     assert data["plot_frame"]["y_axis"]["direction"]
@@ -774,6 +844,9 @@ def test_extract_pie_slices_measures_clean_sectors(tmp_path, monkeypatch):
     assert data["plot_region"]["radius_px"] > 100
     assert data["plot_region"]["bbox_px"]
     assert data["transform"]["kind"] == "circular_invariant"
+    assert data["evidence"]["coordinate_system"] == "polar_2d"
+    assert data["evidence"]["frame"]["center_px"] == data["plot_region"]["center_px"]
+    assert "x_axis" not in data["evidence"]["frame"]
     assert data["totals"]["consistent"] is True
     assert 0.0 <= data["confidence"]["overall"] <= 1.0
     with Image.open(BytesIO(result.images[0].content)) as overlay, Image.open(chart_path) as source:

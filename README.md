@@ -136,7 +136,7 @@ conda run -n agent python -m chartagent --agent --delete-session demo
 
 ## Images and tools
 
-In the Agent REPL, enter an image as `@/path/to/chart.png` or `@"/path with spaces/chart.png"`. The CLI registers the file and sends the model an opaque `att_...` ID plus safe metadata. It does not eagerly send image bytes. The model can call `load_image(attachment_id)` whenever visual inspection is useful, and can pass the same ID to `extract_text` or `measure_bars`. Every load validates ownership, file availability, size, media type, and content hash.
+In the Agent REPL, enter an image as `@/path/to/chart.png` or `@"/path with spaces/chart.png"`. The CLI registers the file and sends the model an opaque `att_...` ID plus safe metadata. It does not eagerly send image bytes. The model can call `load_image(attachment_id)` whenever visual inspection is useful, and can pass the same ID to `extract_text`, `measure_bars`, `extract_line_series`, or `extract_scatter_points`. Cartesian observation tools keep source-image geometry and return calibrated values only when axis evidence is sufficient; otherwise they preserve pixel evidence and warnings. OCR-backed tests and commands use the Conda `agent` environment, which provides RapidOCR. Every load validates ownership, file availability, size, media type, and content hash.
 
 Tool-generated overlays are returned as in-memory visual observations for the next model turn. Their bytes, source-image bytes, provider reasoning, raw responses, credentials, and trace events are not persisted in session memory.
 

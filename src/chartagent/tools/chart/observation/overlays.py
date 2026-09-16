@@ -31,6 +31,81 @@ def _tag(
     draw.text((x + 3, y + 2), text, fill="#111111")
 
 
+def _draw_common_frame(
+    draw: ImageDraw.ImageDraw,
+    overlay: Image.Image,
+    frame: dict | None,
+    *,
+    label: str,
+    draw_axes: bool = True,
+) -> None:
+    """Draw coordinate evidence shared by every chart overlay."""
+    if not isinstance(frame, dict):
+        return
+    polygon = frame.get("polygon_px")
+    if isinstance(polygon, list) and len(polygon) >= 3:
+        points = [
+            (
+                max(0, min(overlay.width - 1, int(round(point[0])))),
+                max(0, min(overlay.height - 1, int(round(point[1])))),
+            )
+            for point in polygon
+            if isinstance(point, (list, tuple)) and len(point) >= 2
+        ]
+        if len(points) >= 3:
+            draw.line([*points, points[0]], fill="#0066ff", width=2, joint="curve")
+            _tag(draw, points[0], label, image_size=overlay.size)
+    elif isinstance(frame.get("bbox_px"), (list, tuple)) and len(frame["bbox_px"]) == 4:
+        x, y, width, height = map(int, frame["bbox_px"])
+        draw.rectangle(
+            (x, y, min(overlay.width - 1, x + width - 1), min(overlay.height - 1, y + height - 1)),
+            outline="#0066ff",
+            width=2,
+        )
+
+    coordinate_system = frame.get("coordinate_system")
+    if coordinate_system == "polar_2d":
+        center = frame.get("center_px")
+        radius = frame.get("radius_px")
+        if isinstance(center, (list, tuple)) and len(center) >= 2 and radius:
+            cx, cy = (int(round(value)) for value in center[:2])
+            r = int(round(float(radius)))
+            draw.ellipse((cx - r, cy - r, cx + r, cy + r), outline="#0066ff", width=2)
+            _tag(draw, (cx - r, max(0, cy - r - 18)), label, image_size=overlay.size)
+        return
+
+    if not draw_axes:
+        return
+    for axis_name, color in (("x_axis", "#0066ff"), ("y_axis", "#00a6a6")):
+        axis = frame.get(axis_name)
+        points = axis.get("points_px") if isinstance(axis, dict) else None
+        if not isinstance(points, list) or len(points) < 2:
+            continue
+        axis_points = [
+            (
+                max(0, min(overlay.width - 1, int(round(point[0])))),
+                max(0, min(overlay.height - 1, int(round(point[1])))),
+            )
+            for point in points[:2]
+            if isinstance(point, (list, tuple)) and len(point) >= 2
+        ]
+        if len(axis_points) == 2:
+            draw.line(axis_points, fill=color, width=3)
+            _tag(draw, axis_points[0], axis_name.replace("_", " ").upper(), image_size=overlay.size)
+
+
+def render_common_frame_overlay(
+    image: Image.Image,
+    frame: dict | None,
+    *,
+    label: str = "CHART FRAME",
+) -> bytes:
+    """Render only the neutral coordinate evidence layer."""
+    overlay = image.convert("RGB").copy()
+    _draw_common_frame(ImageDraw.Draw(overlay), overlay, frame, label=label)
+    return _png_bytes(overlay)
+
+
 def render_ocr_overlay(image: Image.Image, snippets: list[dict]) -> bytes:
     overlay = image.convert("RGB").copy()
     draw = ImageDraw.Draw(overlay)
@@ -52,9 +127,12 @@ def render_bar_overlay(
     image: Image.Image,
     bars: list[dict],
     baseline: dict | None,
+    *,
+    frame: dict | None = None,
 ) -> bytes:
     overlay = image.convert("RGB").copy()
     draw = ImageDraw.Draw(overlay)
+    _draw_common_frame(draw, overlay, frame, label="BAR FRAME", draw_axes=False)
     series_ids = {bar.get("series_id") for bar in bars if bar.get("series_id")}
     baseline_points = baseline.get("points_px") if isinstance(baseline, dict) else None
     if isinstance(baseline_points, list) and len(baseline_points) >= 2:
@@ -127,6 +205,7 @@ def render_line_overlay(
     overlay = image.convert("RGB").copy()
     draw = ImageDraw.Draw(overlay)
     frame = plot_frame or {}
+    _draw_common_frame(draw, overlay, frame, label="LINE FRAME")
     polygon = frame.get("polygon_px") if isinstance(frame, dict) else None
     if isinstance(polygon, list) and len(polygon) >= 3:
         frame_points = [
@@ -226,6 +305,7 @@ def render_scatter_overlay(
     draw = ImageDraw.Draw(overlay)
     series = series or []
     frame = plot_frame or {}
+    _draw_common_frame(draw, overlay, frame, label="SCATTER FRAME")
     polygon = frame.get("polygon_px") if isinstance(frame, dict) else None
     if isinstance(polygon, list) and len(polygon) >= 3:
         frame_points = [
@@ -346,6 +426,17 @@ def render_pie_overlay(
     if radius <= 0:
         _tag(draw, (8, 8), "PIE REGION UNRESOLVED", image_size=overlay.size)
         return _png_bytes(overlay)
+    _draw_common_frame(
+        draw,
+        overlay,
+        {
+            "coordinate_system": "polar_2d",
+            "bbox_px": plot_region.get("bbox_px") or plot_region.get("bbox"),
+            "center_px": center,
+            "radius_px": radius,
+        },
+        label="PIE FRAME",
+    )
     draw.ellipse(
         (center_x - radius, center_y - radius, center_x + radius, center_y + radius),
         outline="#0066ff",
@@ -407,6 +498,7 @@ def render_pie_overlay(
 
 __all__ = [
     "render_ocr_overlay",
+    "render_common_frame_overlay",
     "render_bar_overlay",
     "render_line_overlay",
     "render_scatter_overlay",

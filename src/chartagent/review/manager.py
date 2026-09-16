@@ -227,6 +227,19 @@ def _close_enough(actual: float, expected: float, tolerance: float = 0.18) -> bo
     return abs(actual - expected) <= tolerance * scale
 
 
+def _common_sensor_evidence(data: Mapping[str, Any]) -> Mapping[str, Any]:
+    evidence = data.get("evidence")
+    return evidence if isinstance(evidence, Mapping) else {}
+
+
+def _sensor_warnings(data: Mapping[str, Any]) -> list[str]:
+    common = _common_sensor_evidence(data).get("warnings")
+    if isinstance(common, list):
+        return [item for item in common if isinstance(item, str)]
+    warnings = data.get("warnings")
+    return [item for item in warnings if isinstance(item, str)] if isinstance(warnings, list) else []
+
+
 def _sensor_result(path: Path, chart_type: ChartType) -> tuple[Mapping[str, Any] | None, str | None]:
     """Run the existing deterministic sensor against an ephemeral candidate."""
     try:
@@ -257,6 +270,16 @@ def _compare_sensor(spec: ChartSpec, data: Mapping[str, Any] | None, sensor_erro
     if data is None:
         return [_issue("sensor_unavailable", "candidate", sensor_error or "chart sensor produced no evidence")], evidence
     chart_type = spec.metadata.chart_type
+    common = _common_sensor_evidence(data)
+    if common:
+        evidence.append(
+            {
+                "kind": "common_chart_evidence",
+                "coordinateSystem": common.get("coordinate_system"),
+                "frame": common.get("frame"),
+                "confidence": common.get("confidence"),
+            }
+        )
     if chart_type is ChartType.BAR:
         items = data.get("bars")
         actual_count = len(items) if isinstance(items, list) else 0
@@ -286,10 +309,9 @@ def _compare_sensor(spec: ChartSpec, data: Mapping[str, Any] | None, sensor_erro
             "totals": dict(totals),
             "confidence": data.get("confidence"),
         })
-        sensor_warnings = data.get("warnings")
+        sensor_warnings = _sensor_warnings(data)
         unreliable = (
-            isinstance(sensor_warnings, list)
-            and any(isinstance(item, str) for item in sensor_warnings)
+            bool(sensor_warnings)
         ) or totals.get("consistent") is not True
         if actual_count != expected_count:
             issues.append(_issue(
@@ -412,8 +434,7 @@ def _compare_sensor(spec: ChartSpec, data: Mapping[str, Any] | None, sensor_erro
             )
         if actual_points != expected_points:
             unreliable = (
-                isinstance(data.get("warnings"), list)
-                and bool(data.get("warnings"))
+                bool(_sensor_warnings(data))
                 and (
                     actual_points == 0
                     or is_line
@@ -423,14 +444,14 @@ def _compare_sensor(spec: ChartSpec, data: Mapping[str, Any] | None, sensor_erro
                             marker in warning
                             for marker in ("sampling", "calibration", "fragmented", "overlap", "unresolved")
                         )
-                        for warning in data["warnings"]
+                        for warning in _sensor_warnings(data)
                     )
                 )
             )
             issues.append(_issue("point_evidence_unresolved" if unreliable else "point_count_mismatch", "dataset", f"expected {expected_points} points, detected {actual_points}", "warning" if unreliable else "error"))
         expected_series = {point.series or "default" for point in spec.dataset}
         if len(series) != len(expected_series):
-            unreliable = not series and isinstance(data.get("warnings"), list) and bool(data.get("warnings"))
+            unreliable = not series and bool(_sensor_warnings(data))
             issues.append(_issue("series_evidence_unresolved" if unreliable else "series_count_mismatch", "dataset.series", f"expected {len(expected_series)} series, detected {len(series)}", "warning" if unreliable else "error"))
         actual_labels = {
             str(item.get("label")).strip()
@@ -459,11 +480,10 @@ def _compare_sensor(spec: ChartSpec, data: Mapping[str, Any] | None, sensor_erro
                 if expected_values and len(actual_values) == len(expected_values):
                     if any(not (_close_enough(actual[0], expected[0], 0.12) and _close_enough(actual[1], expected[1], 0.12)) for actual, expected in zip(actual_values, expected_values)):
                         issues.append(_issue("point_value_mismatch", f"dataset.series[{index}]", "detected point coordinates do not match the ChartSpec"))
-    warnings = data.get("warnings")
-    if isinstance(warnings, list):
-        for warning in warnings[:MAX_REVIEW_ISSUES]:
-            if isinstance(warning, str) and warning.strip():
-                issues.append(_issue("sensor_warning", "evidence", warning, "warning"))
+    warnings = _sensor_warnings(data)
+    for warning in warnings[:MAX_REVIEW_ISSUES]:
+        if isinstance(warning, str) and warning.strip():
+            issues.append(_issue("sensor_warning", "evidence", warning, "warning"))
     return issues, evidence
 
 

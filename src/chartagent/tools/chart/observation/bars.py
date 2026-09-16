@@ -17,7 +17,8 @@ from PIL import Image
 
 from ...core.definition import Tool
 from ...core.result import GeneratedImage, ToolResult
-from .cartesian import (
+from .foundation import (
+    build_common_evidence,
     cluster_centers,
     color_mask,
     confidence_map,
@@ -25,6 +26,7 @@ from .cartesian import (
     image_size,
     rgb_to_hex,
 )
+from .coordinates import cartesian_frame, fit_dominant_axis_line
 from .overlays import render_bar_overlay
 
 Orientation = Literal["vertical", "horizontal"]
@@ -36,20 +38,28 @@ def _empty_result(
 ) -> ToolResult:
     warning_list = warnings or ["no bar geometry or baseline detected"]
     rgb = np.asarray(chart_image)
+    confidence = confidence_map(
+        overall=0.0,
+        geometry=0.0,
+        calibration=0.0,
+        association=0.0,
+    )
     data = {
         "image_size": image_size(rgb),
+        "evidence": build_common_evidence(
+            rgb,
+            coordinate_system="cartesian_2d",
+            frame=None,
+            confidence=confidence,
+            warnings=warning_list,
+        ),
         "orientation": "unknown",
         "bar_mode": "unknown",
         "plot_area": None,
         "baseline": None,
         "series": [],
         "bars": [],
-        "confidence": confidence_map(
-            overall=0.0,
-            geometry=0.0,
-            calibration=0.0,
-            association=0.0,
-        ),
+        "confidence": confidence,
         "warnings": warning_list,
     }
     return ToolResult(
@@ -310,6 +320,28 @@ def _axis_hint(
         if len(support) and int(support.max()) >= minimum:
             return float(left + int(np.argmax(support)))
     return None
+
+
+def _visible_axis_reference(
+    rgb: np.ndarray,
+    candidates: list[dict[str, Any]],
+    orientation: Orientation,
+) -> dict[str, Any] | None:
+    """Return visible zero-axis evidence in the same scalar space as bars."""
+    if not candidates:
+        return None
+    axis = fit_dominant_axis_line(rgb, axis="x" if orientation == "vertical" else "y")
+    if axis is None:
+        return None
+    return {
+        "points_px": axis["points_px"],
+        "slope": float(axis["slope"]),
+        "intercept": float(axis["intercept"]),
+        "residual_px": float(axis["residual_px"]),
+        "support": int(axis["support"]),
+        "span_px": float(axis["span_px"]),
+        "source": "visible_axis",
+    }
 
 
 def _line_fit(points: list[tuple[float, float]]) -> tuple[float, float] | None:
@@ -704,6 +736,26 @@ def _measure_chart(rgb: np.ndarray) -> dict[str, Any]:
         prefer_outer=stacked,
     )
     warnings: list[str] = []
+    visible_axis = _visible_axis_reference(rgb, candidates, orientation)
+    baseline_cross_check: dict[str, Any] | None = None
+    if baseline is not None and visible_axis is not None:
+        residuals = []
+        for candidate in candidates:
+            coordinate = candidate["_center_x"] if orientation == "vertical" else candidate["_center_y"]
+            baseline_value = float(baseline["slope"] * coordinate + baseline["intercept"])
+            visible_value = float(visible_axis["slope"] * coordinate + visible_axis["intercept"])
+            residuals.append(abs(baseline_value - visible_value))
+        cross_residual = float(np.sqrt(np.mean(np.square(residuals)))) if residuals else 0.0
+        cross_limit = max(float(baseline["_tolerance"]), float(visible_axis["residual_px"]) + 3.0)
+        baseline_cross_check = {
+            "source": "visible_axis_cross_check",
+            "visible_axis": visible_axis,
+            "residual_px": round(cross_residual, 3),
+            "tolerance_px": round(cross_limit, 3),
+            "consistent": bool(cross_residual <= cross_limit),
+        }
+        if not baseline_cross_check["consistent"]:
+            warnings.append("bar baseline disagrees with visible zero-axis evidence")
     if abs(vertical_score - horizontal_score) < 0.12:
         warnings.append("bar orientation is ambiguous; geometry confidence is reduced")
     if len({candidate["_series_index"] for candidate in candidates}) > 1:
@@ -736,6 +788,7 @@ def _measure_chart(rgb: np.ndarray) -> dict[str, Any]:
         "axis_orientation": orientation,
         "bar_mode": bar_mode,
         "baseline": baseline,
+        "baseline_cross_check": baseline_cross_check,
         "plot_area": plot_area,
         "palette": palette,
         "warnings": warnings,
@@ -821,33 +874,63 @@ def measure_bars(image_path: str) -> ToolResult | dict:
     confidence_overall = 0.0 if baseline is None else min(0.96, 0.72 + baseline["confidence"] * 0.24)
     if warnings:
         confidence_overall *= 0.9
+    confidence = confidence_map(
+        overall=confidence_overall,
+        geometry=0.9 if candidates else 0.0,
+        calibration=0.0,
+        association=0.8 if len(series) == 1 else 0.62,
+    )
+    frame = (
+        cartesian_frame(
+            bbox=measured["plot_area"],
+            x_axis=(measured["baseline_cross_check"] or {}).get("visible_axis")
+            if orientation == "vertical" and measured.get("baseline_cross_check")
+            else (baseline if orientation == "vertical" else None),
+            y_axis=(measured["baseline_cross_check"] or {}).get("visible_axis")
+            if orientation == "horizontal" and measured.get("baseline_cross_check")
+            else (baseline if orientation == "horizontal" else None),
+            orientation=measured["orientation"],
+            confidence=confidence_overall,
+            evidence=["bar_geometry", "baseline"] if baseline else ["bar_geometry"],
+        )
+        if measured["plot_area"]
+        else None
+    )
+    if frame is not None:
+        frame["baseline"] = baseline is not None
+    public_baseline = (
+        {key: value for key, value in baseline.items() if not key.startswith("_")}
+        if baseline
+        else None
+    )
+    if public_baseline is not None and measured.get("baseline_cross_check") is not None:
+        public_baseline["cross_check"] = measured["baseline_cross_check"]
     data = {
         "image_size": image_size(rgb),
+        "evidence": build_common_evidence(
+            rgb,
+            coordinate_system="cartesian_2d",
+            frame=frame,
+            legend=series,
+            series=series,
+            confidence=confidence,
+            warnings=warnings,
+        ),
         "orientation": measured["orientation"],
         "bar_mode": measured["bar_mode"],
         "plot_area": {"bbox": measured["plot_area"]} if measured["plot_area"] else None,
-        "baseline": {
-            key: value
-            for key, value in baseline.items()
-            if not key.startswith("_")
-        }
-        if baseline
-        else None,
+        "baseline": public_baseline,
+        "baseline_cross_check": measured.get("baseline_cross_check"),
         "series": series,
         "bars": bars,
-        "confidence": confidence_map(
-            overall=confidence_overall,
-            geometry=0.9 if candidates else 0.0,
-            calibration=0.0,
-            association=0.8 if len(series) == 1 else 0.62,
-        ),
+        "confidence": confidence,
         "warnings": warnings,
     }
     return ToolResult(
         data,
         (
             GeneratedImage(
-                render_bar_overlay(chart_image, bars, data["baseline"]),
+                render_bar_overlay(chart_image, bars, data["baseline"], frame=frame),
                 "image/png",
                 "Detected bars with unified geometry, identities, and baseline",
             ),

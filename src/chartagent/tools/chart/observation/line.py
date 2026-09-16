@@ -4,33 +4,28 @@ from __future__ import annotations
 
 import colorsys
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import Any
 
 import numpy as np
 from PIL import Image
 
 from ...core.definition import Tool
 from ...core.result import GeneratedImage, ToolResult
-from .cartesian import (
-    apply_axis_transform as cartesian_apply_axis_transform,
-    axis_output as cartesian_axis_output,
+from .foundation import (
+    build_common_evidence,
     color_mask,
     confidence_map,
     default_plot_area,
     detect_color_palette,
     evidence_envelope,
-    fit_axis_transform as cartesian_fit_axis_transform,
-    numeric_ticks as cartesian_numeric_ticks,
-    numeric_text,
+    numeric_ticks,
     rgb_to_hex,
     series_entry,
 )
+from .coordinates import apply_axis_transform, axis_output, detect_cartesian_frame, fit_axis_transform
 from .ocr import extract_text
 from .overlays import render_line_overlay
 
-_MAX_AXIS_SLOPE = 0.18
-_AXIS_SLOPE_STEPS = 49
-_DARK_PIXEL = 112
 _TRACE_TOLERANCE = 30
 
 
@@ -59,267 +54,6 @@ def _line_palette(rgb: np.ndarray, region: list[int]) -> list[np.ndarray]:
             if saturation > existing_saturation:
                 selected[match_index] = (hue, candidate)
     return [color for _, color in selected]
-
-
-def _numeric_ticks(
-    snippets: list[dict[str, Any]],
-    plot_area: list[int],
-) -> tuple[list[dict[str, float]], list[dict[str, float]]]:
-    """Classify numeric OCR snippets near the initial Cartesian frame.
-
-    ``plot_area`` is intentionally only a search hint. The line sensor later
-    projects the returned source-image points onto its inferred axis lines.
-    The extra ``point_px`` field is ignored by the scatter sensor, which
-    continues to consume the historical ``pixel`` field.
-    """
-    x, y, width, height = plot_area
-    x_ticks: list[dict[str, float]] = []
-    y_ticks: list[dict[str, float]] = []
-    for snippet in snippets:
-        value = numeric_text(str(snippet.get("text", "")))
-        bbox = snippet.get("bbox")
-        if value is None or not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
-            continue
-        left, top, box_width, box_height = map(float, bbox)
-        center_x = left + box_width / 2
-        center_y = top + box_height / 2
-        item = {
-            "pixel": center_x,
-            "value": value,
-            "point_px": [center_x, center_y],
-        }
-        if center_x < x + 8 and y <= center_y <= y + height:
-            y_item = dict(item)
-            y_item["pixel"] = center_y
-            y_ticks.append(y_item)
-        elif y + height - 4 <= center_y and x - 4 <= center_x <= x + width:
-            x_ticks.append(item)
-    return _unique_ticks(x_ticks), _unique_ticks(y_ticks)
-
-
-def _unique_ticks(ticks: list[dict[str, float]]) -> list[dict[str, float]]:
-    unique: dict[tuple[int, float], dict[str, float]] = {}
-    for tick in ticks:
-        unique[(round(tick["pixel"]), tick["value"])] = tick
-    return sorted(unique.values(), key=lambda tick: tick["pixel"])
-
-
-def _fit_ticks(ticks: list[dict[str, float]]) -> Callable[[float], float] | None:
-    """Keep the small compatibility helper used by the scatter sensor."""
-    if len(ticks) < 2:
-        return None
-    pixels = np.asarray([tick["pixel"] for tick in ticks], dtype=float)
-    values = np.asarray([tick["value"] for tick in ticks], dtype=float)
-    if len(np.unique(pixels)) < 2:
-        return None
-    slope, intercept = np.polyfit(pixels, values, 1)
-    if not np.isfinite(slope) or not np.isfinite(intercept):
-        return None
-    return lambda pixel: float(slope * pixel + intercept)
-
-
-def _axis_scalar(point: Sequence[float], axis_points: list[list[float]] | None) -> float:
-    """Project a source-image point onto a fitted axis direction."""
-    if not axis_points or len(axis_points) < 2:
-        return float(point[0])
-    origin = np.asarray(axis_points[0], dtype=float)
-    direction = np.asarray(axis_points[1], dtype=float) - origin
-    length = float(np.linalg.norm(direction))
-    if length <= 1e-6:
-        return float(point[0])
-    return float(np.dot(np.asarray(point, dtype=float) - origin, direction / length))
-
-
-def _fit_axis_transform(
-    ticks: list[dict[str, float]],
-    axis_points: list[list[float]] | None,
-) -> dict[str, Any] | None:
-    if len(ticks) < 2:
-        return None
-    pixels = np.asarray(
-        [_axis_scalar(tick.get("point_px", [tick["pixel"], 0]), axis_points) for tick in ticks],
-        dtype=float,
-    )
-    values = np.asarray([tick["value"] for tick in ticks], dtype=float)
-    if len(np.unique(pixels)) < 2:
-        return None
-    slope, intercept = np.polyfit(pixels, values, 1)
-    if not np.isfinite(slope) or not np.isfinite(intercept):
-        return None
-    residual = float(np.sqrt(np.mean((slope * pixels + intercept - values) ** 2)))
-    value_span = max(1.0, float(np.ptp(values)))
-    residual_limit = max(1.5, value_span * 0.08)
-    calibrated = bool(residual <= residual_limit)
-    confidence = min(1.0, len(ticks) / 4.0) * max(
-        0.0,
-        min(1.0, 1.0 - residual / max(residual_limit, 1e-6)),
-    )
-    return {
-        "slope": float(slope),
-        "intercept": float(intercept),
-        "residual": round(residual, 4),
-        "support": len(ticks),
-        "confidence": round(confidence, 4),
-        "calibrated": calibrated,
-        "axis_points": axis_points,
-    }
-
-
-def _apply_axis_transform(model: dict[str, Any] | None, point: Sequence[float]) -> float | None:
-    if not model or not model.get("calibrated"):
-        return None
-    scalar = _axis_scalar(point, model.get("axis_points"))
-    return round(float(model["slope"] * scalar + model["intercept"]), 6)
-
-
-def _dark_mask(rgb: np.ndarray) -> np.ndarray:
-    return np.max(rgb, axis=2) <= _DARK_PIXEL
-
-
-def _fit_dominant_axis_line(dark: np.ndarray, *, axis: str) -> dict[str, Any] | None:
-    """Find a long near-horizontal or near-vertical dark line.
-
-    This is a bounded Hough-like search implemented with NumPy. It favors long
-    support spans, so chart axes win over short text strokes and labels.
-    """
-    height, width = dark.shape
-    yy, xx = np.nonzero(dark)
-    if axis == "x":
-        keep = (
-            (xx >= int(width * 0.08))
-            & (xx <= int(width * 0.97))
-            & (yy >= int(height * 0.52))
-            & (yy <= int(height * 0.96))
-        )
-    else:
-        keep = (
-            (xx >= int(width * 0.04))
-            & (xx <= int(width * 0.46))
-            & (yy >= int(height * 0.06))
-            & (yy <= int(height * 0.94))
-        )
-    xx, yy = xx[keep].astype(float), yy[keep].astype(float)
-    if len(xx) < 20:
-        return None
-
-    best: dict[str, Any] | None = None
-    slopes = np.linspace(-_MAX_AXIS_SLOPE, _MAX_AXIS_SLOPE, _AXIS_SLOPE_STEPS)
-    for slope in slopes:
-        coordinate = yy - slope * xx if axis == "x" else xx - slope * yy
-        rounded = np.rint(coordinate).astype(int)
-        minimum = int(rounded.min())
-        counts = np.bincount(rounded - minimum)
-        if len(counts) == 0:
-            continue
-        candidate_bins = np.argsort(counts)[-8:]
-        for candidate_bin in candidate_bins:
-            support_line = minimum + int(candidate_bin)
-            inliers = np.abs(coordinate - support_line) <= 1.6
-            support = int(inliers.sum())
-            if support < 12:
-                continue
-            projected = xx[inliers] if axis == "x" else yy[inliers]
-            span = float(np.ptp(projected)) if len(projected) else 0.0
-            minimum_span = width * 0.38 if axis == "x" else height * 0.38
-            if span < minimum_span:
-                continue
-            score = span + support * 0.35
-            if best is not None and score <= best["score"]:
-                continue
-            if axis == "x":
-                fit_slope, intercept = np.polyfit(xx[inliers], yy[inliers], 1)
-                first = float(projected.min())
-                last = float(projected.max())
-                endpoints = [
-                    [round(first, 2), round(fit_slope * first + intercept, 2)],
-                    [round(last, 2), round(fit_slope * last + intercept, 2)],
-                ]
-                residual_values = yy[inliers] - (fit_slope * xx[inliers] + intercept)
-            else:
-                fit_slope, intercept = np.polyfit(yy[inliers], xx[inliers], 1)
-                first = float(projected.min())
-                last = float(projected.max())
-                endpoints = [
-                    [round(fit_slope * first + intercept, 2), round(first, 2)],
-                    [round(fit_slope * last + intercept, 2), round(last, 2)],
-                ]
-                residual_values = xx[inliers] - (fit_slope * yy[inliers] + intercept)
-            residual = float(np.sqrt(np.mean(residual_values**2)))
-            best = {
-                "points_px": endpoints,
-                "slope": float(fit_slope),
-                "intercept": float(intercept),
-                "residual_px": round(residual, 4),
-                "support": support,
-                "score": score,
-            }
-    return best
-
-
-def _bbox_from_points(points: list[Sequence[float]]) -> list[int] | None:
-    if not points:
-        return None
-    xs = [float(point[0]) for point in points]
-    ys = [float(point[1]) for point in points]
-    left = max(0, int(np.floor(min(xs))))
-    top = max(0, int(np.floor(min(ys))))
-    right = int(np.ceil(max(xs))) + 1
-    bottom = int(np.ceil(max(ys))) + 1
-    return [left, top, max(1, right - left), max(1, bottom - top)]
-
-
-def _frame_from_evidence(
-    rgb: np.ndarray,
-    palette: list[np.ndarray],
-    search_area: list[int],
-) -> tuple[dict[str, Any], str, list[np.ndarray]]:
-    height, width = rgb.shape[:2]
-    dark = _dark_mask(rgb)
-    x_axis = _fit_dominant_axis_line(dark, axis="x")
-    y_axis = _fit_dominant_axis_line(dark, axis="y")
-
-    trace_points: list[list[float]] = []
-    x, y, frame_width, frame_height = search_area
-    for color in palette:
-        mask = color_mask(rgb, color, tolerance=_TRACE_TOLERANCE)
-        cropped = mask[max(0, y) : y + frame_height, max(0, x) : x + frame_width]
-        for local_y, local_x in np.argwhere(cropped):
-            trace_points.append([float(local_x + max(0, x)), float(local_y + max(0, y))])
-
-    evidence_points = trace_points[:]
-    for axis_line in (x_axis, y_axis):
-        if axis_line:
-            evidence_points.extend(axis_line["points_px"])
-    bbox = _bbox_from_points(evidence_points) or list(search_area)
-    left, top, box_width, box_height = bbox
-    right = min(width, left + box_width)
-    bottom = min(height, top + box_height)
-    bbox = [left, top, max(1, right - left), max(1, bottom - top)]
-    frame = {
-        "bbox": bbox,
-        "polygon_px": [
-            [bbox[0], bbox[1]],
-            [bbox[0] + bbox[2] - 1, bbox[1]],
-            [bbox[0] + bbox[2] - 1, bbox[1] + bbox[3] - 1],
-            [bbox[0], bbox[1] + bbox[3] - 1],
-        ],
-        "x_axis": {key: value for key, value in x_axis.items() if key != "score"}
-        if x_axis
-        else None,
-        "y_axis": {key: value for key, value in y_axis.items() if key != "score"}
-        if y_axis
-        else None,
-    }
-    if x_axis is None and y_axis is None:
-        orientation = "unknown"
-    elif max(
-        abs(float(x_axis["slope"])) if x_axis else 0.0,
-        abs(float(y_axis["slope"])) if y_axis else 0.0,
-    ) > 0.025:
-        orientation = "oblique"
-    else:
-        orientation = "upright"
-    return frame, orientation, palette
 
 
 def _components(mask: np.ndarray, *, min_area: int = 4) -> list[dict[str, Any]]:
@@ -551,8 +285,8 @@ def _point_records(
             "source": source,
             "confidence": confidence,
         }
-        calibrated_x = cartesian_apply_axis_transform(x_model, point)
-        calibrated_y = cartesian_apply_axis_transform(y_model, point)
+        calibrated_x = apply_axis_transform(x_model, point)
+        calibrated_y = apply_axis_transform(y_model, point)
         if calibrated_x is not None and calibrated_y is not None:
             record["x"] = calibrated_x
             record["y"] = calibrated_y
@@ -584,8 +318,22 @@ def _traces_overlap(series: list[dict[str, Any]], tolerance_px: float = 2.5) -> 
 
 
 def _empty_result(image: Image.Image, warning: str) -> ToolResult:
+    rgb = np.asarray(image.convert("RGB"))
+    confidence = confidence_map(
+        overall=0.0,
+        geometry=0.0,
+        calibration=0.0,
+        association=0.0,
+    )
     data = {
         "image_size": [image.width, image.height],
+        "evidence": build_common_evidence(
+            rgb,
+            coordinate_system="cartesian_2d",
+            frame=None,
+            confidence=confidence,
+            warnings=[warning],
+        ),
         "orientation": "unknown",
         "plot_area": None,
         "plot_frame": None,
@@ -595,12 +343,7 @@ def _empty_result(image: Image.Image, warning: str) -> ToolResult:
         },
         "legend": [],
         "series": [],
-        "confidence": confidence_map(
-            overall=0.0,
-            geometry=0.0,
-            calibration=0.0,
-            association=0.0,
-        ),
+        "confidence": confidence,
         "warnings": [warning],
     }
     return ToolResult(
@@ -614,33 +357,6 @@ def _empty_result(image: Image.Image, warning: str) -> ToolResult:
         ),
         (warning,),
     )
-
-
-def _axis_output(ticks: list[dict[str, float]], model: dict[str, Any] | None) -> dict[str, Any]:
-    output: dict[str, Any] = {
-        "label": None,
-        "ticks": [
-            {
-                "pixel": round(float(tick["pixel"]), 3),
-                "value": round(float(tick["value"]), 6),
-                "point_px": [
-                    round(float(tick["point_px"][0]), 3),
-                    round(float(tick["point_px"][1]), 3),
-                ],
-            }
-            for tick in ticks
-        ],
-        "calibrated": bool(model and model.get("calibrated")),
-    }
-    if model:
-        output["transform"] = {
-            "slope": round(float(model["slope"]), 8),
-            "intercept": round(float(model["intercept"]), 8),
-            "residual": model["residual"],
-            "support": model["support"],
-            "confidence": model["confidence"],
-        }
-    return output
 
 
 def extract_line_series(image_path: str) -> ToolResult | dict:
@@ -657,14 +373,30 @@ def extract_line_series(image_path: str) -> ToolResult | dict:
 
     search_area = default_plot_area(rgb)
     preliminary_palette = _line_palette(rgb, search_area)
-    frame, orientation, palette = _frame_from_evidence(rgb, preliminary_palette, search_area)
-    plot_area = list(frame["bbox"])
+    frame, orientation, detection_area = detect_cartesian_frame(
+        rgb,
+        search_area,
+        preliminary_palette,
+    )
+    plot_area = list(frame.get("bbox") if frame else detection_area)
+    if frame is None:
+        frame = {
+            "coordinate_system": "cartesian_2d",
+            "bbox": plot_area,
+            "bbox_px": plot_area,
+            "polygon_px": [],
+            "x_axis": None,
+            "y_axis": None,
+            "confidence": 0.0,
+            "evidence": [],
+        }
+    palette = _line_palette(rgb, plot_area)
     snippets = _ocr_snippets(path)
-    x_ticks, y_ticks = cartesian_numeric_ticks(snippets, search_area)
+    x_ticks, y_ticks = numeric_ticks(snippets, search_area)
     x_axis_points = frame.get("x_axis", {}).get("points_px") if frame.get("x_axis") else None
     y_axis_points = frame.get("y_axis", {}).get("points_px") if frame.get("y_axis") else None
-    x_model = cartesian_fit_axis_transform(x_ticks, x_axis_points)
-    y_model = cartesian_fit_axis_transform(y_ticks, y_axis_points)
+    x_model = fit_axis_transform(x_ticks, x_axis_points)
+    y_model = fit_axis_transform(y_ticks, y_axis_points)
     legend = _legend_entries(rgb, palette, plot_area, snippets)
 
     series: list[dict[str, Any]] = []
@@ -741,12 +473,21 @@ def extract_line_series(image_path: str) -> ToolResult | dict:
         association=association_confidence,
     )
     data = {
+        "evidence": build_common_evidence(
+            rgb,
+            coordinate_system="cartesian_2d",
+            frame=frame,
+            legend=legend,
+            series=series,
+            confidence=confidence,
+            warnings=warnings,
+        ),
         **evidence_envelope(
             rgb,
             plot_area=plot_area,
             axes={
-                "x": cartesian_axis_output(x_ticks, x_model),
-                "y": cartesian_axis_output(y_ticks, y_model),
+                "x": axis_output(x_ticks, x_model),
+                "y": axis_output(y_ticks, y_model),
             },
             legend=[
                 {key: value for key, value in entry.items() if key != "points"}

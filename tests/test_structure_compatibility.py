@@ -54,6 +54,8 @@ CANONICAL_MODULES = (
     "chartagent.tools.chart.observation.ocr",
     "chartagent.tools.chart.observation.pie",
     "chartagent.tools.chart.observation.scatter",
+    "chartagent.tools.chart.observation.foundation",
+    "chartagent.tools.chart.observation.coordinates",
     "chartagent.tools.chart.observation.cartesian",
     "chartagent.tools.chart.observation.overlays",
     "chartagent.tools.chart.specification",

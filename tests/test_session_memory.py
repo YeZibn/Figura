@@ -162,7 +162,7 @@ def test_pie_sensor_uses_authorized_attachment_id(tmp_path, monkeypatch):
         json.dumps({"attachment_id": "att_unknown"}),
     )
 
-    assert json.loads(authorized.content)["data"]["slices"]
+    assert json.loads(authorized.content)["data"]["sectors"]
     assert "authorized" in json.loads(unauthorized.content)["error"]
     assert str(image) not in unauthorized.content
     assert unauthorized.images == ()
