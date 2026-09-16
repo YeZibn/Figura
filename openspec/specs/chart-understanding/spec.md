@@ -331,7 +331,11 @@ while preserving source dimensions. The legacy fields `baseline_y`, `h_px`,
 
 The system SHALL provide an `assemble_spec` tool that constructs a ChartSpec
 from typed arguments (chart type, title, axis labels, points, source) in code
-and returns its dictionary form; the model never hand-writes IR JSON.
+and atomically applies the chart-type, axis, point, range, and generation
+constraints before returning its dictionary form; the model never hand-writes
+IR JSON and does not need a separate validation tool call for the assembled
+result. A failed assembly SHALL return bounded, located issues and SHALL NOT
+return a ChartSpec that downstream generation can treat as valid.
 
 #### Scenario: Valid arguments produce a schema-shaped spec
 
@@ -340,33 +344,24 @@ and returns its dictionary form; the model never hand-writes IR JSON.
 - **THEN** the returned dictionary round-trips through `ChartSpec.from_dict`
   and `to_dict` unchanged
 - **AND** metadata carries the provided source provenance
+- **AND** the returned ChartSpec has passed the same semantic constraints used
+  by downstream chart generation
 
 #### Scenario: Malformed points are rejected as structured errors
 
 - **WHEN** `assemble_spec` is called with points lacking required fields or a
   chart type outside the enumeration
-- **THEN** the tool returns `{"error": ...}` describing the offending input and
-  produces no spec
+- **THEN** the tool returns `{"error": ...}` describing the offending input
+  and produces no spec
 
-### Requirement: Independent ChartSpec validation tool (Critic)
+#### Scenario: Semantic validation failure prevents downstream use
 
-The system SHALL provide a `validate_spec` tool that checks a given spec
-dictionary via `from_dict` plus `validate()` and returns
-`{"ok": bool, "issues": [...]}`. Validation is a separate agent action, never
-embedded in extraction or assembly.
-
-#### Scenario: Clean spec passes
-
-- **WHEN** `validate_spec` is called with a spec assembled from valid inputs
-- **THEN** the result is `{"ok": true, "issues": []}`
-
-#### Scenario: Invalid spec reports located issues without crashing
-
-- **WHEN** `validate_spec` is called with a spec whose dataset is empty or
-  whose points mix incompatible shapes
-- **THEN** the result is `{"ok": false, "issues": [...]}` with each issue
-  carrying a location and message
-- **AND** no exception escapes to the agent loop
+- **WHEN** typed inputs produce an empty dataset, incompatible point shape,
+  invalid axis contract, invalid range, or another generation-blocking issue
+- **THEN** `assemble_spec` returns bounded located issues through its error
+  result
+- **AND** it does not return a partially accepted ChartSpec for rendering or
+  final structured output
 
 ### Requirement: U0 end-to-end restoration through the ReAct loop
 
@@ -374,27 +369,39 @@ The system SHALL enable the agent, given a clean annotated bar chart, clean
 single/multi-series line chart, clean pie chart, or clean single/multi-series
 scatter chart through the normal image-attachment path and the registered
 chart tools, to produce a ChartSpec whose semantic dataset matches the chart's
-true values. The attachment path needed by local-image tools SHALL be
-available to the model without the user repeating it. The infrastructure MUST
-NOT force a fixed tool sequence or require ChartSpec output for every image
-turn.
+true values when those values are visually recoverable. The attachment path
+needed by local-image tools SHALL be available to the model without the user
+repeating it. The multimodal model SHALL be allowed to use its visual
+understanding as the first-pass semantic evidence, and OCR, chart sensors, and
+layout inspection SHALL be auxiliary evidence selected according to observed
+uncertainty. The infrastructure MUST NOT force a fixed tool sequence or
+require `inspect_chart_layout` or ChartSpec output for every image turn.
+
+#### Scenario: Clear annotated bar-chart restoration
+
+- **WHEN** the user attaches a synthetic single- or multi-series bar chart with
+  readable category and value annotations and asks for the underlying data
+- **THEN** the agent may directly use visual understanding and `assemble_spec`
+  or may call targeted sensors before assembly
+- **AND** the dataset values and series identities equal the ground-truth
+  values and identities used to draw the chart
 
 #### Scenario: Freely planned annotated bar-chart restoration
 
-- **WHEN** the user attaches a synthetic single- or multi-series bar chart with
-  printed value annotations through the standard agent REPL and asks for the
+- **WHEN** the user attaches a bar chart with partially uncertain annotations,
+  layout, or geometry through the standard agent REPL and asks for the
   underlying data
-- **THEN** the agent can choose and call relevant sensors, assembly, and
-  validation tools without a caller-supplied workflow prompt
-- **AND** the dataset values and series identities equal the ground-truth
-  values and identities used to draw the chart
+- **THEN** the agent can choose OCR, bar geometry, layout inspection,
+  assembly, and validation tools according to the unresolved evidence
+- **AND** the resulting values retain warnings or uncertainty when the
+  available evidence cannot resolve them
 
 #### Scenario: Freely planned line-chart restoration
 
 - **WHEN** the user attaches a clean line chart with one or more legend-defined
   series and asks for the underlying data
-- **THEN** the agent can use line-series evidence, OCR, visual inspection, or a
-  retry in any order that it chooses
+- **THEN** the agent can combine visual understanding, line-series evidence,
+  OCR, layout inspection, assembly, or a retry in any order that it chooses
 - **AND** the resulting coordinate points preserve the x ordering, y values,
   and semantic series distinction within the supported fixture tolerance
 
@@ -402,8 +409,9 @@ turn.
 
 - **WHEN** the user attaches a clean single- or multi-series scatter chart with
   readable axes and asks for the underlying data
-- **THEN** the agent can choose scatter evidence, OCR, visual inspection,
-  assembly, and validation tools without a caller-supplied workflow prompt
+- **THEN** the agent can combine visual understanding, scatter evidence, OCR,
+  layout inspection, assembly, and validation tools without a caller-supplied
+  workflow prompt
 - **AND** the resulting coordinate points preserve the detected x/y values and
   resolved series distinction within the supported fixture tolerance
 
@@ -415,10 +423,11 @@ turn.
 
 #### Scenario: Conflicting evidence is surfaced before assembly
 
-- **WHEN** annotation values, axis calibration, series colors, or geometric
-  measurements disagree beyond the reported confidence tolerance
+- **WHEN** annotation values, axis calibration, series colors, layout hints, or
+  geometric measurements disagree beyond the reported confidence tolerance
 - **THEN** the agent receives structured warnings and visual evidence, and can
-  re-examine or switch tools before assembling
+  re-examine, switch tools, or preserve an unresolved candidate before
+  assembling
 - **AND** the final answer does not silently claim unresolved values as certain
 
 ### Requirement: Chart tools registered for the agent REPL
@@ -427,13 +436,17 @@ The system SHALL register the existing chart tools, the line-series sensor, the
 pie-sector sensor, and the scatter-point sensor alongside the built-in tools
 when the agent REPL starts, following the existing tool protocol (JSON
 observations, structured errors, and optional bounded visual observations).
+The model-facing chart tool surface SHALL expose `assemble_spec` as the sole
+ChartSpec construction-and-validation gate; internal validation used by
+generation or review SHALL NOT be registered as a separate model tool.
 
 #### Scenario: REPL exposes Cartesian, pie, and scatter chart tools
 
 - **WHEN** the `--agent` REPL starts
 - **THEN** the tool registry contains `extract_text`, `measure_bars`,
   `extract_line_series`, `extract_pie_slices`, `extract_scatter_points`,
-  `assemble_spec`, and `validate_spec` in addition to the built-ins
+  `assemble_spec`, and `render_chart` in addition to the built-ins
+- **AND** the registry does not contain `validate_spec`
 
 ### Requirement: Chart sensors use authorized attachments
 
@@ -857,16 +870,16 @@ evidence when present.
 ### Requirement: Pie restoration remains freely planned
 
 The system SHALL enable the Agent, given a clean annotated or legend-defined
-pie chart through the normal authorized attachment path, to use pie evidence,
-assemble a pie ChartSpec without axes, and independently validate it. The
-infrastructure MUST NOT force a fixed pie-tool sequence or require ChartSpec
-output for descriptive image questions.
+pie chart through the normal authorized attachment path, to use pie evidence
+and assemble a pie ChartSpec without axes through the atomic construction and
+validation gate. The infrastructure MUST NOT force a fixed pie-tool sequence
+or require ChartSpec output for descriptive image questions.
 
 #### Scenario: Agent restores a clean pie chart
 
 - **WHEN** the user attaches a clean pie chart and asks for its underlying data
 - **THEN** the Agent can choose `extract_pie_slices`, visual inspection, OCR,
-  `assemble_spec`, and `validate_spec` in an order it determines
+  and `assemble_spec` in an order it determines
 - **AND** the resulting categorical dataset preserves the resolved labels and
   either the recognized numeric values or the explicitly chosen normalized
   ratios
@@ -875,7 +888,7 @@ output for descriptive image questions.
 
 - **WHEN** the Agent assembles a valid pie result with categorical points and
   no Cartesian axes
-- **THEN** `validate_spec` accepts the result when the dataset and point values
+- **THEN** `assemble_spec` accepts the result when the dataset and point values
   are valid
 
 #### Scenario: Descriptive pie question does not require restoration
@@ -1070,16 +1083,16 @@ Agent action.
 The system SHALL enable the Agent, given a clean annotated or legend-defined
 scatter chart through the normal authorized attachment path, to use scatter
 evidence, OCR, visual inspection, assemble a coordinate-based scatter
-ChartSpec with axes, and independently validate it. The infrastructure MUST
-NOT force a fixed scatter-tool sequence or require ChartSpec output for
-descriptive image questions.
+ChartSpec with axes through the atomic construction and validation gate. The
+infrastructure MUST NOT force a fixed scatter-tool sequence or require
+ChartSpec output for descriptive image questions.
 
 #### Scenario: Agent restores a clean scatter chart
 
 - **WHEN** the user attaches a clean scatter chart and asks for its underlying
   data
 - **THEN** the Agent can choose `extract_scatter_points`, visual inspection,
-  OCR, `assemble_spec`, and `validate_spec` in an order it determines
+  OCR, and `assemble_spec` in an order it determines
 - **AND** the resulting dataset preserves resolved series identities and
   calibrated x/y coordinates when reliable
 - **AND** uncertain or pixel-only points remain explicitly retained or flagged
@@ -1089,8 +1102,9 @@ descriptive image questions.
 
 - **WHEN** the Agent assembles a scatter result with coordinate points but
   missing or invalid Cartesian axes
-- **THEN** `validate_spec` returns located issues without crashing
-- **AND** a corrected result with valid x/y axes can pass independently
+- **THEN** `assemble_spec` returns located issues without crashing
+- **AND** a corrected result with valid x/y axes can pass through the same
+  atomic assembly gate
 
 #### Scenario: Descriptive scatter question does not require restoration
 

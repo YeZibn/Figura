@@ -428,7 +428,7 @@ def validate_layout_hint(
         "polar_region": polar_region,
         "validation": {
             "status": status,
-            "accepted_for_measurement": status in {"accepted", "partial"},
+            "accepted_for_measurement": status == "accepted",
             "confidence": round(max(0.0, min(1.0, validation_confidence)), 6),
             "checks": checks,
             "warnings": warnings[:12],
@@ -473,11 +473,17 @@ def fallback_layout_context(
 
 
 def context_frame(context: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    """Return only a fully accepted frame for geometric measurement."""
     if not isinstance(context, Mapping):
         return None
     validation = context.get("validation")
     frame = context.get("measurement_frame")
-    if not isinstance(validation, Mapping) or not validation.get("accepted_for_measurement") or not isinstance(frame, Mapping):
+    if (
+        not isinstance(validation, Mapping)
+        or validation.get("status") != "accepted"
+        or not validation.get("accepted_for_measurement")
+        or not isinstance(frame, Mapping)
+    ):
         return None
     bbox = frame.get("bbox_px")
     if not isinstance(bbox, Sequence) or len(bbox) < 4:

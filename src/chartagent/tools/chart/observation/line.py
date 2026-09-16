@@ -532,6 +532,17 @@ def extract_line_series(
         series.append(entry)
 
     warnings: list[str] = []
+    conflicts: list[dict[str, Any]] = []
+    for axis_name, ticks, model in (("x", x_ticks, x_model), ("y", y_ticks, y_model)):
+        if len(ticks) >= 2 and model is not None and not model.get("calibrated"):
+            conflicts.append(
+                {
+                    "field": f"{axis_name}_axis_calibration",
+                    "sources": ["ocr", "pixel_geometry"],
+                    "message": f"OCR {axis_name}-axis tick candidates do not fit a reliable pixel calibration",
+                }
+            )
+            warnings.append(f"OCR {axis_name}-axis tick candidates conflict with pixel calibration")
     if isinstance(layout_context, dict):
         validation = layout_context.get("validation") if isinstance(layout_context.get("validation"), dict) else {}
         if validation.get("status") == "rejected":
@@ -592,6 +603,7 @@ def extract_line_series(
             confidence=confidence,
             warnings=warnings,
             layout_context=layout_evidence,
+            conflicts=conflicts,
         ),
         **evidence_envelope(
             rgb,

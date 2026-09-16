@@ -21,13 +21,20 @@ from chartagent.tools.chart.observation.coordinates import (
 from chartagent.tools.chart.observation.foundation import (
     associate_series_labels,
     build_common_evidence,
+    compare_layout_with_frame,
 )
-from chartagent.tools.chart.observation.layout import validate_layout_hint
+from chartagent.tools.chart.observation.layout import context_frame, validate_layout_hint
 from chartagent.tools.chart.observation.line import extract_line_series
 from chartagent.tools.chart.observation.ocr import extract_text
 from chartagent.tools.chart.observation.pie import extract_pie_slices
 from chartagent.tools.chart.observation.scatter import extract_scatter_points
-from chartagent.tools.chart.specification import assemble_spec, validate_spec
+from chartagent.tools.chart.specification import (
+    ASSEMBLE_SPEC,
+    CHART_SPEC_SCHEMA,
+    POINT_SCHEMA,
+    assemble_spec,
+    validate_spec,
+)
 from tests.chart_fixtures import (
     annotated_bar_chart,
     grouped_bar_chart,
@@ -93,6 +100,99 @@ def test_common_chart_evidence_separates_coordinate_models_and_calibration():
     assert short_fit is not None
     assert short_fit["calibrated"] is False
     assert apply_axis_transform(short_fit, [15, 20]) is None
+
+
+def test_layout_conflict_keeps_bounded_pixel_geometry_diagnostics():
+    rgb = np.zeros((120, 220, 3), dtype=np.uint8)
+    frame = {
+        "bbox_px": [20, 20, 180, 80],
+        "x_axis": {"points_px": [[20, 100], [200, 100]]},
+        "y_axis": {"points_px": [[20, 100], [20, 20]]},
+    }
+    layout_context = {
+        "measurement_frame": {"bbox_px": [100, 8, 80, 50]},
+        "axes": {
+            "x": {"points_px": [[100, 58], [180, 58]]},
+            "y": {"points_px": [[100, 58], [100, 8]]},
+        },
+    }
+    comparison = compare_layout_with_frame(frame, layout_context)
+
+    assert comparison is not None
+    assert comparison["status"] == "conflict"
+    assert {item["field"] for item in comparison["conflicts"]} == {
+        "measurement_frame",
+        "x_axis",
+        "y_axis",
+    }
+    warnings: list[str] = []
+    evidence = build_common_evidence(
+        rgb,
+        coordinate_system="cartesian_2d",
+        frame=frame,
+        warnings=warnings,
+        layout_context=layout_context,
+    )
+    assert evidence["conflicts"] == comparison["conflicts"]
+    assert warnings == ["layout hint conflicts with independent pixel geometry"]
+
+
+def test_partial_layout_frame_is_advisory_only():
+    rgb = np.full((100, 200, 3), 255, dtype=np.uint8)
+    context = validate_layout_hint(
+        rgb,
+        {
+            "coordinate_system": "cartesian_2d",
+            "confidence": 0.9,
+            "measurement_frame": {"bbox_norm": [0.1, 0.1, 0.8, 0.76]},
+        },
+    )
+
+    assert context["validation"]["status"] == "partial"
+    assert context["measurement_frame"] is not None
+    assert context_frame(context) is None
+
+
+@pytest.mark.parametrize(
+    ("chart_factory", "sensor", "extract_text_path"),
+    [
+        (line_chart, extract_line_series, "chartagent.tools.chart.observation.line.extract_text"),
+        (scatter_chart, extract_scatter_points, "chartagent.tools.chart.observation.scatter.extract_text"),
+    ],
+)
+def test_cartesian_sensors_retain_independent_geometry_with_accepted_layout(
+    tmp_path,
+    monkeypatch,
+    chart_factory,
+    sensor,
+    extract_text_path,
+):
+    chart_path = tmp_path / f"{sensor.__name__}-layout.png"
+    chart_path.write_bytes(chart_factory()[0])
+    monkeypatch.setattr(extract_text_path, lambda _path: ToolResult([]))
+    with Image.open(chart_path) as image:
+        rgb = np.asarray(image.convert("RGB"))
+    context = validate_layout_hint(
+        rgb,
+        {
+            "coordinate_system": "cartesian_2d",
+            "orientation": "upright",
+            "confidence": 0.95,
+            "measurement_frame": {"bbox_norm": [0.10, 0.10, 0.80, 0.76]},
+            "axes": {
+                "x": {"points_norm": [[0.10, 0.86], [0.90, 0.86]], "confidence": 0.9},
+                "y": {"points_norm": [[0.10, 0.86], [0.10, 0.10]], "confidence": 0.9},
+            },
+        },
+    )
+    assert context["validation"]["status"] == "accepted"
+
+    result = sensor(str(chart_path), context)
+
+    assert isinstance(result, ToolResult)
+    independent = result.data["plot_frame"]["independent_geometry"]
+    assert independent is not None
+    assert independent["x_axis"] or independent["y_axis"]
 
 
 def test_generic_series_association_consumes_text_evidence_without_ocr():
@@ -318,6 +418,37 @@ def test_measure_bars_matches_true_ratios(annotated_chart_path, monkeypatch):
     assert labels == ["BASELINE", *[str(bar["id"]) for bar in data["bars"]]]
 
 
+def test_measure_bars_keeps_independent_baseline_when_layout_is_offset(
+    annotated_chart_path,
+):
+    with Image.open(annotated_chart_path) as image:
+        rgb = np.asarray(image.convert("RGB"))
+    layout_context = validate_layout_hint(
+        rgb,
+        {
+            "coordinate_system": "cartesian_2d",
+            "orientation": "upright",
+            "confidence": 0.95,
+            "measurement_frame": {
+                "bbox_norm": [0.30, 0.12, 0.60, 0.68],
+                "confidence": 0.95,
+            },
+        },
+    )
+    assert layout_context["validation"]["status"] == "partial"
+
+    result = measure_bars(str(annotated_chart_path), layout_context)
+
+    assert isinstance(result, ToolResult)
+    assert len(result.data["bars"]) == 3
+    assert result.data["baseline"]["points_px"] == [[115, 426], [623, 426]]
+    assert any(
+        conflict["field"] == "measurement_frame"
+        for conflict in result.data["evidence"]["conflicts"]
+    )
+    assert "layout hint conflicts with independent pixel geometry" in result.data["warnings"]
+
+
 def test_measure_bars_missing_file_is_structured_error(tmp_path):
     missing = tmp_path / "missing.png"
 
@@ -524,6 +655,28 @@ def test_extract_line_series_calibrates_when_tick_evidence_is_available(tmp_path
     points = result.data["series"][0]["points"]
     assert all("x" in point and "y" in point for point in points)
     assert not any("calibration unavailable" in warning for warning in result.warnings)
+
+
+def test_extract_line_series_preserves_ocr_calibration_conflict(tmp_path, monkeypatch):
+    png_bytes, _ = line_chart()
+    chart_path = tmp_path / "conflicting-line-ticks.png"
+    chart_path.write_bytes(png_bytes)
+    monkeypatch.setattr(
+        "chartagent.tools.chart.observation.line._ocr_snippets",
+        lambda _path: [
+            {"text": "0", "bbox": [45, 90, 12, 12], "confidence": 0.95},
+            {"text": "50", "bbox": [45, 210, 16, 12], "confidence": 0.95},
+            {"text": "0", "bbox": [45, 330, 12, 12], "confidence": 0.95},
+        ],
+    )
+
+    result = extract_line_series(str(chart_path))
+
+    assert isinstance(result, ToolResult)
+    conflicts = result.data["evidence"]["conflicts"]
+    assert any(conflict["field"] == "y_axis_calibration" for conflict in conflicts)
+    assert "OCR y-axis tick candidates conflict with pixel calibration" in result.data["warnings"]
+    assert result.data["axes"]["y"]["ticks"]
 
 
 def _line_tick_snippets():
@@ -960,6 +1113,37 @@ def test_extract_pie_slices_measures_clean_sectors(tmp_path, monkeypatch):
         assert ImageChops.difference(source.convert("RGB"), overlay.convert("RGB")).getbbox()
 
 
+def test_extract_pie_slices_surfaces_independent_center_conflict(tmp_path, monkeypatch):
+    png_bytes, _ = pie_chart(values=(35, 25, 20, 20))
+    chart_path = tmp_path / "conflicting-pie-layout.png"
+    chart_path.write_bytes(png_bytes)
+    monkeypatch.setattr("chartagent.tools.chart.observation.pie.extract_text", lambda _path: ToolResult([]))
+    with Image.open(chart_path) as image:
+        rgb = np.asarray(image.convert("RGB"))
+    layout_context = validate_layout_hint(
+        rgb,
+        {
+            "coordinate_system": "polar_2d",
+            "confidence": 0.95,
+            "measurement_frame": {"bbox_norm": [0.02, 0.05, 0.75, 0.90]},
+            "polar_region": {
+                "center_norm": [0.70, 0.40],
+                "radius_norm": 0.08,
+                "confidence": 0.95,
+            },
+        },
+        chart_type="pie",
+    )
+    assert layout_context["validation"]["status"] == "accepted"
+
+    result = extract_pie_slices(str(chart_path), layout_context)
+
+    assert isinstance(result, ToolResult)
+    assert len(result.data["sectors"]) == 4
+    assert any(conflict["field"] == "polar_geometry" for conflict in result.data["evidence"]["conflicts"])
+    assert "polar layout hint conflicts with detected circle geometry" in result.data["warnings"]
+
+
 def test_extract_pie_slices_preserves_printed_values_separately(tmp_path, monkeypatch):
     png_bytes, _ = pie_chart(values=(60, 40), labels=("Alpha", "Beta"))
     chart_path = tmp_path / "pie-labels.png"
@@ -976,6 +1160,24 @@ def test_extract_pie_slices_preserves_printed_values_separately(tmp_path, monkey
     assert printed
     assert printed[0]["printed"]["value"] == 60.0
     assert printed[0]["measure"]["ratio"] != printed[0]["printed"]["value"]
+
+
+def test_extract_pie_slices_surfaces_ocr_ratio_conflict(tmp_path, monkeypatch):
+    png_bytes, _ = pie_chart(values=(60, 40), labels=("Alpha", "Beta"))
+    chart_path = tmp_path / "conflicting-pie-value.png"
+    chart_path.write_bytes(png_bytes)
+    monkeypatch.setattr(
+        "chartagent.tools.chart.observation.pie.extract_text",
+        lambda _path: ToolResult(
+            [{"id": 1, "text": "99%", "bbox": [250, 190, 32, 16], "confidence": 0.98}]
+        ),
+    )
+
+    result = extract_pie_slices(str(chart_path))
+
+    assert isinstance(result, ToolResult)
+    assert any(conflict["field"].endswith("_ratio") for conflict in result.data["evidence"]["conflicts"])
+    assert any("OCR printed ratio conflicts with geometry" in warning for warning in result.data["warnings"])
 
 
 def test_extract_pie_slices_associates_legend_color_and_label(tmp_path, monkeypatch):
@@ -1153,6 +1355,7 @@ def test_cartesian_tool_observation_serializes_warnings_and_overlay(tmp_path):
     [
         ("bar", [{"category": "A", "value": 12}]),
         ("line", [{"x": 1, "y": 12}, {"x": 2, "y": 18}]),
+        ("pie", [{"category": "A", "value": 0.6}, {"category": "B", "value": 0.4}]),
         ("scatter", [{"x": 1, "y": 12}, {"x": 2, "y": 18}]),
     ],
 )
@@ -1220,6 +1423,36 @@ def test_assemble_spec_rejects_missing_cartesian_axes():
 
     scatter_result = assemble_spec("scatter", [{"x": 1, "y": 2}])
     assert "require non-empty x_label and y_label" in scatter_result["error"]
+
+
+def test_assemble_spec_failure_is_atomic_and_structured():
+    result = assemble_spec(
+        "line",
+        [{"category": "A", "value": 1}],
+        x_label="X",
+        y_label="Y",
+    )
+
+    assert "error" in result
+    assert "metadata" not in result
+    assert "dataset" not in result
+    assert result["issues"]
+    assert result["validation"]["status"] == "failed"
+    assert result["validation"]["checks"]["semantic"] == "failed"
+    assert all(set(issue) == {"location", "message"} for issue in result["issues"])
+
+
+def test_chart_spec_schema_is_shared_by_assembly_and_rendering():
+    from chartagent.tools.chart.rendering import RENDER_CHART
+
+    assembly_point_schema = ASSEMBLE_SPEC.parameters["properties"]["points"]["items"]
+    render_spec_schema = RENDER_CHART.parameters["properties"]["spec"]
+    render_point_schema = render_spec_schema["properties"]["dataset"]["items"]
+
+    assert assembly_point_schema["properties"] == POINT_SCHEMA["properties"]
+    assert render_point_schema["properties"] == POINT_SCHEMA["properties"]
+    assert render_point_schema["oneOf"] == POINT_SCHEMA["oneOf"]
+    assert render_spec_schema["properties"]["metadata"]["properties"]["chart_type"] == CHART_SPEC_SCHEMA["properties"]["metadata"]["properties"]["chart_type"]
 
 
 def test_validate_spec_rejects_scatter_without_axes():

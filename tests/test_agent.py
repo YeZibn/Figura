@@ -21,6 +21,8 @@ from chartagent import (
 from chartagent.agent import _assistant_entry, registry_tools
 from chartagent.client.models import NormalizedResult, ToolCall
 from chartagent.agent.review_gate import review_gate_context
+from chartagent.tools.chart.observation.layout_tool import INSPECT_CHART_LAYOUT
+from chartagent.tools.chart.specification import ASSEMBLE_SPEC
 
 
 class ScriptedClient:
@@ -73,6 +75,45 @@ def test_final_answer_returned_no_tools():
     client = ScriptedClient([_final("hello")])
     agent = Agent(client, ToolRegistry(), system="sys")
     assert agent.run("hi") == "hello"
+
+
+def test_clear_chart_can_assemble_without_layout_inspection():
+    registry = ToolRegistry()
+    registry.register(INSPECT_CHART_LAYOUT)
+    registry.register(ASSEMBLE_SPEC)
+    client = ScriptedClient(
+        [
+            _call(
+                "assemble_spec",
+                json.dumps(
+                    {
+                        "chart_type": "bar",
+                        "title": "Sales",
+                        "x_label": "Category",
+                        "y_label": "Value",
+                        "points": [{"category": "A", "value": 3}],
+                    }
+                ),
+            ),
+            _final("assembled"),
+        ]
+    )
+
+    assert Agent(client, registry).run("restore this clear bar chart") == "assembled"
+    assert client.calls[0]["messages"][0]["role"] == "user"
+    assert len(client.calls) == 2
+    assert json.loads(client.calls[1]["messages"][-1]["content"])["metadata"]["chart_type"] == "bar"
+
+
+def test_descriptive_chart_question_does_not_require_restoration_tools():
+    registry = ToolRegistry()
+    registry.register(INSPECT_CHART_LAYOUT)
+    registry.register(ASSEMBLE_SPEC)
+    client = ScriptedClient([_final("蓝线上升，橙线下降")])
+
+    assert Agent(client, registry).run("这张图的趋势是什么？") == "蓝线上升，橙线下降"
+    assert len(client.calls) == 1
+    assert client.calls[0]["tools"]
 
 
 def test_review_gate_context_is_bounded_structured_json():

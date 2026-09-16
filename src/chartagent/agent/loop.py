@@ -256,12 +256,6 @@ class Agent:
                         call_id=call.id,
                         arguments=summarize_arguments(call.arguments),
                     )
-                self._ensure_layout_context(
-                    call.name,
-                    call.arguments,
-                    layout_contexts,
-                    self.registry,
-                )
                 dispatch_arguments = self._layout_arguments(
                     call.name,
                     call.arguments,
@@ -455,43 +449,6 @@ class Agent:
             return arguments
         parsed["layout_context"] = context
         return json.dumps(parsed, ensure_ascii=False, separators=(",", ":"))
-
-    @staticmethod
-    def _ensure_layout_context(
-        tool_name: str,
-        arguments: str,
-        layout_contexts: dict[str, dict[str, Any]],
-        registry: ToolRegistry,
-    ) -> None:
-        """Create a deterministic fallback when a model skips layout preflight."""
-        if tool_name not in _GEOMETRY_TOOL_NAMES or registry.get(_LAYOUT_TOOL_NAME) is None:
-            return
-        try:
-            parsed = json.loads(arguments) if arguments.strip() else {}
-        except json.JSONDecodeError:
-            return
-        if not isinstance(parsed, dict):
-            return
-        attachment_id = parsed.get("attachment_id")
-        if not isinstance(attachment_id, str) or not attachment_id:
-            return
-        if attachment_id in layout_contexts:
-            return
-        chart_type = {
-            "measure_bars": "bar",
-            "extract_line_series": "line",
-            "extract_scatter_points": "scatter",
-            "extract_pie_slices": "pie",
-        }.get(tool_name)
-        preflight = dispatch_observation(
-            registry,
-            _LAYOUT_TOOL_NAME,
-            json.dumps(
-                {"attachment_id": attachment_id, "chart_type": chart_type},
-                ensure_ascii=False,
-            ),
-        )
-        Agent._remember_layout_context(preflight.content, json.dumps({"attachment_id": attachment_id}), layout_contexts)
 
     @staticmethod
     def _remember_layout_context(

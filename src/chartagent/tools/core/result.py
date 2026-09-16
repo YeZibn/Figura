@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass, field
 from collections.abc import Mapping
 from typing import Any, Iterable
@@ -12,6 +13,26 @@ SUPPORTED_GENERATED_IMAGE_MIME_TYPES = frozenset(
 )
 DEFAULT_MAX_GENERATED_IMAGE_BYTES = 10 * 1024 * 1024
 DEFAULT_MAX_GENERATED_IMAGES = 4
+_EVIDENCE_TYPES = {
+    "extract_text": "text",
+    "inspect_chart_layout": "layout",
+    "measure_bars": "geometry",
+    "extract_line_series": "geometry",
+    "extract_pie_slices": "geometry",
+    "extract_scatter_points": "geometry",
+}
+_EVIDENCE_REFERENCE_KEYS = (
+    "frame",
+    "plot_frame",
+    "plot_area",
+    "axes",
+    "baseline",
+    "bars",
+    "series",
+    "points",
+    "sectors",
+    "layout_context",
+)
 
 
 @dataclass(frozen=True)
@@ -36,10 +57,108 @@ class ToolResult:
     data: Any
     images: tuple[GeneratedImage, ...] = field(default_factory=tuple)
     warnings: tuple[str, ...] = field(default_factory=tuple)
+    evidence: Mapping[str, Any] | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "images", tuple(self.images))
         object.__setattr__(self, "warnings", tuple(self.warnings))
+
+
+def build_evidence_summary(
+    *,
+    source_tool: str,
+    source_attachment_id: str | None,
+    data: Any,
+    warnings: Iterable[object],
+    images: Iterable[GeneratedImage],
+) -> dict[str, Any]:
+    """Build a bounded, source-attributable summary for chart observations."""
+    evidence_type = _EVIDENCE_TYPES.get(source_tool, "tool")
+    confidence_value = data.get("confidence") if isinstance(data, Mapping) else None
+    if isinstance(confidence_value, Mapping):
+        confidence = {
+            str(key)[:48]: _bounded_confidence(value)
+            for key, value in list(confidence_value.items())[:8]
+            if isinstance(key, str) and _bounded_confidence(value) is not None
+        }
+    else:
+        parsed_confidence = _bounded_confidence(confidence_value)
+        confidence = {"overall": parsed_confidence} if parsed_confidence is not None else {}
+
+    normalized_warnings = [
+        item[:160]
+        for item in warnings
+        if isinstance(item, str)
+    ][:12]
+    conflicts: list[Any] = []
+    if isinstance(data, Mapping):
+        direct_conflicts = data.get("conflicts")
+        nested_evidence = data.get("evidence")
+        nested_conflicts = (
+            nested_evidence.get("conflicts")
+            if isinstance(nested_evidence, Mapping)
+            else None
+        )
+        comparison = data.get("layout_comparison")
+        comparison_conflicts = (
+            comparison.get("conflicts")
+            if isinstance(comparison, Mapping)
+            else None
+        )
+        for candidate in (direct_conflicts, nested_conflicts, comparison_conflicts):
+            if isinstance(candidate, (list, tuple)):
+                conflicts.extend(candidate)
+    normalized_conflicts: list[Any] = []
+    for conflict in conflicts:
+        if isinstance(conflict, Mapping):
+            item: dict[str, Any] = {}
+            field = conflict.get("field")
+            sources = conflict.get("sources")
+            message = conflict.get("message")
+            if isinstance(field, str):
+                item["field"] = field[:80]
+            if isinstance(sources, (list, tuple)):
+                item["sources"] = [str(source)[:64] for source in sources[:6]]
+            if isinstance(message, str):
+                item["message"] = message[:160]
+            if item:
+                normalized_conflicts.append(item)
+        elif isinstance(conflict, str):
+            normalized_conflicts.append(conflict[:160])
+        if len(normalized_conflicts) >= 8:
+            break
+    references: list[dict[str, str]] = []
+    if isinstance(source_attachment_id, str) and source_attachment_id:
+        references.append({"scope": "source_image", "attachment_id": source_attachment_id[:160]})
+        if isinstance(data, Mapping):
+            for key in _EVIDENCE_REFERENCE_KEYS:
+                if key in data:
+                    references.append({"scope": key, "attachment_id": source_attachment_id[:160]})
+
+    image_list = list(images)
+    return {
+        "evidence_type": evidence_type,
+        "source_tool": source_tool[:80],
+        "source_attachment_id": source_attachment_id[:160] if isinstance(source_attachment_id, str) else None,
+        "confidence": confidence,
+        "warnings": normalized_warnings,
+        "conflicts": normalized_conflicts,
+        "source_image_refs": references[:12],
+        "visual_observations": {
+            "count": len(image_list),
+            "captions": [image.caption[:160] for image in image_list[:4]],
+        },
+    }
+
+
+def _bounded_confidence(value: object) -> float | None:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(parsed):
+        return None
+    return max(0.0, min(1.0, parsed))
 
 
 @dataclass(frozen=True)
@@ -55,6 +174,8 @@ def normalize_tool_result(
     *,
     max_image_bytes: int = DEFAULT_MAX_GENERATED_IMAGE_BYTES,
     max_images: int = DEFAULT_MAX_GENERATED_IMAGES,
+    source_tool: str | None = None,
+    source_attachment_id: str | None = None,
 ) -> DispatchedObservation:
     """Normalize a legacy value or enriched ``ToolResult``.
 
@@ -94,10 +215,23 @@ def normalize_tool_result(
                     image_metadata[key] = value
         metadata.append(image_metadata)
 
-    content = json.dumps(
-        {"data": result.data, "warnings": warnings, "images": metadata},
-        ensure_ascii=False,
-    )
+    payload: dict[str, Any] = {
+        "data": result.data,
+        "warnings": warnings,
+        "images": metadata,
+    }
+    evidence = result.evidence
+    if evidence is None and source_tool in _EVIDENCE_TYPES:
+        evidence = build_evidence_summary(
+            source_tool=source_tool,
+            source_attachment_id=source_attachment_id,
+            data=result.data,
+            warnings=warnings,
+            images=images,
+        )
+    if evidence is not None:
+        payload["evidence"] = dict(evidence)
+    content = json.dumps(payload, ensure_ascii=False)
     return DispatchedObservation(content=content, images=tuple(images))
 
 
@@ -136,6 +270,7 @@ __all__ = [
     "ToolResult",
     "DispatchedObservation",
     "normalize_tool_result",
+    "build_evidence_summary",
     "SUPPORTED_GENERATED_IMAGE_MIME_TYPES",
     "DEFAULT_MAX_GENERATED_IMAGE_BYTES",
     "DEFAULT_MAX_GENERATED_IMAGES",

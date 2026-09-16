@@ -15,6 +15,7 @@ from .result import (
     DispatchedObservation,
     GeneratedImage,
     ToolResult,
+    build_evidence_summary,
     normalize_tool_result,
 )
 
@@ -27,6 +28,7 @@ __all__ = [
     "dispatch_observation",
     "GeneratedImage",
     "ToolResult",
+    "build_evidence_summary",
     "DispatchedObservation",
     "normalize_tool_result",
     "SUPPORTED_GENERATED_IMAGE_MIME_TYPES",

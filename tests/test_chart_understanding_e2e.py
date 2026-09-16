@@ -41,7 +41,6 @@ class _UnderstandingClient:
             "extract_pie_slices",
             "extract_scatter_points",
             "assemble_spec",
-            "validate_spec",
             "render_chart",
         }
 
@@ -87,10 +86,6 @@ class _UnderstandingClient:
         elif self.stage == 3:
             self.assembled = last_tool_data()
             assert self.assembled == self.ground_truth
-            result = _call("validate", "validate_spec", {"spec": self.assembled})
-        elif self.stage == 4:
-            validation = last_tool_data()
-            assert validation == {"ok": True, "issues": []}
             result = NormalizedResult(content=json.dumps(self.assembled))
         else:
             raise AssertionError("unexpected extra model call")
@@ -114,7 +109,7 @@ def test_agent_restores_annotated_bar_chart_through_full_tool_loop(tmp_path):
     )
 
     assert json.loads(answer) == ground_truth
-    assert client.stage == 5
+    assert client.stage == 4
 
 
 class _MultiSeriesUnderstandingClient:
@@ -172,9 +167,6 @@ class _MultiSeriesUnderstandingClient:
         elif self.stage == 2:
             self.assembled = last_tool_data()
             assert self.assembled["dataset"] == self.ground_truth["dataset"]
-            result = _call("validate", "validate_spec", {"spec": self.assembled})
-        elif self.stage == 3:
-            assert last_tool_data() == {"ok": True, "issues": []}
             result = NormalizedResult(content=json.dumps(self.assembled))
         else:
             raise AssertionError("unexpected extra model call")
@@ -202,7 +194,7 @@ def test_agent_restores_multi_series_line_without_fixed_tool_sequence(tmp_path, 
     )
 
     assert json.loads(answer) == client.assembled
-    assert client.stage == 4
+    assert client.stage == 3
 
 
 class _PieUnderstandingClient:
@@ -238,9 +230,6 @@ class _PieUnderstandingClient:
         elif self.stage == 2:
             self.assembled = last_tool_data()
             assert self.assembled["axes"] is None
-            result = _call("validate", "validate_spec", {"spec": self.assembled})
-        elif self.stage == 3:
-            assert last_tool_data() == {"ok": True, "issues": []}
             result = NormalizedResult(content=json.dumps(self.assembled))
         else:
             raise AssertionError("unexpected extra model call")
@@ -262,7 +251,7 @@ def test_agent_restores_pie_without_cartesian_tool_sequence(tmp_path, monkeypatc
     answer = agent.run(build_user_content("Extract and validate this pie chart.", [str(image_path)]))
 
     assert json.loads(answer) == client.assembled
-    assert client.stage == 4
+    assert client.stage == 3
 
 
 class _ScatterUnderstandingClient:
@@ -308,9 +297,6 @@ class _ScatterUnderstandingClient:
             self.assembled = last_tool_data()
             assert self.assembled["metadata"]["chart_type"] == "scatter"
             assert self.assembled["axes"] is not None
-            result = _call("validate", "validate_spec", {"spec": self.assembled})
-        elif self.stage == 3:
-            assert last_tool_data() == {"ok": True, "issues": []}
             result = NormalizedResult(content=json.dumps(self.assembled))
         else:
             raise AssertionError("unexpected extra model call")
@@ -337,4 +323,4 @@ def test_agent_restores_scatter_without_fixed_tool_sequence(tmp_path, monkeypatc
     )
 
     assert json.loads(answer) == client.assembled
-    assert client.stage == 4
+    assert client.stage == 3

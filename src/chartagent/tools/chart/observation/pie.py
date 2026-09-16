@@ -388,9 +388,10 @@ def _attach_ocr(
     sectors: list[dict[str, Any]],
     region: dict[str, Any],
     snippets: list[dict[str, Any]],
-) -> tuple[list[str], set[str]]:
+) -> tuple[list[str], set[str], list[dict[str, Any]]]:
     warnings: list[str] = []
     used_text: set[str] = set()
+    conflicts: list[dict[str, Any]] = []
     center_x, center_y = _region_center(region)
     radius = _region_radius(region)
     for snippet in snippets:
@@ -417,6 +418,18 @@ def _attach_ocr(
                 "confidence": confidence,
                 "source": "ocr",
             }
+            geometry_ratio = (sector.get("measure") or {}).get("ratio")
+            if ("%" in text or 0.0 <= numeric_value <= 1.0) and geometry_ratio is not None:
+                printed_ratio = numeric_value / 100.0 if "%" in text else numeric_value
+                if abs(float(geometry_ratio) - printed_ratio) > max(0.06, abs(float(geometry_ratio)) * 0.22):
+                    conflicts.append(
+                        {
+                            "field": f"{sector['id']}_ratio",
+                            "sources": ["ocr", "pixel_geometry"],
+                            "message": "printed OCR ratio disagrees with the independently measured sector angle",
+                        }
+                    )
+                    warnings.append(f"OCR printed ratio conflicts with geometry for {sector['id']}")
             used_text.add(text)
             continue
         association = sector.setdefault("association", {})
@@ -434,7 +447,7 @@ def _attach_ocr(
             }
         )
         used_text.add(text)
-    return warnings, used_text
+    return warnings, used_text, conflicts
 
 
 def _legend(
@@ -636,6 +649,7 @@ def extract_pie_slices(
         return _empty_result(chart_image, reason, plot_region, layout_context)
 
     polar_hint = layout_context.get("polar_region") if isinstance(layout_context, dict) else None
+    conflicts: list[dict[str, Any]] = []
     if isinstance(polar_hint, dict):
         detected_center = np.asarray(_region_center(plot_region), dtype=float)
         hinted_center = np.asarray(polar_hint.get("center_px", []), dtype=float)
@@ -646,6 +660,13 @@ def extract_pie_slices(
             radius_error = abs(detected_radius - hinted_radius)
             if center_error > max(12.0, detected_radius * 0.18) or radius_error > max(12.0, detected_radius * 0.18):
                 warnings = ["polar layout hint conflicts with detected circle geometry"]
+                conflicts.append(
+                    {
+                        "field": "polar_geometry",
+                        "sources": ["layout_hint", "pixel_geometry"],
+                        "message": "polar center or radius disagrees with independently detected circle",
+                    }
+                )
             else:
                 warnings = ["polar layout hint agrees with detected circle geometry"]
         else:
@@ -702,8 +723,9 @@ def extract_pie_slices(
 
     snippets = _ocr_snippets(path)
     legend, legend_text = _legend(rgb, plot_region, palette, snippets)
-    ocr_warnings, ocr_text = _attach_ocr(sectors, plot_region, snippets)
+    ocr_warnings, ocr_text, ocr_conflicts = _attach_ocr(sectors, plot_region, snippets)
     warnings.extend(ocr_warnings)
+    conflicts.extend(ocr_conflicts)
     warnings.extend(_attach_external_labels(sectors, plot_region, snippets, legend_text | ocr_text))
 
     for entry in legend:
@@ -776,6 +798,7 @@ def extract_pie_slices(
             confidence=confidence,
             warnings=warnings,
             layout_context=layout_evidence,
+            conflicts=conflicts,
         ),
         "orientation": "upright",
         "transform": {"kind": "circular_invariant", "rotation_deg": None},

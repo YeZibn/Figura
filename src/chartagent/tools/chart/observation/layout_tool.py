@@ -52,10 +52,12 @@ def inspect_chart_layout(
 INSPECT_CHART_LAYOUT = Tool(
     name="inspect_chart_layout",
     description=(
-        "Use this tool after loading an authorized chart image to inspect and "
-        "validate a model-proposed layout before geometry measurement. Call it "
-        "once per attachment when the chart is rotated, horizontal, visually "
-        "ambiguous, or contains dense labels. When supplying layout_hint, use "
+        "Use this optional tool after loading an authorized chart image when "
+        "the spatial layout is genuinely uncertain: for example, rotation, "
+        "horizontal orientation, dense annotations, or disagreement between "
+        "visual and geometric evidence. Do not call it merely to initialize a "
+        "geometry sensor, and do not require it before OCR or assemble_spec. "
+        "When supplying layout_hint, use "
         "canonical normalized fields: measurement_frame.bbox_norm, optional "
         "axes.x/y.points_norm=[[x1, y1], [x2, y2]], annotation_regions, "
         "orientation, coordinate_system, and polar_region; keep all region "
@@ -81,11 +83,11 @@ INSPECT_CHART_LAYOUT = Tool(
                 "description": (
                     "Optional canonical normalized layout hint. Use "
                     "measurement_frame.bbox_norm, axes.x/y.points_norm, "
-                    "annotation_regions, orientation, coordinate_system, and "
-                    "polar_region. Axis points must be two endpoints in "
-                    "[[x1, y1], [x2, y2]] form; regions use [left, top, width, "
-                    "height] in 0..1 coordinates. If an axis is uncertain, omit "
-                    "the entire axis instead of supplying one endpoint."
+        "annotation_regions, orientation, coordinate_system, and "
+        "polar_region. Axis points must be two endpoints in "
+        "[[x1, y1], [x2, y2]] form; regions use [left, top, width, "
+        "height] in 0..1 coordinates. If an axis is uncertain, omit "
+        "the entire axis instead of supplying one endpoint."
                 ),
                 "additionalProperties": True,
             },

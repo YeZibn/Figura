@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
 from typing import Any, Callable, Iterable, Sequence
 
 import numpy as np
@@ -352,6 +353,124 @@ def evidence_envelope(
     return result
 
 
+def compare_layout_with_frame(
+    frame: Mapping[str, Any] | None,
+    layout_context: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Compare a model layout hint with independently detected geometry."""
+    if not isinstance(frame, Mapping) or not isinstance(layout_context, Mapping):
+        return None
+    layout_frame = layout_context.get("measurement_frame")
+    if not isinstance(layout_frame, Mapping):
+        return None
+    independent_frame = frame.get("independent_geometry")
+    observed_frame = independent_frame if isinstance(independent_frame, Mapping) else frame
+    layout_bbox = layout_frame.get("bbox_px")
+    observed_bbox = observed_frame.get("bbox_px") or observed_frame.get("bbox")
+    checks: dict[str, Any] = {}
+    conflicts: list[dict[str, Any]] = []
+    if _valid_bbox(layout_bbox) and _valid_bbox(observed_bbox):
+        layout_values = [float(value) for value in layout_bbox[:4]]
+        observed_values = [float(value) for value in observed_bbox[:4]]
+        overlap = _bbox_iou(layout_values, observed_values)
+        center_delta = _bbox_center_delta(layout_values, observed_values)
+        frame_check = {
+            "iou": round(overlap, 6),
+            "center_delta_px": round(center_delta, 3),
+            "consistent": overlap >= 0.55 and center_delta <= max(16.0, min(layout_values[2], layout_values[3]) * 0.12),
+        }
+        checks["measurement_frame"] = frame_check
+        if not frame_check["consistent"]:
+            conflicts.append({
+                "field": "measurement_frame",
+                "sources": ["layout_hint", "pixel_geometry"],
+                "message": "layout measurement frame disagrees with independently detected frame",
+            })
+
+    layout_axes = layout_context.get("axes")
+    if isinstance(layout_axes, Mapping):
+        for axis_name, frame_key in (("x", "x_axis"), ("y", "y_axis")):
+            hinted = layout_axes.get(axis_name)
+            observed = observed_frame.get(frame_key)
+            hinted_points = hinted.get("points_px") if isinstance(hinted, Mapping) else None
+            observed_points = observed.get("points_px") if isinstance(observed, Mapping) else None
+            comparison = _compare_axis_points(hinted_points, observed_points)
+            if comparison is None:
+                continue
+            checks[f"{axis_name}_axis"] = comparison
+            if not comparison["consistent"]:
+                conflicts.append({
+                    "field": f"{axis_name}_axis",
+                    "sources": ["layout_hint", "pixel_geometry"],
+                    "message": f"layout {axis_name}-axis disagrees with independently detected geometry",
+                })
+
+    status = "conflict" if conflicts else "agree" if checks else "unavailable"
+    return {
+        "source": "layout_vs_pixel_geometry",
+        "status": status,
+        "checks": checks,
+        "conflicts": conflicts[:6],
+    }
+
+
+def _valid_bbox(value: object) -> bool:
+    if not isinstance(value, (list, tuple)) or len(value) < 4:
+        return False
+    try:
+        return all(math.isfinite(float(item)) for item in value[:4]) and float(value[2]) > 0 and float(value[3]) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _bbox_iou(first: Sequence[float], second: Sequence[float]) -> float:
+    first_right, first_bottom = first[0] + first[2], first[1] + first[3]
+    second_right, second_bottom = second[0] + second[2], second[1] + second[3]
+    width = max(0.0, min(first_right, second_right) - max(first[0], second[0]))
+    height = max(0.0, min(first_bottom, second_bottom) - max(first[1], second[1]))
+    intersection = width * height
+    union = first[2] * first[3] + second[2] * second[3] - intersection
+    return intersection / union if union > 0 else 0.0
+
+
+def _bbox_center_delta(first: Sequence[float], second: Sequence[float]) -> float:
+    first_center = np.asarray([first[0] + first[2] / 2.0, first[1] + first[3] / 2.0])
+    second_center = np.asarray([second[0] + second[2] / 2.0, second[1] + second[3] / 2.0])
+    return float(np.linalg.norm(first_center - second_center))
+
+
+def _compare_axis_points(first: object, second: object) -> dict[str, Any] | None:
+    if not (
+        isinstance(first, Sequence)
+        and isinstance(second, Sequence)
+        and len(first) >= 2
+        and len(second) >= 2
+    ):
+        return None
+    try:
+        first_points = [np.asarray(point[:2], dtype=float) for point in first[:2]]
+        second_points = [np.asarray(point[:2], dtype=float) for point in second[:2]]
+        if any(point.shape != (2,) or not np.all(np.isfinite(point)) for point in [*first_points, *second_points]):
+            return None
+        first_vector = first_points[1] - first_points[0]
+        second_vector = second_points[1] - second_points[0]
+        first_length = float(np.linalg.norm(first_vector))
+        second_length = float(np.linalg.norm(second_vector))
+        if first_length < 1.0 or second_length < 1.0:
+            return None
+        cosine = abs(float(np.dot(first_vector, second_vector))) / (first_length * second_length)
+        angle_error = 1.0 - cosine
+        endpoint_delta = float(np.mean([np.linalg.norm(first_points[index] - second_points[index]) for index in range(2)]))
+        consistent = angle_error <= 0.08 and endpoint_delta <= max(18.0, min(first_length, second_length) * 0.12)
+        return {
+            "angle_error": round(angle_error, 6),
+            "endpoint_delta_px": round(endpoint_delta, 3),
+            "consistent": consistent,
+        }
+    except (TypeError, ValueError, IndexError):
+        return None
+
+
 def build_common_evidence(
     rgb: np.ndarray,
     *,
@@ -362,8 +481,10 @@ def build_common_evidence(
     confidence: dict[str, float] | None = None,
     warnings: list[str] | None = None,
     layout_context: dict[str, Any] | None = None,
+    conflicts: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Compose the neutral evidence envelope used by all chart sensors."""
+    warning_list = list(warnings or [])
     evidence = {
         "image_size": image_size(rgb),
         "coordinate_system": coordinate_system,
@@ -371,10 +492,22 @@ def build_common_evidence(
         "legend": legend or [],
         "series": series or [],
         "confidence": confidence or confidence_map(overall=0.0),
-        "warnings": list(warnings or []),
+        "warnings": warning_list,
+        "conflicts": list(conflicts or [])[:6],
     }
     if layout_context is not None:
         evidence["layout_context"] = layout_context
+        comparison = compare_layout_with_frame(frame, layout_context)
+        if comparison is not None:
+            evidence["layout_comparison"] = comparison
+            evidence["conflicts"] = [
+                *evidence["conflicts"],
+                *comparison["conflicts"],
+            ][:6]
+            if comparison["status"] == "conflict":
+                warning_list.append("layout hint conflicts with independent pixel geometry")
+                if isinstance(warnings, list) and warning_list != warnings:
+                    warnings[:] = warning_list
     return evidence
 
 
@@ -382,6 +515,7 @@ __all__ = [
     "bbox_from_boxes",
     "bounded_source_point",
     "build_common_evidence",
+    "compare_layout_with_frame",
     "associate_series_labels",
     "cluster_centers",
     "color_mask",

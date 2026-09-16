@@ -388,6 +388,7 @@ def detect_cartesian_frame(
     accepted_layout = context_frame(layout_context)
     x_axis = fit_dominant_axis_line(rgb, axis="x", search_area=search_area)
     y_axis = fit_dominant_axis_line(rgb, axis="y", search_area=search_area)
+    layout_frame: dict[str, Any] | None = None
     layout_validation = layout_context.get("validation", {}) if isinstance(layout_context, dict) else {}
     layout_checks = layout_validation.get("checks", {}) if isinstance(layout_validation, dict) else {}
     context_axes = layout_context.get("axes", {}) if isinstance(layout_context, dict) else {}
@@ -401,26 +402,23 @@ def detect_cartesian_frame(
     if accepted_layout and verified_layout_axes:
         context_x = context_axes.get("x") if isinstance(context_axes, dict) else None
         context_y = context_axes.get("y") if isinstance(context_axes, dict) else None
-        x_axis = context_x or x_axis
-        y_axis = context_y or y_axis
         context_bbox = accepted_layout.get("bbox_px")
         if isinstance(context_bbox, (list, tuple)) and len(context_bbox) >= 4:
             context_polygon = accepted_layout.get("polygon_px")
-            frame = cartesian_frame(
+            layout_frame = cartesian_frame(
                 bbox=context_bbox,
                 polygon=context_polygon,
-                x_axis=x_axis,
-                y_axis=y_axis,
+                x_axis=context_x,
+                y_axis=context_y,
                 orientation=str(layout_context.get("orientation", "unknown")),
                 confidence=float((layout_context.get("validation") or {}).get("confidence", 0.0)),
                 evidence=["validated_layout_context", *list(layout_context.get("evidence") or [])[:6]],
             )
-            frame["bbox"] = list(map(int, context_bbox[:4]))
-            frame["layout_context_id"] = str(layout_context.get("context_id", ""))[:80]
-            frame["marker_extent_px"] = _colored_extent(rgb, palette, frame["bbox"], context_polygon)
-            if frame["marker_extent_px"] is not None:
-                frame["evidence"].append("colored_extents")
-            return frame, frame["orientation"], frame["bbox"]
+            layout_frame["bbox"] = list(map(int, context_bbox[:4]))
+            layout_frame["layout_context_id"] = str(layout_context.get("context_id", ""))[:80]
+            layout_frame["marker_extent_px"] = _colored_extent(rgb, palette, layout_frame["bbox"], context_polygon)
+            if layout_frame["marker_extent_px"] is not None:
+                layout_frame["evidence"].append("colored_extents")
     x_geometry = axis_geometry(x_axis)
     y_geometry = axis_geometry(y_axis)
     evidence = [name for name, value in (("x_axis", x_axis), ("y_axis", y_axis)) if value]
@@ -470,6 +468,9 @@ def detect_cartesian_frame(
         )
         frame["bbox"] = bbox
         frame["marker_extent_px"] = marker_extent
+        if layout_frame is not None:
+            layout_frame["independent_geometry"] = frame
+            return layout_frame, layout_frame["orientation"], list(map(int, layout_frame["bbox_px"][:4]))
         return frame, orientation, bbox
 
     axis = x_axis or y_axis
@@ -503,6 +504,9 @@ def detect_cartesian_frame(
             )
             frame["bbox"] = bbox
             frame["marker_extent_px"] = marker_extent
+            if layout_frame is not None:
+                layout_frame["independent_geometry"] = frame
+                return layout_frame, layout_frame["orientation"], list(map(int, layout_frame["bbox_px"][:4]))
             return frame, "unknown", bbox
 
     marker_extent = _colored_extent(rgb, palette, search_area)
@@ -528,7 +532,13 @@ def detect_cartesian_frame(
         )
         frame["bbox"] = bbox
         frame["marker_extent_px"] = marker_extent
+        if layout_frame is not None:
+            layout_frame["independent_geometry"] = frame
+            return layout_frame, layout_frame["orientation"], list(map(int, layout_frame["bbox_px"][:4]))
         return frame, "unknown", bbox
+    if layout_frame is not None:
+        layout_frame["independent_geometry"] = None
+        return layout_frame, layout_frame["orientation"], list(map(int, layout_frame["bbox_px"][:4]))
     return None, "unknown", list(map(int, search_area))
 
 

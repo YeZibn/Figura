@@ -13,7 +13,7 @@ from .observation.ocr import EXTRACT_TEXT
 from .observation.pie import EXTRACT_PIE_SLICES
 from .observation.scatter import EXTRACT_SCATTER_POINTS
 from .rendering import RENDER_CHART
-from .specification import ASSEMBLE_SPEC, VALIDATE_SPEC
+from .specification import ASSEMBLE_SPEC
 
 CHART_TOOLS = [
     EXTRACT_TEXT,
@@ -23,7 +23,6 @@ CHART_TOOLS = [
     EXTRACT_PIE_SLICES,
     EXTRACT_SCATTER_POINTS,
     ASSEMBLE_SPEC,
-    VALIDATE_SPEC,
     RENDER_CHART,
 ]
 CHART_TOOL_NAMES = [tool.name for tool in CHART_TOOLS]

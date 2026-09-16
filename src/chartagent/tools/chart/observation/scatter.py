@@ -419,6 +419,17 @@ def extract_scatter_points(
     if not series:
         return _empty_result(chart_image, "no reliable scatter point population detected", layout_context)
 
+    conflicts: list[dict[str, Any]] = []
+    for axis_name, ticks, model in (("x", x_ticks, x_model), ("y", y_ticks, y_model)):
+        if len(ticks) >= 2 and model is not None and not model.get("calibrated"):
+            conflicts.append(
+                {
+                    "field": f"{axis_name}_axis_calibration",
+                    "sources": ["ocr", "pixel_geometry"],
+                    "message": f"OCR {axis_name}-axis tick candidates do not fit a reliable pixel calibration",
+                }
+            )
+            warnings.append(f"OCR {axis_name}-axis tick candidates conflict with pixel calibration")
     if frame is None:
         warnings.append("scatter plot frame unresolved; preserving source pixel geometry")
     if isinstance(layout_context, dict):
@@ -477,6 +488,7 @@ def extract_scatter_points(
             confidence=confidence,
             warnings=warnings,
             layout_context=layout_evidence,
+            conflicts=conflicts,
         ),
         "orientation": orientation,
         "plot_frame": frame,

@@ -923,6 +923,7 @@ def measure_bars(
         if measured["plot_area"]
         else None
     )
+    independent_frame = frame
     layout_frame = context_frame(layout_context)
     if layout_frame is not None:
         frame = dict(layout_frame)
@@ -934,6 +935,7 @@ def measure_bars(
         frame["orientation"] = str(layout_context.get("orientation", measured["orientation"]))
         frame["evidence"] = ["validated_layout_context"]
         frame["confidence"] = float((layout_context.get("validation") or {}).get("confidence", 0.0))
+        frame["independent_geometry"] = independent_frame
     if frame is not None:
         frame["baseline"] = baseline is not None
     public_baseline = (

@@ -132,6 +132,100 @@ def test_existing_warning_is_preserved():
     assert json.loads(observation.content)["warnings"] == ["low confidence"]
 
 
+def test_chart_dispatch_adds_attributable_evidence_summary():
+    image = GeneratedImage(b"png", "image/png", "bar overlay")
+    registry = ToolRegistry()
+    registry.register(
+        Tool(
+            "measure_bars",
+            "measure bars",
+            {
+                "type": "object",
+                "properties": {"attachment_id": {"type": "string"}},
+                "required": ["attachment_id"],
+            },
+            lambda attachment_id: ToolResult(
+                {
+                    "image_size": [120, 80],
+                    "frame": {"bbox_px": [10, 10, 100, 60]},
+                    "confidence": {"overall": 0.8, "geometry": 0.9},
+                },
+                [image],
+                ["baseline is partial"],
+            ),
+        )
+    )
+
+    observation = dispatch_observation(
+        registry,
+        "measure_bars",
+        '{"attachment_id":"att_chart"}',
+    )
+    payload = json.loads(observation.content)
+    evidence = payload["evidence"]
+
+    assert evidence["evidence_type"] == "geometry"
+    assert evidence["source_tool"] == "measure_bars"
+    assert evidence["source_attachment_id"] == "att_chart"
+    assert evidence["confidence"] == {"overall": 0.8, "geometry": 0.9}
+    assert evidence["warnings"] == ["baseline is partial"]
+    assert {item["scope"] for item in evidence["source_image_refs"]} >= {"source_image", "frame"}
+    assert evidence["visual_observations"] == {"count": 1, "captions": ["bar overlay"]}
+    assert "image_path" not in json.dumps(evidence)
+
+
+def test_evidence_summary_is_bounded_and_json_safe():
+    from chartagent.tools import build_evidence_summary
+
+    summary = build_evidence_summary(
+        source_tool="extract_text",
+        source_attachment_id="att_chart",
+        data={"plot_area": {"bbox": [0, 0, 10, 10]}, "confidence": float("inf")},
+        warnings=["w" * 1000] * 20,
+        images=[GeneratedImage(b"x", "image/png", "caption" * 100)],
+    )
+
+    encoded = json.dumps(summary, ensure_ascii=False)
+    assert json.loads(encoded) == summary
+    assert summary["evidence_type"] == "text"
+    assert len(summary["warnings"]) == 12
+    assert all(len(item) <= 160 for item in summary["warnings"])
+    assert len(summary["visual_observations"]["captions"][0]) <= 160
+    assert summary["confidence"] == {}
+
+
+def test_evidence_summary_preserves_bounded_conflict_candidates():
+    from chartagent.tools import build_evidence_summary
+
+    summary = build_evidence_summary(
+        source_tool="measure_bars",
+        source_attachment_id="att_chart",
+        data={
+            "evidence": {
+                "conflicts": [
+                    {
+                        "field": "baseline",
+                        "sources": ["pixel_geometry", "ocr", "ignored-extra-source"],
+                        "message": "baseline candidate disagrees with printed value",
+                        "untrusted": {"should": "not leak"},
+                    }
+                ]
+            }
+        },
+        warnings=[],
+        images=[],
+    )
+
+    assert summary["conflicts"] == [
+        {
+            "field": "baseline",
+            "sources": ["pixel_geometry", "ocr", "ignored-extra-source"],
+            "message": "baseline candidate disagrees with printed value",
+        }
+    ]
+    assert json.loads(json.dumps(summary, ensure_ascii=False)) == summary
+
+
 def test_unserializable_enriched_data_is_structured_error():
     observation = dispatch_observation(
         _registry(ToolResult(object())), "observe", "{}"

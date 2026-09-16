@@ -37,7 +37,6 @@ _PRESENTATIONS: dict[str, tuple[str, str | None, str]] = {
     "extract_pie_slices": ("提取饼图扇区", "extract_pie_slices", "chart-observation"),
     "extract_scatter_points": ("提取散点", "extract_scatter_points", "chart-observation"),
     "assemble_spec": ("组装图表规格", "assemble_spec", "chart-spec"),
-    "validate_spec": ("校验图表规格", "validate_spec", "chart-spec"),
     "render_chart": ("生成图表", "render_chart", "chart-generation"),
     "review_generated_chart": ("审核生成图表", "review_generated_chart", "chart-review"),
 }

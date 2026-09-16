@@ -25,6 +25,7 @@ from ...spec import chart_spec_digest
 from ...spec import ChartSpec, ChartType, DataPoint
 from ..core.result import GeneratedImage, ToolResult
 from ..core.definition import Tool
+from .specification import CHART_SPEC_SCHEMA
 from .validation import (
     GenerationIssue,
     GenerationValidation,
@@ -641,88 +642,12 @@ def render_chart(
         return {"error": f"chart renderer unavailable: {str(exc)[:240]}"}
 
 
-_SPEC_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "metadata": {
-            "type": "object",
-            "properties": {
-                "chart_type": {
-                    "type": "string",
-                    "enum": [chart_type.value for chart_type in ChartType],
-                    "description": "Chart kind: bar, line, pie, or scatter.",
-                },
-                "title": {"type": "string", "maxLength": MAX_TITLE_LENGTH, "description": "Optional chart title."},
-                "source": {"type": ["string", "null"], "description": "Optional provenance label, not a filesystem authorization."},
-                "note": {"type": "string", "maxLength": MAX_LABEL_LENGTH, "description": "Optional chart note."},
-            },
-            "required": ["chart_type"],
-            "additionalProperties": False,
-            "description": "Chart metadata required by ChartSpec.",
-        },
-        "axes": {
-            "type": ["object", "null"],
-            "properties": {
-                "x": {
-                    "type": "object",
-                    "properties": {
-                        "label": {"type": "string", "description": "X-axis label."},
-                        "categories": {"type": "array", "items": {"type": "string", "description": "Category label."}, "maxItems": MAX_CHART_POINTS, "description": "Optional ordered category labels."},
-                        "min_value": {"type": "number", "description": "Optional finite lower numeric bound."},
-                        "max_value": {"type": "number", "description": "Optional finite upper numeric bound."},
-                    },
-                    "required": ["label"],
-                    "additionalProperties": False,
-                    "description": "X-axis definition.",
-                },
-                "y": {
-                    "type": "object",
-                    "properties": {
-                        "label": {"type": "string", "description": "Y-axis label."},
-                        "categories": {"type": "array", "items": {"type": "string", "description": "Category label."}, "maxItems": MAX_CHART_POINTS, "description": "Optional ordered category labels."},
-                        "min_value": {"type": "number", "description": "Optional finite lower numeric bound."},
-                        "max_value": {"type": "number", "description": "Optional finite upper numeric bound."},
-                    },
-                    "required": ["label"],
-                    "additionalProperties": False,
-                    "description": "Y-axis definition.",
-                },
-            },
-            "required": ["x", "y"],
-            "additionalProperties": False,
-            "description": "Required for bar, line, and scatter charts; pie charts may use null.",
-        },
-        "dataset": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "category": {"type": "string", "description": "Category for bar or pie points."},
-                    "value": {"type": "number", "description": "Finite magnitude for bar or pie points."},
-                    "x": {"type": "number", "description": "Finite x coordinate for line or scatter points."},
-                    "y": {"type": "number", "description": "Finite y coordinate for line or scatter points."},
-                    "series": {"type": "string", "description": "Optional non-empty series label."},
-                    "confidence": {"type": "number", "minimum": 0, "maximum": 1, "description": "Optional confidence in the inclusive range 0 to 1."},
-                },
-                "oneOf": [{"required": ["category", "value"]}, {"required": ["x", "y"]}],
-                "additionalProperties": False,
-                "description": "One typed data point matching the selected chart type.",
-            },
-            "minItems": 1,
-            "maxItems": MAX_CHART_POINTS,
-            "description": "Non-empty dataset rendered in order.",
-        },
-    },
-    "required": ["metadata", "dataset"],
-    "additionalProperties": False,
-}
-
 RENDER_CHART = Tool(
     name="render_chart",
     description=(
         "Render a validated ChartSpec into a bounded PNG chart candidate and return "
         "the image, render metadata, deterministic validation summary, and any "
-        "warnings. Use after assembling or validating chart data when a visual "
+        "warnings. Use after assembling chart data when a visual "
         "output is requested; do not use with incomplete specs, unsupported chart "
         "types, or as a substitute for the mandatory post-generation review. A "
         "successful tool call means only that rendering and local artifact checks "
@@ -732,7 +657,7 @@ RENDER_CHART = Tool(
     parameters={
         "type": "object",
         "properties": {
-            "spec": _SPEC_SCHEMA,
+            "spec": CHART_SPEC_SCHEMA,
             "width": {"type": "integer", "minimum": 1, "maximum": MAX_CHART_WIDTH},
             "height": {"type": "integer", "minimum": 1, "maximum": MAX_CHART_HEIGHT},
         },

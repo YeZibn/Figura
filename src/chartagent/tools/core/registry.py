@@ -81,7 +81,13 @@ def dispatch_observation(
         return DispatchedObservation(_error(f"Tool {name!r} failed: {exc}"))
 
     try:
-        return normalize_tool_result(result)
+        return normalize_tool_result(
+            result,
+            source_tool=name,
+            source_attachment_id=args.get("attachment_id")
+            if isinstance(args.get("attachment_id"), str)
+            else None,
+        )
     except Exception:  # pragma: no cover - un-serializable result guard
         return DispatchedObservation(_error(f"Tool {name!r} result could not be serialized."))
 

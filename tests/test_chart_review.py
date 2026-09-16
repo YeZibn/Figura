@@ -82,6 +82,25 @@ def test_direct_candidate_is_independently_reviewed_and_promoted():
     assert manager.gate("run-1")["ok"] is True
 
 
+def test_review_revalidates_a_spec_when_the_agent_bypasses_assembly():
+    expected = _bar_spec()
+    invalid = _bar_spec()
+    invalid.axes = None
+    rendered = render_chart(expected.to_dict())
+
+    result = review_candidate_bytes(
+        invalid,
+        rendered.images[0].content,
+        media_type="image/png",
+        declared_width=1200,
+        declared_height=800,
+    )
+
+    assert result.status is ReviewStatus.FAILED
+    assert result.checks["structure"] == "failed"
+    assert any(issue.code == "invalid_chart_spec" for issue in result.issues)
+
+
 @pytest.mark.parametrize("chart_type", list(ChartType))
 def test_independent_reviewer_supports_all_rendered_chart_types(chart_type):
     spec = _bar_spec() if chart_type is ChartType.BAR else _other_spec(chart_type)
