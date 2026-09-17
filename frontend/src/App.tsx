@@ -421,11 +421,11 @@ function GeneratedChartView({ artifact, loader, onPreview }: { artifact: Generat
 }
 
 function eventLabel(event: AgentRunEvent): string {
-  const labels: Record<string, string> = { run_started: '运行已开始', model_started: '模型轮次开始', model_completed: '模型轮次完成', progress: '处理中', generated_chart: '图表状态已更新', chart_review_started: '图表审核已开始', chart_review_required: '等待图表审核', generated_chart_published: '图表已发布', generated_chart_rejected: '图表未发布', chart_review_completed: '图表审核完成', final_answer: '最终回答已生成', budget_exhausted: '达到预算上限', run_failed: '运行失败', run_interrupted: '运行已中断', history_gap: '历史记录不完整', tool_result: '工具结果（历史记录不完整）' }
+  const labels: Record<string, string> = { run_started: '运行已开始', resume_started: '继续执行已开始', model_started: '模型轮次开始', model_completed: '模型轮次完成', operation_completed: '操作结果已保存', recovery_blocked: '继续执行被阻止', progress: '处理中', generated_chart: '图表状态已更新', chart_review_started: '图表审核已开始', chart_review_required: '等待图表审核', generated_chart_published: '图表已发布', generated_chart_rejected: '图表未发布', chart_review_completed: '图表审核完成', final_answer: '最终回答已生成', budget_exhausted: '达到预算上限', run_failed: '运行失败', run_interrupted: '运行已中断', history_gap: '历史记录不完整', tool_result: '工具结果（历史记录不完整）' }
   return labels[event.kind] || event.kind
 }
 
-function RunTimeline({ timeline, expanded, onToggle, previewLoader, onPreview, onInterrupt, onRetry }: { timeline: RunTimeline; expanded: boolean; onToggle: () => void; previewLoader: PreviewResourceLoader | null; onPreview?: PreviewOpener; onInterrupt?: () => void; onRetry?: () => void }) {
+function RunTimeline({ timeline, expanded, onToggle, previewLoader, onPreview, onInterrupt, onRetry, onResume }: { timeline: RunTimeline; expanded: boolean; onToggle: () => void; previewLoader: PreviewResourceLoader | null; onPreview?: PreviewOpener; onInterrupt?: () => void; onRetry?: () => void; onResume?: () => void }) {
   const [expandedSteps, setExpandedSteps] = useState<Set<string>>(new Set())
   const rows = normalizeTimeline(timeline.events)
   const summary = timeline.summary
@@ -433,11 +433,13 @@ function RunTimeline({ timeline, expanded, onToggle, previewLoader, onPreview, o
   const statusText = status === 'completed' ? '已完成' : status === 'failed' ? '失败' : status === 'interrupted' ? '已中断' : summary.cancelRequested ? '正在中断' : '运行中'
   return <section className={'run-timeline ' + status + (expanded ? ' expanded' : '')}>
     <button className="run-summary" onClick={onToggle} aria-expanded={expanded} aria-controls={`trace-${summary.runId}`}><span className="run-arrow">{expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}</span><span className="run-summary-icon"><Terminal size={14} /></span><span className="run-summary-copy"><strong>执行过程</strong><small>{timestampLabel(summary.createdAt)} · {summary.eventCount || timeline.events.length} 个事件{summary.provider ? ` · ${providerLabel(summary.provider)}${summary.model ? ` · ${summary.model}` : ''}` : ''}{summary.retryOf ? ` · 重试自 ${summary.retryOf}` : ''}</small></span><span className={'run-status ' + status}>{statusText}</span></button>
-    {(status === 'running' && onInterrupt) || ((status === 'failed' || status === 'interrupted') && onRetry) ? <div className="run-actions">
+    {(status === 'running' && onInterrupt) || ((status === 'failed' || status === 'interrupted') && (onRetry || onResume)) ? <div className="run-actions">
       {status === 'running' && onInterrupt && <button type="button" className="small-action" onClick={onInterrupt} disabled={summary.cancelRequested}>{summary.cancelRequested ? '正在中断' : '中断运行'}</button>}
+      {status !== 'running' && onResume && summary.recovery?.status === 'available' && <button type="button" className="small-action" onClick={onResume}>继续执行</button>}
       {(status === 'failed' || status === 'interrupted') && onRetry && <button type="button" className="small-action" onClick={onRetry}>重试本次运行</button>}
     </div> : null}
     {expanded && <div className="run-trace" id={`trace-${summary.runId}`}>
+      {summary.recovery && summary.recovery.status !== 'unavailable' && <div className={'trace-warning recovery-' + summary.recovery.status} role="status">{summary.recovery.status === 'available' ? `可继续执行：${summary.recovery.phase || '已保存'} · 下一步 ${summary.recovery.nextAction || '继续处理'}` : `暂时无法继续执行：${summary.recovery.blockedReason || '恢复状态受限'}，可使用“重试本次运行”。`}</div>}
       {summary.historyWarning && <div className="trace-warning" role="status">部分执行记录未能持久化，当前显示的过程可能不完整。</div>}
       {timeline.historyGap && <div className="trace-warning" role="status">历史记录存在缺口，未显示缺失的执行步骤。</div>}
       {rows.length === 0 && <div className="trace-empty">没有可恢复的执行事件。</div>}
@@ -490,6 +492,7 @@ function RunBlock(props: {
   onPreview?: PreviewOpener
   onInterrupt?: () => void
   onRetry?: () => void
+  onResume?: () => void
 }) {
   const { timeline, user, assistant } = props
   const answer = assistant?.kind === 'assistant' ? assistant.text : timeline.summary.answer || ''
@@ -497,7 +500,7 @@ function RunBlock(props: {
   const artifacts = generatedArtifacts(timeline.events)
   return <section className={'run-block run-' + timeline.summary.status}>
     {user && <Message item={user} expanded={props.expandedMessage === user.id} onToggle={props.onToggleMessage} previewLoader={props.previewLoader} onPreview={props.onPreview} />}
-    <RunTimeline timeline={timeline} expanded={props.expanded} onToggle={props.onToggleRun} previewLoader={props.previewLoader} onPreview={props.onPreview} onInterrupt={props.onInterrupt} onRetry={props.onRetry} />
+    <RunTimeline timeline={timeline} expanded={props.expanded} onToggle={props.onToggleRun} previewLoader={props.previewLoader} onPreview={props.onPreview} onInterrupt={props.onInterrupt} onRetry={props.onRetry} onResume={props.onResume} />
     {(answer || artifacts.length > 0) && <section className="run-result" aria-label="最终结果">
       <div className="run-result-heading"><Sparkles size={14} /><strong>最终结果</strong><span>{answer ? answerTimestamp : '图表输出'}</span></div>
       {answer && <Message item={{ id: `${timeline.summary.runId}:assistant`, kind: 'assistant', text: answer, timestamp: answerTimestamp }} expanded={props.expandedMessage === `${timeline.summary.runId}:assistant`} onToggle={props.onToggleMessage} previewLoader={props.previewLoader} onPreview={props.onPreview} />}
@@ -506,7 +509,7 @@ function RunBlock(props: {
   </section>
 }
 
-function ConversationPanel(props: { data: SessionData | null; timelines: RunTimeline[]; pendingUser: ConversationItem | null; runState: RunState; selectedAttachmentIds: string[]; provider: Provider; health: GatewayHealth | null; mode: 'mock' | 'gateway'; onProviderChange: (provider: Provider) => void; onSubmit: (text: string, attachmentIds: string[], retryOf?: string) => Promise<boolean>; onInterrupt?: (runId: string) => void; onRetry?: (runId: string) => void; loading: boolean; loadingSession: boolean; error: string | null; onToggleRun: (runId: string, status: RunSummary['status']) => void; expandedRuns: Set<string>; previewLoader?: PreviewResourceLoader | null; onPreview?: PreviewOpener }) {
+function ConversationPanel(props: { data: SessionData | null; timelines: RunTimeline[]; pendingUser: ConversationItem | null; runState: RunState; selectedAttachmentIds: string[]; provider: Provider; health: GatewayHealth | null; mode: 'mock' | 'gateway'; onProviderChange: (provider: Provider) => void; onSubmit: (text: string, attachmentIds: string[], retryOf?: string, resumeOf?: string) => Promise<boolean>; onInterrupt?: (runId: string) => void; onRetry?: (runId: string) => void; onResume?: (runId: string) => void; loading: boolean; loadingSession: boolean; error: string | null; onToggleRun: (runId: string, status: RunSummary['status']) => void; expandedRuns: Set<string>; previewLoader?: PreviewResourceLoader | null; onPreview?: PreviewOpener }) {
   const [text, setText] = useState('')
   const [expanded, setExpanded] = useState<string | null>(null)
   const previewLoader = props.previewLoader || null
@@ -528,7 +531,7 @@ function ConversationPanel(props: { data: SessionData | null; timelines: RunTime
   })
   const orphanMessages = messages.filter((item) => !linkedMessageIds.has(item.id))
   const toggleMessage = (id: string) => setExpanded((current) => current === id ? null : id)
-  return <main className="conversation panel"><header className="conversation-header"><div className="conversation-title"><span className="eyebrow">当前会话</span><h1>{props.data?.session.name ?? (props.loadingSession ? '正在加载会话' : '暂无活动会话')}</h1>{props.data && <span className="conversation-meta">{props.data.session.runCount} 次运行 · 执行记录保存在本机</span>}</div><div className="conversation-header-actions"><label className="provider-selector"><span>下一次运行</span><select aria-label="选择下一次运行的模型来源" value={props.provider} onChange={(event) => props.onProviderChange(event.target.value as Provider)} disabled={props.loadingSession}>{(['openai', 'qwen'] as Provider[]).map((provider) => { const status = providerStatus(props.health, provider, props.mode); return <option key={provider} value={provider} disabled={status === 'unavailable'}>{providerLabels[provider]}{status === 'unavailable' ? '（不可用）' : ''}</option> })}</select></label><span className={'run-chip ' + props.runState}><span className="status-dot" />{runStateLabel(props.runState)} · {props.data?.session.runCount ?? 0} 次运行</span></div></header><div className="message-scroll">{props.loadingSession ? <div className="loading-state"><span className="spinner" />正在加载会话...</div> : props.error && !props.data && messages.length === 0 ? <div className="error-state"><div className="empty-icon"><MessageSquare size={22} /></div><h2>无法连接本地服务</h2><p>{props.error}</p></div> : !props.data && messages.length === 0 ? <div className="empty-conversation"><div className="empty-icon"><MessageSquare size={22} /></div><h2>创建第一个会话</h2><p>请从左侧新建会话，开始使用 Figura。</p></div> : messages.length === 0 && props.timelines.length === 0 ? <div className="empty-conversation"><div className="empty-icon"><MessageSquare size={22} /></div><p>提出问题或添加图片，开始使用 Figura。</p></div> : <>{runBlocks.map(({ timeline, user, assistant }) => <RunBlock key={timeline.summary.runId} timeline={timeline} user={user} assistant={assistant} expanded={props.expandedRuns.has(timeline.summary.runId) || timeline.summary.status === 'running'} onToggleRun={() => props.onToggleRun(timeline.summary.runId, timeline.summary.status)} expandedMessage={expanded} onToggleMessage={toggleMessage} previewLoader={previewLoader} onPreview={props.onPreview} onInterrupt={() => props.onInterrupt?.(timeline.summary.runId)} onRetry={() => props.onRetry?.(timeline.summary.runId)} />)}{orphanMessages.map((item) => <Message key={item.id} item={item} expanded={expanded === item.id} onToggle={toggleMessage} previewLoader={previewLoader} onPreview={props.onPreview} />)}</>}{props.loading && <div className="typing"><span /><span /><span /> Figura Agent 正在思考</div>}{props.error && <div className="error-banner" role="alert">{props.error}</div>}</div><div className="composer"><div className="composer-label"><Sparkles size={13} /><span>向 Figura Agent 提问</span></div><textarea value={text} onChange={(event) => setText(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void send() } }} placeholder="例如：比较这张图中各系列的变化趋势..." rows={1} /><div className="composer-actions"><span className="composer-hint">Enter 发送 · Shift + Enter 换行</span><button className="send-button" onClick={() => void send()} disabled={!text.trim() || props.loading || props.loadingSession} title="发送消息" aria-label="发送消息"><Send size={16} /> </button></div></div></main>
+  return <main className="conversation panel"><header className="conversation-header"><div className="conversation-title"><span className="eyebrow">当前会话</span><h1>{props.data?.session.name ?? (props.loadingSession ? '正在加载会话' : '暂无活动会话')}</h1>{props.data && <span className="conversation-meta">{props.data.session.runCount} 次运行 · 执行记录保存在本机</span>}</div><div className="conversation-header-actions"><label className="provider-selector"><span>下一次运行</span><select aria-label="选择下一次运行的模型来源" value={props.provider} onChange={(event) => props.onProviderChange(event.target.value as Provider)} disabled={props.loadingSession}>{(['openai', 'qwen'] as Provider[]).map((provider) => { const status = providerStatus(props.health, provider, props.mode); return <option key={provider} value={provider} disabled={status === 'unavailable'}>{providerLabels[provider]}{status === 'unavailable' ? '（不可用）' : ''}</option> })}</select></label><span className={'run-chip ' + props.runState}><span className="status-dot" />{runStateLabel(props.runState)} · {props.data?.session.runCount ?? 0} 次运行</span></div></header><div className="message-scroll">{props.loadingSession ? <div className="loading-state"><span className="spinner" />正在加载会话...</div> : props.error && !props.data && messages.length === 0 ? <div className="error-state"><div className="empty-icon"><MessageSquare size={22} /></div><h2>无法连接本地服务</h2><p>{props.error}</p></div> : !props.data && messages.length === 0 ? <div className="empty-conversation"><div className="empty-icon"><MessageSquare size={22} /></div><h2>创建第一个会话</h2><p>请从左侧新建会话，开始使用 Figura。</p></div> : messages.length === 0 && props.timelines.length === 0 ? <div className="empty-conversation"><div className="empty-icon"><MessageSquare size={22} /></div><p>提出问题或添加图片，开始使用 Figura。</p></div> : <>{runBlocks.map(({ timeline, user, assistant }) => <RunBlock key={timeline.summary.runId} timeline={timeline} user={user} assistant={assistant} expanded={props.expandedRuns.has(timeline.summary.runId) || timeline.summary.status === 'running'} onToggleRun={() => props.onToggleRun(timeline.summary.runId, timeline.summary.status)} expandedMessage={expanded} onToggleMessage={toggleMessage} previewLoader={previewLoader} onPreview={props.onPreview} onInterrupt={() => props.onInterrupt?.(timeline.summary.runId)} onRetry={() => props.onRetry?.(timeline.summary.runId)} onResume={() => props.onResume?.(timeline.summary.runId)} />)}{orphanMessages.map((item) => <Message key={item.id} item={item} expanded={expanded === item.id} onToggle={toggleMessage} previewLoader={previewLoader} onPreview={props.onPreview} />)}</>}{props.loading && <div className="typing"><span /><span /><span /> Figura Agent 正在思考</div>}{props.error && <div className="error-banner" role="alert">{props.error}</div>}</div><div className="composer"><div className="composer-label"><Sparkles size={13} /><span>向 Figura Agent 提问</span></div><textarea value={text} onChange={(event) => setText(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void send() } }} placeholder="例如：比较这张图中各系列的变化趋势..." rows={1} /><div className="composer-actions"><span className="composer-hint">Enter 发送 · Shift + Enter 换行</span><button className="send-button" onClick={() => void send()} disabled={!text.trim() || props.loading || props.loadingSession} title="发送消息" aria-label="发送消息"><Send size={16} /> </button></div></div></main>
 }
 
 function AttachmentPreview({ attachment, loader, onPreview }: { attachment: Attachment; loader: PreviewResourceLoader | null; onPreview?: PreviewOpener }) {
@@ -829,7 +832,7 @@ export default function App() {
   const removePending = (key: string) => { const item = pending.find((candidate) => candidate.key === key); if (item) URL.revokeObjectURL(item.previewUrl); setPending((items) => items.filter((candidate) => candidate.key !== key)) }
   const toggleAttachment = (id: string) => setSelectedIds((ids) => ids.includes(id) ? ids.filter((item) => item !== id) : [...ids, id])
 
-  const submit = async (text: string, attachmentIds: string[], retryOf?: string): Promise<boolean> => {
+  const submit = async (text: string, attachmentIds: string[], retryOf?: string, resumeOf?: string): Promise<boolean> => {
     if (!activeId) return false
     const sessionId = activeId
     subscriptionRef.current?.close()
@@ -851,12 +854,16 @@ export default function App() {
       }
       let handle
       try {
-        handle = await client.startRun(sessionId, text, attachmentIds, provider, startOptions)
+        handle = resumeOf
+          ? await client.resumeRun(sessionId, resumeOf, { idempotencyKey })
+          : await client.startRun(sessionId, text, attachmentIds, provider, startOptions)
       } catch (firstError) {
         // A lost acknowledgement can mean the Gateway accepted the run. One
         // keyed recovery request is safe and lets the Gateway return it.
         try {
-          handle = await client.startRun(sessionId, text, attachmentIds, provider, startOptions)
+          handle = resumeOf
+            ? await client.resumeRun(sessionId, resumeOf, { idempotencyKey })
+            : await client.startRun(sessionId, text, attachmentIds, provider, startOptions)
         } catch {
           throw firstError
         }
@@ -868,7 +875,7 @@ export default function App() {
       setPendingUser({ id: `${handle.runId}:user`, kind: 'user', text, timestamp: currentTime(), attachmentIds: attachmentIds.length ? attachmentIds : undefined })
       setRunState(handle.status === 'running' ? 'running' : handle.status === 'interrupted' ? 'interrupted' : handle.status === 'failed' ? 'failed' : 'completed')
       const startedAt = new Date().toISOString()
-      setTimelines((current) => current.some((item) => item.summary.runId === handle.runId) ? current : [...current, { summary: { runId: handle.runId, sessionId, status: handle.status, createdAt: startedAt, updatedAt: startedAt, eventCount: 0, provider: handle.provider || provider, model: handle.model, retryOf: handle.retryOf }, events: [], historyGap: false }])
+      setTimelines((current) => current.some((item) => item.summary.runId === handle.runId) ? current : [...current, { summary: { runId: handle.runId, sessionId, status: handle.status, createdAt: startedAt, updatedAt: startedAt, eventCount: 0, provider: handle.provider || provider, model: handle.model, retryOf: handle.retryOf, parentRunId: handle.parentRunId, rootRunId: handle.rootRunId, continuationKind: handle.continuationKind, recovery: handle.recovery }, events: [], historyGap: false }])
       let reconnectAttempts = 0
       let reconnectTimer: number | undefined
       const applyHistory = (history: Awaited<ReturnType<ChartAgentClient['getRunHistory']>>) => {
@@ -989,9 +996,22 @@ export default function App() {
     await submit(user.text, user.attachmentIds || [], runId)
   }
 
+  const resumeRun = async (runId: string) => {
+    const timeline = timelines.find((item) => item.summary.runId === runId)
+    if (!timeline || timeline.summary.recovery?.status !== 'available') return
+    const request = runRequestsRef.current.get(runId)
+    const storedUser = data?.messages.find((item) => item.id === `${runId}:user`)
+    const user = storedUser || (request ? { id: `${runId}:user`, kind: 'user' as const, text: request.text, timestamp: currentTime(), attachmentIds: request.attachmentIds } : undefined)
+    if (!user || user.kind !== 'user') {
+      setError('这条运行缺少原始请求，暂时无法继续执行。')
+      return
+    }
+    await submit(user.text, user.attachmentIds || [], undefined, runId)
+  }
+
   const toggleRun = (runId: string, status: RunSummary['status']) => setExpandedRuns((current) => { const next = new Set(current); if (status === 'running') { next.has(runId) ? next.delete(runId) : next.add(runId) } else { next.has(runId) ? next.delete(runId) : next.add(runId) } return next })
   const changeProvider = (next: Provider) => { setProvider(next); if (activeId) window.localStorage.setItem(`figura.provider.${activeId}`, next); if (loading) setError('当前运行不会切换来源，新选择将应用于下一次运行。') }
-  return <><div className="app-shell"><SessionSidebar sessions={sessions} activeId={activeId} onSelect={selectSession} onCreate={create} onDelete={requestDeleteSession} mode={mode} runtimeStatus={runtimeStatus} health={gatewayHealth} /><ConversationPanel data={data} timelines={timelines} pendingUser={pendingUser} runState={runState} selectedAttachmentIds={selectedIds} provider={provider} health={gatewayHealth} mode={mode} onProviderChange={changeProvider} onSubmit={submit} onInterrupt={(runId) => void interruptRun(runId)} onRetry={(runId) => void retryRun(runId)} loading={loading} loadingSession={loadingSession} error={error} onToggleRun={toggleRun} expandedRuns={expandedRuns} previewLoader={previewLoader} onPreview={setActivePreview} /><AttachmentPanel attachments={data?.attachments ?? []} pending={pending} selectedIds={selectedIds} error={attachmentError} onAdd={addFiles} onToggle={toggleAttachment} onRemovePending={removePending} onRetryPending={(item) => void uploadPending(item)} onRemove={requestDeleteAttachment} previewLoader={previewLoader} onPreview={setActivePreview} /></div>{activePreview && <InteractivePreview preview={activePreview} loader={previewLoader} onClose={() => setActivePreview(null)} />}{creatingSession && <div className="dialog-backdrop"><form className="session-dialog" onSubmit={(event) => void confirmCreate(event)}><h2>新建会话</h2><label htmlFor="session-name">会话名称</label><input id="session-name" value={newSessionName} onChange={(event) => setNewSessionName(event.target.value)} placeholder="例如：季度销售分析" autoFocus /><div className="dialog-actions"><button type="button" className="dialog-secondary" onClick={() => setCreatingSession(false)}>取消</button><button type="submit" className="dialog-primary" disabled={!newSessionName.trim()}>创建会话</button></div></form></div>}{confirmAction && <div className="dialog-backdrop"><div className="session-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-dialog-title"><h2 id="delete-dialog-title">{confirmAction.kind === 'session' ? '删除会话？' : '删除附件？'}</h2><p className="dialog-message">{confirmAction.kind === 'session' ? `将永久删除“${confirmAction.session.name}”及其运行记录和附件。` : `将删除“${confirmAction.attachment.filename}”及其源文件。`}</p><div className="dialog-actions"><button type="button" className="dialog-secondary" onClick={() => setConfirmAction(null)} disabled={deleting}>取消</button><button type="button" className="dialog-danger" onClick={() => void confirmDelete()} disabled={deleting}><Trash2 size={13} />{deleting ? '正在删除' : '确认删除'}</button></div></div></div>}</>
+  return <><div className="app-shell"><SessionSidebar sessions={sessions} activeId={activeId} onSelect={selectSession} onCreate={create} onDelete={requestDeleteSession} mode={mode} runtimeStatus={runtimeStatus} health={gatewayHealth} /><ConversationPanel data={data} timelines={timelines} pendingUser={pendingUser} runState={runState} selectedAttachmentIds={selectedIds} provider={provider} health={gatewayHealth} mode={mode} onProviderChange={changeProvider} onSubmit={submit} onInterrupt={(runId) => void interruptRun(runId)} onRetry={(runId) => void retryRun(runId)} onResume={(runId) => void resumeRun(runId)} loading={loading} loadingSession={loadingSession} error={error} onToggleRun={toggleRun} expandedRuns={expandedRuns} previewLoader={previewLoader} onPreview={setActivePreview} /><AttachmentPanel attachments={data?.attachments ?? []} pending={pending} selectedIds={selectedIds} error={attachmentError} onAdd={addFiles} onToggle={toggleAttachment} onRemovePending={removePending} onRetryPending={(item) => void uploadPending(item)} onRemove={requestDeleteAttachment} previewLoader={previewLoader} onPreview={setActivePreview} /></div>{activePreview && <InteractivePreview preview={activePreview} loader={previewLoader} onClose={() => setActivePreview(null)} />}{creatingSession && <div className="dialog-backdrop"><form className="session-dialog" onSubmit={(event) => void confirmCreate(event)}><h2>新建会话</h2><label htmlFor="session-name">会话名称</label><input id="session-name" value={newSessionName} onChange={(event) => setNewSessionName(event.target.value)} placeholder="例如：季度销售分析" autoFocus /><div className="dialog-actions"><button type="button" className="dialog-secondary" onClick={() => setCreatingSession(false)}>取消</button><button type="submit" className="dialog-primary" disabled={!newSessionName.trim()}>创建会话</button></div></form></div>}{confirmAction && <div className="dialog-backdrop"><div className="session-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-dialog-title"><h2 id="delete-dialog-title">{confirmAction.kind === 'session' ? '删除会话？' : '删除附件？'}</h2><p className="dialog-message">{confirmAction.kind === 'session' ? `将永久删除“${confirmAction.session.name}”及其运行记录和附件。` : `将删除“${confirmAction.attachment.filename}”及其源文件。`}</p><div className="dialog-actions"><button type="button" className="dialog-secondary" onClick={() => setConfirmAction(null)} disabled={deleting}>取消</button><button type="button" className="dialog-danger" onClick={() => void confirmDelete()} disabled={deleting}><Trash2 size={13} />{deleting ? '正在删除' : '确认删除'}</button></div></div></div>}</>
 }
 
 function toUserMessage(error: unknown): string {
@@ -1003,6 +1023,9 @@ function toUserMessage(error: unknown): string {
     if (error.code === 'invalid_provider') return '模型来源不受支持，请重新选择 OpenAI 或 Qwen。'
     if (error.code === 'idempotency_conflict') return '请求标识已对应其他内容，请重新提交。'
     if (error.code === 'run_not_terminal') return '运行尚未结束，暂时不能重试。'
+    if (error.code === 'recovery_blocked') return error.reason === 'operation_outcome_uncertain' ? '运行在一个操作边界中断，结果无法安全确认，请使用“重试本次运行”。' : '该运行暂时无法继续执行，请使用“重试本次运行”。'
+    if (error.code === 'recovery_unavailable' || error.code === 'checkpoint_expired' || error.code === 'unsupported_checkpoint_version') return '该运行没有可用的继续执行检查点，请使用“重试本次运行”。'
+    if (error.code === 'resume_idempotency_conflict') return '恢复请求标识已对应其他恢复操作，请重新点击继续执行。'
     if (error.code === 'history_gap') return '执行历史存在缺口，当前只能查看已保留部分。'
     if (error.code === 'session_not_found') return '会话不存在，可能已被删除。'
     if (error.code === 'session_exists') return '会话名称已存在，请换一个名称。'

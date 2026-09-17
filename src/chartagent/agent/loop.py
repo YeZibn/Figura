@@ -53,10 +53,15 @@ _LAYOUT_TOOL_NAME = "inspect_chart_layout"
 _GEOMETRY_TOOL_NAMES = frozenset(
     {"measure_bars", "extract_line_series", "extract_scatter_points", "extract_pie_slices"}
 )
+_RENDER_TOOL_NAMES = frozenset({"render_chart", "generate_chart"})
 
 
 class AgentInterrupted(RuntimeError):
     """Raised when a cooperative run interruption is observed."""
+
+
+class AgentRecoveryBlocked(RuntimeError):
+    """Raised when a continuation reaches an operation with an unknown outcome."""
 
 
 class Agent:
@@ -89,6 +94,11 @@ class Agent:
         context_budget: int = 24000,
         review_manager: Optional[ChartReviewManager] = None,
         interruption_event: Any = None,
+        recovery_context: Optional[dict[str, Any]] = None,
+        checkpoint_sink: Optional[Callable[..., bool]] = None,
+        operation_begin: Optional[Callable[..., dict[str, Any]]] = None,
+        operation_complete: Optional[Callable[..., dict[str, Any] | None]] = None,
+        operation_uncertain: Optional[Callable[..., dict[str, Any] | None]] = None,
         **chat_kwargs: Any,
     ) -> None:
         self.client = client
@@ -107,6 +117,11 @@ class Agent:
         self.attachments = attachments
         self._review_manager = review_manager or ChartReviewManager(attachments=attachments)
         self._interruption_event = interruption_event
+        self._recovery_context = recovery_context
+        self._checkpoint_sink = checkpoint_sink
+        self._operation_begin = operation_begin
+        self._operation_complete = operation_complete
+        self._operation_uncertain = operation_uncertain
         self.context_budget = context_budget
         self._messages: List[ChatCompletionMessageParam] = []
         self._current_messages: List[ChatCompletionMessageParam] = []
@@ -133,7 +148,7 @@ class Agent:
         if callable(close):
             close()
 
-    def run(self, user_input: str | list[dict]) -> str:
+    def run(self, user_input: str | list[dict], *, recovery_context: Optional[dict[str, Any]] = None) -> str:
         """Drive one user turn to completion (final answer or budget cap).
 
         ``user_input`` is a plain string or an OpenAI multimodal content list
@@ -142,10 +157,23 @@ class Agent:
         """
         if self._interruption_requested():
             raise AgentInterrupted("Agent run was interrupted before it started")
+        recovery = recovery_context if recovery_context is not None else self._recovery_context
         run = self.memory.begin_run(self._run_id) if self._run_id is not None else self.memory.begin_run()
         self._messages = []
         self._current_messages = []
         layout_contexts: dict[str, dict[str, Any]] = {}
+        checkpoint_references: list[dict[str, Any]] = []
+        if isinstance(recovery, dict):
+            loader = getattr(self.memory, "recovery_context", None)
+            hydrated = loader(recovery, budget=self.context_budget) if callable(loader) else []
+            if hydrated:
+                self._current_messages.extend(hydrated)  # type: ignore[arg-type]
+            raw_layouts = recovery.get("layoutContexts")
+            if isinstance(raw_layouts, dict):
+                layout_contexts = {
+                    str(key): value for key, value in list(raw_layouts.items())[:16]
+                    if isinstance(value, dict)
+                }
         user_message = {"role": "user", "content": user_input}
         self.memory.append(run, "user", {"message": user_message, "text": user_input if isinstance(user_input, str) else "[image attachment turn]"})
         if isinstance(user_input, str):
@@ -156,7 +184,8 @@ class Agent:
                     self.attachments.bind_run(attachment_id, run.id)
         else:
             run_attachment_ids = ()
-        self._current_messages.append(user_message)  # type: ignore[arg-type]
+        if not self._current_messages or self._current_messages[-1].get("role") != "user":
+            self._current_messages.append(user_message)  # type: ignore[arg-type]
         tools = registry_tools(self.registry)
         emitter = (
             TraceEmitter(self._trace_sink, run_id=self._trace_run_id or run.id)
@@ -164,6 +193,12 @@ class Agent:
             else None
         )
 
+        pending_recovery_calls = self._recovery_tool_calls(recovery)
+        if isinstance(recovery, dict) and recovery.get("nextAction") == "final" and isinstance(recovery.get("pendingAnswer"), str):
+            answer = str(recovery["pendingAnswer"])
+            self.memory.append(run, "final", {"answer": answer, "recovered": True})
+            self.memory.finish(run, RunStatus.COMPLETED, "recovered_final")
+            return answer
         for step in range(self.max_steps):
             turn = step + 1
             system_message = {"role": "system", "content": self._system} if self._system else None
@@ -184,20 +219,28 @@ class Agent:
                     trace_turn=turn,
                 )
             self._raise_if_interrupted(run)
-            try:
-                result = self.client.chat(self._messages, tools=tools, **chat_kwargs)
-            except Exception as exc:
-                self.memory.append(run, "error", {"error_code": "agent_call_failed", "error_type": type(exc).__name__[:64]})
-                self.memory.finish(run, RunStatus.FAILED, "error")
-                if emitter is not None and not isinstance(self.client, LLMClient):
-                    emitter.emit(
-                        "model_completed",
-                        turn=turn,
-                        status="error",
-                        error_code="agent_call_failed",
-                        error_type=type(exc).__name__[:64],
-                    )
-                raise
+            operation_id = f"model:{turn}"
+            if pending_recovery_calls:
+                result = NormalizedResult(tool_calls=pending_recovery_calls, finish_reason="tool_calls")
+                pending_recovery_calls = []
+            else:
+                self._begin_work_unit(operation_id, "model")
+                try:
+                    result = self.client.chat(self._messages, tools=tools, **chat_kwargs)
+                except Exception as exc:
+                    self._uncertain_work_unit(operation_id, "model_response_outcome_uncertain")
+                    self.memory.append(run, "error", {"error_code": "agent_call_failed", "error_type": type(exc).__name__[:64]})
+                    self.memory.finish(run, RunStatus.FAILED, "error")
+                    if emitter is not None and not isinstance(self.client, LLMClient):
+                        emitter.emit(
+                            "model_completed",
+                            turn=turn,
+                            status="error",
+                            error_code="agent_call_failed",
+                            error_type=type(exc).__name__[:64],
+                        )
+                    raise
+                self._complete_work_unit(operation_id, "model", self._model_result_payload(result))
 
             if emitter is not None and not isinstance(self.client, LLMClient):
                 emitter.emit(
@@ -247,6 +290,26 @@ class Agent:
                 self._current_messages.append(assistant_message)
                 self._messages.append(assistant_message)
                 self.memory.append(run, "assistant", {"message": assistant_message})
+                self._checkpoint(
+                    run,
+                    phase="model",
+                    next_action="final",
+                    state=self._checkpoint_state(
+                        user_input,
+                        self._current_messages,
+                        layout_contexts,
+                        run_attachment_ids,
+                        turn,
+                        pending_tool_calls=(),
+                        pending_answer=result.content,
+                        visual_references=checkpoint_references,
+                    ),
+                )
+                if isinstance(recovery, dict) and recovery.get("nextAction") == "final" and isinstance(recovery.get("pendingAnswer"), str):
+                    answer = str(recovery["pendingAnswer"])
+                    self.memory.append(run, "final", {"answer": answer, "recovered": True})
+                    self.memory.finish(run, RunStatus.COMPLETED, "recovered_final")
+                    return answer
                 self.memory.append(run, "final", {"answer": result.content, "finish_reason": result.finish_reason})
                 self.memory.finish(run, RunStatus.COMPLETED, "final")
                 if emitter is not None:
@@ -262,9 +325,29 @@ class Agent:
             self._current_messages.append(assistant_message)
             self._messages.append(assistant_message)
             self.memory.append(run, "assistant", {"message": assistant_message})
+            self._checkpoint(
+                run,
+                phase="model",
+                next_action="tool",
+                state=self._checkpoint_state(
+                    user_input,
+                    self._current_messages,
+                    layout_contexts,
+                    run_attachment_ids,
+                    turn,
+                    pending_tool_calls=result.tool_calls,
+                    visual_references=checkpoint_references,
+                ),
+            )
             visual_evidence: list[ToolVisualEvidence] = []
-            for call in result.tool_calls:
+            for call_index, call in enumerate(result.tool_calls):
                 self._raise_if_interrupted(run)
+                operation_kind = "render" if call.name in _RENDER_TOOL_NAMES else "tool"
+                operation_id = f"{operation_kind}:{turn}:{call.id}"
+                operation = self._begin_work_unit(operation_id, operation_kind)
+                if isinstance(recovery, dict) and operation.get("state") in {"in_flight", "uncertain"}:
+                    self._uncertain_work_unit(operation_id, "operation_outcome_uncertain")
+                    raise AgentRecoveryBlocked("operation outcome is uncertain")
                 if emitter is not None:
                     presentation = get_tool_presentation(call.name, tool=self.registry.get(call.name))
                     emitter.emit(
@@ -291,6 +374,14 @@ class Agent:
                         call.arguments,
                         layout_contexts,
                     )
+                review_operation_id = None
+                if any(
+                    isinstance(getattr(image, "metadata", None), dict)
+                    and image.metadata.get("kind") == "generated_chart"
+                    for image in observation.images
+                ):
+                    review_operation_id = f"review:{turn}:{call.id}"
+                    self._begin_work_unit(review_operation_id, "review")
                 observation = self._apply_generation_review(
                     observation,
                     run_id=run.id,
@@ -301,6 +392,8 @@ class Agent:
                     turn=turn,
                 )
                 self._raise_if_interrupted(run)
+                if review_operation_id:
+                    self._complete_work_unit(review_operation_id, "review", {"status": "completed"})
                 tool_message = tool_entry(call, observation.content)
                 self._current_messages.append(tool_message)
                 self._messages.append(tool_message)
@@ -317,6 +410,30 @@ class Agent:
                         )
                     except Exception:  # noqa: BLE001 - observation diagnostics cannot abort the Agent
                         observation_refs = ()
+                checkpoint_references.extend(
+                    item for item in observation_refs if isinstance(item, dict)
+                )
+                self._complete_work_unit(
+                    operation_id,
+                    operation_kind,
+                    {"status": observation_status(observation.content)},
+                    {"observations": list(observation_refs)},
+                )
+                remaining_calls = result.tool_calls[call_index + 1:]
+                self._checkpoint(
+                    run,
+                    phase="tool",
+                    next_action="tool" if remaining_calls else "model",
+                    state=self._checkpoint_state(
+                        user_input,
+                        self._current_messages,
+                        layout_contexts,
+                        run_attachment_ids,
+                        turn,
+                        pending_tool_calls=remaining_calls,
+                        visual_references=checkpoint_references,
+                    ),
+                )
                 if emitter is not None:
                     self._raise_if_interrupted(run)
                     image_payload = {"images": summarize_images(observation.images)}
@@ -424,7 +541,6 @@ class Agent:
                         "image_count": len(visual_evidence),
                     },
                 )
-
         self._raise_if_interrupted(run)
         terminal_answer = _BUDGET_MSG
         terminal_gate = self._review_manager.gate(run.id)
@@ -441,6 +557,110 @@ class Agent:
         self.memory.append(run, "terminal", {"answer": terminal_answer, "max_steps": self.max_steps, "review_gate": terminal_gate})
         self.memory.finish(run, RunStatus.COMPLETED, "budget")
         return terminal_answer
+
+    def _begin_work_unit(self, operation_id: str, operation_kind: str) -> dict[str, Any]:
+        if self._operation_begin is None:
+            return {"operationId": operation_id, "state": "in_flight"}
+        try:
+            result = self._operation_begin(operation_id, operation_kind)
+            return result if isinstance(result, dict) else {"operationId": operation_id, "state": "in_flight"}
+        except Exception:  # noqa: BLE001 - journaling remains a bounded diagnostic
+            return {"operationId": operation_id, "state": "in_flight"}
+
+    def _complete_work_unit(
+        self,
+        operation_id: str,
+        operation_kind: str,
+        result: dict[str, Any] | None = None,
+        references: dict[str, Any] | None = None,
+    ) -> None:
+        if self._operation_complete is None:
+            return
+        try:
+            self._operation_complete(operation_id, result=result, references=references)
+        except Exception:  # noqa: BLE001 - trace persistence cannot stop the Agent
+            self._uncertain_work_unit(operation_id, f"{operation_kind}_persistence_failed")
+
+    def _uncertain_work_unit(self, operation_id: str, reason: str) -> None:
+        if self._operation_uncertain is None:
+            return
+        try:
+            self._operation_uncertain(operation_id, reason=reason)
+        except Exception:  # noqa: BLE001 - bounded recovery fallback
+            pass
+
+    def _checkpoint(
+        self,
+        run: Any,
+        *,
+        state: dict[str, Any],
+        phase: str,
+        next_action: str,
+    ) -> None:
+        if self._checkpoint_sink is None:
+            return
+        try:
+            checkpoint_state = dict(state)
+            checkpoint_state.setdefault("phase", phase)
+            checkpoint_state["nextAction"] = next_action
+            self._checkpoint_sink(checkpoint_state, phase=phase, next_action=next_action)
+        except Exception:  # noqa: BLE001 - checkpoint failure is surfaced as unavailable metadata
+            return
+
+    @staticmethod
+    def _checkpoint_state(
+        user_input: str | list[dict],
+        messages: Sequence[dict[str, Any]],
+        layout_contexts: dict[str, dict[str, Any]],
+        attachment_ids: Sequence[str],
+        turn: int,
+        *,
+        pending_tool_calls: Sequence[ToolCall],
+        pending_answer: str | None = None,
+        visual_references: Sequence[dict[str, Any]] = (),
+    ) -> dict[str, Any]:
+        result = {
+            "prompt": user_input if isinstance(user_input, str) else "[image attachment turn]",
+            "messages": list(messages),
+            "layoutContexts": layout_contexts,
+            "attachmentIds": list(attachment_ids),
+            "currentTurn": turn,
+            "pendingToolCalls": [
+                {"id": call.id, "name": call.name, "arguments": call.arguments}
+                for call in pending_tool_calls
+            ],
+            "visualReferences": list(visual_references)[:32],
+        }
+        if pending_answer is not None:
+            result["pendingAnswer"] = pending_answer
+        return result
+
+    @staticmethod
+    def _model_result_payload(result: NormalizedResult) -> dict[str, Any]:
+        return {
+            "content": result.content,
+            "finishReason": result.finish_reason,
+            "toolCalls": [
+                {"id": call.id, "name": call.name, "arguments": call.arguments}
+                for call in result.tool_calls
+            ],
+        }
+
+    @staticmethod
+    def _recovery_tool_calls(recovery: Optional[dict[str, Any]]) -> list[ToolCall]:
+        if not isinstance(recovery, dict) or recovery.get("nextAction") not in {"tool", "dispatch_tool"}:
+            return []
+        raw = recovery.get("pendingToolCalls")
+        if not isinstance(raw, list):
+            return []
+        calls: list[ToolCall] = []
+        for item in raw[:16]:
+            if not isinstance(item, dict):
+                continue
+            if not all(isinstance(item.get(key), str) and item.get(key) for key in ("id", "name", "arguments")):
+                continue
+            calls.append(ToolCall(item["id"], item["name"], item["arguments"]))
+        return calls
 
     def _interruption_requested(self) -> bool:
         event = self._interruption_event

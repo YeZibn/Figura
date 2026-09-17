@@ -22,6 +22,10 @@ MAX_IDEMPOTENCY_KEY = 128
 MAX_TERMINAL_CODE = 64
 MAX_EVENT_KIND = 64
 MAX_EVENT_PAYLOAD = 12000
+MAX_CHECKPOINT_PAYLOAD = 64 * 1024
+MAX_OPERATION_RESULT = 16 * 1024
+MAX_RECOVERY_REASON = 240
+MAX_OPERATION_ID = 160
 SUPPORTED_PROVIDERS = ("openai", "qwen")
 MAX_ARTIFACT_CAPTION = 500
 MAX_ARTIFACT_TITLE = 240
@@ -75,12 +79,108 @@ class RunTerminalReason(str, Enum):
     HISTORY_EXPIRED = "history_expired"
 
 
+class RecoveryStatus(str, Enum):
+    """Whether a terminal run has a safe, explicit continuation available."""
+
+    AVAILABLE = "available"
+    BLOCKED = "blocked"
+    UNAVAILABLE = "unavailable"
+
+
+class CheckpointPhase(str, Enum):
+    """The last durable boundary reached by a run."""
+
+    ACCEPTED = "accepted"
+    MODEL = "model"
+    TOOL = "tool"
+    RENDER = "render"
+    REVIEW = "review"
+    PUBLICATION = "publication"
+    FINAL = "final"
+
+
+class OperationState(str, Enum):
+    """Durable state of a resumable work unit."""
+
+    NOT_STARTED = "not_started"
+    IN_FLIGHT = "in_flight"
+    COMPLETED = "completed"
+    UNCERTAIN = "uncertain"
+    UNKNOWN = "uncertain"  # compatibility spelling for persisted crash windows
+
+
+class ContinuationKind(str, Enum):
+    """How a child run relates to its parent."""
+
+    RESUME = "resume"
+    RETRY = "retry"
+
+
+CHECKPOINT_SCHEMA_VERSION = 1
+RECOVERY_UNAVAILABLE_CODE = "recovery_unavailable"
+RECOVERY_BLOCKED_CODE = "recovery_blocked"
+CHECKPOINT_EXPIRED_CODE = "checkpoint_expired"
+CHECKPOINT_VERSION_CODE = "unsupported_checkpoint_version"
+RESUME_IDEMPOTENCY_CONFLICT_CODE = "resume_idempotency_conflict"
+
+
 IDEMPOTENCY_CONFLICT_CODE = "idempotency_conflict"
 HISTORY_GAP_CODE = "history_gap"
 
 
 def utc_timestamp() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+@dataclass(frozen=True)
+class RunLineage:
+    """Normalized parent/root relationship for continuation and retry runs."""
+
+    parent_run_id: str | None = None
+    root_run_id: str | None = None
+    continuation_kind: ContinuationKind | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        if self.parent_run_id:
+            result["parentRunId"] = truncate_text(self.parent_run_id, MAX_RUN_ID)
+        if self.root_run_id:
+            result["rootRunId"] = truncate_text(self.root_run_id, MAX_RUN_ID)
+        if self.continuation_kind:
+            result["continuationKind"] = self.continuation_kind.value
+        return result
+
+
+@dataclass(frozen=True)
+class RunRecovery:
+    """Bounded public recovery projection; checkpoint payloads never leave storage."""
+
+    status: RecoveryStatus = RecoveryStatus.UNAVAILABLE
+    checkpoint_id: str | None = None
+    checkpoint_version: int | None = None
+    phase: CheckpointPhase | None = None
+    next_action: str | None = None
+    blocked_reason: str | None = None
+    updated_at: str | None = None
+    expires_at: float | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        result: dict[str, Any] = {"status": self.status.value}
+        if self.checkpoint_id:
+            result["checkpointId"] = truncate_text(self.checkpoint_id, MAX_RUN_ID)
+        if self.checkpoint_version is not None:
+            result["checkpointVersion"] = int(self.checkpoint_version)
+        if self.phase:
+            result["phase"] = self.phase.value
+        if self.next_action:
+            result["nextAction"] = truncate_text(self.next_action, 120)
+        if self.blocked_reason:
+            result["blockedReason"] = truncate_text(self.blocked_reason, MAX_RECOVERY_REASON)
+        if self.updated_at:
+            result["updatedAt"] = self.updated_at
+        if self.expires_at is not None:
+            result["expiresAt"] = self.expires_at
+        return result
 
 
 @dataclass(frozen=True)
@@ -95,6 +195,10 @@ class RunAccepted:
     terminal_code: str | None = None
     terminal_message: str | None = None
     retry_of: str | None = None
+    parent_run_id: str | None = None
+    root_run_id: str | None = None
+    continuation_kind: ContinuationKind | None = None
+    recovery: RunRecovery | None = None
 
     def to_dict(self) -> dict[str, Any]:
         result = {
@@ -112,6 +216,10 @@ class RunAccepted:
             result["terminalMessage"] = truncate_text(self.terminal_message, MAX_ERROR_MESSAGE)
         if self.retry_of:
             result["retryOf"] = truncate_text(self.retry_of, MAX_RUN_ID)
+        lineage = RunLineage(self.parent_run_id or self.retry_of, self.root_run_id, self.continuation_kind)
+        result.update(lineage.to_dict())
+        if self.recovery is not None:
+            result["recovery"] = self.recovery.to_dict()
         return result
 
 

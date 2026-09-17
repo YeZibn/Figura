@@ -20,8 +20,12 @@ from ..tools.core.result import (
 from ..trace import TraceEvent
 from .history import GatewayHistoryStore, HistoryStoreError
 from .protocol import (
+    CheckpointPhase,
+    ContinuationKind,
     MAX_EVENT_PAYLOAD,
     ObservationReference,
+    RecoveryStatus,
+    RunRecovery,
     RunAccepted,
     RunEvent,
     RunStatus,
@@ -34,6 +38,29 @@ DEFAULT_MAX_RUNS = 64
 DEFAULT_MAX_RUN_EVENTS = 256
 DEFAULT_RUN_RETENTION_SECONDS = 120.0
 DEFAULT_OBSERVATION_RETENTION_SECONDS = 120.0
+
+
+def _recovery_from_dict(value: dict | None) -> RunRecovery:
+    if not isinstance(value, dict):
+        return RunRecovery()
+    try:
+        status = RecoveryStatus(value.get("status", RecoveryStatus.UNAVAILABLE.value))
+    except ValueError:
+        status = RecoveryStatus.UNAVAILABLE
+    try:
+        phase = CheckpointPhase(value["phase"]) if value.get("phase") else None
+    except ValueError:
+        phase = None
+    return RunRecovery(
+        status=status,
+        checkpoint_id=value.get("checkpointId"),
+        checkpoint_version=value.get("checkpointVersion"),
+        phase=phase,
+        next_action=value.get("nextAction"),
+        blocked_reason=value.get("blockedReason"),
+        updated_at=value.get("updatedAt"),
+        expires_at=value.get("expiresAt"),
+    )
 
 
 @dataclass
@@ -139,12 +166,19 @@ class ManagedRun:
         history_store: GatewayHistoryStore | None = None,
         run_id: str | None = None,
         retry_of: str | None = None,
+        parent_run_id: str | None = None,
+        root_run_id: str | None = None,
+        continuation_kind: ContinuationKind | str | None = None,
     ) -> None:
         self.run_id = run_id or f"run_{uuid4().hex}"
         self.session_id = session_id
         self.provider = provider
         self.model = model
         self.retry_of = retry_of
+        self.parent_run_id = parent_run_id or retry_of
+        self.root_run_id = root_run_id or self.run_id
+        self.continuation_kind = ContinuationKind(continuation_kind) if continuation_kind is not None else None
+        self.recovery = RunRecovery()
         self.status = RunStatus.RUNNING
         self.answer: str | None = None
         self.error_code: str | None = None
@@ -164,15 +198,27 @@ class ManagedRun:
 
     @property
     def accepted(self) -> RunAccepted:
+        recovery = self.recovery
+        if self.history_store is not None:
+            try:
+                projection = self.history_store.get_recovery(self.session_id, self.run_id)
+                if projection is not None:
+                    recovery = _recovery_from_dict(projection)
+            except Exception:  # noqa: BLE001 - live projection has a safe local fallback
+                pass
         return RunAccepted(
-            self.run_id,
-            self.session_id,
-            self.status,
-            self.provider,
-            self.model,
-            self.error_code,
-            self.error_message,
-            self.retry_of,
+            run_id=self.run_id,
+            session_id=self.session_id,
+            status=self.status,
+            provider=self.provider,
+            model=self.model,
+            terminal_code=self.error_code,
+            terminal_message=self.error_message,
+            retry_of=self.retry_of,
+            parent_run_id=self.parent_run_id,
+            root_run_id=self.root_run_id,
+            continuation_kind=self.continuation_kind,
+            recovery=recovery,
         )
 
     @property
@@ -220,6 +266,83 @@ class ManagedRun:
             payload.setdefault("turn", event.turn)
         payload["traceSequence"] = event.sequence
         self.publish(event.kind, payload)
+
+    def create_checkpoint(
+        self,
+        state: dict,
+        *,
+        phase: CheckpointPhase | str,
+        next_action: str,
+        status: RecoveryStatus | str = RecoveryStatus.AVAILABLE,
+        blocked_reason: str | None = None,
+    ) -> bool:
+        """Persist a recovery boundary before announcing it to consumers."""
+        if self.history_store is None:
+            return False
+        try:
+            checkpoint = self.history_store.create_checkpoint(
+                self.session_id,
+                self.run_id,
+                state,
+                phase=phase,
+                next_action=next_action,
+                status=status,
+                blocked_reason=blocked_reason,
+                sequence=self._next_sequence,
+            )
+            self.recovery = _recovery_from_dict(checkpoint.public())
+            return True
+        except Exception:  # noqa: BLE001 - recovery failures become bounded metadata
+            self.recovery = RunRecovery(
+                status=RecoveryStatus.UNAVAILABLE,
+                blocked_reason="checkpoint_persistence_failed",
+            )
+            return False
+
+    def begin_operation(self, operation_id: str, operation_kind: str, *, request_fingerprint: str | None = None) -> dict:
+        if self.history_store is None:
+            return {"operationId": operation_id, "state": "in_flight"}
+        return self.history_store.begin_operation(
+            self.run_id, operation_id, operation_kind, request_fingerprint=request_fingerprint,
+        )
+
+    def complete_operation(self, operation_id: str, *, result: dict | None = None, references: dict | None = None) -> dict | None:
+        if self.history_store is None:
+            return None
+        completed = self.history_store.complete_operation(
+            self.run_id, operation_id, result=result, references=references,
+        )
+        if completed is not None:
+            self.publish("operation_completed", {
+                "operationId": operation_id,
+                "operationKind": completed.get("operationKind"),
+                "state": completed.get("state"),
+            })
+        return completed
+
+    def mark_operation_uncertain(self, operation_id: str, *, reason: str | None = None) -> dict | None:
+        if self.history_store is None:
+            return None
+        uncertain = self.history_store.uncertain_operation(self.run_id, operation_id, reason=reason)
+        if uncertain is not None:
+            try:
+                self.history_store.mark_recovery(
+                    self.session_id,
+                    self.run_id,
+                    RecoveryStatus.BLOCKED,
+                    reason="operation_outcome_uncertain",
+                )
+            except Exception:  # noqa: BLE001 - local projection remains conservative
+                pass
+            self.recovery = RunRecovery(
+                status=RecoveryStatus.BLOCKED,
+                blocked_reason="operation_outcome_uncertain",
+            )
+            self.publish("recovery_blocked", {
+                "operationId": operation_id,
+                "reason": "operation_outcome_uncertain",
+            })
+        return uncertain
 
     def has_event(self, kind: str) -> bool:
         with self._condition:
@@ -439,19 +562,30 @@ class HistoricalRun:
         self.model = summary.get("model")
         self.cancel_requested = bool(summary.get("cancelRequested"))
         self.retry_of = summary.get("retryOf")
+        self.parent_run_id = summary.get("parentRunId") or self.retry_of
+        self.root_run_id = summary.get("rootRunId") or self.run_id
+        try:
+            self.continuation_kind = ContinuationKind(summary.get("continuationKind")) if summary.get("continuationKind") else None
+        except ValueError:
+            self.continuation_kind = None
+        self.recovery = _recovery_from_dict(summary.get("recovery"))
         self.history_store = history_store
 
     @property
     def accepted(self) -> RunAccepted:
         return RunAccepted(
-            self.run_id,
-            self.session_id,
-            self.status,
-            self.provider,
-            self.model,
-            self.error_code,
-            self.error_message,
-            self.retry_of,
+            run_id=self.run_id,
+            session_id=self.session_id,
+            status=self.status,
+            provider=self.provider,
+            model=self.model,
+            terminal_code=self.error_code,
+            terminal_message=self.error_message,
+            retry_of=self.retry_of,
+            parent_run_id=self.parent_run_id,
+            root_run_id=self.root_run_id,
+            continuation_kind=self.continuation_kind,
+            recovery=self.recovery,
         )
 
     @property
@@ -511,6 +645,12 @@ class RunManager:
         idempotency_key: str | None = None,
         request_fingerprint: str | None = None,
         retry_of: str | None = None,
+        parent_run_id: str | None = None,
+        root_run_id: str | None = None,
+        continuation_kind: ContinuationKind | str | None = None,
+        idempotency_operation_kind: str | None = None,
+        idempotency_parent_run_id: str | None = None,
+        idempotency_checkpoint_id: str | None = None,
     ) -> ManagedRun:
         with self._lock:
             self.cleanup()
@@ -525,6 +665,9 @@ class RunManager:
                 retention_seconds=self.retention_seconds,
                 history_store=self.history_store,
                 retry_of=retry_of,
+                parent_run_id=parent_run_id,
+                root_run_id=root_run_id,
+                continuation_kind=continuation_kind,
             )
             self._runs[run.run_id] = run
             if self.history_store is not None:
@@ -537,6 +680,12 @@ class RunManager:
                         idempotency_key=idempotency_key,
                         request_fingerprint=request_fingerprint,
                         retry_of=retry_of,
+                        parent_run_id=parent_run_id,
+                        root_run_id=root_run_id,
+                        continuation_kind=continuation_kind,
+                        idempotency_operation_kind=idempotency_operation_kind,
+                        idempotency_parent_run_id=idempotency_parent_run_id,
+                        idempotency_checkpoint_id=idempotency_checkpoint_id,
                     )
                 except Exception:  # noqa: BLE001 - keep the live run usable
                     run._mark_history_warning()
@@ -572,6 +721,12 @@ class RunManager:
         idempotency_key: str | None = None,
         request_fingerprint: str | None = None,
         retry_of: str | None = None,
+        parent_run_id: str | None = None,
+        root_run_id: str | None = None,
+        continuation_kind: ContinuationKind | str | None = None,
+        idempotency_operation_kind: str | None = None,
+        idempotency_parent_run_id: str | None = None,
+        idempotency_checkpoint_id: str | None = None,
     ) -> ManagedRun:
         run = self.create(
             session_id,
@@ -580,6 +735,12 @@ class RunManager:
             idempotency_key=idempotency_key,
             request_fingerprint=request_fingerprint,
             retry_of=retry_of,
+            parent_run_id=parent_run_id,
+            root_run_id=root_run_id,
+            continuation_kind=continuation_kind,
+            idempotency_operation_kind=idempotency_operation_kind,
+            idempotency_parent_run_id=idempotency_parent_run_id,
+            idempotency_checkpoint_id=idempotency_checkpoint_id,
         )
         try:
             self._executor.submit(worker, run)

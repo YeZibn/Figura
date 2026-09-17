@@ -16,6 +16,9 @@ from uuid import uuid4
 from ..memory.sqlite import default_database_path
 from ..trace import truncate_text
 from .protocol import (
+    CHECKPOINT_SCHEMA_VERSION,
+    CheckpointPhase,
+    ContinuationKind,
     GeneratedChartReference,
     MAX_ARTIFACT_CAPTION,
     MAX_ARTIFACT_CHART_TYPE,
@@ -25,9 +28,18 @@ from .protocol import (
     MAX_IDEMPOTENCY_KEY,
     MAX_RUN_ID,
     MAX_TERMINAL_CODE,
+    OperationState,
+    RecoveryStatus,
     RunEvent,
     RunStatus,
     utc_timestamp,
+)
+from .recovery import (
+    CheckpointError,
+    RecoveryCheckpoint,
+    bounded_operation_result,
+    deserialize_checkpoint,
+    serialize_checkpoint,
 )
 
 DEFAULT_MAX_HISTORY_EVENTS = 512
@@ -35,6 +47,7 @@ DEFAULT_MAX_HISTORY_RUNS = 256
 DEFAULT_HISTORY_RETENTION_SECONDS = 30 * 24 * 60 * 60.0
 DEFAULT_MAX_HISTORY_ARTIFACT_BYTES = 8 * 1024 * 1024
 DEFAULT_MAX_HISTORY_ARTIFACTS = 32
+DEFAULT_RECOVERY_RETENTION_SECONDS = DEFAULT_HISTORY_RETENTION_SECONDS
 _SUPPORTED_ARTIFACT_TYPES = frozenset({"image/png", "image/jpeg", "image/gif", "image/webp"})
 
 
@@ -107,7 +120,17 @@ class GatewayHistoryStore:
                   provider TEXT,
                   model TEXT,
                   cancel_requested INTEGER NOT NULL DEFAULT 0,
-                  retry_of TEXT
+                  retry_of TEXT,
+                  parent_run_id TEXT REFERENCES gateway_runs(run_id) ON DELETE SET NULL,
+                  root_run_id TEXT,
+                  continuation_kind TEXT,
+                  recovery_status TEXT NOT NULL DEFAULT 'unavailable',
+                  checkpoint_id TEXT,
+                  recovery_phase TEXT,
+                  recovery_next_action TEXT,
+                  recovery_reason TEXT,
+                  recovery_version INTEGER,
+                  recovery_updated_at TEXT
                 );
                 CREATE TABLE IF NOT EXISTS gateway_run_idempotency (
                   idempotency_key TEXT PRIMARY KEY,
@@ -116,6 +139,33 @@ class GatewayHistoryStore:
                   request_fingerprint TEXT NOT NULL,
                   created_at TEXT NOT NULL,
                   expires_at REAL NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS gateway_run_checkpoints (
+                  checkpoint_id TEXT PRIMARY KEY,
+                  run_id TEXT NOT NULL REFERENCES gateway_runs(run_id) ON DELETE CASCADE,
+                  version INTEGER NOT NULL,
+                  phase TEXT NOT NULL,
+                  next_action TEXT NOT NULL,
+                  state_json TEXT NOT NULL,
+                  digest TEXT NOT NULL,
+                  recovery_status TEXT NOT NULL,
+                  blocked_reason TEXT,
+                  created_at TEXT NOT NULL,
+                  expires_at REAL NOT NULL,
+                  sequence INTEGER NOT NULL DEFAULT 0
+                );
+                CREATE TABLE IF NOT EXISTS gateway_run_operations (
+                  run_id TEXT NOT NULL REFERENCES gateway_runs(run_id) ON DELETE CASCADE,
+                  operation_id TEXT NOT NULL,
+                  operation_kind TEXT NOT NULL,
+                  state TEXT NOT NULL,
+                  request_fingerprint TEXT,
+                  result_json TEXT,
+                  reference_json TEXT,
+                  created_at TEXT NOT NULL,
+                  updated_at TEXT NOT NULL,
+                  expires_at REAL NOT NULL,
+                  PRIMARY KEY(run_id, operation_id)
                 );
                 CREATE TABLE IF NOT EXISTS gateway_run_events (
                   run_id TEXT NOT NULL REFERENCES gateway_runs(run_id) ON DELETE CASCADE,
@@ -158,6 +208,14 @@ class GatewayHistoryStore:
                   ON gateway_run_artifacts(run_id, observation_id);
                 CREATE INDEX IF NOT EXISTS idx_gateway_idempotency_run
                   ON gateway_run_idempotency(run_id);
+                CREATE INDEX IF NOT EXISTS idx_gateway_checkpoints_run
+                  ON gateway_run_checkpoints(run_id, created_at);
+                CREATE INDEX IF NOT EXISTS idx_gateway_checkpoints_expiry
+                  ON gateway_run_checkpoints(expires_at);
+                CREATE INDEX IF NOT EXISTS idx_gateway_operations_run
+                  ON gateway_run_operations(run_id, updated_at);
+                CREATE INDEX IF NOT EXISTS idx_gateway_operations_expiry
+                  ON gateway_run_operations(expires_at);
                 """
             )
             # Older development databases may contain partially-created
@@ -173,6 +231,16 @@ class GatewayHistoryStore:
                 ("model", "TEXT"),
                 ("cancel_requested", "INTEGER NOT NULL DEFAULT 0"),
                 ("retry_of", "TEXT"),
+                ("parent_run_id", "TEXT"),
+                ("root_run_id", "TEXT"),
+                ("continuation_kind", "TEXT"),
+                ("recovery_status", "TEXT NOT NULL DEFAULT 'unavailable'"),
+                ("checkpoint_id", "TEXT"),
+                ("recovery_phase", "TEXT"),
+                ("recovery_next_action", "TEXT"),
+                ("recovery_reason", "TEXT"),
+                ("recovery_version", "INTEGER"),
+                ("recovery_updated_at", "TEXT"),
                 ("artifact_kind", "TEXT NOT NULL DEFAULT 'visual_observation'"),
                 ("chart_type", "TEXT"),
                 ("title", "TEXT"),
@@ -196,12 +264,30 @@ class GatewayHistoryStore:
                     "model",
                     "cancel_requested",
                     "retry_of",
+                    "parent_run_id",
+                    "root_run_id",
+                    "continuation_kind",
+                    "recovery_status",
+                    "checkpoint_id",
+                    "recovery_phase",
+                    "recovery_next_action",
+                    "recovery_reason",
+                    "recovery_version",
+                    "recovery_updated_at",
                 } else "gateway_run_artifacts"
                 table_columns = columns if table == "gateway_runs" else {
                     row["name"] for row in connection.execute("PRAGMA table_info(gateway_run_artifacts)")
                 }
                 if name not in table_columns:
                     connection.execute(f"ALTER TABLE {table} ADD COLUMN {name} {declaration}")
+            idem_columns = {row["name"] for row in connection.execute("PRAGMA table_info(gateway_run_idempotency)")}
+            for name, declaration in (
+                ("operation_kind", "TEXT"),
+                ("parent_run_id", "TEXT"),
+                ("checkpoint_id", "TEXT"),
+            ):
+                if name not in idem_columns:
+                    connection.execute(f"ALTER TABLE gateway_run_idempotency ADD COLUMN {name} {declaration}")
 
     @staticmethod
     def _restrict_permissions(path: Path, mode: int) -> None:
@@ -216,6 +302,20 @@ class GatewayHistoryStore:
         artifact_paths: list[Path] = []
         connection.execute(
             "DELETE FROM gateway_run_idempotency WHERE expires_at <= ?",
+            (now,),
+        )
+        connection.execute(
+            """UPDATE gateway_runs SET recovery_status = 'unavailable',
+                      recovery_reason = 'checkpoint_expired', recovery_updated_at = ?
+                WHERE checkpoint_id IN (SELECT checkpoint_id FROM gateway_run_checkpoints WHERE expires_at <= ?)""",
+            (utc_timestamp(), now),
+        )
+        connection.execute(
+            "DELETE FROM gateway_run_checkpoints WHERE expires_at <= ?",
+            (now,),
+        )
+        connection.execute(
+            "DELETE FROM gateway_run_operations WHERE expires_at <= ?",
             (now,),
         )
         expired_artifacts = connection.execute(
@@ -268,6 +368,12 @@ class GatewayHistoryStore:
         idempotency_key: str | None = None,
         request_fingerprint: str | None = None,
         retry_of: str | None = None,
+        parent_run_id: str | None = None,
+        root_run_id: str | None = None,
+        continuation_kind: ContinuationKind | str | None = None,
+        idempotency_operation_kind: str | None = None,
+        idempotency_parent_run_id: str | None = None,
+        idempotency_checkpoint_id: str | None = None,
     ) -> None:
         now = utc_timestamp()
         expires_at = time.time() + self.retention_seconds
@@ -281,8 +387,8 @@ class GatewayHistoryStore:
             connection.execute(
                 """INSERT INTO gateway_runs(
                    run_id, session_id, status, created_at, updated_at, expires_at,
-                   provider, model, retry_of
-                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   provider, model, retry_of, parent_run_id, root_run_id, continuation_kind
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     run_id,
                     session_id,
@@ -293,6 +399,9 @@ class GatewayHistoryStore:
                     provider,
                     model,
                     retry_of,
+                    parent_run_id,
+                    root_run_id or run_id,
+                    ContinuationKind(continuation_kind).value if continuation_kind is not None else None,
                 ),
             )
             if idempotency_key is not None:
@@ -301,8 +410,8 @@ class GatewayHistoryStore:
                 connection.execute(
                     """INSERT INTO gateway_run_idempotency(
                        idempotency_key, session_id, run_id, request_fingerprint,
-                       created_at, expires_at
-                       ) VALUES (?, ?, ?, ?, ?, ?)""",
+                       created_at, expires_at, operation_kind, parent_run_id, checkpoint_id
+                       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         idempotency_key[:MAX_IDEMPOTENCY_KEY],
                         session_id,
@@ -310,6 +419,9 @@ class GatewayHistoryStore:
                         request_fingerprint[:128],
                         now,
                         expires_at,
+                        idempotency_operation_kind,
+                        idempotency_parent_run_id,
+                        idempotency_checkpoint_id,
                     ),
                 )
 
@@ -333,6 +445,339 @@ class GatewayHistoryStore:
             "requestFingerprint": row["request_fingerprint"],
             "createdAt": row["created_at"],
             "expiresAt": row["expires_at"],
+        }
+
+    def create_checkpoint(
+        self,
+        session_id: str,
+        run_id: str,
+        state: Mapping[str, Any],
+        *,
+        phase: CheckpointPhase | str,
+        next_action: str,
+        status: RecoveryStatus | str = RecoveryStatus.AVAILABLE,
+        blocked_reason: str | None = None,
+        sequence: int = 0,
+        version: int = CHECKPOINT_SCHEMA_VERSION,
+    ) -> RecoveryCheckpoint:
+        """Commit a versioned checkpoint and its public run projection atomically."""
+        try:
+            normalized_status = RecoveryStatus(status)
+            encoded, digest = serialize_checkpoint(
+                state,
+                phase=phase,
+                next_action=next_action,
+                version=version,
+            )
+            normalized_phase = CheckpointPhase(phase).value
+        except (CheckpointError, TypeError, ValueError) as exc:
+            raise HistoryStoreError(str(exc)) from exc
+        checkpoint_id = f"chk_{uuid4().hex}"
+        now = utc_timestamp()
+        expires_at = time.time() + self.retention_seconds
+        reason = truncate_text(blocked_reason, 240) if blocked_reason else None
+        with self._lock, self._connect() as connection:
+            self._cleanup_connection(connection)
+            run = connection.execute(
+                "SELECT 1 FROM gateway_runs WHERE run_id = ? AND session_id = ?",
+                (run_id, session_id),
+            ).fetchone()
+            if run is None:
+                raise HistoryStoreError("Gateway run is not registered")
+            connection.execute(
+                """INSERT INTO gateway_run_checkpoints(
+                   checkpoint_id, run_id, version, phase, next_action, state_json,
+                   digest, recovery_status, blocked_reason, created_at, expires_at, sequence)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    checkpoint_id, run_id, int(version), normalized_phase,
+                    truncate_text(next_action, 120), encoded, digest,
+                    normalized_status.value, reason, now, expires_at, max(0, int(sequence)),
+                ),
+            )
+            connection.execute(
+                """UPDATE gateway_runs SET checkpoint_id = ?, recovery_status = ?,
+                   recovery_phase = ?, recovery_next_action = ?, recovery_reason = ?,
+                   recovery_version = ?, recovery_updated_at = ?, updated_at = ?
+                   WHERE run_id = ? AND session_id = ?""",
+                (
+                    checkpoint_id, normalized_status.value, normalized_phase,
+                    truncate_text(next_action, 120), reason, int(version), now, now,
+                    run_id, session_id,
+                ),
+            )
+        return RecoveryCheckpoint(
+            checkpoint_id, run_id, int(version), normalized_phase,
+            truncate_text(next_action, 120), json.loads(encoded)["state"], digest,
+            normalized_status, reason, now, expires_at, max(0, int(sequence)),
+        )
+
+    def get_checkpoint(
+        self,
+        session_id: str,
+        run_id: str,
+        checkpoint_id: str | None = None,
+        *,
+        validate: bool = True,
+    ) -> RecoveryCheckpoint | None:
+        """Load the latest authorized checkpoint, optionally validating its digest/version."""
+        with self._lock, self._connect() as connection:
+            self._cleanup_connection(connection)
+            query = """SELECT c.* FROM gateway_run_checkpoints c
+                       JOIN gateway_runs r ON r.run_id = c.run_id
+                       WHERE c.run_id = ? AND r.session_id = ?"""
+            params: list[Any] = [run_id, session_id]
+            if checkpoint_id:
+                query += " AND c.checkpoint_id = ?"
+                params.append(checkpoint_id)
+            query += " ORDER BY c.created_at DESC LIMIT 1"
+            row = connection.execute(query, params).fetchone()
+        if row is None or float(row["expires_at"]) <= time.time():
+            return None
+        try:
+            parsed = deserialize_checkpoint(row["state_json"], row["digest"], version=CHECKPOINT_SCHEMA_VERSION) if validate else json.loads(row["state_json"])
+            if validate and int(row["version"]) != CHECKPOINT_SCHEMA_VERSION:
+                raise CheckpointError("unsupported checkpoint version")
+            state = parsed.get("state", {})
+        except (CheckpointError, TypeError, ValueError, json.JSONDecodeError):
+            if validate:
+                self.mark_recovery(
+                    session_id, run_id, RecoveryStatus.BLOCKED,
+                    reason="unsupported_or_invalid_checkpoint",
+                )
+                return None
+            state = {}
+        return RecoveryCheckpoint(
+            row["checkpoint_id"], row["run_id"], int(row["version"]), row["phase"],
+            row["next_action"], state, row["digest"], RecoveryStatus(row["recovery_status"]),
+            row["blocked_reason"], row["created_at"], float(row["expires_at"]), int(row["sequence"]),
+        )
+
+    def mark_recovery(
+        self,
+        session_id: str,
+        run_id: str,
+        status: RecoveryStatus | str,
+        *,
+        reason: str | None = None,
+    ) -> bool:
+        normalized = RecoveryStatus(status)
+        with self._lock, self._connect() as connection:
+            self._cleanup_connection(connection)
+            now = utc_timestamp()
+            cursor = connection.execute(
+                """UPDATE gateway_runs SET recovery_status = ?, recovery_reason = ?,
+                   recovery_updated_at = ?, updated_at = ?
+                   WHERE run_id = ? AND session_id = ?""",
+                (normalized.value, truncate_text(reason, 240) if reason else None, now, now, run_id, session_id),
+            )
+            if cursor.rowcount:
+                connection.execute(
+                    """UPDATE gateway_run_checkpoints SET recovery_status = ?, blocked_reason = ?
+                       WHERE checkpoint_id = (SELECT checkpoint_id FROM gateway_runs WHERE run_id = ?)""",
+                    (normalized.value, truncate_text(reason, 240) if reason else None, run_id),
+                )
+            return cursor.rowcount > 0
+
+    def get_recovery(self, session_id: str, run_id: str) -> dict[str, Any] | None:
+        """Return a safe recovery projection for an authorized run."""
+        with self._lock, self._connect() as connection:
+            self._cleanup_connection(connection)
+            row = connection.execute(
+                """SELECT recovery_status, checkpoint_id, recovery_version, recovery_phase,
+                          recovery_next_action, recovery_reason, recovery_updated_at,
+                          (SELECT expires_at FROM gateway_run_checkpoints c
+                            WHERE c.checkpoint_id = r.checkpoint_id) AS checkpoint_expires_at
+                     FROM gateway_runs r WHERE run_id = ? AND session_id = ?""",
+                (run_id, session_id),
+            ).fetchone()
+        if row is None:
+            return None
+        status = row["recovery_status"] or RecoveryStatus.UNAVAILABLE.value
+        if status == RecoveryStatus.AVAILABLE.value and row["checkpoint_id"] is None:
+            status = RecoveryStatus.UNAVAILABLE.value
+        result: dict[str, Any] = {"status": status}
+        if row["checkpoint_id"]:
+            result["checkpointId"] = row["checkpoint_id"]
+        if row["recovery_version"] is not None:
+            result["checkpointVersion"] = int(row["recovery_version"])
+        if row["recovery_phase"]:
+            result["phase"] = row["recovery_phase"]
+        if row["recovery_next_action"]:
+            result["nextAction"] = row["recovery_next_action"]
+        if row["recovery_reason"]:
+            result["blockedReason"] = row["recovery_reason"]
+        if row["recovery_updated_at"]:
+            result["updatedAt"] = row["recovery_updated_at"]
+        if row["checkpoint_expires_at"] is not None:
+            result["expiresAt"] = float(row["checkpoint_expires_at"])
+        return result
+
+    def begin_operation(
+        self,
+        run_id: str,
+        operation_id: str,
+        operation_kind: str,
+        *,
+        request_fingerprint: str | None = None,
+        state: OperationState | str = OperationState.IN_FLIGHT,
+    ) -> dict[str, Any]:
+        """Create or return a durable operation boundary."""
+        now = utc_timestamp()
+        expires_at = time.time() + self.retention_seconds
+        normalized_state = OperationState(state)
+        with self._lock, self._connect() as connection:
+            self._cleanup_connection(connection)
+            existing = connection.execute(
+                "SELECT * FROM gateway_run_operations WHERE run_id = ? AND operation_id = ?",
+                (run_id, operation_id[:160]),
+            ).fetchone()
+            if existing is not None:
+                return self._operation_summary(existing)
+            connection.execute(
+                """INSERT INTO gateway_run_operations(
+                   run_id, operation_id, operation_kind, state, request_fingerprint,
+                   created_at, updated_at, expires_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    run_id, operation_id[:160], truncate_text(operation_kind, 64),
+                    normalized_state.value,
+                    truncate_text(request_fingerprint, 128) if request_fingerprint else None,
+                    now, now, expires_at,
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM gateway_run_operations WHERE run_id = ? AND operation_id = ?",
+                (run_id, operation_id[:160]),
+            ).fetchone()
+        return self._operation_summary(row)
+
+    def complete_operation(
+        self,
+        run_id: str,
+        operation_id: str,
+        *,
+        result: Mapping[str, Any] | None = None,
+        references: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        return self._set_operation_state(run_id, operation_id, OperationState.COMPLETED, result=result, references=references)
+
+    def uncertain_operation(self, run_id: str, operation_id: str, *, reason: str | None = None) -> dict[str, Any] | None:
+        return self._set_operation_state(
+            run_id, operation_id, OperationState.UNCERTAIN,
+            result={"reason": truncate_text(reason, 240) if reason else "operation_outcome_uncertain"},
+        )
+
+    def _set_operation_state(
+        self,
+        run_id: str,
+        operation_id: str,
+        state: OperationState,
+        *,
+        result: Mapping[str, Any] | None = None,
+        references: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        now = utc_timestamp()
+        result_json = bounded_operation_result(result)
+        reference_json = bounded_operation_result(references)
+        with self._lock, self._connect() as connection:
+            self._cleanup_connection(connection)
+            connection.execute(
+                """UPDATE gateway_run_operations SET state = ?, result_json = COALESCE(?, result_json),
+                   reference_json = COALESCE(?, reference_json), updated_at = ?
+                   WHERE run_id = ? AND operation_id = ?""",
+                (state.value, result_json, reference_json, now, run_id, operation_id[:160]),
+            )
+            row = connection.execute(
+                "SELECT * FROM gateway_run_operations WHERE run_id = ? AND operation_id = ?",
+                (run_id, operation_id[:160]),
+            ).fetchone()
+        return self._operation_summary(row) if row is not None else None
+
+    def get_operation(self, run_id: str, operation_id: str) -> dict[str, Any] | None:
+        with self._lock, self._connect() as connection:
+            self._cleanup_connection(connection)
+            row = connection.execute(
+                "SELECT * FROM gateway_run_operations WHERE run_id = ? AND operation_id = ?",
+                (run_id, operation_id[:160]),
+            ).fetchone()
+        return self._operation_summary(row) if row is not None else None
+
+    def list_operations(self, run_id: str) -> list[dict[str, Any]]:
+        """Return bounded operation projections for recovery validation."""
+        with self._lock, self._connect() as connection:
+            self._cleanup_connection(connection)
+            rows = connection.execute(
+                "SELECT * FROM gateway_run_operations WHERE run_id = ? ORDER BY created_at, operation_id LIMIT 128",
+                (run_id,),
+            ).fetchall()
+        return [self._operation_summary(row) for row in rows]
+
+    @staticmethod
+    def _operation_summary(row) -> dict[str, Any]:
+        result: dict[str, Any] = {
+            "runId": row["run_id"],
+            "operationId": row["operation_id"],
+            "operationKind": row["operation_kind"],
+            "state": row["state"],
+            "createdAt": row["created_at"],
+            "updatedAt": row["updated_at"],
+            "expiresAt": row["expires_at"],
+        }
+        if row["request_fingerprint"]:
+            result["requestFingerprint"] = row["request_fingerprint"]
+        for key, column in (("result", "result_json"), ("references", "reference_json")):
+            if row[column]:
+                try:
+                    result[key] = json.loads(row[column])
+                except json.JSONDecodeError:
+                    result[key] = {"truncated": True}
+        return result
+
+    def bind_resume_idempotency(
+        self,
+        idempotency_key: str,
+        session_id: str,
+        parent_run_id: str,
+        checkpoint_id: str,
+        request_fingerprint: str,
+        child_run_id: str,
+    ) -> dict[str, Any]:
+        """Atomically bind a resume intent before worker submission."""
+        now = utc_timestamp()
+        expires_at = time.time() + self.retention_seconds
+        key = idempotency_key[:MAX_IDEMPOTENCY_KEY]
+        with self._lock, self._connect() as connection:
+            self._cleanup_connection(connection)
+            existing = connection.execute(
+                "SELECT * FROM gateway_run_idempotency WHERE idempotency_key = ?",
+                (key,),
+            ).fetchone()
+            if existing is not None:
+                return {
+                    "idempotencyKey": key,
+                    "sessionId": existing["session_id"],
+                    "runId": existing["run_id"],
+                    "requestFingerprint": existing["request_fingerprint"],
+                    "parentRunId": existing["parent_run_id"] if "parent_run_id" in existing.keys() else None,
+                    "checkpointId": existing["checkpoint_id"] if "checkpoint_id" in existing.keys() else None,
+                    "existing": True,
+                }
+            connection.execute(
+                """INSERT INTO gateway_run_idempotency(
+                   idempotency_key, session_id, run_id, request_fingerprint,
+                   created_at, expires_at, operation_kind, parent_run_id, checkpoint_id)
+                   VALUES (?, ?, ?, ?, ?, ?, 'resume', ?, ?)""",
+                (key, session_id, child_run_id, request_fingerprint[:128], now, expires_at, parent_run_id, checkpoint_id),
+            )
+        return {
+            "idempotencyKey": key,
+            "sessionId": session_id,
+            "runId": child_run_id,
+            "requestFingerprint": request_fingerprint[:128],
+            "parentRunId": parent_run_id,
+            "checkpointId": checkpoint_id,
+            "existing": False,
         }
 
     def append_event(self, event: RunEvent) -> None:
@@ -486,7 +931,9 @@ class GatewayHistoryStore:
                 """SELECT run_id, session_id, status, created_at, updated_at,
                           expires_at,
                           terminal_code, terminal_message, answer_source, history_warning, provider, model,
-                          cancel_requested, retry_of,
+                          cancel_requested, retry_of, parent_run_id, root_run_id, continuation_kind,
+                          recovery_status, checkpoint_id, recovery_phase, recovery_next_action,
+                          recovery_reason, recovery_version, recovery_updated_at,
                           (SELECT COUNT(*) FROM gateway_run_events e WHERE e.run_id = r.run_id) AS event_count
                      FROM gateway_runs r WHERE session_id = ? ORDER BY created_at""",
                 (session_id,),
@@ -497,7 +944,7 @@ class GatewayHistoryStore:
         with self._lock, self._connect() as connection:
             self._cleanup_connection(connection)
             row = connection.execute(
-                "SELECT run_id, session_id, status, created_at, updated_at, expires_at, terminal_code, terminal_message, answer_source, history_warning, provider, model, cancel_requested, retry_of, (SELECT COUNT(*) FROM gateway_run_events e WHERE e.run_id = r.run_id) AS event_count FROM gateway_runs r WHERE run_id = ? AND session_id = ?",
+                "SELECT run_id, session_id, status, created_at, updated_at, expires_at, terminal_code, terminal_message, answer_source, history_warning, provider, model, cancel_requested, retry_of, parent_run_id, root_run_id, continuation_kind, recovery_status, checkpoint_id, recovery_phase, recovery_next_action, recovery_reason, recovery_version, recovery_updated_at, (SELECT COUNT(*) FROM gateway_run_events e WHERE e.run_id = r.run_id) AS event_count FROM gateway_runs r WHERE run_id = ? AND session_id = ?",
                 (run_id, session_id),
             ).fetchone()
         return self._run_summary(row) if row else None
@@ -520,6 +967,18 @@ class GatewayHistoryStore:
             "model": row["model"],
             "cancelRequested": bool(row["cancel_requested"]),
             "retryOf": row["retry_of"],
+            "parentRunId": row["parent_run_id"],
+            "rootRunId": row["root_run_id"] or row["run_id"],
+            "continuationKind": row["continuation_kind"] or (ContinuationKind.RETRY.value if row["retry_of"] else None),
+            "recovery": {
+                "status": row["recovery_status"] or RecoveryStatus.UNAVAILABLE.value,
+                **({"checkpointId": row["checkpoint_id"]} if row["checkpoint_id"] else {}),
+                **({"checkpointVersion": int(row["recovery_version"])} if row["recovery_version"] is not None else {}),
+                **({"phase": row["recovery_phase"]} if row["recovery_phase"] else {}),
+                **({"nextAction": row["recovery_next_action"]} if row["recovery_next_action"] else {}),
+                **({"blockedReason": row["recovery_reason"]} if row["recovery_reason"] else {}),
+                **({"updatedAt": row["recovery_updated_at"]} if row["recovery_updated_at"] else {}),
+            },
         }
 
     def list_events(self, session_id: str, run_id: str, after_sequence: int = 0) -> list[RunEvent]:

@@ -9,7 +9,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from .context import build_context, sanitize_payload
+from .context import build_context, recovery_messages, sanitize_payload
 from .models import Attachment, Record, Run, RunStatus, Session, SessionStats, bounded, utc_now
 
 SCHEMA_VERSION = 1
@@ -315,6 +315,20 @@ class SQLiteAgentMemory:
     def context(self, run: Run, system: dict[str, Any] | None = None, budget: int = 24000, current_messages: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
         all_runs = [item for item in self._load_runs() if item.id != run.id]
         return build_context(system, all_runs, run.records, current_messages=current_messages, budget=budget or self.context_budget)
+
+    def recovery_context(self, checkpoint_state: dict[str, Any] | None, *, budget: int | None = None) -> list[dict[str, Any]]:
+        """Load explicitly authorized checkpoint messages, never ordinary history."""
+        return recovery_messages(checkpoint_state, budget=budget or self.context_budget)
+
+    def begin_continuation(self, run_id: str, checkpoint_state: dict[str, Any]) -> tuple[Run, list[dict[str, Any]]]:
+        """Start a child memory run and return its isolated recovery messages."""
+        run = self.begin_run(run_id)
+        self.append(run, "recovery_context", {
+            "parentRunId": checkpoint_state.get("parentRunId"),
+            "checkpointId": checkpoint_state.get("checkpointId"),
+            "phase": checkpoint_state.get("phase"),
+        })
+        return run, self.recovery_context(checkpoint_state)
 
     def save_attachment(self, attachment: Attachment) -> None:
         with self.connection:

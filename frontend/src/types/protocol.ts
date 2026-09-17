@@ -44,6 +44,21 @@ export type SessionData = { session: Session; messages: ConversationItem[]; atta
 export type RunStatus = 'running' | 'completed' | 'failed' | 'interrupted'
 export type RunState = 'idle' | 'connecting' | 'running' | 'reconnecting' | 'cancel_requested' | 'completed' | 'failed' | 'interrupted' | 'history-gap' | 'unavailable'
 export type Provider = 'openai' | 'qwen'
+export type RecoveryStatus = 'available' | 'blocked' | 'unavailable'
+export type CheckpointPhase = 'accepted' | 'model' | 'tool' | 'render' | 'review' | 'publication' | 'final'
+export type OperationState = 'not_started' | 'in_flight' | 'completed' | 'uncertain'
+export type ContinuationKind = 'resume' | 'retry'
+
+export type RunRecovery = {
+  status: RecoveryStatus
+  checkpointId?: string | null
+  checkpointVersion?: number | null
+  phase?: CheckpointPhase | string | null
+  nextAction?: string | null
+  blockedReason?: string | null
+  updatedAt?: string | null
+  expiresAt?: number | null
+}
 
 export type RunSummary = {
   runId: string
@@ -61,6 +76,10 @@ export type RunSummary = {
   model?: string | null
   cancelRequested?: boolean
   retryOf?: string | null
+  parentRunId?: string | null
+  rootRunId?: string | null
+  continuationKind?: ContinuationKind | null
+  recovery?: RunRecovery | null
 }
 
 export type RunHandle = {
@@ -72,6 +91,10 @@ export type RunHandle = {
   terminalCode?: string | null
   terminalMessage?: string | null
   retryOf?: string | null
+  parentRunId?: string | null
+  rootRunId?: string | null
+  continuationKind?: ContinuationKind | null
+  recovery?: RunRecovery | null
 }
 
 export type ObservationReference = {

@@ -1,6 +1,7 @@
 import type { AgentRunEvent, Attachment, GatewayHealth, Provider, RunHandle, RunHistory, Session, SessionData } from '../types/protocol'
 
 export type RunStartOptions = { idempotencyKey?: string; retryOf?: string }
+export type RunResumeOptions = { idempotencyKey: string; checkpointId?: string }
 
 export type RunSubscription = { close(): void }
 
@@ -20,6 +21,7 @@ export type ChartAgentClient = {
   uploadAttachment(sessionId: string, file: File): Promise<Attachment>
   deleteAttachment(sessionId: string, attachmentId: string): Promise<void>
   interruptRun(sessionId: string, runId: string): Promise<RunHandle>
+  resumeRun(sessionId: string, runId: string, options: RunResumeOptions): Promise<RunHandle>
   attachmentContentUrl(sessionId: string, attachmentId: string): string
   generatedArtifactUrl(sessionId: string, runId: string, artifactId: string): string
   startRun(sessionId: string, text: string, attachmentIds?: string[], provider?: Provider, options?: RunStartOptions): Promise<RunHandle>

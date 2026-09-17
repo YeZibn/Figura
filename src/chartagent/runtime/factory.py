@@ -31,6 +31,11 @@ def create_agent_runtime(
     run_id: str | None = None,
     visual_observation_sink: Optional[VisualObservationSink] = None,
     interruption_event: Any = None,
+    recovery_context: dict[str, Any] | None = None,
+    checkpoint_sink: Optional[Callable[..., bool]] = None,
+    operation_begin: Optional[Callable[..., dict[str, Any]]] = None,
+    operation_complete: Optional[Callable[..., dict[str, Any] | None]] = None,
+    operation_uncertain: Optional[Callable[..., dict[str, Any] | None]] = None,
     session_name: str | None = None,
     database: str | Path | None = None,
     client: Any = None,
@@ -73,6 +78,16 @@ def create_agent_runtime(
         agent_kwargs["visual_observation_sink"] = visual_observation_sink
     if interruption_event is not None:
         agent_kwargs["interruption_event"] = interruption_event
+    if recovery_context is not None:
+        agent_kwargs["recovery_context"] = recovery_context
+    for key, value in {
+        "checkpoint_sink": checkpoint_sink,
+        "operation_begin": operation_begin,
+        "operation_complete": operation_complete,
+        "operation_uncertain": operation_uncertain,
+    }.items():
+        if value is not None:
+            agent_kwargs[key] = value
     if memory is not None:
         agent_kwargs["memory"] = memory
     agent_kwargs["attachments"] = attachments

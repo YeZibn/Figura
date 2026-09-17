@@ -1,4 +1,4 @@
-import type { ChartAgentClient, RunEventCallbacks, RunStartOptions, RunSubscription } from './client'
+import type { ChartAgentClient, RunEventCallbacks, RunResumeOptions, RunStartOptions, RunSubscription } from './client'
 import type { AgentRunEvent, Attachment, GatewayHealth, GeneratedChartReference, ObservationReference, PreviewResource, Provider, RunHandle, RunHistory, RunSummary, Session, SessionData } from '../types/protocol'
 import { mediaTypeForFile } from '../attachments'
 
@@ -149,6 +149,7 @@ function mapRunEvent(event: GatewayRunEvent, sessionId: string): AgentRunEvent {
 const terminalEventKinds = new Set(['final_answer', 'run_failed', 'run_interrupted'])
 const streamEventKinds = [
   'run_started',
+  'resume_started',
   'model_started',
   'model_completed',
   'tool_call',
@@ -165,6 +166,8 @@ const streamEventKinds = [
   'final_answer',
   'run_failed',
   'run_interrupted',
+  'recovery_blocked',
+  'operation_completed',
   'history_gap',
 ]
 
@@ -241,6 +244,15 @@ export const gatewayClient: ChartAgentClient = {
     const payload = await request<GatewayRunResponse>(`/sessions/${encodeURIComponent(sessionId)}/runs/${encodeURIComponent(runId)}/interrupt`, {
       method: 'POST',
       body: JSON.stringify({ reason: 'user_cancelled' }),
+    })
+    return mapRun(payload)
+  },
+
+  async resumeRun(sessionId, runId, options: RunResumeOptions) {
+    const payload = await request<GatewayRunResponse>(`/sessions/${encodeURIComponent(sessionId)}/runs/${encodeURIComponent(runId)}/resume`, {
+      method: 'POST',
+      body: JSON.stringify(options.checkpointId ? { checkpointId: options.checkpointId } : {}),
+      headers: { 'Idempotency-Key': options.idempotencyKey },
     })
     return mapRun(payload)
   },

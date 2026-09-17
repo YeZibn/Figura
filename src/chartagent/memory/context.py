@@ -68,6 +68,32 @@ def records_to_messages(records: Iterable[Record]) -> list[dict[str, Any]]:
     return messages
 
 
+def recovery_messages(state: dict[str, Any] | None, *, budget: int = 24000) -> list[dict[str, Any]]:
+    """Read only an explicitly supplied checkpoint context.
+
+    Interrupted runs are intentionally absent from ``build_context``.  This
+    separate API makes the authorization boundary visible to callers and
+    keeps recovery from accidentally becoming ordinary conversation history.
+    """
+    if not isinstance(state, dict):
+        return []
+    raw = state.get("messages")
+    if not isinstance(raw, list):
+        return []
+    result: list[dict[str, Any]] = []
+    used = 0
+    for item in raw[:48]:
+        if not isinstance(item, dict) or item.get("role") not in {"user", "assistant", "tool", "system"}:
+            continue
+        clean = sanitize_payload(item)
+        size = json_size(clean)
+        if used + size > max(1024, budget):
+            break
+        result.append(clean)
+        used += size
+    return result
+
+
 def summarize_run(run: Run, *, limit: int = 1200) -> dict[str, Any]:
     user = ""
     terminal = ""

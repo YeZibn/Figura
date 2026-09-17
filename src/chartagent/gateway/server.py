@@ -174,6 +174,17 @@ class GatewayRequestHandler(BaseHTTPRequestHandler):
                 )
                 self._send_json(HTTPStatus.ACCEPTED, payload)
                 return
+            elif (parts := self._run_resume_parts(path)) is not None:
+                session_id, run_id = parts
+                body = self._read_json()
+                payload = self.gateway.resume_run(
+                    session_id,
+                    run_id,
+                    self.headers.get("Idempotency-Key"),
+                    body.get("checkpointId"),
+                )
+                self._send_json(HTTPStatus.ACCEPTED, payload)
+                return
             elif (parts := self._run_interrupt_parts(path)) is not None:
                 session_id, run_id = parts
                 body = self._read_json()
@@ -281,6 +292,16 @@ class GatewayRequestHandler(BaseHTTPRequestHandler):
             return None
         parts = path[len(prefix):].split("/")
         if len(parts) == 4 and parts[1] == "runs" and parts[3] == "interrupt":
+            return unquote(parts[0]), unquote(parts[2])
+        return None
+
+    @staticmethod
+    def _run_resume_parts(path: str) -> tuple[str, str] | None:
+        prefix = f"{API_PREFIX}/sessions/"
+        if not path.startswith(prefix):
+            return None
+        parts = path[len(prefix):].split("/")
+        if len(parts) == 4 and parts[1] == "runs" and parts[3] == "resume":
             return unquote(parts[0]), unquote(parts[2])
         return None
 

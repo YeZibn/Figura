@@ -1,4 +1,4 @@
-import type { ChartAgentClient, RunEventCallbacks, RunStartOptions, RunSubscription } from './client'
+import type { ChartAgentClient, RunEventCallbacks, RunResumeOptions, RunStartOptions, RunSubscription } from './client'
 import type { AgentRunEvent, Attachment, ConversationItem, Provider, RunHandle, RunHistory, RunSummary, Session, SessionData } from '../types/protocol'
 
 const image = 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360"%3E%3Crect width="640" height="360" fill="%23f7f9fb"/%3E%3Cpath d="M74 292h492M110 260V104m130 156V68m130 192V126m130 134V92" stroke="%232e8c82" stroke-width="54" stroke-linecap="round"/%3E%3Cpath d="M60 48h520" stroke="%23dbe3e8"/%3E%3C/svg%3E'
@@ -88,9 +88,9 @@ export const mockClient: ChartAgentClient = {
     pendingRuns.set(runId, { text, attachmentIds })
     const target = data[sessionId]
     const model = provider === 'qwen' ? 'qwen3.8-flash' : 'gpt-4o-mini'
-    if (target) target.runs.push({ runId, sessionId, status: 'running', provider, model, retryOf: options.retryOf, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), eventCount: 0 })
+    if (target) target.runs.push({ runId, sessionId, status: 'running', provider, model, retryOf: options.retryOf, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), eventCount: 0, parentRunId: options.retryOf, rootRunId: options.retryOf || runId, continuationKind: options.retryOf ? 'retry' : null, recovery: { status: 'available', checkpointId: `chk_${runId}`, checkpointVersion: 1, phase: 'accepted', nextAction: 'model' } })
     if (options.idempotencyKey) idempotentRuns.set(options.idempotencyKey, runId)
-    return { runId, sessionId, status: 'running', provider, model, retryOf: options.retryOf }
+    return { runId, sessionId, status: 'running', provider, model, retryOf: options.retryOf, parentRunId: options.retryOf, rootRunId: options.retryOf || runId, continuationKind: options.retryOf ? 'retry' : null, recovery: { status: 'available', checkpointId: `chk_${runId}`, checkpointVersion: 1, phase: 'accepted', nextAction: 'model' } }
   },
   async interruptRun(sessionId, runId) {
     const target = data[sessionId]
@@ -109,7 +109,38 @@ export const mockClient: ChartAgentClient = {
       histories.set(runId, history)
       subscriptions.get(runId)?.forEach((subscription) => subscription.interrupt())
     }
-    return { runId, sessionId, status: summary.status, provider: summary.provider, model: summary.model, terminalCode: summary.terminalCode, terminalMessage: summary.terminalMessage, retryOf: summary.retryOf }
+    return { runId, sessionId, status: summary.status, provider: summary.provider, model: summary.model, terminalCode: summary.terminalCode, terminalMessage: summary.terminalMessage, retryOf: summary.retryOf, parentRunId: summary.parentRunId, rootRunId: summary.rootRunId, continuationKind: summary.continuationKind, recovery: summary.recovery }
+  },
+  async resumeRun(sessionId, runId, options: RunResumeOptions) {
+    await wait(90)
+    const target = data[sessionId]
+    const parent = target?.runs.find((item) => item.runId === runId)
+    if (!target || !parent) throw new Error('运行记录不存在')
+    if (parent.status === 'running') throw new Error('运行尚未结束')
+    if (parent.recovery?.status !== 'available') {
+      const error = new Error('该运行暂时无法继续执行') as Error & { code: string; status: number }
+      error.code = parent.recovery?.status === 'blocked' ? 'recovery_blocked' : 'recovery_unavailable'
+      error.status = 409
+      throw error
+    }
+    const request = JSON.stringify({ sessionId, runId, checkpointId: options.checkpointId || parent.recovery.checkpointId || null })
+    const previousRequest = idempotentRequests.get(options.idempotencyKey)
+    if (previousRequest && previousRequest !== request) {
+      const error = new Error('恢复请求标识已用于其他请求') as Error & { code: string; status: number }
+      error.code = 'resume_idempotency_conflict'
+      error.status = 409
+      throw error
+    }
+    const existingId = idempotentRuns.get(options.idempotencyKey)
+    const existing = existingId ? target.runs.find((item) => item.runId === existingId) : undefined
+    if (existing) return { runId: existing.runId, sessionId, status: existing.status, provider: existing.provider, model: existing.model, parentRunId: existing.parentRunId, rootRunId: existing.rootRunId, continuationKind: existing.continuationKind, recovery: existing.recovery }
+    idempotentRequests.set(options.idempotencyKey, request)
+    const childId = `run_mock_${Date.now()}`
+    const model = parent.model || 'gpt-4o-mini'
+    pendingRuns.set(childId, { text: '继续执行已提交的图表分析', attachmentIds: [] })
+    target.runs.push({ runId: childId, sessionId, status: 'running', provider: parent.provider, model, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), eventCount: 0, parentRunId: runId, rootRunId: parent.rootRunId || runId, continuationKind: 'resume', recovery: { status: 'available', checkpointId: `chk_${childId}`, checkpointVersion: 1, phase: 'accepted', nextAction: 'model' } })
+    idempotentRuns.set(options.idempotencyKey, childId)
+    return { runId: childId, sessionId, status: 'running', provider: parent.provider, model, parentRunId: runId, rootRunId: parent.rootRunId || runId, continuationKind: 'resume', recovery: { status: 'available', checkpointId: `chk_${childId}`, checkpointVersion: 1, phase: 'accepted', nextAction: 'model' } }
   },
   async getRunHistory(sessionId, runId, afterSequence = 0): Promise<RunHistory> {
     await wait(40)
