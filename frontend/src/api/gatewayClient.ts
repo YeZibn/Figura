@@ -1,4 +1,4 @@
-import type { ChartAgentClient, RunEventCallbacks, RunSubscription } from './client'
+import type { ChartAgentClient, RunEventCallbacks, RunStartOptions, RunSubscription } from './client'
 import type { AgentRunEvent, Attachment, GatewayHealth, GeneratedChartReference, ObservationReference, PreviewResource, Provider, RunHandle, RunHistory, RunSummary, Session, SessionData } from '../types/protocol'
 import { mediaTypeForFile } from '../attachments'
 
@@ -13,9 +13,9 @@ type GatewayAttachment = {
   preview_available?: boolean
 }
 type GatewaySessionData = Omit<SessionData, 'attachments'> & { attachments: GatewayAttachment[] }
-type GatewayRunResponse = { run: { runId: string; sessionId: string; status: 'running'; provider?: Provider; model?: string } }
+type GatewayRunResponse = { run: RunHandle }
 type GatewayRunEvent = { runId: string; sequence: number; kind: string; timestamp: string; payload?: Record<string, unknown> }
-type GatewayRunHistory = { run: RunSummary; events: GatewayRunEvent[]; historyGap: boolean; firstSequence?: number | null }
+type GatewayRunHistory = { run: RunSummary; events: GatewayRunEvent[]; historyGap: boolean; historyGapCode?: string | null; firstSequence?: number | null }
 type GatewayHealthResponse = GatewayHealth
 
 export class GatewayClientError extends Error {
@@ -146,7 +146,7 @@ function mapRunEvent(event: GatewayRunEvent, sessionId: string): AgentRunEvent {
   return { runId: event.runId, sequence: event.sequence, kind: event.kind, timestamp: event.timestamp, payload }
 }
 
-const terminalEventKinds = new Set(['final_answer', 'run_failed'])
+const terminalEventKinds = new Set(['final_answer', 'run_failed', 'run_interrupted'])
 const streamEventKinds = [
   'run_started',
   'model_started',
@@ -164,6 +164,7 @@ const streamEventKinds = [
   'budget_exhausted',
   'final_answer',
   'run_failed',
+  'run_interrupted',
   'history_gap',
 ]
 
@@ -228,11 +229,20 @@ export const gatewayClient: ChartAgentClient = {
     return generatedArtifactUrl(sessionId, runId, artifactId)
   },
 
-  async startRun(sessionId, text, attachmentIds = [], provider) {
+  async startRun(sessionId, text, attachmentIds = [], provider, options: RunStartOptions = {}) {
     return mapRun(await request<GatewayRunResponse>(`/sessions/${encodeURIComponent(sessionId)}/runs`, {
       method: 'POST',
-      body: JSON.stringify({ text, attachmentIds, ...(provider ? { provider } : {}) }),
+      body: JSON.stringify({ text, attachmentIds, ...(provider ? { provider } : {}), ...(options.retryOf ? { retryOf: options.retryOf } : {}) }),
+      headers: options.idempotencyKey ? { 'Idempotency-Key': options.idempotencyKey } : undefined,
     }))
+  },
+
+  async interruptRun(sessionId, runId) {
+    const payload = await request<GatewayRunResponse>(`/sessions/${encodeURIComponent(sessionId)}/runs/${encodeURIComponent(runId)}/interrupt`, {
+      method: 'POST',
+      body: JSON.stringify({ reason: 'user_cancelled' }),
+    })
+    return mapRun(payload)
   },
 
   async getRunHistory(sessionId, runId, afterSequence = 0) {

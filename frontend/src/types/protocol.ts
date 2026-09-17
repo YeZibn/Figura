@@ -42,7 +42,7 @@ export type ConversationItem =
 
 export type SessionData = { session: Session; messages: ConversationItem[]; attachments: Attachment[]; runs: RunSummary[] }
 export type RunStatus = 'running' | 'completed' | 'failed' | 'interrupted'
-export type RunState = 'idle' | 'connecting' | 'running' | 'completed' | 'failed' | 'interrupted' | 'unavailable'
+export type RunState = 'idle' | 'connecting' | 'running' | 'reconnecting' | 'cancel_requested' | 'completed' | 'failed' | 'interrupted' | 'history-gap' | 'unavailable'
 export type Provider = 'openai' | 'qwen'
 
 export type RunSummary = {
@@ -59,14 +59,19 @@ export type RunSummary = {
   historyWarning?: string | null
   provider?: Provider | null
   model?: string | null
+  cancelRequested?: boolean
+  retryOf?: string | null
 }
 
 export type RunHandle = {
   runId: string
   sessionId: string
-  status: 'running'
+  status: RunStatus
   provider?: Provider | null
   model?: string | null
+  terminalCode?: string | null
+  terminalMessage?: string | null
+  retryOf?: string | null
 }
 
 export type ObservationReference = {

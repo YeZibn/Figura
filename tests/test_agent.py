@@ -8,6 +8,7 @@ history shape — is verified offline.
 from __future__ import annotations
 
 import json
+from threading import Event
 from typing import Any, Dict, List
 
 from chartagent import (
@@ -18,7 +19,7 @@ from chartagent import (
     ToolResult,
     register_builtins,
 )
-from chartagent.agent import _assistant_entry, registry_tools
+from chartagent.agent import AgentInterrupted, _assistant_entry, registry_tools
 from chartagent.client.models import NormalizedResult, ToolCall
 from chartagent.agent.review_gate import review_gate_context
 from chartagent.tools.chart.observation.layout_tool import INSPECT_CHART_LAYOUT
@@ -212,6 +213,42 @@ def test_max_steps_budget():
     out = agent.run("loop")
     assert out == "*stopped: max_steps reached*"
     assert len(client.calls) == 3
+
+
+def test_agent_stops_before_model_request_when_interrupted():
+    stop = Event()
+    stop.set()
+    client = ScriptedClient([_final("must not run")])
+    agent = Agent(client, ToolRegistry(), interruption_event=stop)
+
+    try:
+        agent.run("stop now")
+    except AgentInterrupted:
+        pass
+    else:
+        raise AssertionError("expected cooperative interruption")
+    assert client.calls == []
+
+
+def test_agent_stops_before_next_tool_result_is_published():
+    stop = Event()
+    registry = ToolRegistry()
+
+    def interrupting_tool():
+        stop.set()
+        return {"ok": True}
+
+    registry.register(Tool("interrupting", "interrupt", {"type": "object"}, interrupting_tool))
+    client = ScriptedClient([_call("interrupting", "{}"), _final("must not continue")])
+    agent = Agent(client, registry, interruption_event=stop)
+
+    try:
+        agent.run("stop after tool")
+    except AgentInterrupted:
+        pass
+    else:
+        raise AssertionError("expected cooperative interruption")
+    assert len(client.calls) == 1
 
 
 def test_reset_clears_history():

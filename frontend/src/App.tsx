@@ -53,9 +53,12 @@ function toolStatusLabel(status: 'success' | 'running' | 'error'): string {
 function runStateLabel(state: RunState): string {
   if (state === 'connecting') return '正在连接'
   if (state === 'running') return '运行中'
+  if (state === 'reconnecting') return '正在重连'
+  if (state === 'cancel_requested') return '正在中断'
   if (state === 'completed') return '已完成'
   if (state === 'failed') return '运行失败'
   if (state === 'interrupted') return '已中断'
+  if (state === 'history-gap') return '历史记录不完整'
   if (state === 'unavailable') return '服务不可用'
   return '准备就绪'
 }
@@ -82,6 +85,11 @@ function currentTime(): string {
 
 function delay(milliseconds: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, milliseconds))
+}
+
+function newIdempotencyKey(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID()
+  return `figura-${Date.now()}-${Math.random().toString(36).slice(2)}`
 }
 
 function eventPayload(event: AgentRunEvent): Record<string, unknown> {
@@ -181,9 +189,9 @@ function generatedArtifacts(events: AgentRunEvent[]): GeneratedChartReference[] 
 }
 
 function mergeEvents(current: AgentRunEvent[], incoming: AgentRunEvent[]): AgentRunEvent[] {
-  const bySequence = new Map(current.map((event) => [event.sequence, event]))
-  incoming.forEach((event) => bySequence.set(event.sequence, event))
-  return [...bySequence.values()].sort((left, right) => left.sequence - right.sequence)
+  const byCursor = new Map(current.map((event) => [`${event.runId}:${event.sequence}`, event]))
+  incoming.forEach((event) => byCursor.set(`${event.runId}:${event.sequence}`, event))
+  return [...byCursor.values()].sort((left, right) => left.sequence - right.sequence)
 }
 
 function isSafeLink(value: string): boolean {
@@ -413,23 +421,27 @@ function GeneratedChartView({ artifact, loader, onPreview }: { artifact: Generat
 }
 
 function eventLabel(event: AgentRunEvent): string {
-  const labels: Record<string, string> = { run_started: '运行已开始', model_started: '模型轮次开始', model_completed: '模型轮次完成', progress: '处理中', generated_chart: '图表状态已更新', chart_review_started: '图表审核已开始', chart_review_required: '等待图表审核', generated_chart_published: '图表已发布', generated_chart_rejected: '图表未发布', chart_review_completed: '图表审核完成', final_answer: '最终回答已生成', budget_exhausted: '达到预算上限', run_failed: '运行失败', history_gap: '历史记录不完整', tool_result: '工具结果（历史记录不完整）' }
+  const labels: Record<string, string> = { run_started: '运行已开始', model_started: '模型轮次开始', model_completed: '模型轮次完成', progress: '处理中', generated_chart: '图表状态已更新', chart_review_started: '图表审核已开始', chart_review_required: '等待图表审核', generated_chart_published: '图表已发布', generated_chart_rejected: '图表未发布', chart_review_completed: '图表审核完成', final_answer: '最终回答已生成', budget_exhausted: '达到预算上限', run_failed: '运行失败', run_interrupted: '运行已中断', history_gap: '历史记录不完整', tool_result: '工具结果（历史记录不完整）' }
   return labels[event.kind] || event.kind
 }
 
-function RunTimeline({ timeline, expanded, onToggle, previewLoader, onPreview }: { timeline: RunTimeline; expanded: boolean; onToggle: () => void; previewLoader: PreviewResourceLoader | null; onPreview?: PreviewOpener }) {
+function RunTimeline({ timeline, expanded, onToggle, previewLoader, onPreview, onInterrupt, onRetry }: { timeline: RunTimeline; expanded: boolean; onToggle: () => void; previewLoader: PreviewResourceLoader | null; onPreview?: PreviewOpener; onInterrupt?: () => void; onRetry?: () => void }) {
   const [expandedSteps, setExpandedSteps] = useState<Set<string>>(new Set())
   const rows = normalizeTimeline(timeline.events)
   const summary = timeline.summary
   const status = summary.status
-  const statusText = status === 'completed' ? '已完成' : status === 'failed' ? '失败' : status === 'interrupted' ? '已中断' : '运行中'
+  const statusText = status === 'completed' ? '已完成' : status === 'failed' ? '失败' : status === 'interrupted' ? '已中断' : summary.cancelRequested ? '正在中断' : '运行中'
   return <section className={'run-timeline ' + status + (expanded ? ' expanded' : '')}>
-    <button className="run-summary" onClick={onToggle} aria-expanded={expanded} aria-controls={`trace-${summary.runId}`}><span className="run-arrow">{expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}</span><span className="run-summary-icon"><Terminal size={14} /></span><span className="run-summary-copy"><strong>执行过程</strong><small>{timestampLabel(summary.createdAt)} · {summary.eventCount || timeline.events.length} 个事件{summary.provider ? ` · ${providerLabel(summary.provider)}${summary.model ? ` · ${summary.model}` : ''}` : ''}</small></span><span className={'run-status ' + status}>{statusText}</span></button>
+    <button className="run-summary" onClick={onToggle} aria-expanded={expanded} aria-controls={`trace-${summary.runId}`}><span className="run-arrow">{expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}</span><span className="run-summary-icon"><Terminal size={14} /></span><span className="run-summary-copy"><strong>执行过程</strong><small>{timestampLabel(summary.createdAt)} · {summary.eventCount || timeline.events.length} 个事件{summary.provider ? ` · ${providerLabel(summary.provider)}${summary.model ? ` · ${summary.model}` : ''}` : ''}{summary.retryOf ? ` · 重试自 ${summary.retryOf}` : ''}</small></span><span className={'run-status ' + status}>{statusText}</span></button>
+    {(status === 'running' && onInterrupt) || ((status === 'failed' || status === 'interrupted') && onRetry) ? <div className="run-actions">
+      {status === 'running' && onInterrupt && <button type="button" className="small-action" onClick={onInterrupt} disabled={summary.cancelRequested}>{summary.cancelRequested ? '正在中断' : '中断运行'}</button>}
+      {(status === 'failed' || status === 'interrupted') && onRetry && <button type="button" className="small-action" onClick={onRetry}>重试本次运行</button>}
+    </div> : null}
     {expanded && <div className="run-trace" id={`trace-${summary.runId}`}>
       {summary.historyWarning && <div className="trace-warning" role="status">部分执行记录未能持久化，当前显示的过程可能不完整。</div>}
       {timeline.historyGap && <div className="trace-warning" role="status">历史记录存在缺口，未显示缺失的执行步骤。</div>}
       {rows.length === 0 && <div className="trace-empty">没有可恢复的执行事件。</div>}
-      {rows.map((row) => row.kind === 'event' ? <div className={'trace-event ' + (row.event.kind === 'run_failed' || row.event.kind === 'history_gap' ? 'error' : '')} key={`${row.event.runId}-${row.event.sequence}`}><span className="trace-event-dot" /><span className="trace-event-copy"><strong>{eventLabel(row.event)}</strong><small>{timestampLabel(row.event.timestamp)}</small><span>{textDetail(eventPayload(row.event).message || eventPayload(row.event).status || eventPayload(row.event).publication_status || eventPayload(row.event).reason || (row.event.kind === 'generated_chart' ? '生成图表结果已移至最终结果区域' : ''))}</span></span></div> : <div className="trace-tool" key={row.step.id}><button className="trace-tool-header" onClick={() => setExpandedSteps((current) => { const next = new Set(current); next.has(row.step.id) ? next.delete(row.step.id) : next.add(row.step.id); return next })} aria-expanded={expandedSteps.has(row.step.id)}><span className="trace-event-dot" /><span className="trace-tool-name"><strong>{row.step.toolLabel || row.step.toolName}</strong><small>{row.step.toolName} · {row.step.callId}</small></span><span className={'run-status ' + row.step.status}>{row.step.status === 'running' ? '运行中' : row.step.status === 'success' ? '完成' : '失败'}</span>{expandedSteps.has(row.step.id) ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</button>{expandedSteps.has(row.step.id) && <div className="trace-tool-detail">{row.step.call && <div><label>调用参数</label><pre>{textDetail(eventPayload(row.step.call).arguments)}</pre></div>}{row.step.result && <div><label>工具结果</label>{row.step.resultTruncated && <small className="trace-warning">工具结果已截断，仅保留有限诊断内容。</small>}<pre>{textDetail(eventPayload(row.step.result).result || eventPayload(row.step.result).message)}</pre></div>}{row.step.observations.map((observation, index) => <ObservationView key={index} observation={observation} loader={previewLoader} onPreview={onPreview} />)}</div>}</div>)}
+      {rows.map((row) => row.kind === 'event' ? <div className={'trace-event ' + (row.event.kind === 'run_failed' || row.event.kind === 'run_interrupted' || row.event.kind === 'history_gap' ? 'error' : '')} key={`${row.event.runId}-${row.event.sequence}`}><span className="trace-event-dot" /><span className="trace-event-copy"><strong>{eventLabel(row.event)}</strong><small>{timestampLabel(row.event.timestamp)}</small><span>{textDetail(eventPayload(row.event).message || eventPayload(row.event).status || eventPayload(row.event).publication_status || eventPayload(row.event).reason || (row.event.kind === 'generated_chart' ? '生成图表结果已移至最终结果区域' : ''))}</span></span></div> : <div className="trace-tool" key={row.step.id}><button className="trace-tool-header" onClick={() => setExpandedSteps((current) => { const next = new Set(current); next.has(row.step.id) ? next.delete(row.step.id) : next.add(row.step.id); return next })} aria-expanded={expandedSteps.has(row.step.id)}><span className="trace-event-dot" /><span className="trace-tool-name"><strong>{row.step.toolLabel || row.step.toolName}</strong><small>{row.step.toolName} · {row.step.callId}</small></span><span className={'run-status ' + row.step.status}>{row.step.status === 'running' ? '运行中' : row.step.status === 'success' ? '完成' : '失败'}</span>{expandedSteps.has(row.step.id) ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</button>{expandedSteps.has(row.step.id) && <div className="trace-tool-detail">{row.step.call && <div><label>调用参数</label><pre>{textDetail(eventPayload(row.step.call).arguments)}</pre></div>}{row.step.result && <div><label>工具结果</label>{row.step.resultTruncated && <small className="trace-warning">工具结果已截断，仅保留有限诊断内容。</small>}<pre>{textDetail(eventPayload(row.step.result).result || eventPayload(row.step.result).message)}</pre></div>}{row.step.observations.map((observation, index) => <ObservationView key={index} observation={observation} loader={previewLoader} onPreview={onPreview} />)}</div>}</div>)}
     </div>}
   </section>
 }
@@ -476,6 +488,8 @@ function RunBlock(props: {
   onToggleMessage: (id: string) => void
   previewLoader: PreviewResourceLoader | null
   onPreview?: PreviewOpener
+  onInterrupt?: () => void
+  onRetry?: () => void
 }) {
   const { timeline, user, assistant } = props
   const answer = assistant?.kind === 'assistant' ? assistant.text : timeline.summary.answer || ''
@@ -483,7 +497,7 @@ function RunBlock(props: {
   const artifacts = generatedArtifacts(timeline.events)
   return <section className={'run-block run-' + timeline.summary.status}>
     {user && <Message item={user} expanded={props.expandedMessage === user.id} onToggle={props.onToggleMessage} previewLoader={props.previewLoader} onPreview={props.onPreview} />}
-    <RunTimeline timeline={timeline} expanded={props.expanded} onToggle={props.onToggleRun} previewLoader={props.previewLoader} onPreview={props.onPreview} />
+    <RunTimeline timeline={timeline} expanded={props.expanded} onToggle={props.onToggleRun} previewLoader={props.previewLoader} onPreview={props.onPreview} onInterrupt={props.onInterrupt} onRetry={props.onRetry} />
     {(answer || artifacts.length > 0) && <section className="run-result" aria-label="最终结果">
       <div className="run-result-heading"><Sparkles size={14} /><strong>最终结果</strong><span>{answer ? answerTimestamp : '图表输出'}</span></div>
       {answer && <Message item={{ id: `${timeline.summary.runId}:assistant`, kind: 'assistant', text: answer, timestamp: answerTimestamp }} expanded={props.expandedMessage === `${timeline.summary.runId}:assistant`} onToggle={props.onToggleMessage} previewLoader={props.previewLoader} onPreview={props.onPreview} />}
@@ -492,7 +506,7 @@ function RunBlock(props: {
   </section>
 }
 
-function ConversationPanel(props: { data: SessionData | null; timelines: RunTimeline[]; pendingUser: ConversationItem | null; runState: RunState; selectedAttachmentIds: string[]; provider: Provider; health: GatewayHealth | null; mode: 'mock' | 'gateway'; onProviderChange: (provider: Provider) => void; onSubmit: (text: string, attachmentIds: string[]) => Promise<boolean>; loading: boolean; loadingSession: boolean; error: string | null; onToggleRun: (runId: string, status: RunSummary['status']) => void; expandedRuns: Set<string>; previewLoader?: PreviewResourceLoader | null; onPreview?: PreviewOpener }) {
+function ConversationPanel(props: { data: SessionData | null; timelines: RunTimeline[]; pendingUser: ConversationItem | null; runState: RunState; selectedAttachmentIds: string[]; provider: Provider; health: GatewayHealth | null; mode: 'mock' | 'gateway'; onProviderChange: (provider: Provider) => void; onSubmit: (text: string, attachmentIds: string[], retryOf?: string) => Promise<boolean>; onInterrupt?: (runId: string) => void; onRetry?: (runId: string) => void; loading: boolean; loadingSession: boolean; error: string | null; onToggleRun: (runId: string, status: RunSummary['status']) => void; expandedRuns: Set<string>; previewLoader?: PreviewResourceLoader | null; onPreview?: PreviewOpener }) {
   const [text, setText] = useState('')
   const [expanded, setExpanded] = useState<string | null>(null)
   const previewLoader = props.previewLoader || null
@@ -514,7 +528,7 @@ function ConversationPanel(props: { data: SessionData | null; timelines: RunTime
   })
   const orphanMessages = messages.filter((item) => !linkedMessageIds.has(item.id))
   const toggleMessage = (id: string) => setExpanded((current) => current === id ? null : id)
-  return <main className="conversation panel"><header className="conversation-header"><div className="conversation-title"><span className="eyebrow">当前会话</span><h1>{props.data?.session.name ?? (props.loadingSession ? '正在加载会话' : '暂无活动会话')}</h1>{props.data && <span className="conversation-meta">{props.data.session.runCount} 次运行 · 执行记录保存在本机</span>}</div><div className="conversation-header-actions"><label className="provider-selector"><span>下一次运行</span><select aria-label="选择下一次运行的模型来源" value={props.provider} onChange={(event) => props.onProviderChange(event.target.value as Provider)} disabled={props.loadingSession}>{(['openai', 'qwen'] as Provider[]).map((provider) => { const status = providerStatus(props.health, provider, props.mode); return <option key={provider} value={provider} disabled={status === 'unavailable'}>{providerLabels[provider]}{status === 'unavailable' ? '（不可用）' : ''}</option> })}</select></label><span className={'run-chip ' + props.runState}><span className="status-dot" />{runStateLabel(props.runState)} · {props.data?.session.runCount ?? 0} 次运行</span></div></header><div className="message-scroll">{props.loadingSession ? <div className="loading-state"><span className="spinner" />正在加载会话...</div> : props.error && !props.data && messages.length === 0 ? <div className="error-state"><div className="empty-icon"><MessageSquare size={22} /></div><h2>无法连接本地服务</h2><p>{props.error}</p></div> : !props.data && messages.length === 0 ? <div className="empty-conversation"><div className="empty-icon"><MessageSquare size={22} /></div><h2>创建第一个会话</h2><p>请从左侧新建会话，开始使用 Figura。</p></div> : messages.length === 0 && props.timelines.length === 0 ? <div className="empty-conversation"><div className="empty-icon"><MessageSquare size={22} /></div><p>提出问题或添加图片，开始使用 Figura。</p></div> : <>{runBlocks.map(({ timeline, user, assistant }) => <RunBlock key={timeline.summary.runId} timeline={timeline} user={user} assistant={assistant} expanded={props.expandedRuns.has(timeline.summary.runId) || timeline.summary.status === 'running'} onToggleRun={() => props.onToggleRun(timeline.summary.runId, timeline.summary.status)} expandedMessage={expanded} onToggleMessage={toggleMessage} previewLoader={previewLoader} onPreview={props.onPreview} />)}{orphanMessages.map((item) => <Message key={item.id} item={item} expanded={expanded === item.id} onToggle={toggleMessage} previewLoader={previewLoader} onPreview={props.onPreview} />)}</>}{props.loading && <div className="typing"><span /><span /><span /> Figura Agent 正在思考</div>}{props.error && <div className="error-banner" role="alert">{props.error}</div>}</div><div className="composer"><div className="composer-label"><Sparkles size={13} /><span>向 Figura Agent 提问</span></div><textarea value={text} onChange={(event) => setText(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void send() } }} placeholder="例如：比较这张图中各系列的变化趋势..." rows={1} /><div className="composer-actions"><span className="composer-hint">Enter 发送 · Shift + Enter 换行</span><button className="send-button" onClick={() => void send()} disabled={!text.trim() || props.loading || props.loadingSession} title="发送消息" aria-label="发送消息"><Send size={16} /> </button></div></div></main>
+  return <main className="conversation panel"><header className="conversation-header"><div className="conversation-title"><span className="eyebrow">当前会话</span><h1>{props.data?.session.name ?? (props.loadingSession ? '正在加载会话' : '暂无活动会话')}</h1>{props.data && <span className="conversation-meta">{props.data.session.runCount} 次运行 · 执行记录保存在本机</span>}</div><div className="conversation-header-actions"><label className="provider-selector"><span>下一次运行</span><select aria-label="选择下一次运行的模型来源" value={props.provider} onChange={(event) => props.onProviderChange(event.target.value as Provider)} disabled={props.loadingSession}>{(['openai', 'qwen'] as Provider[]).map((provider) => { const status = providerStatus(props.health, provider, props.mode); return <option key={provider} value={provider} disabled={status === 'unavailable'}>{providerLabels[provider]}{status === 'unavailable' ? '（不可用）' : ''}</option> })}</select></label><span className={'run-chip ' + props.runState}><span className="status-dot" />{runStateLabel(props.runState)} · {props.data?.session.runCount ?? 0} 次运行</span></div></header><div className="message-scroll">{props.loadingSession ? <div className="loading-state"><span className="spinner" />正在加载会话...</div> : props.error && !props.data && messages.length === 0 ? <div className="error-state"><div className="empty-icon"><MessageSquare size={22} /></div><h2>无法连接本地服务</h2><p>{props.error}</p></div> : !props.data && messages.length === 0 ? <div className="empty-conversation"><div className="empty-icon"><MessageSquare size={22} /></div><h2>创建第一个会话</h2><p>请从左侧新建会话，开始使用 Figura。</p></div> : messages.length === 0 && props.timelines.length === 0 ? <div className="empty-conversation"><div className="empty-icon"><MessageSquare size={22} /></div><p>提出问题或添加图片，开始使用 Figura。</p></div> : <>{runBlocks.map(({ timeline, user, assistant }) => <RunBlock key={timeline.summary.runId} timeline={timeline} user={user} assistant={assistant} expanded={props.expandedRuns.has(timeline.summary.runId) || timeline.summary.status === 'running'} onToggleRun={() => props.onToggleRun(timeline.summary.runId, timeline.summary.status)} expandedMessage={expanded} onToggleMessage={toggleMessage} previewLoader={previewLoader} onPreview={props.onPreview} onInterrupt={() => props.onInterrupt?.(timeline.summary.runId)} onRetry={() => props.onRetry?.(timeline.summary.runId)} />)}{orphanMessages.map((item) => <Message key={item.id} item={item} expanded={expanded === item.id} onToggle={toggleMessage} previewLoader={previewLoader} onPreview={props.onPreview} />)}</>}{props.loading && <div className="typing"><span /><span /><span /> Figura Agent 正在思考</div>}{props.error && <div className="error-banner" role="alert">{props.error}</div>}</div><div className="composer"><div className="composer-label"><Sparkles size={13} /><span>向 Figura Agent 提问</span></div><textarea value={text} onChange={(event) => setText(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void send() } }} placeholder="例如：比较这张图中各系列的变化趋势..." rows={1} /><div className="composer-actions"><span className="composer-hint">Enter 发送 · Shift + Enter 换行</span><button className="send-button" onClick={() => void send()} disabled={!text.trim() || props.loading || props.loadingSession} title="发送消息" aria-label="发送消息"><Send size={16} /> </button></div></div></main>
 }
 
 function AttachmentPreview({ attachment, loader, onPreview }: { attachment: Attachment; loader: PreviewResourceLoader | null; onPreview?: PreviewOpener }) {
@@ -561,6 +575,8 @@ export default function App() {
   const activeIdRef = useRef(activeId)
   const localPreviews = useRef(new Map<string, string>())
   const subscriptionRef = useRef<RunSubscription | null>(null)
+  const activeRunRef = useRef<{ sessionId: string; runId: string; idempotencyKey: string; lastSequence: number; text: string; attachmentIds: string[]; provider: Provider } | null>(null)
+  const runRequestsRef = useRef(new Map<string, { text: string; attachmentIds: string[] }>())
   const previewLoader = useMemo(
     () => mode === 'gateway' ? createGatewayPreviewLoader(gatewayUrl) : null,
     [mode, gatewayUrl],
@@ -630,39 +646,85 @@ export default function App() {
         setTimelines(hydrated)
         const current = hydrated.find((item) => item.summary.status === 'running')
         if (current) {
+          const runId = current.summary.runId
           setRunState('running')
           setLoading(true)
           const cursor = Math.max(...current.events.map((event) => event.sequence), 0)
-          subscriptionRef.current = client.subscribeRun(activeId, current.summary.runId, {
-            onEvent(event) {
-              if (activeIdRef.current !== activeId) return
-              if (event.kind === 'history_gap') {
-                setTimelines((items) => items.map((item) => item.summary.runId === current.summary.runId ? { ...item, historyGap: true } : item))
-                return
+          activeRunRef.current = { sessionId: activeId, runId, idempotencyKey: '', lastSequence: cursor, text: '', attachmentIds: [], provider: current.summary.provider || 'openai' }
+          let reconnectAttempts = 0
+          let reconnectTimer: number | undefined
+          const applyHydratedHistory = (history: Awaited<ReturnType<ChartAgentClient['getRunHistory']>>) => {
+            setTimelines((items) => items.map((item) => item.summary.runId === runId ? { ...item, summary: history.run, events: mergeEvents(item.events, history.events), historyGap: item.historyGap || history.historyGap } : item))
+            const latest = Math.max(...history.events.map((event) => event.sequence), 0)
+            if (activeRunRef.current?.runId === runId) activeRunRef.current.lastSequence = Math.max(activeRunRef.current.lastSequence, latest)
+          }
+          const finishHydrated = async (history: Awaited<ReturnType<ChartAgentClient['getRunHistory']>>) => {
+            applyHydratedHistory(history)
+            if (history.run.status === 'running') return false
+            setPendingUser(null)
+            setRunState(history.run.status === 'interrupted' ? 'interrupted' : history.run.status === 'failed' ? 'failed' : 'completed')
+            setLoading(false)
+            activeRunRef.current = null
+            try {
+              const updated = await client.getSession(activeId)
+              if (activeIdRef.current === activeId) {
+                setData(withLocalPreviews(updated))
+                setSessions((items) => items.map((item) => item.id === updated.session.id ? updated.session : item))
               }
-              setTimelines((items) => items.map((item) => item.summary.runId === current.summary.runId ? { ...item, events: mergeEvents(item.events, [event]), summary: { ...item.summary, eventCount: Math.max(item.summary.eventCount, event.sequence), updatedAt: event.timestamp } } : item))
-            },
-            onError(reason) {
-              if (activeIdRef.current !== activeId) return
+            } catch { /* The durable run history remains visible if refresh fails. */ }
+            return true
+          }
+          const scheduleHydratedReconnect = (reason: Error) => {
+            if (activeIdRef.current !== activeId) return
+            if (reconnectAttempts >= 5) {
               setRunState('unavailable')
               setLoading(false)
               setError(toUserMessage(reason))
-            },
-            onComplete() {
-              subscriptionRef.current = null
-              void client.getSession(activeId).then(async (updated) => {
+              return
+            }
+            reconnectAttempts += 1
+            setRunState('reconnecting')
+            const backoff = Math.min(8000, 400 * (2 ** (reconnectAttempts - 1))) + Math.floor(Math.random() * 200)
+            reconnectTimer = window.setTimeout(() => {
+              const nextCursor = activeRunRef.current?.runId === runId ? activeRunRef.current.lastSequence : cursor
+              connectHydrated(nextCursor)
+            }, backoff)
+          }
+          const connectHydrated = (afterSequence: number) => {
+            if (activeIdRef.current !== activeId) return
+            subscriptionRef.current = client.subscribeRun(activeId, runId, {
+              onEvent(event) {
                 if (activeIdRef.current !== activeId) return
-                setData(withLocalPreviews(updated))
-                setSessions((items) => items.map((item) => item.id === updated.session.id ? updated.session : item))
-                const history = await client.getRunHistory(activeId, current.summary.runId)
-                setTimelines((items) => items.map((item) => item.summary.runId === current.summary.runId ? { ...item, summary: history.run, events: mergeEvents(item.events, history.events), historyGap: item.historyGap || history.historyGap } : item))
-                setPendingUser(null)
-                setRunState(history.run.status === 'interrupted' ? 'interrupted' : history.run.status === 'failed' ? 'failed' : 'completed')
-                setLoading(false)
-              }).catch((reason) => { setRunState('unavailable'); setLoading(false); setError(toUserMessage(reason)) })
-            },
-          }, cursor)
+                if (event.kind === 'history_gap') {
+                  setRunState('history-gap')
+                  setTimelines((items) => items.map((item) => item.summary.runId === runId ? { ...item, historyGap: true } : item))
+                  return
+                }
+                if (activeRunRef.current?.runId === runId) activeRunRef.current.lastSequence = Math.max(activeRunRef.current.lastSequence, event.sequence)
+                if (event.kind === 'run_interrupted') { setRunState('interrupted'); setLoading(false) }
+                else if (event.kind === 'run_failed') { setRunState('failed'); setLoading(false) }
+                setTimelines((items) => items.map((item) => item.summary.runId === runId ? { ...item, events: mergeEvents(item.events, [event]), summary: { ...item.summary, eventCount: Math.max(item.summary.eventCount, event.sequence), updatedAt: event.timestamp } } : item))
+              },
+              async onError(reason) {
+                if (activeIdRef.current !== activeId) return
+                try {
+                  const nextCursor = activeRunRef.current?.runId === runId ? activeRunRef.current.lastSequence : afterSequence
+                  const history = await client.getRunHistory(activeId, runId, nextCursor)
+                  if (await finishHydrated(history)) return
+                } catch { /* A later reconnect will retry the durable cursor read. */ }
+                scheduleHydratedReconnect(reason)
+              },
+              onComplete() {
+                subscriptionRef.current = null
+                if (activeIdRef.current !== activeId) return
+                const nextCursor = activeRunRef.current?.runId === runId ? activeRunRef.current.lastSequence : afterSequence
+                void client.getRunHistory(activeId, runId, nextCursor).then((history) => finishHydrated(history)).catch((reason) => scheduleHydratedReconnect(reason))
+              },
+            }, afterSequence)
+          }
+          connectHydrated(cursor)
         } else {
+          activeRunRef.current = null
           setRunState('idle')
           setLoading(false)
         }
@@ -671,7 +733,7 @@ export default function App() {
   }, [activeId, client, gatewayReady])
 
   const clearPending = () => { pending.forEach((item) => URL.revokeObjectURL(item.previewUrl)); setPending([]) }
-  const selectSession = (id: string) => { subscriptionRef.current?.close(); subscriptionRef.current = null; clearPending(); setSelectedIds([]); setPendingUser(null); setTimelines([]); setExpandedRuns(new Set()); setRunState('idle'); setAttachmentError(null); setError(null); setActiveId(id) }
+  const selectSession = (id: string) => { subscriptionRef.current?.close(); subscriptionRef.current = null; activeRunRef.current = null; runRequestsRef.current.clear(); clearPending(); setSelectedIds([]); setPendingUser(null); setTimelines([]); setExpandedRuns(new Set()); setRunState('idle'); setAttachmentError(null); setError(null); setActiveId(id) }
   const create = async () => { setNewSessionName(''); setCreatingSession(true) }
   const confirmCreate = async (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); const name = newSessionName.trim(); if (!name) return; setError(null); try { subscriptionRef.current?.close(); subscriptionRef.current = null; clearPending(); setSelectedIds([]); setPendingUser(null); setTimelines([]); setRunState('idle'); const created = await client.createSession(name); setSessions(await client.listSessions()); setActiveId(created.session.id); setCreatingSession(false) } catch (reason) { setError(toUserMessage(reason)) } }
 
@@ -767,7 +829,7 @@ export default function App() {
   const removePending = (key: string) => { const item = pending.find((candidate) => candidate.key === key); if (item) URL.revokeObjectURL(item.previewUrl); setPending((items) => items.filter((candidate) => candidate.key !== key)) }
   const toggleAttachment = (id: string) => setSelectedIds((ids) => ids.includes(id) ? ids.filter((item) => item !== id) : [...ids, id])
 
-  const submit = async (text: string, attachmentIds: string[]): Promise<boolean> => {
+  const submit = async (text: string, attachmentIds: string[], retryOf?: string): Promise<boolean> => {
     if (!activeId) return false
     const sessionId = activeId
     subscriptionRef.current?.close()
@@ -775,6 +837,8 @@ export default function App() {
     setRunState('connecting')
     setError(null)
     setSelectedIds([])
+    const idempotencyKey = newIdempotencyKey()
+    const startOptions = { idempotencyKey, ...(retryOf ? { retryOf } : {}) }
     try {
       const selectedStatus = providerStatus(gatewayHealth, provider, mode)
       if (selectedStatus !== 'ready') {
@@ -785,66 +849,104 @@ export default function App() {
         setLoading(false)
         return false
       }
-      const handle = await client.startRun(sessionId, text, attachmentIds, provider)
+      let handle
+      try {
+        handle = await client.startRun(sessionId, text, attachmentIds, provider, startOptions)
+      } catch (firstError) {
+        // A lost acknowledgement can mean the Gateway accepted the run. One
+        // keyed recovery request is safe and lets the Gateway return it.
+        try {
+          handle = await client.startRun(sessionId, text, attachmentIds, provider, startOptions)
+        } catch {
+          throw firstError
+        }
+      }
       window.localStorage.setItem(`figura.provider.${sessionId}`, provider)
       if (activeIdRef.current !== sessionId) return false
+      activeRunRef.current = { sessionId, runId: handle.runId, idempotencyKey, lastSequence: 0, text, attachmentIds: [...attachmentIds], provider }
+      runRequestsRef.current.set(handle.runId, { text, attachmentIds: [...attachmentIds] })
       setPendingUser({ id: `${handle.runId}:user`, kind: 'user', text, timestamp: currentTime(), attachmentIds: attachmentIds.length ? attachmentIds : undefined })
-      setRunState('running')
+      setRunState(handle.status === 'running' ? 'running' : handle.status === 'interrupted' ? 'interrupted' : handle.status === 'failed' ? 'failed' : 'completed')
       const startedAt = new Date().toISOString()
-      setTimelines((current) => current.some((item) => item.summary.runId === handle.runId) ? current : [...current, { summary: { runId: handle.runId, sessionId, status: 'running', createdAt: startedAt, updatedAt: startedAt, eventCount: 0, provider: handle.provider || provider, model: handle.model }, events: [], historyGap: false }])
-      let terminalFailure = false
+      setTimelines((current) => current.some((item) => item.summary.runId === handle.runId) ? current : [...current, { summary: { runId: handle.runId, sessionId, status: handle.status, createdAt: startedAt, updatedAt: startedAt, eventCount: 0, provider: handle.provider || provider, model: handle.model, retryOf: handle.retryOf }, events: [], historyGap: false }])
       let reconnectAttempts = 0
+      let reconnectTimer: number | undefined
       const applyHistory = (history: Awaited<ReturnType<ChartAgentClient['getRunHistory']>>) => {
         setTimelines((current) => current.map((item) => item.summary.runId === handle.runId ? { summary: history.run, events: mergeEvents(item.events, history.events), historyGap: item.historyGap || history.historyGap } : item))
+        const latest = Math.max(...history.events.map((event) => event.sequence), 0)
+        if (activeRunRef.current?.runId === handle.runId) activeRunRef.current.lastSequence = Math.max(activeRunRef.current.lastSequence, latest)
         return history
       }
-      const connect = (afterSequence = 0) => {
+      const finishFromHistory = async (history: Awaited<ReturnType<ChartAgentClient['getRunHistory']>>) => {
+        applyHistory(history)
+        if (history.run.status === 'interrupted') setRunState('interrupted')
+        else if (history.run.status === 'failed') setRunState('failed')
+        else if (history.run.status === 'completed') setRunState('completed')
+        setLoading(false)
+        setPendingUser(null)
+        if (history.run.status !== 'running') {
+          activeRunRef.current = null
+          try {
+            const updated = await client.getSession(sessionId)
+            if (activeIdRef.current === sessionId) {
+              setData(withLocalPreviews(updated))
+              setSessions((items) => items.map((item) => item.id === updated.session.id ? updated.session : item))
+            }
+          } catch { /* The run history remains visible if the session refresh fails. */ }
+        }
+        return history.run.status !== 'running'
+      }
+      const scheduleReconnect = (reason: Error) => {
+        if (activeIdRef.current !== sessionId) return
+        if (reconnectAttempts >= 5) {
+          setRunState('unavailable')
+          setLoading(false)
+          setError(toUserMessage(reason))
+          return
+        }
+        reconnectAttempts += 1
+        setRunState('reconnecting')
+        const backoff = Math.min(8000, 400 * (2 ** (reconnectAttempts - 1))) + Math.floor(Math.random() * 200)
+        reconnectTimer = window.setTimeout(() => {
+          const cursor = activeRunRef.current?.runId === handle.runId ? activeRunRef.current.lastSequence : 0
+          connect(cursor)
+        }, backoff)
+      }
+      const connect = (afterSequence = activeRunRef.current?.lastSequence || 0) => {
         subscriptionRef.current = client.subscribeRun(sessionId, handle.runId, {
           onEvent(event) {
             if (activeIdRef.current !== sessionId) return
             if (event.kind === 'history_gap') {
+              setRunState('history-gap')
               setTimelines((current) => current.map((item) => item.summary.runId === handle.runId ? { ...item, historyGap: true } : item))
               return
             }
+            if (activeRunRef.current?.runId === handle.runId) activeRunRef.current.lastSequence = Math.max(activeRunRef.current.lastSequence, event.sequence)
             if (event.kind === 'run_failed') {
-              terminalFailure = true
               setRunState('failed')
               setLoading(false)
               setError(toUserMessage(new GatewayClientError(String(event.payload.code || 'agent_failed'), String(event.payload.message || 'Agent 执行失败'), 502, typeof event.payload.reason === 'string' ? event.payload.reason : undefined)))
+            } else if (event.kind === 'run_interrupted') {
+              setRunState('interrupted')
+              setLoading(false)
             } else if (event.kind !== 'run_started') setRunState('running')
             setTimelines((current) => current.map((item) => item.summary.runId === handle.runId ? { ...item, events: mergeEvents(item.events, [event]), summary: { ...item.summary, eventCount: Math.max(item.summary.eventCount, event.sequence), updatedAt: event.timestamp }, historyGap: item.historyGap || event.kind === 'history_gap' } : item))
           },
           async onError(reason) {
             if (activeIdRef.current !== sessionId) return
-            setRunState('connecting')
             try {
-              const currentTimeline = await client.getRunHistory(sessionId, handle.runId)
-              const history = applyHistory(currentTimeline)
-              if (history.run.status === 'running' && reconnectAttempts < 2) { reconnectAttempts += 1; const latest = Math.max(...history.events.map((event) => event.sequence), 0); connect(latest); return }
-              if (history.run.status === 'completed') { setRunState('completed'); setLoading(false); setPendingUser(null); return }
-              if (history.run.status === 'failed') terminalFailure = true
-            } catch { /* The visible error below preserves all events already rendered. */ }
-            setRunState('unavailable')
-            setLoading(false)
-            setError(toUserMessage(reason))
+              const cursor = activeRunRef.current?.runId === handle.runId ? activeRunRef.current.lastSequence : afterSequence
+              const history = await client.getRunHistory(sessionId, handle.runId, cursor)
+              if (await finishFromHistory(history)) return
+              scheduleReconnect(reason)
+            } catch {
+              scheduleReconnect(reason)
+            }
           },
           onComplete() {
             subscriptionRef.current = null
-            if (activeIdRef.current !== sessionId || terminalFailure) return
-            void client.getSession(sessionId).then(async (updated) => {
-              if (activeIdRef.current !== sessionId) return
-              setData(withLocalPreviews(updated))
-              setSessions((current) => current.map((item) => item.id === updated.session.id ? updated.session : item))
-              let history = await client.getRunHistory(sessionId, handle.runId)
-              for (let attempt = 0; attempt < 5 && history.run.status === 'running'; attempt += 1) {
-                await delay(40)
-                history = await client.getRunHistory(sessionId, handle.runId)
-              }
-              applyHistory(history)
-              setPendingUser(null)
-              setRunState(history.run.status === 'interrupted' ? 'interrupted' : 'completed')
-              setLoading(false)
-            }).catch((reason) => { setRunState('failed'); setLoading(false); setError(toUserMessage(reason)) })
+            if (activeIdRef.current !== sessionId) return
+            void client.getRunHistory(sessionId, handle.runId, activeRunRef.current?.lastSequence || 0).then((history) => finishFromHistory(history)).catch((reason) => { setRunState('unavailable'); setLoading(false); setError(toUserMessage(reason)) })
           },
         }, afterSequence)
       }
@@ -858,9 +960,38 @@ export default function App() {
     }
   }
 
+  const interruptRun = async (runId: string) => {
+    const sessionId = activeIdRef.current
+    if (!sessionId) return
+    setRunState('cancel_requested')
+    setTimelines((items) => items.map((item) => item.summary.runId === runId ? { ...item, summary: { ...item.summary, cancelRequested: true } } : item))
+    try {
+      const handle = await client.interruptRun(sessionId, runId)
+      setTimelines((items) => items.map((item) => item.summary.runId === runId ? { ...item, summary: { ...item.summary, status: handle.status, terminalCode: handle.terminalCode, terminalMessage: handle.terminalMessage, cancelRequested: true, updatedAt: new Date().toISOString() } } : item))
+      if (handle.status === 'interrupted') { setRunState('interrupted'); setLoading(false) }
+    } catch (reason) {
+      setRunState('running')
+      setError(toUserMessage(reason))
+    }
+  }
+
+  const retryRun = async (runId: string) => {
+    const timeline = timelines.find((item) => item.summary.runId === runId)
+    if (!timeline) return
+    const request = runRequestsRef.current.get(runId)
+    const storedUser = data?.messages.find((item) => item.id === `${runId}:user`)
+    const activeUser = pendingUser?.id === `${runId}:user` ? pendingUser : undefined
+    const user = activeUser || storedUser || (request ? { id: `${runId}:user`, kind: 'user' as const, text: request.text, timestamp: currentTime(), attachmentIds: request.attachmentIds } : undefined)
+    if (!user || user.kind !== 'user') {
+      setError('这条运行缺少原始请求，暂时无法自动重试。')
+      return
+    }
+    await submit(user.text, user.attachmentIds || [], runId)
+  }
+
   const toggleRun = (runId: string, status: RunSummary['status']) => setExpandedRuns((current) => { const next = new Set(current); if (status === 'running') { next.has(runId) ? next.delete(runId) : next.add(runId) } else { next.has(runId) ? next.delete(runId) : next.add(runId) } return next })
   const changeProvider = (next: Provider) => { setProvider(next); if (activeId) window.localStorage.setItem(`figura.provider.${activeId}`, next); if (loading) setError('当前运行不会切换来源，新选择将应用于下一次运行。') }
-  return <><div className="app-shell"><SessionSidebar sessions={sessions} activeId={activeId} onSelect={selectSession} onCreate={create} onDelete={requestDeleteSession} mode={mode} runtimeStatus={runtimeStatus} health={gatewayHealth} /><ConversationPanel data={data} timelines={timelines} pendingUser={pendingUser} runState={runState} selectedAttachmentIds={selectedIds} provider={provider} health={gatewayHealth} mode={mode} onProviderChange={changeProvider} onSubmit={submit} loading={loading} loadingSession={loadingSession} error={error} onToggleRun={toggleRun} expandedRuns={expandedRuns} previewLoader={previewLoader} onPreview={setActivePreview} /><AttachmentPanel attachments={data?.attachments ?? []} pending={pending} selectedIds={selectedIds} error={attachmentError} onAdd={addFiles} onToggle={toggleAttachment} onRemovePending={removePending} onRetryPending={(item) => void uploadPending(item)} onRemove={requestDeleteAttachment} previewLoader={previewLoader} onPreview={setActivePreview} /></div>{activePreview && <InteractivePreview preview={activePreview} loader={previewLoader} onClose={() => setActivePreview(null)} />}{creatingSession && <div className="dialog-backdrop"><form className="session-dialog" onSubmit={(event) => void confirmCreate(event)}><h2>新建会话</h2><label htmlFor="session-name">会话名称</label><input id="session-name" value={newSessionName} onChange={(event) => setNewSessionName(event.target.value)} placeholder="例如：季度销售分析" autoFocus /><div className="dialog-actions"><button type="button" className="dialog-secondary" onClick={() => setCreatingSession(false)}>取消</button><button type="submit" className="dialog-primary" disabled={!newSessionName.trim()}>创建会话</button></div></form></div>}{confirmAction && <div className="dialog-backdrop"><div className="session-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-dialog-title"><h2 id="delete-dialog-title">{confirmAction.kind === 'session' ? '删除会话？' : '删除附件？'}</h2><p className="dialog-message">{confirmAction.kind === 'session' ? `将永久删除“${confirmAction.session.name}”及其运行记录和附件。` : `将删除“${confirmAction.attachment.filename}”及其源文件。`}</p><div className="dialog-actions"><button type="button" className="dialog-secondary" onClick={() => setConfirmAction(null)} disabled={deleting}>取消</button><button type="button" className="dialog-danger" onClick={() => void confirmDelete()} disabled={deleting}><Trash2 size={13} />{deleting ? '正在删除' : '确认删除'}</button></div></div></div>}</>
+  return <><div className="app-shell"><SessionSidebar sessions={sessions} activeId={activeId} onSelect={selectSession} onCreate={create} onDelete={requestDeleteSession} mode={mode} runtimeStatus={runtimeStatus} health={gatewayHealth} /><ConversationPanel data={data} timelines={timelines} pendingUser={pendingUser} runState={runState} selectedAttachmentIds={selectedIds} provider={provider} health={gatewayHealth} mode={mode} onProviderChange={changeProvider} onSubmit={submit} onInterrupt={(runId) => void interruptRun(runId)} onRetry={(runId) => void retryRun(runId)} loading={loading} loadingSession={loadingSession} error={error} onToggleRun={toggleRun} expandedRuns={expandedRuns} previewLoader={previewLoader} onPreview={setActivePreview} /><AttachmentPanel attachments={data?.attachments ?? []} pending={pending} selectedIds={selectedIds} error={attachmentError} onAdd={addFiles} onToggle={toggleAttachment} onRemovePending={removePending} onRetryPending={(item) => void uploadPending(item)} onRemove={requestDeleteAttachment} previewLoader={previewLoader} onPreview={setActivePreview} /></div>{activePreview && <InteractivePreview preview={activePreview} loader={previewLoader} onClose={() => setActivePreview(null)} />}{creatingSession && <div className="dialog-backdrop"><form className="session-dialog" onSubmit={(event) => void confirmCreate(event)}><h2>新建会话</h2><label htmlFor="session-name">会话名称</label><input id="session-name" value={newSessionName} onChange={(event) => setNewSessionName(event.target.value)} placeholder="例如：季度销售分析" autoFocus /><div className="dialog-actions"><button type="button" className="dialog-secondary" onClick={() => setCreatingSession(false)}>取消</button><button type="submit" className="dialog-primary" disabled={!newSessionName.trim()}>创建会话</button></div></form></div>}{confirmAction && <div className="dialog-backdrop"><div className="session-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-dialog-title"><h2 id="delete-dialog-title">{confirmAction.kind === 'session' ? '删除会话？' : '删除附件？'}</h2><p className="dialog-message">{confirmAction.kind === 'session' ? `将永久删除“${confirmAction.session.name}”及其运行记录和附件。` : `将删除“${confirmAction.attachment.filename}”及其源文件。`}</p><div className="dialog-actions"><button type="button" className="dialog-secondary" onClick={() => setConfirmAction(null)} disabled={deleting}>取消</button><button type="button" className="dialog-danger" onClick={() => void confirmDelete()} disabled={deleting}><Trash2 size={13} />{deleting ? '正在删除' : '确认删除'}</button></div></div></div>}</>
 }
 
 function toUserMessage(error: unknown): string {
@@ -870,6 +1001,9 @@ function toUserMessage(error: unknown): string {
     if (error.code === 'agent_unavailable' && error.reason === 'invalid_configuration') return 'Agent 配置无效，请检查模型地址和参数。'
     if (error.code === 'agent_unavailable') return 'Agent 当前不可用，请稍后重试。'
     if (error.code === 'invalid_provider') return '模型来源不受支持，请重新选择 OpenAI 或 Qwen。'
+    if (error.code === 'idempotency_conflict') return '请求标识已对应其他内容，请重新提交。'
+    if (error.code === 'run_not_terminal') return '运行尚未结束，暂时不能重试。'
+    if (error.code === 'history_gap') return '执行历史存在缺口，当前只能查看已保留部分。'
     if (error.code === 'session_not_found') return '会话不存在，可能已被删除。'
     if (error.code === 'session_exists') return '会话名称已存在，请换一个名称。'
     if (error.code === 'session_busy') return '会话正在运行 Agent，请等待本次运行结束后再删除。'

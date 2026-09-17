@@ -228,6 +228,192 @@ def test_gateway_provider_validation_is_bounded():
     assert error.value.code == "invalid_provider"
 
 
+def test_gateway_idempotency_reuses_accepted_run_and_rejects_conflicts(tmp_path):
+    database = tmp_path / "sessions.db"
+    calls = 0
+
+    class FakeAgent:
+        def run(self, prompt):
+            nonlocal calls
+            calls += 1
+            return "幂等完成"
+
+    class FakeRuntime:
+        agent = FakeAgent()
+
+        def close(self):
+            return None
+
+    service = GatewayService(
+        database=database,
+        runtime_factory=lambda name, **kwargs: FakeRuntime(),
+        readiness_probe=lambda: {"status": "ready", "provider": "openai", "model": "test-model"},
+    )
+    session_id = service.create_session("idempotency")['session']['id']
+
+    first = service.start_run(session_id, "同一请求", raw_idempotency_key="intent-1")
+    duplicate = service.start_run(session_id, "同一请求", raw_idempotency_key="intent-1")
+    assert duplicate["run"]["runId"] == first["run"]["runId"]
+    assert calls == 1
+
+    with pytest.raises(GatewayFault) as conflict:
+        service.start_run(session_id, "另一请求", raw_idempotency_key="intent-1")
+    assert conflict.value.code == "idempotency_conflict"
+    service.close()
+
+
+def test_gateway_concurrent_equivalent_submissions_share_one_run(tmp_path):
+    database = tmp_path / "sessions.db"
+    started = threading.Event()
+    release = threading.Event()
+    calls = 0
+    calls_lock = threading.Lock()
+
+    class BlockingAgent:
+        def run(self, prompt):
+            nonlocal calls
+            with calls_lock:
+                calls += 1
+            started.set()
+            release.wait(timeout=2)
+            return "并发请求完成"
+
+    class FakeRuntime:
+        agent = BlockingAgent()
+
+        def close(self):
+            return None
+
+    service = GatewayService(
+        database=database,
+        runtime_factory=lambda name, **kwargs: FakeRuntime(),
+        readiness_probe=lambda: {"status": "ready", "provider": "openai", "model": "test-model"},
+    )
+    session_id = service.create_session("concurrent-idempotency")["session"]["id"]
+    results = []
+    errors = []
+
+    def submit():
+        try:
+            results.append(service.start_run(session_id, "同一个并发请求", raw_idempotency_key="concurrent-1"))
+        except Exception as exc:  # pragma: no cover - assertion below reports unexpected failures
+            errors.append(exc)
+
+    threads = [threading.Thread(target=submit) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=2)
+    assert not errors
+    assert len(results) == 2
+    assert results[0]["run"]["runId"] == results[1]["run"]["runId"]
+    assert started.wait(timeout=2)
+    assert calls == 1
+    release.set()
+    assert service.get_run(session_id, results[0]["run"]["runId"]).wait_terminal(timeout=2)
+    service.close()
+
+
+def test_gateway_worker_submit_failure_is_terminal_and_replayable(tmp_path):
+    database = tmp_path / "sessions.db"
+    service = GatewayService(
+        database=database,
+        runtime_factory=lambda name, **kwargs: pytest.fail("worker must not construct a runtime"),
+        readiness_probe=lambda: {"status": "ready", "provider": "openai", "model": "test-model"},
+    )
+    service._runs._executor.submit = lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("submit failed"))
+    session_id = service.create_session("worker-submit-failure")["session"]["id"]
+
+    accepted = service.start_run(session_id, "提交失败", raw_idempotency_key="submit-failure-1")
+    assert accepted["run"]["status"] == "failed"
+    run_id = accepted["run"]["runId"]
+    history = service.get_run_history(session_id, run_id)
+    assert history["run"]["terminalCode"] == "worker_error"
+    assert [event["kind"] for event in history["events"]] == ["run_started", "run_failed"]
+    duplicate = service.start_run(session_id, "提交失败", raw_idempotency_key="submit-failure-1")
+    assert duplicate["run"]["runId"] == run_id
+    service.close()
+
+
+def test_gateway_restart_recovery_persists_interruption_event(tmp_path):
+    database = tmp_path / "sessions.db"
+    store = GatewayHistoryStore(database)
+    memory = SQLiteAgentMemory("restart-recovery", database=database)
+    session_id = memory.session.id
+    store.create_run("run_restart", session_id)
+    store.append_event(RunEvent("run_restart", 1, "model_started", {"turn": 1}))
+    memory.close()
+
+    service = GatewayService(database=database)
+    run = service.get_run(session_id, "run_restart")
+    assert run.status.value == "interrupted"
+    assert run.error_code == "gateway_restarted"
+    assert [event.kind for event in run.iter_events()] == ["model_started", "run_interrupted"]
+    service.close()
+
+
+def test_gateway_retry_creates_new_identity_and_preserves_parent(tmp_path):
+    database = tmp_path / "sessions.db"
+
+    class FakeAgent:
+        def run(self, prompt):
+            return "重试完成"
+
+    class FakeRuntime:
+        agent = FakeAgent()
+
+        def close(self):
+            return None
+
+    service = GatewayService(
+        database=database,
+        runtime_factory=lambda name, **kwargs: FakeRuntime(),
+        readiness_probe=lambda: {"status": "ready", "provider": "openai", "model": "test-model"},
+    )
+    session_id = service.create_session("retry-lineage")["session"]["id"]
+    parent = service.start_run(session_id, "第一次", raw_idempotency_key="retry-parent")
+    parent_id = parent["run"]["runId"]
+    assert service.get_run(session_id, parent_id).wait_terminal(timeout=2)
+    child = service.start_run(
+        session_id,
+        "第一次",
+        raw_idempotency_key="retry-child",
+        raw_retry_of=parent_id,
+    )
+    child_id = child["run"]["runId"]
+    assert child_id != parent_id
+    assert child["run"]["retryOf"] == parent_id
+    assert service.start_run(
+        session_id,
+        "第一次",
+        raw_idempotency_key="retry-child",
+        raw_retry_of=parent_id,
+    )["run"]["runId"] == child_id
+    assert service.get_run(session_id, child_id).wait_terminal(timeout=2)
+    assert service._history.get_run(session_id, child_id)["retryOf"] == parent_id
+    service.close()
+
+
+def test_managed_run_interrupt_is_terminal_and_blocks_late_events(tmp_path):
+    store = GatewayHistoryStore(tmp_path / "sessions.db")
+    memory = SQLiteAgentMemory("interrupt", database=tmp_path / "sessions.db")
+    manager = RunManager(history_store=store)
+    run = manager.create(memory.session.id)
+    run.publish("tool_call", {"tool_name": "slow_tool"})
+
+    assert run.interrupt() is True
+    assert run.status.value == "interrupted"
+    assert run.interrupt() is False
+    assert run.publish("final_answer", {"answer": "迟到结果"}) is None
+    assert [event.kind for event in run.iter_events()] == ["run_started", "tool_call", "run_interrupted"]
+    history = store.history(memory.session.id, run.run_id)
+    assert history is not None
+    assert history["run"]["status"] == "interrupted"
+    assert history["run"]["terminalCode"] == "user_cancelled"
+    memory.close()
+    manager.close()
+
+
 def test_completed_projection_omits_partial_runs_and_sensitive_records(tmp_path):
     session = SQLiteAgentMemory("demo", database=tmp_path / "sessions.db").session
     partial = Run("partial", session.id, 2, RunStatus.INTERRUPTED)
@@ -655,7 +841,7 @@ def _binary_request(port: int, path: str, content: bytes, *, filename: str, medi
     return response.status, json.loads(raw) if raw else None
 
 
-def _request(port: int, method: str, path: str, payload=None, *, origin=None):
+def _request(port: int, method: str, path: str, payload=None, *, origin=None, extra_headers=None):
     connection = http.client.HTTPConnection("127.0.0.1", port, timeout=3)
     body = None
     headers = {}
@@ -664,6 +850,8 @@ def _request(port: int, method: str, path: str, payload=None, *, origin=None):
         headers["Content-Type"] = "application/json"
     if origin:
         headers["Origin"] = origin
+    if extra_headers:
+        headers.update(extra_headers)
     connection.request(method, path, body=body, headers=headers)
     response = connection.getresponse()
     raw = response.read()
@@ -931,6 +1119,84 @@ def test_http_async_run_returns_sse_stream(tmp_path):
         assert "event: final_answer" in raw
         assert '"answer":"流式完成"' in raw
     finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=3)
+
+
+def test_http_idempotency_and_interrupt_route(tmp_path):
+    database = tmp_path / "sessions.db"
+    started = threading.Event()
+    release = threading.Event()
+    calls = 0
+
+    class BlockingAgent:
+        def run(self, prompt):
+            nonlocal calls
+            calls += 1
+            started.set()
+            release.wait(timeout=2)
+            return "不应发布"
+
+    class FakeRuntime:
+        agent = BlockingAgent()
+
+        def close(self):
+            return None
+
+    service = GatewayService(
+        database=database,
+        runtime_factory=lambda name, **kwargs: FakeRuntime(),
+        readiness_probe=lambda: {"status": "ready", "provider": "openai", "model": "test-model"},
+    )
+    server = GatewayHTTPServer(("127.0.0.1", 0), service)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    try:
+        status, created, _ = _request(port, "POST", "/api/v1/sessions", {"name": "interrupt-http"})
+        assert status == 200
+        session_id = created["session"]["id"]
+        key = "http-intent-1"
+        status, first, _ = _request(
+            port,
+            "POST",
+            f"/api/v1/sessions/{session_id}/runs",
+            {"text": "等待"},
+            extra_headers={"Idempotency-Key": key},
+        )
+        assert status == 202
+        run_id = first["run"]["runId"]
+        assert started.wait(timeout=2)
+        status, duplicate, _ = _request(
+            port,
+            "POST",
+            f"/api/v1/sessions/{session_id}/runs",
+            {"text": "等待"},
+            extra_headers={"Idempotency-Key": key},
+        )
+        assert status == 202
+        assert duplicate["run"]["runId"] == run_id
+        assert calls == 1
+        status, interrupted, _ = _request(
+            port,
+            "POST",
+            f"/api/v1/sessions/{session_id}/runs/{run_id}/interrupt",
+            {},
+        )
+        assert status == 200
+        assert interrupted["run"]["status"] == "interrupted"
+        release.set()
+        status, history, _ = _request(
+            port,
+            "GET",
+            f"/api/v1/sessions/{session_id}/runs/{run_id}",
+        )
+        assert status == 200
+        assert history["run"]["status"] == "interrupted"
+        assert any(event["kind"] == "run_interrupted" for event in history["events"])
+    finally:
+        release.set()
         server.shutdown()
         server.server_close()
         thread.join(timeout=3)

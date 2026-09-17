@@ -13,7 +13,7 @@ from ..memory import SQLiteAgentMemory
 from ..memory.sqlite import default_database_path
 from ..multimodal import build_registered_attachment_turn
 from ..runtime import AgentRuntime, create_agent_runtime, probe_agent_readiness
-from ..agent import REVIEW_INCOMPLETE_MESSAGE
+from ..agent import AgentInterrupted, REVIEW_INCOMPLETE_MESSAGE
 from ..agent.review_gate import _REVIEW_FAILED_MSG
 from ..tools.core.result import GeneratedImage
 from ..trace import TraceSink, truncate_text
@@ -24,11 +24,14 @@ from .runs import HistoricalRun, ManagedRun, RunManager
 from .protocol import (
     AttachmentSummary,
     GatewayFault,
+    IDEMPOTENCY_CONFLICT_CODE,
     SessionTranscript,
     SessionSummary,
     SUPPORTED_PROVIDERS,
+    request_fingerprint,
     success,
     validate_attachment_ids,
+    validate_idempotency_key,
     validate_message_text,
     validate_session_name,
     validate_provider,
@@ -136,6 +139,7 @@ class GatewayService:
         run_id: str | None = None,
         trace_sink: TraceSink | None = None,
         visual_observation_sink: Callable[[str, str, Sequence[GeneratedImage]], Sequence[dict[str, Any]]] | None = None,
+        interruption_event: Any = None,
     ) -> AgentRuntime:
         effective_model = model if model is not None else self.model
         return create_agent_runtime(
@@ -146,6 +150,7 @@ class GatewayService:
             run_id=run_id,
             trace_sink=trace_sink,
             visual_observation_sink=visual_observation_sink,
+            interruption_event=interruption_event,
         )
 
     def health(self) -> dict[str, Any]:
@@ -285,9 +290,47 @@ class GatewayService:
         raw_text: object,
         raw_attachment_ids: object = None,
         raw_provider: object = None,
+        raw_idempotency_key: object = None,
+        raw_retry_of: object = None,
     ) -> dict[str, Any]:
-        run = self._start_managed_run(session_id, raw_text, raw_attachment_ids, raw_provider)
+        run = self._start_managed_run(
+            session_id,
+            raw_text,
+            raw_attachment_ids,
+            raw_provider,
+            raw_idempotency_key,
+            raw_retry_of,
+        )
         return success({"run": run.accepted.to_dict()})
+
+    def interrupt_run(
+        self,
+        session_id: object,
+        run_id: object,
+        raw_reason: object = "user_cancelled",
+    ) -> dict[str, Any]:
+        session = self._resolve_session(session_id)
+        run = self.get_run(session.id, run_id)
+        reason = raw_reason if isinstance(raw_reason, str) and raw_reason in {
+            "user_cancelled",
+            "gateway_restarted",
+        } else "user_cancelled"
+        if isinstance(run, ManagedRun) and not run.terminal:
+            try:
+                self._history.request_interrupt(run.run_id)
+            except Exception as exc:  # noqa: BLE001 - memory state remains authoritative
+                raise GatewayFault("gateway_storage_error", 500, "运行中断状态保存失败") from exc
+            changed = run.interrupt(
+                reason,
+                "运行已按用户请求中断" if reason == "user_cancelled" else "Gateway 重启，运行已中断",
+                reason,
+            )
+        else:
+            changed = False
+        return success({
+            "run": run.accepted.to_dict(),
+            "changed": changed,
+        })
 
     def get_run(self, session_id: object, run_id: object) -> ManagedRun:
         session = self._resolve_session(session_id)
@@ -404,7 +447,15 @@ class GatewayService:
         raw_text: object,
         raw_attachment_ids: object,
         raw_provider: object = None,
-    ) -> ManagedRun:
+        raw_idempotency_key: object = None,
+        raw_retry_of: object = None,
+    ) -> ManagedRun | HistoricalRun:
+        text = validate_message_text(raw_text)
+        attachment_ids = validate_attachment_ids(raw_attachment_ids)
+        idempotency_key = validate_idempotency_key(raw_idempotency_key)
+        retry_of = raw_retry_of.strip() if isinstance(raw_retry_of, str) else None
+        if retry_of is not None and (not retry_of or len(retry_of) > 128):
+            raise GatewayFault("invalid_request", 400, "retryOf is invalid")
         session, prompt = self._prepare_prompt(session_id, raw_text, raw_attachment_ids)
         requested_provider = validate_provider(raw_provider)
         try:
@@ -463,11 +514,38 @@ class GatewayService:
         try:
             with self._runs.session_operation():
                 current = self._resolve_session(session.id)
+                fingerprint = request_fingerprint(current.id, text, attachment_ids, provider)
+                if idempotency_key is not None:
+                    existing = self._history.get_idempotency(idempotency_key)
+                    if existing is not None:
+                        if (
+                            existing["sessionId"] != current.id
+                            or existing["requestFingerprint"] != fingerprint
+                        ):
+                            raise GatewayFault(
+                                IDEMPOTENCY_CONFLICT_CODE,
+                                409,
+                                "Idempotency-Key 已用于其他请求",
+                            )
+                        existing_run = self._runs.get(existing["runId"])
+                        if existing_run is not None:
+                            return existing_run
+                        historical = self._runs.historical(current.id, existing["runId"])
+                        if historical is not None:
+                            return historical
+                        raise GatewayFault("run_unavailable", 404, "原运行记录已不可用")
+                if retry_of is not None:
+                    parent = self.get_run(current.id, retry_of)
+                    if not parent.terminal:
+                        raise GatewayFault("run_not_terminal", 409, "只有已结束的运行才能重试")
                 return self._runs.start(
                     current.id,
                     lambda run: self._execute_run(run, current.name, prompt),
                     provider=provider,
                     model=model,
+                    idempotency_key=idempotency_key,
+                    request_fingerprint=fingerprint if idempotency_key is not None else None,
+                    retry_of=retry_of,
                 )
         except RuntimeError as exc:
             raise GatewayFault("run_limit", 429, "Too many Agent runs are active") from exc
@@ -500,6 +578,8 @@ class GatewayService:
         return session, prompt
 
     def _execute_run(self, run: ManagedRun, session_name: str, prompt: str) -> None:
+        if run.interruption_requested():
+            return
         visual_sink = lambda tool_name, call_id, images: self._store_observations(
             run,
             images,
@@ -521,6 +601,10 @@ class GatewayService:
         try:
             try:
                 answer = runtime.agent.run(prompt)
+            except AgentInterrupted:
+                if not run.terminal:
+                    run.interrupt("user_cancelled", "运行已按用户请求中断")
+                return
             except Exception as exc:
                 run.publish("run_failed", {"code": "agent_failed", "message": "Agent run failed"})
                 run.fail("agent_failed", 502, "Agent run failed")
@@ -528,6 +612,8 @@ class GatewayService:
         finally:
             runtime.close()
 
+        if run.interruption_requested() or run.terminal:
+            return
         if str(answer) in {REVIEW_INCOMPLETE_MESSAGE, _REVIEW_FAILED_MSG}:
             run.publish(
                 "run_failed",
@@ -566,6 +652,7 @@ class GatewayService:
             "model": run.model,
             "trace_sink": run.publish_trace,
             "visual_observation_sink": visual_sink,
+            "interruption_event": run.interruption_requested,
         }
         try:
             parameters = inspect.signature(factory).parameters.values()

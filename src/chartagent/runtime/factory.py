@@ -30,6 +30,7 @@ def create_agent_runtime(
     trace_reasoning: bool = False,
     run_id: str | None = None,
     visual_observation_sink: Optional[VisualObservationSink] = None,
+    interruption_event: Any = None,
     session_name: str | None = None,
     database: str | Path | None = None,
     client: Any = None,
@@ -70,6 +71,8 @@ def create_agent_runtime(
         agent_kwargs["trace_run_id"] = run_id
     if visual_observation_sink is not None:
         agent_kwargs["visual_observation_sink"] = visual_observation_sink
+    if interruption_event is not None:
+        agent_kwargs["interruption_event"] = interruption_event
     if memory is not None:
         agent_kwargs["memory"] = memory
     agent_kwargs["attachments"] = attachments

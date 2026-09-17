@@ -1,4 +1,4 @@
-import type { ChartAgentClient, RunEventCallbacks, RunSubscription } from './client'
+import type { ChartAgentClient, RunEventCallbacks, RunStartOptions, RunSubscription } from './client'
 import type { AgentRunEvent, Attachment, ConversationItem, Provider, RunHandle, RunHistory, RunSummary, Session, SessionData } from '../types/protocol'
 
 const image = 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360"%3E%3Crect width="640" height="360" fill="%23f7f9fb"/%3E%3Cpath d="M74 292h492M110 260V104m130 156V68m130 192V126m130 134V92" stroke="%232e8c82" stroke-width="54" stroke-linecap="round"/%3E%3Cpath d="M60 48h520" stroke="%23dbe3e8"/%3E%3C/svg%3E'
@@ -29,7 +29,11 @@ const data: Record<string, SessionData> = {
 }
 
 const pendingRuns = new Map<string, { text: string; attachmentIds: string[] }>()
+const idempotentRuns = new Map<string, string>()
+const idempotentRequests = new Map<string, string>()
 const histories = new Map<string, AgentRunEvent[]>([[demoRun.runId, demoEvents]])
+type MockSubscription = { interrupt(): void }
+const subscriptions = new Map<string, Set<MockSubscription>>()
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 const clone = <T,>(value: T): T => structuredClone(value)
 
@@ -64,13 +68,48 @@ export const mockClient: ChartAgentClient = {
   generatedArtifactUrl(_sessionId, _runId, _artifactId) {
     return image
   },
-  async startRun(sessionId, text, attachmentIds = [], provider: Provider = 'openai') {
+  async startRun(sessionId, text, attachmentIds = [], provider: Provider = 'openai', options: RunStartOptions = {}) {
     await wait(90)
+    if (options.idempotencyKey) {
+      const request = JSON.stringify({ sessionId, text, attachmentIds, provider, retryOf: options.retryOf || null })
+      const previousRequest = idempotentRequests.get(options.idempotencyKey)
+      if (previousRequest && previousRequest !== request) {
+        const error = new Error('请求标识已对应其他内容') as Error & { code: string; status: number }
+        error.code = 'idempotency_conflict'
+        error.status = 409
+        throw error
+      }
+      const existingId = idempotentRuns.get(options.idempotencyKey)
+      const existing = existingId ? data[sessionId]?.runs.find((item) => item.runId === existingId) : undefined
+      if (existing) return { runId: existing.runId, sessionId, status: existing.status, provider: existing.provider, model: existing.model, retryOf: existing.retryOf }
+      idempotentRequests.set(options.idempotencyKey, request)
+    }
     const runId = `run_mock_${Date.now()}`
     pendingRuns.set(runId, { text, attachmentIds })
     const target = data[sessionId]
-    if (target) target.runs.push({ runId, sessionId, status: 'running', provider, model: provider === 'qwen' ? 'qwen3.8-flash' : 'gpt-4o-mini', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), eventCount: 0 })
-    return { runId, sessionId, status: 'running', provider, model: provider === 'qwen' ? 'qwen3.8-flash' : 'gpt-4o-mini' }
+    const model = provider === 'qwen' ? 'qwen3.8-flash' : 'gpt-4o-mini'
+    if (target) target.runs.push({ runId, sessionId, status: 'running', provider, model, retryOf: options.retryOf, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), eventCount: 0 })
+    if (options.idempotencyKey) idempotentRuns.set(options.idempotencyKey, runId)
+    return { runId, sessionId, status: 'running', provider, model, retryOf: options.retryOf }
+  },
+  async interruptRun(sessionId, runId) {
+    const target = data[sessionId]
+    const summary = target?.runs.find((item) => item.runId === runId)
+    if (!target || !summary) throw new Error('运行记录不存在')
+    if (summary.status === 'running') {
+      summary.status = 'interrupted'
+      summary.cancelRequested = true
+      summary.terminalCode = 'user_cancelled'
+      summary.terminalMessage = '运行已按用户请求中断'
+      summary.updatedAt = new Date().toISOString()
+      const sequence = Math.max(...(histories.get(runId) || []).map((event) => event.sequence), 0) + 1
+      const payload = { status: 'interrupted', code: 'user_cancelled', reason: 'user_cancelled', message: '运行已按用户请求中断' }
+      const history = histories.get(runId) || []
+      if (!history.some((event) => event.sequence === sequence)) history.push({ runId, sequence, kind: 'run_interrupted', timestamp: '刚刚', payload })
+      histories.set(runId, history)
+      subscriptions.get(runId)?.forEach((subscription) => subscription.interrupt())
+    }
+    return { runId, sessionId, status: summary.status, provider: summary.provider, model: summary.model, terminalCode: summary.terminalCode, terminalMessage: summary.terminalMessage, retryOf: summary.retryOf }
   },
   async getRunHistory(sessionId, runId, afterSequence = 0): Promise<RunHistory> {
     await wait(40)
@@ -83,6 +122,7 @@ export const mockClient: ChartAgentClient = {
     let closed = false
     const timers: ReturnType<typeof setTimeout>[] = []
     const target = data[sessionId]
+    const runSummary = target?.runs.find((item) => item.runId === runId)
     const timestamp = '刚刚'
     const emit = (kind: string, sequence: number, payload: Record<string, unknown> = {}) => {
       if (closed) return
@@ -111,9 +151,28 @@ export const mockClient: ChartAgentClient = {
       call_id: 'mock-render-1',
       artifacts: [{ artifactKind: 'generated_chart', artifactId: `artifact_${runId}`, mediaType: 'image/png', caption: '生成图表：分析结果重绘', byteCount: image.length, chartType: 'bar', title: '分析结果重绘', width: 640, height: 360, status: 'available', imageUrl: image, downloadUrl: image }],
     }))
+    const subscription: MockSubscription = {
+      interrupt() {
+        if (closed) return
+        emit('run_interrupted', Math.max(...(histories.get(runId) || []).map((event) => event.sequence), 0), {
+          status: 'interrupted',
+          code: 'user_cancelled',
+          reason: 'user_cancelled',
+          message: '运行已按用户请求中断',
+        })
+        closed = true
+        timers.forEach((timer) => clearTimeout(timer))
+        callbacks.onComplete()
+        subscriptions.get(runId)?.delete(subscription)
+      },
+    }
+    const registered = subscriptions.get(runId) || new Set<MockSubscription>()
+    registered.add(subscription)
+    subscriptions.set(runId, registered)
     schedule(760, () => {
       if (closed) return
       const pending = pendingRuns.get(runId)
+      if (runSummary?.status !== 'running') return
       emit('final_answer', 7, { answer: '模拟回复：已完成本次图表分析。' })
       if (target) {
         target.messages.push({ id: `${runId}:user`, kind: 'user', text: pending?.text || '已提交的分析请求', timestamp, attachmentIds: pending?.attachmentIds.length ? pending.attachmentIds : undefined })
@@ -129,6 +188,7 @@ export const mockClient: ChartAgentClient = {
       close() {
         closed = true
         timers.forEach((timer) => clearTimeout(timer))
+        subscriptions.get(runId)?.delete(subscription)
       },
     }
   },

@@ -55,6 +55,10 @@ _GEOMETRY_TOOL_NAMES = frozenset(
 )
 
 
+class AgentInterrupted(RuntimeError):
+    """Raised when a cooperative run interruption is observed."""
+
+
 class Agent:
     """Minimal ReAct agent loop owning its history in memory.
 
@@ -84,6 +88,7 @@ class Agent:
         attachments: Any = None,
         context_budget: int = 24000,
         review_manager: Optional[ChartReviewManager] = None,
+        interruption_event: Any = None,
         **chat_kwargs: Any,
     ) -> None:
         self.client = client
@@ -101,6 +106,7 @@ class Agent:
         self.memory = memory or InMemoryAgentMemory(context_budget=context_budget)
         self.attachments = attachments
         self._review_manager = review_manager or ChartReviewManager(attachments=attachments)
+        self._interruption_event = interruption_event
         self.context_budget = context_budget
         self._messages: List[ChatCompletionMessageParam] = []
         self._current_messages: List[ChatCompletionMessageParam] = []
@@ -134,6 +140,8 @@ class Agent:
         (e.g. from ``build_user_content``); it is appended to history and
         forwarded to the client unchanged.
         """
+        if self._interruption_requested():
+            raise AgentInterrupted("Agent run was interrupted before it started")
         run = self.memory.begin_run(self._run_id) if self._run_id is not None else self.memory.begin_run()
         self._messages = []
         self._current_messages = []
@@ -175,6 +183,7 @@ class Agent:
                     trace_run_id=emitter.run_id,
                     trace_turn=turn,
                 )
+            self._raise_if_interrupted(run)
             try:
                 result = self.client.chat(self._messages, tools=tools, **chat_kwargs)
             except Exception as exc:
@@ -209,6 +218,7 @@ class Agent:
                 )
 
             if not result.tool_calls:
+                self._raise_if_interrupted(run)
                 assistant_message = assistant_entry(result)
                 gate = self._review_manager.gate(run.id)
                 if gate["pending"]:
@@ -254,6 +264,7 @@ class Agent:
             self.memory.append(run, "assistant", {"message": assistant_message})
             visual_evidence: list[ToolVisualEvidence] = []
             for call in result.tool_calls:
+                self._raise_if_interrupted(run)
                 if emitter is not None:
                     presentation = get_tool_presentation(call.name, tool=self.registry.get(call.name))
                     emitter.emit(
@@ -273,6 +284,7 @@ class Agent:
                 observation = dispatch_observation(
                     self.registry, call.name, dispatch_arguments
                 )
+                self._raise_if_interrupted(run)
                 if call.name == _LAYOUT_TOOL_NAME:
                     self._remember_layout_context(
                         observation.content,
@@ -288,6 +300,7 @@ class Agent:
                     emitter=emitter,
                     turn=turn,
                 )
+                self._raise_if_interrupted(run)
                 tool_message = tool_entry(call, observation.content)
                 self._current_messages.append(tool_message)
                 self._messages.append(tool_message)
@@ -295,6 +308,7 @@ class Agent:
                 observation_refs: Sequence[dict[str, Any]] = ()
                 sink_images = observation.images
                 if self._visual_observation_sink is not None and sink_images:
+                    self._raise_if_interrupted(run)
                     try:
                         observation_refs = self._visual_observation_sink(
                             call.name,
@@ -304,6 +318,7 @@ class Agent:
                     except Exception:  # noqa: BLE001 - observation diagnostics cannot abort the Agent
                         observation_refs = ()
                 if emitter is not None:
+                    self._raise_if_interrupted(run)
                     image_payload = {"images": summarize_images(observation.images)}
                     if observation_refs:
                         generated_refs = [
@@ -392,6 +407,7 @@ class Agent:
                     for generated in observation.images
                 )
             if visual_evidence:
+                self._raise_if_interrupted(run)
                 visual_message = {
                     "role": "user",
                     "content": build_tool_observation_content(visual_evidence),
@@ -409,6 +425,7 @@ class Agent:
                     },
                 )
 
+        self._raise_if_interrupted(run)
         terminal_answer = _BUDGET_MSG
         terminal_gate = self._review_manager.gate(run.id)
         if terminal_gate["pending"] or terminal_gate["failed"]:
@@ -424,6 +441,26 @@ class Agent:
         self.memory.append(run, "terminal", {"answer": terminal_answer, "max_steps": self.max_steps, "review_gate": terminal_gate})
         self.memory.finish(run, RunStatus.COMPLETED, "budget")
         return terminal_answer
+
+    def _interruption_requested(self) -> bool:
+        event = self._interruption_event
+        if event is None:
+            return False
+        if callable(event):
+            try:
+                return bool(event())
+            except Exception:  # noqa: BLE001 - cancellation must remain best effort
+                return False
+        is_set = getattr(event, "is_set", None)
+        return bool(is_set()) if callable(is_set) else bool(event)
+
+    def _raise_if_interrupted(self, run: Any) -> None:
+        if not self._interruption_requested():
+            return
+        try:
+            self.memory.finish(run, RunStatus.INTERRUPTED, "interrupted")
+        finally:
+            raise AgentInterrupted("Agent run was interrupted")
 
     @staticmethod
     def _layout_arguments(

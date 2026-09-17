@@ -169,8 +169,16 @@ class GatewayRequestHandler(BaseHTTPRequestHandler):
                     body.get("text"),
                     body.get("attachmentIds"),
                     body.get("provider"),
+                    self.headers.get("Idempotency-Key"),
+                    body.get("retryOf"),
                 )
                 self._send_json(HTTPStatus.ACCEPTED, payload)
+                return
+            elif (parts := self._run_interrupt_parts(path)) is not None:
+                session_id, run_id = parts
+                body = self._read_json()
+                payload = self.gateway.interrupt_run(session_id, run_id, body.get("reason", "user_cancelled"))
+                self._send_json(HTTPStatus.OK, payload)
                 return
             else:
                 session_id = self._session_id(path)
@@ -263,6 +271,16 @@ class GatewayRequestHandler(BaseHTTPRequestHandler):
             return None
         parts = path[len(prefix):].split("/")
         if len(parts) == 4 and parts[1] == "runs" and parts[3] == "events":
+            return unquote(parts[0]), unquote(parts[2])
+        return None
+
+    @staticmethod
+    def _run_interrupt_parts(path: str) -> tuple[str, str] | None:
+        prefix = f"{API_PREFIX}/sessions/"
+        if not path.startswith(prefix):
+            return None
+        parts = path[len(prefix):].split("/")
+        if len(parts) == 4 and parts[1] == "runs" and parts[3] == "interrupt":
             return unquote(parts[0]), unquote(parts[2])
         return None
 
@@ -461,7 +479,7 @@ class GatewayRequestHandler(BaseHTTPRequestHandler):
             self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
             self.send_header(
                 "Access-Control-Allow-Headers",
-                "Content-Type, X-ChartAgent-Media-Type, Last-Event-ID",
+                "Content-Type, X-ChartAgent-Media-Type, Last-Event-ID, Idempotency-Key",
             )
             self.send_header("Vary", "Origin")
 

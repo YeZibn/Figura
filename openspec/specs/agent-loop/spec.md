@@ -85,6 +85,9 @@ the model returns no tool calls and no required generated-chart review
 obligation remains, or the step budget is exhausted, and SHALL return the
 final text. The user input is appended to history and forwarded to the client
 unchanged in either form.
+The run SHALL also accept a cooperative interruption signal, stop at a safe
+loop boundary when the signal is observed, and SHALL not publish a final
+answer for an interrupted run.
 
 #### Scenario: Returns after final answer
 
@@ -121,6 +124,41 @@ unchanged in either form.
   image part)
 - **THEN** the user entry in history carries that content list unchanged, and
   the client receives it verbatim on the first model turn
+
+#### Scenario: Interruption stops before the next work unit
+
+- **WHEN** the interruption signal is observed before a model turn, tool call,
+  rendering operation, or review action begins
+- **THEN** the Agent exits the loop with a bounded interrupted outcome
+- **AND** it does not begin that work unit or claim a completed final answer
+
+#### Scenario: Late work result is ignored
+
+- **WHEN** a provider or tool returns after the Agent has observed interruption
+- **THEN** the result is not used to continue the loop or publish a final
+  answer
+- **AND** the caller can still finalize the run as interrupted
+
+### Requirement: Agent cooperatively stops an interrupted run
+
+The Agent SHALL check the interruption signal before each model request and
+before each requested native tool dispatch, and SHALL check it again before
+publishing tool observations, generated visuals, review context, or final
+answer data. The checks SHALL be bounded and SHALL not change native message
+ordering for work that completed before interruption was observed.
+
+#### Scenario: Tool loop observes interruption between calls
+
+- **WHEN** one tool call completes and the run is interrupted before the next
+  model turn
+- **THEN** the Agent records the completed tool result as bounded trace data
+- **AND** it does not issue the next model request
+
+#### Scenario: Generated observation races with interruption
+
+- **WHEN** a generated visual result becomes available after interruption
+- **THEN** the Agent does not expose it as new run progress or a final answer
+- **AND** the run remains interruptible and terminalizable
 
 ### Requirement: Agent uses a static behavior prompt and automatic review obligations
 

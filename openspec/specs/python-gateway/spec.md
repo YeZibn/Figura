@@ -113,7 +113,12 @@ asynchronous text-turn requests. It SHALL resolve the provider before starting
 the Agent, snapshot the effective provider and model on the run, and preserve
 the existing transcript and attachment behavior. Omitting provider SHALL use
 the configured default provider. A selected provider that is unavailable SHALL
-fail before Agent execution with a safe configuration error.
+fail before Agent execution with a safe configuration error. An asynchronous
+request MAY include an idempotency key and bounded request fingerprint;
+repeated equivalent requests SHALL resolve to the same run, while a conflicting
+reuse SHALL fail before execution. The Gateway SHALL expose an authorized
+operation to interrupt an active run and SHALL preserve its bounded terminal
+reason.
 
 #### Scenario: Run uses the requested provider
 
@@ -184,12 +189,39 @@ fail before Agent execution with a safe configuration error.
 - **THEN** the Gateway returns a validation error and does not create or begin
   an Agent run
 
+#### Scenario: Equivalent asynchronous submission returns the original run
+
+- **WHEN** a client repeats an accepted asynchronous request with the same
+  idempotency key and equivalent bounded request data
+- **THEN** the Gateway returns the original run ID and state
+- **AND** it does not enqueue or invoke another Agent
+
+#### Scenario: Conflicting idempotency reuse is rejected
+
+- **WHEN** a client reuses an idempotency key with different text,
+  attachments, provider, or session
+- **THEN** the Gateway returns a bounded conflict response
+- **AND** neither the original run nor a new run is changed
+
+#### Scenario: Active run can be interrupted
+
+- **WHEN** an authorized client requests interruption for an active run
+- **THEN** the Gateway records a user-cancel reason, signals the running
+  Agent, and exposes the interrupted terminal state through the run summary
+  and event stream
+
 ### Requirement: Gateway exposes a bounded ordered run event stream
 
 Run summaries, live events, and historical events SHALL include the effective
 provider and model where available, using bounded machine fields. These fields
 MUST remain stable after acceptance and MUST NOT contain credentials, endpoint
 URLs, or raw provider responses.
+Each run event SHALL have a monotonic per-run sequence. A subscription with a
+cursor SHALL replay retained events after that cursor before live events,
+report a history gap explicitly when the cursor cannot be satisfied, and
+expose the durable terminal outcome so a client can stop reconnecting. Once a
+run is terminal, publishing additional execution progress SHALL be rejected or
+ignored.
 
 #### Scenario: Live event identifies provider
 
@@ -240,6 +272,21 @@ URLs, or raw provider responses.
 - **THEN** the Gateway sends a bounded representation with an explicit
   truncation marker and never sends credentials, raw provider responses, or
   unbounded data
+
+#### Scenario: Terminal history is replayable after disconnect
+
+- **WHEN** a client reconnects after a run has completed, failed, or been
+  interrupted
+- **THEN** the Gateway replays retained events and the authoritative terminal
+  summary for that same run
+- **AND** the stream closes without waiting for new execution progress
+
+#### Scenario: Events after terminal state are not published
+
+- **WHEN** a late model, tool, rendering, or review callback attempts to emit
+  an event after terminalization
+- **THEN** the Gateway ignores the callback for client-visible history
+- **AND** the run sequence and terminal outcome remain unchanged
 
 ### Requirement: Gateway serves temporary visual observations by authorized reference
 

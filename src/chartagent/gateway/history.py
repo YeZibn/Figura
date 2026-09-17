@@ -22,6 +22,9 @@ from .protocol import (
     MAX_ARTIFACT_TITLE,
     MAX_EVENT_KIND,
     MAX_EVENT_PAYLOAD,
+    MAX_IDEMPOTENCY_KEY,
+    MAX_RUN_ID,
+    MAX_TERMINAL_CODE,
     RunEvent,
     RunStatus,
     utc_timestamp,
@@ -102,7 +105,17 @@ class GatewayHistoryStore:
                   answer_source TEXT,
                   history_warning TEXT,
                   provider TEXT,
-                  model TEXT
+                  model TEXT,
+                  cancel_requested INTEGER NOT NULL DEFAULT 0,
+                  retry_of TEXT
+                );
+                CREATE TABLE IF NOT EXISTS gateway_run_idempotency (
+                  idempotency_key TEXT PRIMARY KEY,
+                  session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                  run_id TEXT NOT NULL REFERENCES gateway_runs(run_id) ON DELETE CASCADE,
+                  request_fingerprint TEXT NOT NULL,
+                  created_at TEXT NOT NULL,
+                  expires_at REAL NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS gateway_run_events (
                   run_id TEXT NOT NULL REFERENCES gateway_runs(run_id) ON DELETE CASCADE,
@@ -143,6 +156,8 @@ class GatewayHistoryStore:
                   ON gateway_run_events(run_id, sequence);
                 CREATE INDEX IF NOT EXISTS idx_gateway_artifacts_run
                   ON gateway_run_artifacts(run_id, observation_id);
+                CREATE INDEX IF NOT EXISTS idx_gateway_idempotency_run
+                  ON gateway_run_idempotency(run_id);
                 """
             )
             # Older development databases may contain partially-created
@@ -156,6 +171,8 @@ class GatewayHistoryStore:
                 ("history_warning", "TEXT"),
                 ("provider", "TEXT"),
                 ("model", "TEXT"),
+                ("cancel_requested", "INTEGER NOT NULL DEFAULT 0"),
+                ("retry_of", "TEXT"),
                 ("artifact_kind", "TEXT NOT NULL DEFAULT 'visual_observation'"),
                 ("chart_type", "TEXT"),
                 ("title", "TEXT"),
@@ -177,6 +194,8 @@ class GatewayHistoryStore:
                     "history_warning",
                     "provider",
                     "model",
+                    "cancel_requested",
+                    "retry_of",
                 } else "gateway_run_artifacts"
                 table_columns = columns if table == "gateway_runs" else {
                     row["name"] for row in connection.execute("PRAGMA table_info(gateway_run_artifacts)")
@@ -195,6 +214,10 @@ class GatewayHistoryStore:
         """Remove expired rows using the caller's transaction connection."""
         now = time.time()
         artifact_paths: list[Path] = []
+        connection.execute(
+            "DELETE FROM gateway_run_idempotency WHERE expires_at <= ?",
+            (now,),
+        )
         expired_artifacts = connection.execute(
             "SELECT managed_path FROM gateway_run_artifacts WHERE expires_at <= ?", (now,)
         ).fetchall()
@@ -235,7 +258,17 @@ class GatewayHistoryStore:
         except (OSError, ValueError):
             return None
 
-    def create_run(self, run_id: str, session_id: str, *, provider: str | None = None, model: str | None = None) -> None:
+    def create_run(
+        self,
+        run_id: str,
+        session_id: str,
+        *,
+        provider: str | None = None,
+        model: str | None = None,
+        idempotency_key: str | None = None,
+        request_fingerprint: str | None = None,
+        retry_of: str | None = None,
+    ) -> None:
         now = utc_timestamp()
         expires_at = time.time() + self.retention_seconds
         with self._lock, self._connect() as connection:
@@ -246,9 +279,61 @@ class GatewayHistoryStore:
             if int(count) >= self.max_runs:
                 raise HistoryStoreError("Gateway run history limit exceeded")
             connection.execute(
-                "INSERT INTO gateway_runs(run_id, session_id, status, created_at, updated_at, expires_at, provider, model) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (run_id, session_id, RunStatus.RUNNING.value, now, now, expires_at, provider, model),
+                """INSERT INTO gateway_runs(
+                   run_id, session_id, status, created_at, updated_at, expires_at,
+                   provider, model, retry_of
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    run_id,
+                    session_id,
+                    RunStatus.RUNNING.value,
+                    now,
+                    now,
+                    expires_at,
+                    provider,
+                    model,
+                    retry_of,
+                ),
             )
+            if idempotency_key is not None:
+                if request_fingerprint is None:
+                    raise HistoryStoreError("Idempotency fingerprint is required")
+                connection.execute(
+                    """INSERT INTO gateway_run_idempotency(
+                       idempotency_key, session_id, run_id, request_fingerprint,
+                       created_at, expires_at
+                       ) VALUES (?, ?, ?, ?, ?, ?)""",
+                    (
+                        idempotency_key[:MAX_IDEMPOTENCY_KEY],
+                        session_id,
+                        run_id,
+                        request_fingerprint[:128],
+                        now,
+                        expires_at,
+                    ),
+                )
+
+    def get_idempotency(self, idempotency_key: str) -> dict[str, Any] | None:
+        """Return the durable run binding for one non-expired request key."""
+        with self._lock, self._connect() as connection:
+            self._cleanup_connection(connection)
+            row = connection.execute(
+                """SELECT idempotency_key, session_id, run_id, request_fingerprint,
+                          created_at, expires_at
+                     FROM gateway_run_idempotency
+                    WHERE idempotency_key = ?""",
+                (idempotency_key[:MAX_IDEMPOTENCY_KEY],),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "idempotencyKey": row["idempotency_key"],
+            "sessionId": row["session_id"],
+            "runId": row["run_id"],
+            "requestFingerprint": row["request_fingerprint"],
+            "createdAt": row["created_at"],
+            "expiresAt": row["expires_at"],
+        }
 
     def append_event(self, event: RunEvent) -> None:
         payload = dict(event.payload)
@@ -258,9 +343,14 @@ class GatewayHistoryStore:
             encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
         with self._lock, self._connect() as connection:
             self._cleanup_connection(connection)
-            row = connection.execute("SELECT 1 FROM gateway_runs WHERE run_id = ?", (event.run_id,)).fetchone()
+            row = connection.execute(
+                "SELECT status FROM gateway_runs WHERE run_id = ?",
+                (event.run_id,),
+            ).fetchone()
             if row is None:
                 raise HistoryStoreError("Gateway run is not registered")
+            if row["status"] != RunStatus.RUNNING.value and event.kind != "run_interrupted":
+                return
             existing = connection.execute(
                 "SELECT 1 FROM gateway_run_events WHERE run_id = ? AND sequence = ?",
                 (event.run_id, event.sequence),
@@ -297,41 +387,97 @@ class GatewayHistoryStore:
         terminal_message: str | None = None,
         answer_source: str | None = None,
         history_warning: str | None = None,
+        cancel_requested: bool | None = None,
+        retry_of: str | None = None,
     ) -> None:
         with self._lock, self._connect() as connection:
             self._cleanup_connection(connection)
+            assignments = [
+                "status = ?",
+                "updated_at = ?",
+                "expires_at = ?",
+                "terminal_code = ?",
+                "terminal_message = ?",
+                "answer_source = ?",
+                "history_warning = ?",
+            ]
+            values: list[Any] = [
+                status.value,
+                utc_timestamp(),
+                time.time() + self.retention_seconds,
+                truncate_text(terminal_code, MAX_TERMINAL_CODE) if terminal_code else None,
+                truncate_text(terminal_message, 240) if terminal_message else None,
+                truncate_text(answer_source, 12000) if answer_source is not None else None,
+                truncate_text(history_warning, 240) if history_warning else None,
+            ]
+            if cancel_requested is not None:
+                assignments.append("cancel_requested = ?")
+                values.append(1 if cancel_requested else 0)
+            if retry_of is not None:
+                assignments.append("retry_of = ?")
+                values.append(truncate_text(retry_of, MAX_RUN_ID))
+            values.append(run_id)
             connection.execute(
-                """UPDATE gateway_runs
-                   SET status = ?, updated_at = ?, expires_at = ?, terminal_code = ?, terminal_message = ?,
-                       answer_source = ?, history_warning = ?
+                f"""UPDATE gateway_runs SET {', '.join(assignments)}
                  WHERE run_id = ?""",
-                (
-                    status.value,
-                    utc_timestamp(),
-                    time.time() + self.retention_seconds,
-                    truncate_text(terminal_code, 128) if terminal_code else None,
-                    truncate_text(terminal_message, 240) if terminal_message else None,
-                    truncate_text(answer_source, 12000) if answer_source is not None else None,
-                    truncate_text(history_warning, 240) if history_warning else None,
-                    run_id,
-                ),
+                values,
             )
+
+    def request_interrupt(self, run_id: str) -> bool:
+        """Record a cooperative cancellation request for an active run."""
+        with self._lock, self._connect() as connection:
+            self._cleanup_connection(connection)
+            cursor = connection.execute(
+                """UPDATE gateway_runs SET cancel_requested = 1, updated_at = ?
+                    WHERE run_id = ? AND status = ? AND cancel_requested = 0""",
+                (utc_timestamp(), run_id, RunStatus.RUNNING.value),
+            )
+            return cursor.rowcount > 0
 
     def interrupt_running_runs(self) -> None:
         """Mark runs left active by a previous Gateway process as interrupted."""
         with self._lock, self._connect() as connection:
-            connection.execute(
-                """UPDATE gateway_runs
-                   SET status = ?, updated_at = ?, terminal_code = ?, terminal_message = ?
-                 WHERE status = ?""",
-                (
-                    RunStatus.INTERRUPTED.value,
-                    utc_timestamp(),
-                    "gateway_restarted",
-                    "Gateway 重启，运行已中断",
-                    RunStatus.RUNNING.value,
-                ),
-            )
+            now = utc_timestamp()
+            rows = connection.execute(
+                "SELECT run_id FROM gateway_runs WHERE status = ?",
+                (RunStatus.RUNNING.value,),
+            ).fetchall()
+            for row in rows:
+                run_id = row["run_id"]
+                sequence = int(connection.execute(
+                    "SELECT COALESCE(MAX(sequence), 0) + 1 FROM gateway_run_events WHERE run_id = ?",
+                    (run_id,),
+                ).fetchone()[0])
+                payload = json.dumps(
+                    {
+                        "status": RunStatus.INTERRUPTED.value,
+                        "code": "gateway_restarted",
+                        "reason": "gateway_restarted",
+                        "message": "Gateway 重启，运行已中断",
+                    },
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+                connection.execute(
+                    """INSERT OR IGNORE INTO gateway_run_events(
+                       run_id, sequence, kind, payload_json, created_at
+                       ) VALUES (?, ?, 'run_interrupted', ?, ?)""",
+                    (run_id, sequence, payload, now),
+                )
+                connection.execute(
+                    """UPDATE gateway_runs
+                       SET status = ?, updated_at = ?, terminal_code = ?, terminal_message = ?,
+                           cancel_requested = 1
+                     WHERE run_id = ? AND status = ?""",
+                    (
+                        RunStatus.INTERRUPTED.value,
+                        now,
+                        "gateway_restarted",
+                        "Gateway 重启，运行已中断",
+                        run_id,
+                        RunStatus.RUNNING.value,
+                    ),
+                )
 
     def list_runs(self, session_id: str) -> list[dict[str, Any]]:
         with self._lock, self._connect() as connection:
@@ -340,6 +486,7 @@ class GatewayHistoryStore:
                 """SELECT run_id, session_id, status, created_at, updated_at,
                           expires_at,
                           terminal_code, terminal_message, answer_source, history_warning, provider, model,
+                          cancel_requested, retry_of,
                           (SELECT COUNT(*) FROM gateway_run_events e WHERE e.run_id = r.run_id) AS event_count
                      FROM gateway_runs r WHERE session_id = ? ORDER BY created_at""",
                 (session_id,),
@@ -350,7 +497,7 @@ class GatewayHistoryStore:
         with self._lock, self._connect() as connection:
             self._cleanup_connection(connection)
             row = connection.execute(
-                "SELECT run_id, session_id, status, created_at, updated_at, expires_at, terminal_code, terminal_message, answer_source, history_warning, provider, model, (SELECT COUNT(*) FROM gateway_run_events e WHERE e.run_id = r.run_id) AS event_count FROM gateway_runs r WHERE run_id = ? AND session_id = ?",
+                "SELECT run_id, session_id, status, created_at, updated_at, expires_at, terminal_code, terminal_message, answer_source, history_warning, provider, model, cancel_requested, retry_of, (SELECT COUNT(*) FROM gateway_run_events e WHERE e.run_id = r.run_id) AS event_count FROM gateway_runs r WHERE run_id = ? AND session_id = ?",
                 (run_id, session_id),
             ).fetchone()
         return self._run_summary(row) if row else None
@@ -371,6 +518,8 @@ class GatewayHistoryStore:
             "historyWarning": row["history_warning"],
             "provider": row["provider"],
             "model": row["model"],
+            "cancelRequested": bool(row["cancel_requested"]),
+            "retryOf": row["retry_of"],
         }
 
     def list_events(self, session_id: str, run_id: str, after_sequence: int = 0) -> list[RunEvent]:
@@ -405,6 +554,7 @@ class GatewayHistoryStore:
             "run": summary,
             "events": [event.to_dict() for event in events],
             "historyGap": history_gap,
+            "historyGapCode": "history_gap" if history_gap else None,
             "firstSequence": first_sequence,
         }
 

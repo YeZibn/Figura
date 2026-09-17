@@ -1332,6 +1332,11 @@ button:disabled { cursor: not-allowed; }
 
 .run-summary:hover,
 .trace-tool-header:hover { background: rgba(255, 255, 255, .62); }
+.run-actions {
+  display: flex;
+  gap: 6px;
+  padding: 0 11px 8px 40px;
+}
 .run-arrow { display: grid; flex: none; place-items: center; color: var(--subtle); }
 .run-summary-icon { display: grid; width: 26px; height: 26px; flex: none; place-items: center; border-radius: 5px; background: #e1efeb; color: var(--brand); }
 .run-summary-copy { display: grid; min-width: 0; flex: 1; gap: 3px; }

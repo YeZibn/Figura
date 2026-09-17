@@ -99,18 +99,36 @@ GET  /api/v1/sessions/{session_id}/runs/{run_id}/artifacts/{artifact_id}
 
 The event stream is bounded SSE and includes model turns, tool calls, tool
 results, visual-observation metadata, generated-chart metadata, final answers,
-and failures. Temporary visual evidence is available through short-lived
-opaque observation IDs. User-facing charts created by `render_chart` use a
-separate `artifact_<id>` reference and the `/artifacts/` route, so their PNG
-bytes are persisted for the configured run-retention period and remain scoped
-to the owning session. Event JSON and durable session memory never contain
-image bytes, credentials, provider raw responses, or unbounded trace content.
-Run cancellation is not part of this milestone. Gateway runs also persist
-bounded execution history separately from model conversation records. The
-client restores run summaries and events after reload, replays from an event
-cursor after reconnect, joins tool calls/results/visual observations by
-`call_id`, and renders generated charts with preview, metadata, download, or an
-explicit unavailable state. Final answers are rendered as safe Markdown; the
+interruptions, and failures. Temporary visual evidence is available through
+short-lived opaque observation IDs. User-facing charts created by `render_chart`
+use a separate `artifact_<id>` reference and the `/artifacts/` route, so their
+PNG bytes are persisted for the configured run-retention period and remain
+scoped to the owning session. Event JSON and durable session memory never
+contain image bytes, credentials, provider raw responses, or unbounded trace
+content.
+
+Run creation is asynchronous and accepts an optional `Idempotency-Key` header.
+The key is bound to the normalized session, prompt, attachment IDs, and
+effective provider; repeating the equivalent request returns the original run,
+while reusing the key for different input returns `idempotency_conflict`.
+Requests without a key remain supported but do not receive duplicate-submission
+protection. A retry is a new run and must use a new key; its request body may
+include `retryOf` pointing to a terminal run.
+
+The client restores bounded execution history separately from model conversation
+records and reconnects an active SSE stream from the last applied sequence. The
+`after` query parameter and `Last-Event-ID` header use the same per-run cursor.
+If the retained history no longer covers the requested cursor, the stream emits
+`history_gap`; the summary remains authoritative. A user interruption is an
+explicit `POST /sessions/{session_id}/runs/{run_id}/interrupt` operation and is
+reported as terminal `interrupted` with a bounded reason such as
+`user_cancelled`. It is distinct from a transport disconnect.
+
+Gateway runs are not resumable across a Gateway process restart: previously
+active runs are terminalized as `interrupted` with `gateway_restarted`, and the
+terminal summary/event can be replayed after reconnect. The client renders run
+states, retry actions, and generated charts with preview, metadata, download, or
+an explicit unavailable state. Final answers are rendered as safe Markdown; the
 original bounded source remains available in the answer panel.
 
 Additional run-history routes are:

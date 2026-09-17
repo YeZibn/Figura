@@ -7,7 +7,7 @@ from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from contextlib import contextmanager
-from threading import Condition, RLock
+from threading import Condition, Event, RLock
 from typing import Callable, Iterable
 from uuid import uuid4
 
@@ -138,11 +138,13 @@ class ManagedRun:
         retention_seconds: float = DEFAULT_RUN_RETENTION_SECONDS,
         history_store: GatewayHistoryStore | None = None,
         run_id: str | None = None,
+        retry_of: str | None = None,
     ) -> None:
         self.run_id = run_id or f"run_{uuid4().hex}"
         self.session_id = session_id
         self.provider = provider
         self.model = model
+        self.retry_of = retry_of
         self.status = RunStatus.RUNNING
         self.answer: str | None = None
         self.error_code: str | None = None
@@ -154,13 +156,24 @@ class ManagedRun:
         self.retention_seconds = retention_seconds
         self.history_store = history_store
         self.history_warning: str | None = None
+        self.cancel_requested = False
         self._events: deque[RunEvent] = deque(maxlen=max_events)
         self._next_sequence = 0
+        self._interrupt_event = Event()
         self._condition = Condition(RLock())
 
     @property
     def accepted(self) -> RunAccepted:
-        return RunAccepted(self.run_id, self.session_id, self.status, self.provider, self.model)
+        return RunAccepted(
+            self.run_id,
+            self.session_id,
+            self.status,
+            self.provider,
+            self.model,
+            self.error_code,
+            self.error_message,
+            self.retry_of,
+        )
 
     @property
     def terminal(self) -> bool:
@@ -170,23 +183,32 @@ class ManagedRun:
     def expired(self) -> bool:
         return self.finished_at is not None and time.monotonic() - self.finished_at > self.retention_seconds
 
-    def publish(self, kind: str, payload: dict | None = None) -> RunEvent:
+    def interruption_requested(self) -> bool:
+        return self._interrupt_event.is_set()
+
+    def publish(self, kind: str, payload: dict | None = None) -> RunEvent | None:
         with self._condition:
-            self._next_sequence += 1
-            event = RunEvent(
-                run_id=self.run_id,
-                sequence=self._next_sequence,
-                kind=kind,
-                payload=sanitize_payload(payload or {}),
-            )
-            if self.history_store is not None:
-                try:
-                    self.history_store.append_event(event)
-                except Exception:  # noqa: BLE001 - trace persistence cannot stop a run
-                    self._mark_history_warning()
-            self._events.append(event)
-            self._condition.notify_all()
-            return event
+            if self.terminal:
+                return None
+            return self._publish_locked(kind, payload)
+
+    def _publish_locked(self, kind: str, payload: dict | None = None) -> RunEvent:
+        """Append one event while the run condition lock is held."""
+        self._next_sequence += 1
+        event = RunEvent(
+            run_id=self.run_id,
+            sequence=self._next_sequence,
+            kind=kind,
+            payload=sanitize_payload(payload or {}),
+        )
+        if self.history_store is not None:
+            try:
+                self.history_store.append_event(event)
+            except Exception:  # noqa: BLE001 - trace persistence cannot stop a run
+                self._mark_history_warning()
+        self._events.append(event)
+        self._condition.notify_all()
+        return event
 
     def publish_trace(self, event: TraceEvent) -> None:
         # Provider reasoning is intentionally not a desktop event. The CLI's
@@ -207,28 +229,110 @@ class ManagedRun:
         with self._condition:
             if self.terminal:
                 return
-            self.answer = str(answer)
-            self.status = RunStatus.COMPLETED
-            self.finished_at = time.monotonic()
-            self._condition.notify_all()
+            if self.cancel_requested or self._interrupt_event.is_set():
+                should_interrupt = True
+            else:
+                should_interrupt = False
+            if should_interrupt:
+                self._set_interrupted_locked("user_cancelled", "运行已按用户请求中断")
+                self._publish_locked("run_interrupted", {
+                    "code": self.error_code,
+                    "reason": self.error_reason,
+                    "message": self.error_message,
+                })
+                self._condition.notify_all()
+            else:
+                self.answer = str(answer)
+                self.status = RunStatus.COMPLETED
+                self.finished_at = time.monotonic()
+                self._condition.notify_all()
+        if should_interrupt:
+            self._update_history(
+                RunStatus.INTERRUPTED,
+                terminal_code=self.error_code,
+                terminal_message=self.error_message,
+                cancel_requested=True,
+            )
+            return
         self._update_history(RunStatus.COMPLETED, answer_source=self.answer)
 
     def fail(self, code: str, status: int, message: str, reason: str | None = None) -> None:
         with self._condition:
             if self.terminal:
                 return
-            self.error_code = code
-            self.error_status = status
-            self.error_message = message
-            self.error_reason = reason
-            self.status = RunStatus.FAILED
-            self.finished_at = time.monotonic()
+            if self.cancel_requested or self._interrupt_event.is_set():
+                self._set_interrupted_locked("user_cancelled", "运行已按用户请求中断")
+                self._publish_locked("run_interrupted", {
+                    "code": self.error_code,
+                    "reason": self.error_reason,
+                    "message": self.error_message,
+                })
+                interrupted = True
+            else:
+                interrupted = False
+            if not interrupted:
+                self.error_code = code
+                self.error_status = status
+                self.error_message = message
+                self.error_reason = reason
+                self.status = RunStatus.FAILED
+                self.finished_at = time.monotonic()
             self._condition.notify_all()
+        if interrupted:
+            self._update_history(
+                RunStatus.INTERRUPTED,
+                terminal_code=self.error_code,
+                terminal_message=self.error_message,
+                cancel_requested=True,
+            )
+            return
         self._update_history(
             RunStatus.FAILED,
             terminal_code=self.error_code,
             terminal_message=self.error_message,
         )
+
+    def interrupt(
+        self,
+        code: str = "user_cancelled",
+        message: str = "运行已按用户请求中断",
+        reason: str | None = None,
+    ) -> bool:
+        """Request and terminalize cooperative work exactly once."""
+        with self._condition:
+            if self.terminal:
+                return False
+            self.cancel_requested = True
+            self._interrupt_event.set()
+            self._set_interrupted_locked(code, message, reason)
+            self._publish_locked("run_interrupted", {
+                "code": code,
+                "reason": reason or code,
+                "message": message,
+            })
+            self._condition.notify_all()
+        self._update_history(
+            RunStatus.INTERRUPTED,
+            terminal_code=code,
+            terminal_message=message,
+            cancel_requested=True,
+        )
+        return True
+
+    def _set_interrupted_locked(
+        self,
+        code: str,
+        message: str,
+        reason: str | None = None,
+    ) -> None:
+        self.cancel_requested = True
+        self._interrupt_event.set()
+        self.error_code = code
+        self.error_status = 499
+        self.error_message = message
+        self.error_reason = reason or code
+        self.status = RunStatus.INTERRUPTED
+        self.finished_at = time.monotonic()
 
     def _mark_history_warning(self) -> None:
         if self.history_warning is None:
@@ -280,11 +384,12 @@ class ManagedRun:
         cursor = max(0, after_sequence)
         durable, history_gap, first_sequence = self._durable_events(cursor)
         if history_gap:
+            gap_sequence = max(cursor, (first_sequence or cursor) - 1)
             yield RunEvent(
                 self.run_id,
-                cursor,
+                gap_sequence,
                 "history_gap",
-                {"afterSequence": cursor, "firstSequence": first_sequence},
+                {"code": "history_gap", "afterSequence": cursor, "firstSequence": first_sequence},
             )
         for event in durable:
             if event.sequence > cursor:
@@ -332,7 +437,22 @@ class HistoricalRun:
         self.history_warning = summary.get("historyWarning")
         self.provider = summary.get("provider")
         self.model = summary.get("model")
+        self.cancel_requested = bool(summary.get("cancelRequested"))
+        self.retry_of = summary.get("retryOf")
         self.history_store = history_store
+
+    @property
+    def accepted(self) -> RunAccepted:
+        return RunAccepted(
+            self.run_id,
+            self.session_id,
+            self.status,
+            self.provider,
+            self.model,
+            self.error_code,
+            self.error_message,
+            self.retry_of,
+        )
 
     @property
     def terminal(self) -> bool:
@@ -346,11 +466,16 @@ class HistoricalRun:
         if snapshot is None:
             return
         if snapshot["historyGap"]:
+            first_sequence = snapshot.get("firstSequence")
             yield RunEvent(
                 self.run_id,
-                max(0, after_sequence),
+                max(max(0, after_sequence), (first_sequence or max(0, after_sequence)) - 1),
                 "history_gap",
-                {"afterSequence": max(0, after_sequence), "firstSequence": snapshot.get("firstSequence")},
+                {
+                    "code": "history_gap",
+                    "afterSequence": max(0, after_sequence),
+                    "firstSequence": first_sequence,
+                },
             )
         for item in snapshot["events"]:
             yield RunEvent(**_event_kwargs(item))
@@ -377,7 +502,16 @@ class RunManager:
         self._lock = RLock()
         self._executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="chartagent-run")
 
-    def create(self, session_id: str, *, provider: str | None = None, model: str | None = None) -> ManagedRun:
+    def create(
+        self,
+        session_id: str,
+        *,
+        provider: str | None = None,
+        model: str | None = None,
+        idempotency_key: str | None = None,
+        request_fingerprint: str | None = None,
+        retry_of: str | None = None,
+    ) -> ManagedRun:
         with self._lock:
             self.cleanup()
             active_count = sum(not run.terminal for run in self._runs.values())
@@ -390,6 +524,7 @@ class RunManager:
                 max_events=self.max_events,
                 retention_seconds=self.retention_seconds,
                 history_store=self.history_store,
+                retry_of=retry_of,
             )
             self._runs[run.run_id] = run
             if self.history_store is not None:
@@ -399,6 +534,9 @@ class RunManager:
                         session_id,
                         provider=provider,
                         model=model,
+                        idempotency_key=idempotency_key,
+                        request_fingerprint=request_fingerprint,
+                        retry_of=retry_of,
                     )
                 except Exception:  # noqa: BLE001 - keep the live run usable
                     run._mark_history_warning()
@@ -424,9 +562,35 @@ class RunManager:
                 for run in self._runs.values()
             )
 
-    def start(self, session_id: str, worker: Callable[[ManagedRun], None], *, provider: str | None = None, model: str | None = None) -> ManagedRun:
-        run = self.create(session_id, provider=provider, model=model)
-        self._executor.submit(worker, run)
+    def start(
+        self,
+        session_id: str,
+        worker: Callable[[ManagedRun], None],
+        *,
+        provider: str | None = None,
+        model: str | None = None,
+        idempotency_key: str | None = None,
+        request_fingerprint: str | None = None,
+        retry_of: str | None = None,
+    ) -> ManagedRun:
+        run = self.create(
+            session_id,
+            provider=provider,
+            model=model,
+            idempotency_key=idempotency_key,
+            request_fingerprint=request_fingerprint,
+            retry_of=retry_of,
+        )
+        try:
+            self._executor.submit(worker, run)
+        except Exception as exc:  # noqa: BLE001 - accepted runs must reach a terminal state
+            run.publish("run_failed", {
+                "code": "worker_error",
+                "reason": "worker_submit_failed",
+                "message": "Agent worker could not be started",
+            })
+            run.fail("worker_error", 503, "Agent worker could not be started", "worker_submit_failed")
+            return run
         return run
 
     def get(self, run_id: str) -> ManagedRun | None:

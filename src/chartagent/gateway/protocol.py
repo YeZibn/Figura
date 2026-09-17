@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
@@ -17,6 +18,8 @@ MAX_ERROR_MESSAGE = 240
 MAX_ATTACHMENT_IDS = 16
 MAX_ATTACHMENT_ID = 128
 MAX_RUN_ID = 128
+MAX_IDEMPOTENCY_KEY = 128
+MAX_TERMINAL_CODE = 64
 MAX_EVENT_KIND = 64
 MAX_EVENT_PAYLOAD = 12000
 SUPPORTED_PROVIDERS = ("openai", "qwen")
@@ -57,6 +60,25 @@ class RunStatus(str, Enum):
     INTERRUPTED = "interrupted"
 
 
+class RunTerminalReason(str, Enum):
+    """Stable bounded reasons for an unsuccessful or interrupted run."""
+
+    USER_CANCELLED = "user_cancelled"
+    GATEWAY_RESTARTED = "gateway_restarted"
+    PROVIDER_TIMEOUT = "provider_timeout"
+    WORKER_ERROR = "worker_error"
+    RUN_TIMEOUT = "run_timeout"
+    AGENT_FAILED = "agent_failed"
+    AGENT_UNAVAILABLE = "agent_unavailable"
+    REVIEW_FAILED = "review_failed"
+    REVIEW_INCOMPLETE = "review_incomplete"
+    HISTORY_EXPIRED = "history_expired"
+
+
+IDEMPOTENCY_CONFLICT_CODE = "idempotency_conflict"
+HISTORY_GAP_CODE = "history_gap"
+
+
 def utc_timestamp() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -70,6 +92,9 @@ class RunAccepted:
     status: RunStatus = RunStatus.RUNNING
     provider: str | None = None
     model: str | None = None
+    terminal_code: str | None = None
+    terminal_message: str | None = None
+    retry_of: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         result = {
@@ -81,6 +106,12 @@ class RunAccepted:
             result["provider"] = self.provider
         if self.model:
             result["model"] = self.model
+        if self.terminal_code:
+            result["terminalCode"] = truncate_text(self.terminal_code, MAX_TERMINAL_CODE)
+        if self.terminal_message:
+            result["terminalMessage"] = truncate_text(self.terminal_message, MAX_ERROR_MESSAGE)
+        if self.retry_of:
+            result["retryOf"] = truncate_text(self.retry_of, MAX_RUN_ID)
         return result
 
 
@@ -286,6 +317,41 @@ def validate_provider(value: object, *, allow_none: bool = True) -> str | None:
     if not isinstance(value, str) or value.strip().lower() not in SUPPORTED_PROVIDERS:
         raise GatewayFault("invalid_provider", 400, "provider must be openai or qwen")
     return value.strip().lower()
+
+
+def validate_idempotency_key(value: object, *, allow_none: bool = True) -> str | None:
+    """Validate the opaque request key without accepting control characters."""
+    if value is None and allow_none:
+        return None
+    if not isinstance(value, str):
+        raise GatewayFault("invalid_request", 400, "Idempotency-Key must be text")
+    clean = value.strip()
+    if not clean or len(clean) > MAX_IDEMPOTENCY_KEY:
+        raise GatewayFault("invalid_request", 400, "Idempotency-Key is invalid")
+    if any(ord(char) < 33 or ord(char) > 126 for char in clean):
+        raise GatewayFault("invalid_request", 400, "Idempotency-Key is invalid")
+    return clean
+
+
+def request_fingerprint(
+    session_id: str,
+    text: str,
+    attachment_ids: tuple[str, ...],
+    provider: str | None,
+) -> str:
+    """Create a stable digest for work-affecting, already-normalized inputs."""
+    payload = json.dumps(
+        {
+            "sessionId": session_id,
+            "text": text,
+            "attachmentIds": list(attachment_ids),
+            "provider": provider,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 @dataclass(frozen=True)
