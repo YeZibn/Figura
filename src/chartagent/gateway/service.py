@@ -14,6 +14,7 @@ from ..memory.sqlite import default_database_path
 from ..multimodal import build_registered_attachment_turn
 from ..runtime import AgentRuntime, create_agent_runtime, probe_agent_readiness
 from ..agent import REVIEW_INCOMPLETE_MESSAGE
+from ..agent.review_gate import _REVIEW_FAILED_MSG
 from ..tools.core.result import GeneratedImage
 from ..trace import TraceSink, truncate_text
 from .attachments import AttachmentStoreError, EphemeralAttachmentStore
@@ -527,15 +528,18 @@ class GatewayService:
         finally:
             runtime.close()
 
-        if str(answer) == REVIEW_INCOMPLETE_MESSAGE:
+        if str(answer) in {REVIEW_INCOMPLETE_MESSAGE, _REVIEW_FAILED_MSG}:
             run.publish(
                 "run_failed",
                 {
-                    "code": "review_incomplete",
-                    "message": "Generated chart review did not complete within the bounded run",
+                    "code": "review_incomplete" if str(answer) == REVIEW_INCOMPLETE_MESSAGE else "review_failed",
+                    "message": "Generated chart review did not complete within the bounded run" if str(answer) == REVIEW_INCOMPLETE_MESSAGE else "Generated chart review failed; no artifact was published",
                 },
             )
-            run.fail("review_incomplete", 422, "Generated chart review did not complete", "review_incomplete")
+            if str(answer) == REVIEW_INCOMPLETE_MESSAGE:
+                run.fail("review_incomplete", 422, "Generated chart review did not complete", "review_incomplete")
+            else:
+                run.fail("review_failed", 422, "Generated chart review failed", "review_failed")
             return
         if not run.has_event("final_answer"):
             run.publish("final_answer", {"answer": str(answer)})

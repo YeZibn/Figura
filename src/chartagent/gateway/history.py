@@ -134,6 +134,7 @@ class GatewayHistoryStore:
                   candidate_status TEXT,
                   review_status TEXT,
                   publication_status TEXT,
+                  review_mode TEXT,
                   review_json TEXT
                 );
                 CREATE INDEX IF NOT EXISTS idx_gateway_runs_session
@@ -166,6 +167,7 @@ class GatewayHistoryStore:
                 ("candidate_status", "TEXT"),
                 ("review_status", "TEXT"),
                 ("publication_status", "TEXT"),
+                ("review_mode", "TEXT"),
                 ("review_json", "TEXT"),
             ):
                 table = "gateway_runs" if name in {
@@ -415,6 +417,14 @@ class GatewayHistoryStore:
                 "failed" if candidate_status in {"review_failed", "timed_out", "retry_exhausted", "expired"} else "pending"
             )
         )
+        review: Mapping[str, Any] | None = None
+        try:
+            parsed_review = json.loads(row["review_json"] or "{}")
+            if isinstance(parsed_review, Mapping):
+                review = parsed_review
+        except (TypeError, json.JSONDecodeError):
+            review = None
+        review_mode = row["review_mode"] or (review or {}).get("reviewMode")
         reference = GeneratedChartReference(
             artifact_id=artifact_id,
             media_type=row["media_type"],
@@ -432,6 +442,8 @@ class GatewayHistoryStore:
             candidate_status=row["candidate_status"],
             review_status=row["review_status"],
             publication_status=publication,
+            review_mode=review_mode,
+            review=review,
         )
         return reference.to_dict()
 
@@ -499,12 +511,13 @@ class GatewayHistoryStore:
                 ):
                     connection.execute(
                         """UPDATE gateway_run_artifacts SET candidate_status = ?, review_status = ?,
-                           publication_status = ?, review_json = ?, expires_at = ?
+                           publication_status = ?, review_mode = ?, review_json = ?, expires_at = ?
                            WHERE observation_id = ? AND artifact_kind = 'generated_candidate'""",
                         (
                             str(metadata.get("candidateStatus", "review_pending")),
                             "completed",
                             str(metadata.get("publicationStatus", "unpublished")),
+                            str(metadata.get("reviewMode", "safety")),
                             json.dumps(metadata.get("review", {}), ensure_ascii=False)[:MAX_EVENT_PAYLOAD],
                             time.time() + self.retention_seconds,
                             candidate_id,
@@ -536,8 +549,8 @@ class GatewayHistoryStore:
                        caption, byte_count, sha256, created_at, expires_at,
                        artifact_kind, chart_type, title, width, height,
                        candidate_id, review_id, chart_spec_digest, candidate_status,
-                       review_status, publication_status, review_json)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'generated_candidate', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       review_status, publication_status, review_mode, review_json)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'generated_candidate', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         candidate_id, run_id, session_id, managed_path, media_type,
                         truncate_text(caption, MAX_ARTIFACT_CAPTION), len(content),
@@ -546,6 +559,7 @@ class GatewayHistoryStore:
                         digest, candidate_status,
                         str(metadata.get("reviewStatus", "pending")),
                         str(metadata.get("publicationStatus", "unpublished")),
+                        str(metadata.get("reviewMode", "safety")),
                         json.dumps(metadata.get("review", {}), ensure_ascii=False)[:MAX_EVENT_PAYLOAD],
                     ),
                 )

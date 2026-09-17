@@ -95,6 +95,13 @@ export type GeneratedChartReference = {
   candidateStatus?: string
   reviewStatus?: string
   publicationStatus?: string
+  reviewMode?: string
+  review?: {
+    decision?: string
+    confidence?: number
+    issues?: Array<{ code?: string; location?: string; severity?: string; message?: string }>
+    checks?: Record<string, string>
+  }
   reason?: string
   imageUrl?: string
   downloadUrl?: string

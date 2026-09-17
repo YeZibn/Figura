@@ -32,18 +32,17 @@ from ..trace import (
     summarize_images,
     summarize_result,
 )
-from ..tools.core import ToolRegistry, dispatch_observation, canonical_tool_definition
+from ..tools.core import ToolRegistry, dispatch_observation
 from ..tools.core.presentation import get_tool_presentation
 from ..memory import AgentMemory, InMemoryAgentMemory, RunStatus
-from ..review import ChartReviewManager, CandidateStatus, PublicationStatus
+from ..review import ChartReviewManager, ReviewIssue, ReviewResult, ReviewStatus, review_candidate_with_vlm
 from ..tools.core.result import GeneratedImage
 from .tool_schema import registry_tools, tool_to_openai_schema
-from ..tools.adapters.review import review_generated_chart_tool
 from .messages import assistant_entry, tool_entry
 from .review_gate import (
     _BUDGET_MSG,
+    _REVIEW_FAILED_MSG,
     _REVIEW_REQUIRED_MSG,
-    REVIEW_INCOMPLETE_MESSAGE,
     review_gate_context,
 )
 from .observations import observation_status
@@ -225,6 +224,16 @@ class Agent:
                     if emitter is not None:
                         emitter.emit("chart_review_required", turn=turn, state=gate)
                     continue
+                if gate["failed"]:
+                    self._current_messages.append(assistant_message)
+                    self._messages.append(assistant_message)
+                    self.memory.append(run, "assistant", {"message": assistant_message})
+                    self.memory.append(run, "review_gate", {"state": gate})
+                    if emitter is not None:
+                        emitter.emit("generated_chart_rejected", turn=turn, state=gate, reason="review_failed")
+                    self.memory.append(run, "terminal", {"answer": _REVIEW_FAILED_MSG, "review_gate": gate})
+                    self.memory.finish(run, RunStatus.COMPLETED, "review_failed")
+                    return _REVIEW_FAILED_MSG
                 self._current_messages.append(assistant_message)
                 self._messages.append(assistant_message)
                 self.memory.append(run, "assistant", {"message": assistant_message})
@@ -276,16 +285,15 @@ class Agent:
                     call_id=call.id,
                     arguments=call.arguments,
                     source_attachment_ids=run_attachment_ids,
+                    emitter=emitter,
+                    turn=turn,
                 )
-                if self.registry.get("review_generated_chart") is not None:
-                    tools = registry_tools(self.registry)
-                review_transition = self._review_transition_image(call.name, observation.content)
                 tool_message = tool_entry(call, observation.content)
                 self._current_messages.append(tool_message)
                 self._messages.append(tool_message)
                 self.memory.append(run, "tool", {"message": tool_message, "tool_name": call.name, "status": observation_status(observation.content)})
                 observation_refs: Sequence[dict[str, Any]] = ()
-                sink_images = observation.images or review_transition
+                sink_images = observation.images
                 if self._visual_observation_sink is not None and sink_images:
                     try:
                         observation_refs = self._visual_observation_sink(
@@ -339,6 +347,8 @@ class Agent:
                             "candidate_status": candidate_status,
                             "review_status": review_status,
                             "publication_status": publication_status,
+                            "review_mode": item.get("reviewMode"),
+                            "internal_review": item.get("reviewMode") == "vlm",
                         }
                         if candidate_status == "review_pending" and review_status in {"pending", "requires_model_decision"}:
                             emitter.emit(
@@ -377,17 +387,6 @@ class Agent:
                             call_id=call.id,
                             **image_payload,
                         )
-                    if review_transition and observation_refs:
-                        emitter.emit(
-                            "generated_chart",
-                            turn=turn,
-                            tool_name=call.name,
-                            call_id=call.id,
-                            artifacts=[
-                                reference for reference in observation_refs
-                                if reference.get("artifactKind") == "generated_chart"
-                            ],
-                        )
                 visual_evidence.extend(
                     ToolVisualEvidence(call.name, call.id, generated)
                     for generated in observation.images
@@ -412,8 +411,8 @@ class Agent:
 
         terminal_answer = _BUDGET_MSG
         terminal_gate = self._review_manager.gate(run.id)
-        if terminal_gate["pending"]:
-            terminal_answer = _REVIEW_REQUIRED_MSG
+        if terminal_gate["pending"] or terminal_gate["failed"]:
+            terminal_answer = _REVIEW_REQUIRED_MSG if terminal_gate["pending"] else _REVIEW_FAILED_MSG
         if emitter is not None:
             emitter.emit(
                 "budget_exhausted",
@@ -488,30 +487,6 @@ class Agent:
         except (TypeError, json.JSONDecodeError):
             return []
 
-    def _ensure_review_tool(self) -> None:
-        if self.registry.get("review_generated_chart") is None:
-            self.registry.register(review_generated_chart_tool(self._review_manager))
-
-    def _review_transition_image(self, tool_name: str, content: str) -> tuple[GeneratedImage, ...]:
-        """Expose a reviewed candidate to the Gateway promotion boundary."""
-        if tool_name != "review_generated_chart":
-            return ()
-        try:
-            payload = json.loads(content)
-            candidate_payload = payload.get("candidate") if isinstance(payload, dict) else None
-            if not isinstance(candidate_payload, dict):
-                return ()
-            candidate_id = candidate_payload.get("candidateId")
-            review_id = candidate_payload.get("reviewId")
-            candidate = self._review_manager.get(candidate_id, review_id)
-            if candidate is None:
-                return ()
-            metadata = candidate.safe_metadata()
-            metadata["kind"] = "generated_chart"
-            return (GeneratedImage(candidate.content, candidate.media_type, f"生成图表：{candidate.title}", metadata),)
-        except (TypeError, ValueError, json.JSONDecodeError):
-            return ()
-
     def _apply_generation_review(
         self,
         observation: Any,
@@ -520,6 +495,8 @@ class Agent:
         call_id: str,
         arguments: str,
         source_attachment_ids: Sequence[str],
+        emitter: TraceEmitter | None = None,
+        turn: int | None = None,
     ) -> Any:
         """Run the post-generation hook before tool evidence reaches the model."""
         if not observation.images:
@@ -558,9 +535,52 @@ class Agent:
                 spec,
                 source_attachment_ids=source_attachment_ids,
             )
-            self._ensure_review_tool()
-            if candidate.policy.semantic_required is False:
-                candidate = self._review_manager.process(candidate)
+            if candidate.review_status is ReviewStatus.PENDING:
+                semantic_result: ReviewResult | None = None
+                if candidate.policy.semantic_required:
+                    source_payload = self._review_manager.source_payload(candidate)
+                    if source_payload is None:
+                        semantic_result = ReviewResult(
+                            status=ReviewStatus.FAILED,
+                            checks={"source_evidence": "failed"},
+                            issues=(ReviewIssue(
+                                "source_evidence_unavailable",
+                                "source",
+                                "authorized source attachment is unavailable",
+                            ),),
+                            decision="fail",
+                            confidence=0.0,
+                            review_mode="vlm",
+                        )
+                    else:
+                        if emitter is not None:
+                            emitter.emit(
+                                "chart_review_started",
+                                turn=turn,
+                                internal_review=True,
+                                tool_count=0,
+                                candidate_id=candidate.candidate_id,
+                                review_id=candidate.review_id,
+                                review_mode="vlm",
+                            )
+                        semantic_result = review_candidate_with_vlm(
+                            self.client,
+                            candidate,
+                            spec,
+                            source_image=source_payload[0],
+                            source_media_type=source_payload[1],
+                            chat_kwargs=self._chat_kwargs,
+                            trace_kwargs=(
+                                {
+                                    "trace_sink": emitter,
+                                    "trace_run_id": emitter.run_id,
+                                    "trace_turn": turn,
+                                }
+                                if emitter is not None and isinstance(self.client, LLMClient)
+                                else None
+                            ),
+                        )
+                candidate = self._review_manager.process(candidate, semantic_result=semantic_result)
             generated.append(self._review_manager.decorate_image(image, candidate))
             review_payloads.append(candidate.safe_metadata())
             changed = True

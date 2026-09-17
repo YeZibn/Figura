@@ -262,7 +262,6 @@ def test_agent_repl_registers_builtin_and_chart_tools(monkeypatch):
         "assemble_spec",
         "render_chart",
         "load_image",
-        "review_generated_chart",
     }
 
 
@@ -284,8 +283,15 @@ def test_agent_repl_uses_advisory_chart_default(monkeypatch):
     assert cli_mod.run_agent_repl() == 0
     assert captured["system"] == cli_mod.AGENT_SYSTEM_PROMPT
     assert "evidence" in captured["system"]
-    assert "review_generated_chart" in captured["system"]
+    assert "VLM" in captured["system"]
+    assert "review_generated_chart" not in captured["system"]
     assert "published_with_warning" in captured["system"]
+    assert "candidate image or preview" in captured["system"]
+    assert "publicationStatus is authoritative" in captured["system"]
+    assert "reviewStatus=completed only means" in captured["system"]
+    assert "call assemble_spec, then call render_chart" in captured["system"]
+    assert "post-render" in captured["system"]
+    assert "OCR/CV/geometry/layout tools" in captured["system"]
     assert "Tool success" in captured["system"] or "Tool execution success" in captured["system"]
     assert "registered tool descriptions and parameter schemas" in captured["system"]
 

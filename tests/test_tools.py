@@ -180,11 +180,10 @@ def test_agent_and_mcp_exports_share_the_same_contract():
 
 
 def test_registered_tools_have_actionable_descriptions_and_explicit_schemas():
-    from chartagent.review import ChartReviewManager
     from chartagent.tools.builtins.catalog import BUILTIN_TOOLS
     from chartagent.tools.chart.catalog import CHART_TOOLS
 
-    tools = [*BUILTIN_TOOLS, *CHART_TOOLS, ChartReviewManager().review_tool()]
+    tools = [*BUILTIN_TOOLS, *CHART_TOOLS]
     assert len({tool.name for tool in tools}) == len(tools)
     for tool in tools:
         assert len(tool.description) >= 80

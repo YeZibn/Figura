@@ -1,5 +1,7 @@
 """Tests for the generated-chart candidate review gate."""
 
+import json
+
 from chartagent.review import (
     CandidateStatus,
     ChartReviewManager,
@@ -8,13 +10,18 @@ from chartagent.review import (
     chart_spec_digest,
     select_review_policy,
     review_candidate_bytes,
+    parse_vlm_review,
+    build_vlm_review_messages,
+    VLM_REVIEW_SYSTEM_PROMPT,
 )
+from chartagent.attachments import AttachmentRegistry
+from dataclasses import replace
 import pytest
 from chartagent.spec import Axes, Axis, ChartMetadata, ChartSpec, ChartType, DataPoint
 from chartagent.tools.chart.rendering import render_chart
 from chartagent.agent import Agent
 from chartagent.client.models import NormalizedResult, ToolCall
-from chartagent.tools import ToolRegistry, ToolResult
+from chartagent.tools import ToolRegistry
 from chartagent.tools.chart.catalog import register_chart_tools
 from chartagent.gateway.service import GatewayService
 from chartagent.runtime import AgentRuntime
@@ -111,13 +118,11 @@ def test_independent_reviewer_supports_all_rendered_chart_types(chart_type):
     assert reviewed.publication_status is not PublicationStatus.REJECTED, reviewed.review.to_dict() if reviewed.review else None
 
 
-def test_line_reviewer_consumes_trace_and_confirmed_point_evidence(monkeypatch):
+def test_artifact_safety_review_does_not_call_chart_sensors(monkeypatch):
     png_bytes, payload = line_chart()
     spec = ChartSpec.from_dict(payload)
-    monkeypatch.setattr(
-        "chartagent.tools.chart.observation.line.extract_text",
-        lambda _path: ToolResult([]),
-    )
+    called = []
+    monkeypatch.setattr("chartagent.tools.chart.observation.line.extract_line_series", lambda _path: called.append(True))
 
     result = review_candidate_bytes(
         spec,
@@ -127,13 +132,12 @@ def test_line_reviewer_consumes_trace_and_confirmed_point_evidence(monkeypatch):
         declared_height=480,
     )
 
-    geometry = next(item for item in result.evidence if item["kind"] == "line_geometry")
-    assert geometry["traceCount"] == 2
-    assert geometry["traceVertexCount"] > 0
-    assert geometry["pointCount"] >= 2
+    assert result.status is ReviewStatus.COMPLETED
+    assert result.checks["render_fidelity"] == "not_run"
+    assert called == []
 
 
-def test_source_linked_candidate_cannot_finish_before_review_tool():
+def test_source_linked_candidate_cannot_finish_before_vlm_review():
     spec = _bar_spec()
     rendered = render_chart(spec.to_dict())
     manager = ChartReviewManager()
@@ -150,33 +154,166 @@ def test_source_linked_candidate_cannot_finish_before_review_tool():
     assert manager.gate("run-2")["pending"][0]["candidateId"] == candidate.candidate_id
 
 
-def test_reviewer_blocks_a_chartspec_value_mismatch():
-    expected = _bar_spec()
-    actual = _bar_spec()
-    actual.dataset[1].value = 200
-    rendered = render_chart(actual.to_dict())
-    result = review_candidate_bytes(
-        expected,
-        rendered.images[0].content,
-        media_type="image/png",
-        declared_width=1200,
-        declared_height=800,
-    )
+def test_vlm_review_blocks_a_chartspec_value_mismatch():
+    result = parse_vlm_review(json.dumps({
+        "decision": "fail",
+        "confidence": 0.94,
+        "checks": {
+            "chart_type": "pass",
+            "orientation": "pass",
+            "layout": "pass",
+            "data_mapping": "fail",
+            "labels": "pass",
+            "readability": "pass",
+        },
+        "issues": [{
+            "code": "value_mismatch",
+            "location": "dataset[1].value",
+            "severity": "error",
+            "message": "候选图中的数值与 ChartSpec 不一致",
+        }],
+    }))
+    assert result.status is ReviewStatus.COMPLETED
+    assert result.blocking is True
+    assert result.decision == "fail"
+    assert result.issues[0].code == "value_mismatch"
+
+
+def test_vlm_review_prompt_describes_staged_checks_and_exact_contract():
+    assert "整张画布是否发生旋转" in VLM_REVIEW_SYSTEM_PROMPT
+    assert "零基线" in VLM_REVIEW_SYSTEM_PROMPT
+    assert "bar：" in VLM_REVIEW_SYSTEM_PROMPT
+    assert '"decision": "pass | pass_with_warning | fail"' in VLM_REVIEW_SYSTEM_PROMPT
+    assert "顶层字段必须且只能是" in VLM_REVIEW_SYSTEM_PROMPT
+
+
+def test_vlm_review_rejects_extra_top_level_fields():
+    payload = {
+        "decision": "pass",
+        "confidence": 0.95,
+        "checks": {name: "pass" for name in ("chart_type", "orientation", "layout", "data_mapping", "labels", "readability")},
+        "issues": [],
+        "extra": "not allowed",
+    }
+    result = parse_vlm_review(json.dumps(payload))
     assert result.status is ReviewStatus.FAILED
-    assert any(issue.code in {"bar_value_mismatch", "bar_count_mismatch"} for issue in result.issues)
+    assert result.issues[0].code == "invalid_vlm_output"
 
 
-def test_review_tool_requires_matching_candidate_and_review_ids():
+def test_vlm_review_rejects_extra_issue_fields():
+    payload = {
+        "decision": "fail",
+        "confidence": 0.9,
+        "checks": {"chart_type": "pass", "orientation": "pass", "layout": "fail", "data_mapping": "pass", "labels": "pass", "readability": "pass"},
+        "issues": [{"code": "layout_mismatch", "location": "candidate.plot_area", "severity": "error", "message": "布局错误", "evidence": "extra"}],
+    }
+    result = parse_vlm_review(json.dumps(payload))
+    assert result.status is ReviewStatus.FAILED
+    assert result.issues[0].code == "invalid_vlm_output"
+
+
+@pytest.mark.parametrize(
+    "decision, checks, issues",
+    [
+        (
+            "pass",
+            {"chart_type": "pass", "orientation": "warning", "layout": "pass", "data_mapping": "pass", "labels": "pass", "readability": "pass"},
+            [],
+        ),
+        (
+            "pass_with_warning",
+            {name: "pass" for name in ("chart_type", "orientation", "layout", "data_mapping", "labels", "readability")},
+            [],
+        ),
+        (
+            "fail",
+            {name: "pass" for name in ("chart_type", "orientation", "layout", "data_mapping", "labels", "readability")},
+            [],
+        ),
+    ],
+)
+def test_vlm_review_rejects_inconsistent_decision_contract(decision, checks, issues):
+    result = parse_vlm_review(json.dumps({"decision": decision, "confidence": 0.8, "checks": checks, "issues": issues}))
+    assert result.status is ReviewStatus.FAILED
+    assert result.issues[0].code == "invalid_vlm_output"
+
+
+def test_vlm_review_records_bar_baseline_failure():
+    result = parse_vlm_review(json.dumps({
+        "decision": "fail",
+        "confidence": 0.97,
+        "checks": {
+            "chart_type": "pass",
+            "orientation": "pass",
+            "layout": "fail",
+            "data_mapping": "pass",
+            "labels": "pass",
+            "readability": "pass",
+        },
+        "issues": [{
+            "code": "baseline_mismatch",
+            "location": "candidate.plot_area.zero_baseline",
+            "severity": "error",
+            "message": "柱体底边未与坐标系零基线重合",
+        }],
+    }))
+    assert result.status is ReviewStatus.COMPLETED
+    assert result.blocking is True
+    assert result.issues[0].code == "baseline_mismatch"
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "not json",
+        json.dumps({"decision": "unknown", "confidence": 0.5, "checks": {}, "issues": []}),
+        json.dumps({"decision": "pass", "confidence": 2, "checks": {}, "issues": []}),
+    ],
+)
+def test_vlm_review_rejects_malformed_or_unbounded_output(content):
+    result = parse_vlm_review(content)
+    assert result.status is ReviewStatus.FAILED
+    assert result.decision == "fail"
+    assert result.issues[0].code == "invalid_vlm_output"
+
+
+def test_vlm_review_messages_do_not_include_local_paths(tmp_path):
     spec = _bar_spec()
     rendered = render_chart(spec.to_dict())
     manager = ChartReviewManager()
-    candidate = manager.create_candidate("run-3", "call-3", rendered.images[0], spec)
-    tool = manager.review_tool()
+    candidate = manager.create_candidate(
+        "run-message",
+        "call-message",
+        rendered.images[0],
+        spec,
+        source_attachment_ids=("att_source",),
+    )
+    source_path = tmp_path / "private-source.png"
+    messages = build_vlm_review_messages(
+        candidate,
+        spec,
+        source_image=rendered.images[0].content,
+    )
+    assert str(source_path) not in json.dumps(messages, ensure_ascii=False)
+    assert any(part.get("type") == "image_url" for part in messages[1]["content"])
 
-    denied = tool.fn(candidate.candidate_id, "review_wrong")
-    assert "error" in denied
-    accepted = tool.fn(candidate.candidate_id, candidate.review_id)
-    assert accepted["candidate"]["candidateId"] == candidate.candidate_id
+
+def test_vlm_review_requires_matching_candidate_and_review_ids():
+    spec = _bar_spec()
+    rendered = render_chart(spec.to_dict())
+    manager = ChartReviewManager()
+    candidate = manager.create_candidate("run-3", "call-3", rendered.images[0], spec, source_attachment_ids=("att_source",))
+    semantic = parse_vlm_review(json.dumps({
+        "decision": "pass",
+        "confidence": 0.9,
+        "checks": {name: "pass" for name in ("chart_type", "orientation", "layout", "data_mapping", "labels", "readability")},
+        "issues": [],
+    }))
+    mismatched = replace(semantic, candidate_id="cand_wrong", review_id="review_wrong", chart_spec_digest="0" * 64)
+    reviewed = manager.process(candidate, semantic_result=mismatched)
+    assert reviewed.publication_status is PublicationStatus.REJECTED
+    assert reviewed.review is not None
+    assert reviewed.review.issues[0].code == "review_identity_mismatch"
 
 
 def test_gateway_candidate_promotion_requires_matching_completed_review(tmp_path):
@@ -244,38 +381,55 @@ def test_agent_final_answer_is_rejected_while_source_linked_candidate_is_pending
     client = Client()
     result = Agent(client, registry, max_steps=2).run("请重绘 att_source")
 
-    assert result == "*stopped: generated chart review incomplete*"
-    assert "review_generated_chart" in {item["function"]["name"] for item in client.calls[1]}
+    assert result == "*stopped: generated chart review failed; no artifact published*"
+    assert "review_generated_chart" not in {item["function"]["name"] for item in client.calls[1]}
 
 
-def test_pending_review_trace_has_independent_lifecycle_fields():
+def test_failed_vlm_review_trace_has_independent_lifecycle_fields(tmp_path):
     import json
 
     spec = _bar_spec().to_dict()
 
+    source_path = tmp_path / "source.png"
+    source_path.write_bytes(render_chart(spec).images[0].content)
+    attachments = AttachmentRegistry()
+    attachment = attachments.register(str(source_path))
+
     class Client:
         def __init__(self):
-            self.calls = 0
+            self.calls = []
 
-        def chat(self, _messages, **_kwargs):
-            self.calls += 1
-            if self.calls == 1:
+        def chat(self, _messages, **kwargs):
+            self.calls.append(kwargs)
+            if kwargs.get("tools") is None:
+                return NormalizedResult(content=json.dumps({
+                    "decision": "fail",
+                    "confidence": 0.9,
+                    "checks": {
+                        "chart_type": "pass", "orientation": "pass", "layout": "pass",
+                        "data_mapping": "fail", "labels": "pass", "readability": "pass",
+                    },
+                    "issues": [{"code": "value_mismatch", "location": "dataset[0]", "severity": "error", "message": "数据不一致"}],
+                }))
+            if len([item for item in self.calls if item.get("tools") is not None]) == 1:
                 return NormalizedResult(
                     tool_calls=[ToolCall("render", "render_chart", json.dumps({"spec": spec}))]
                 )
-            return NormalizedResult(content="等待审核")
+            return NormalizedResult(content="模型不能绕过失败审核")
 
     events = []
     registry = ToolRegistry()
     register_chart_tools(registry)
-    result = Agent(Client(), registry, max_steps=2, trace=events.append).run("请重绘 att_source")
+    client = Client()
+    result = Agent(client, registry, attachments=attachments, max_steps=3, trace=events.append).run(f"请重绘 {attachment.id}")
 
-    assert result == "*stopped: generated chart review incomplete*"
+    assert result == "*stopped: generated chart review failed; no artifact published*"
+    assert any(call.get("tools") is None for call in client.calls)
     started = next(event for event in events if event.kind == "chart_review_started")
-    assert started.payload["candidate_status"] == "review_pending"
-    assert started.payload["review_status"] == "pending"
-    assert started.payload["publication_status"] == "unpublished"
-    assert "status" not in started.payload
+    assert started.payload["internal_review"] is True
+    assert started.payload["tool_count"] == 0
+    completed = next(event for event in events if event.kind == "chart_review_completed")
+    assert completed.payload["review_mode"] == "vlm"
 
 
 def test_gateway_publishes_only_after_direct_candidate_review(tmp_path):

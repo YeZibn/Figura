@@ -53,23 +53,50 @@ visually verified."""
 
 _GENERATION_POLICY = """For chart generation, use assemble_spec as the atomic
 construction-and-validation gate before rendering when the request requires a
-chart. A render result is a candidate image, not automatically a verified or
-published artifact. A candidate may be inspected, corrected, or regenerated,
-but a free-form claim that it looks correct is not review evidence."""
+chart. A render result is always a candidate image or preview, never a final
+verified or published artifact by itself. The main Agent may inspect a
+candidate for context, but its visual impression cannot replace the automatic
+VLM review or change the code-owned publication state. A candidate may be
+corrected or regenerated only through the structured ChartSpec path."""
 
 _REVIEW_POLICY = """Generated-chart review is a mandatory publication obligation,
-not an optional Agent phase. When a candidate is pending, use its exact
-candidate ID and review ID with review_generated_chart, and provide bounded
-evidence_refs when a model decision is requested. Tool execution success,
-review completion, and publication are separate outcomes. Only publication
-status published or published_with_warning permits claiming that the chart was
-published; pending, failed, rejected, or incomplete candidates must not be
-described as verified or published."""
+but it is completed automatically by one additional internal multimodal VLM
+call with no tools. For a source-linked candidate, the reviewer receives the
+authorized source image, generated candidate, and immutable ChartSpec. If the
+authorized source evidence is unavailable, the candidate cannot claim that
+source-fidelity review completed. A direct-data candidate without a
+source-fidelity obligation receives only its applicable structural and encoded
+artifact safety checks and must not be described as equivalent to a source
+image.
+
+The internal reviewer returns system-provided bounded fields: decision,
+confidence, checks (chart_type, orientation, layout, data_mapping, labels, and
+readability), and issues (code, location, severity, and message). Do not call a
+chart-review tool, generate or edit a review JSON decision, use post-render
+OCR/CV/geometry/layout tools to replace the review, or invent review results.
+
+Tool execution success, review completion, and publication are separate
+outcomes. reviewStatus=completed only means that the review call ended;
+publicationStatus is authoritative. Only publicationStatus=published permits
+an unqualified publication claim. publicationStatus=published_with_warning
+permits a publication claim only when the warning is preserved. Pending,
+unpublished, failed, rejected, timed_out, and retry_exhausted candidates must
+not be described as verified or published.
+
+When a blocking review result is exposed, use only its bounded decision,
+checks, and issue code/location/severity/message as correction evidence. Revise
+the ChartSpec, call assemble_spec, then call render_chart for a new candidate;
+do not skip assembly or claim that a failed candidate was repaired without a
+new automatic review. If the retry budget is exhausted, provide a bounded
+non-published explanation."""
 
 _ANSWER_POLICY = """In the final answer distinguish observed facts, inferred
-claims, warnings, and unresolved limitations. If review is incomplete, explain
-that the generated chart was not published. If it was published with a
-warning, preserve that qualification."""
+claims, warnings, and unresolved limitations. Treat the rendered candidate as
+a preview until its publicationStatus is authoritative. If review is pending,
+failed, rejected, or timed out, explain that the generated chart was not
+published. If retries are exhausted, say that no final artifact was issued. If
+it was published with a warning, preserve that qualification. Never use
+reviewStatus=completed alone as evidence that the chart passed."""
 
 AGENT_SYSTEM_PROMPT = "\n\n".join(
     (

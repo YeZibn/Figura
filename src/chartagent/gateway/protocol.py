@@ -122,6 +122,8 @@ class GeneratedChartReference:
     candidate_status: str | None = None
     review_status: str | None = None
     publication_status: str | None = None
+    review_mode: str | None = None
+    review: Mapping[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         result: dict[str, Any] = {
@@ -149,6 +151,10 @@ class GeneratedChartReference:
             result["reviewStatus"] = self.review_status
         if self.publication_status:
             result["publicationStatus"] = self.publication_status
+        if self.review_mode:
+            result["reviewMode"] = truncate_text(self.review_mode, 32)
+        if isinstance(self.review, Mapping):
+            result["review"] = sanitize_payload(self.review)
         if self.reason:
             result["reason"] = truncate_text(self.reason, MAX_ERROR_MESSAGE)
         return result

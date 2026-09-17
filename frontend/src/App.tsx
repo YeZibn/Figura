@@ -366,8 +366,9 @@ function GeneratedChartView({ artifact, loader, onPreview }: { artifact: Generat
   const publicationStatus = artifact.publicationStatus || ''
   const reviewStatus = artifact.reviewStatus || ''
   const candidateStatus = artifact.candidateStatus || ''
+  const reviewMode = artifact.reviewMode || ''
   const status = publicationStatus === 'published' ? 'available' : publicationStatus === 'published_with_warning' ? 'warning' : publicationStatus === 'rejected' || candidateStatus === 'review_failed' || candidateStatus === 'timed_out' || candidateStatus === 'retry_exhausted' ? 'failed' : reviewStatus === 'pending' || reviewStatus === 'requires_model_decision' || candidateStatus === 'review_pending' || artifact.status === 'pending' ? 'pending' : artifact.status === 'unavailable' || (!artifact.imageUrl && !artifact.previewResource) || imageFailed ? 'unavailable' : artifact.status === 'warning' ? 'warning' : 'available'
-  const statusLabel = status === 'available' ? '已发布' : status === 'warning' ? '已发布·有警告' : status === 'pending' ? '待审核' : status === 'failed' ? '未发布·审核未通过' : '暂不可用'
+  const statusLabel = status === 'available' ? '已发布' : status === 'warning' ? '已发布·有警告' : status === 'pending' ? (reviewMode === 'vlm' ? 'VLM 审核中' : '待审核') : status === 'failed' ? '未发布·审核未通过' : '暂不可用'
   const metadata = [
     artifact.chartType ? chartTypeLabel(artifact.chartType) : '',
     artifact.width && artifact.height ? `${artifact.width} × ${artifact.height}` : '',
@@ -407,7 +408,7 @@ function GeneratedChartView({ artifact, loader, onPreview }: { artifact: Generat
   return <article className={'generated-chart ' + status}>
     <div className="generated-chart-heading"><div className="observation-label"><BarChart3 size={13} /><strong>生成图表</strong><span>{statusLabel}</span></div>{(artifact.downloadUrl || artifact.previewResource) && (status === 'available' || status === 'warning') && <button className="chart-download" type="button" onClick={() => void download()} disabled={downloading} title="下载生成图表"><Download size={13} />{downloading ? '正在下载' : '下载 PNG'}</button>}</div>
     {(artifact.imageUrl || artifact.previewResource) && (status === 'available' || status === 'warning' || status === 'pending') ? <PreviewImage loader={loader} onPreview={onPreview} sourceLabel="生成图表" statusLabel={statusLabel} title={artifact.title || artifact.caption || '生成图表'} resource={artifact.previewResource} fallbackUrl={artifact.previewResource ? undefined : artifact.imageUrl} alt={artifact.title || artifact.caption || '生成图表'} onError={() => setImageFailed(true)} /> : <div className="observation-placeholder">{status === 'failed' ? '图表审核未通过，未产生可下载文件' : '图表文件已过期或暂不可用'}</div>}
-    <div className="generated-chart-copy"><strong>{artifact.title || artifact.caption || '未命名图表'}</strong>{metadata && <small>{metadata}</small>}{artifact.reason && <small className="generated-chart-reason">{artifact.reason}</small>}{downloadError && <small className="generated-chart-reason">{downloadError}</small>}</div>
+    <div className="generated-chart-copy"><strong>{artifact.title || artifact.caption || '未命名图表'}</strong>{metadata && <small>{metadata}</small>}{artifact.reason && <small className="generated-chart-reason">{artifact.reason}</small>}{artifact.review?.issues?.slice(0, 3).map((issue, index) => issue.message ? <small className="generated-chart-reason" key={`${issue.code || 'issue'}-${index}`}>{issue.message}</small> : null)}{downloadError && <small className="generated-chart-reason">{downloadError}</small>}</div>
   </article>
 }
 

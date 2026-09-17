@@ -12,7 +12,6 @@ from ..memory import SQLiteAgentMemory
 from ..review import ChartReviewManager
 from ..trace import TraceSink
 from ..tools.adapters.attachment import load_image_tool
-from ..tools.adapters.review import review_generated_chart_tool
 from ..tools.builtins import register_builtins
 from ..tools.chart import register_chart_tools
 from ..tools.core import GeneratedImage, ToolRegistry
@@ -60,8 +59,6 @@ def create_agent_runtime(
     if hasattr(registry, "register"):
         registry.register(load_image_tool(attachments))
         register_chart_tools_fn(registry, attachments=attachments)
-        if registry.get("review_generated_chart") is None:
-            registry.register(review_generated_chart_tool(review_manager))
     else:
         register_chart_tools_fn(registry)
 

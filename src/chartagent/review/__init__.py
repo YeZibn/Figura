@@ -18,6 +18,13 @@ from .manager import (
     review_candidate_bytes,
     select_review_policy,
 )
+from .vlm import (
+    VLM_REVIEW_CHECKS,
+    VLM_REVIEW_SYSTEM_PROMPT,
+    build_vlm_review_messages,
+    parse_vlm_review,
+    review_candidate_with_vlm,
+)
 
 __all__ = [
     "CandidateStatus",
@@ -36,4 +43,9 @@ __all__ = [
     "MAX_REVIEW_TEXT",
     "DEFAULT_REVIEW_ATTEMPTS",
     "DEFAULT_REVIEW_DEADLINE_SECONDS",
+    "VLM_REVIEW_CHECKS",
+    "VLM_REVIEW_SYSTEM_PROMPT",
+    "build_vlm_review_messages",
+    "parse_vlm_review",
+    "review_candidate_with_vlm",
 ]

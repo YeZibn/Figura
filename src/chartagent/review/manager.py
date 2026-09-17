@@ -130,6 +130,12 @@ class ReviewResult:
     issues: tuple[ReviewIssue, ...] = ()
     evidence: tuple[Mapping[str, Any], ...] = ()
     model_decision_required: bool = False
+    decision: str | None = None
+    confidence: float | None = None
+    review_mode: str = "safety"
+    candidate_id: str | None = None
+    review_id: str | None = None
+    chart_spec_digest: str | None = None
 
     @property
     def blocking(self) -> bool:
@@ -143,13 +149,25 @@ class ReviewResult:
         return bool(self.issues) and not self.blocking
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        result = {
             "status": self.status.value,
             "checks": dict(self.checks),
             "issues": [item.to_dict() for item in self.issues[:MAX_REVIEW_ISSUES]],
             "evidence": [dict(item) for item in self.evidence[:MAX_REVIEW_EVIDENCE]],
             "modelDecisionRequired": self.model_decision_required,
+            "reviewMode": self.review_mode,
         }
+        if self.decision is not None:
+            result["decision"] = self.decision
+        if self.confidence is not None:
+            result["confidence"] = self.confidence
+        if self.candidate_id is not None:
+            result["candidateId"] = self.candidate_id
+        if self.review_id is not None:
+            result["reviewId"] = self.review_id
+        if self.chart_spec_digest is not None:
+            result["chartSpecDigest"] = self.chart_spec_digest
+        return result
 
 
 @dataclass(frozen=True)
@@ -174,6 +192,7 @@ class ChartCandidate:
     created_at: float = field(default_factory=time.monotonic)
     deadline_at: float = 0.0
     content: bytes = field(default=b"", repr=False, compare=False)
+    superseded: bool = False
 
     def safe_metadata(self) -> dict[str, Any]:
         result: dict[str, Any] = {
@@ -191,9 +210,12 @@ class ChartCandidate:
             "reviewStatus": self.review_status.value,
             "publicationStatus": self.publication_status.value,
             "reviewRequired": self.policy.semantic_required,
+            "reviewMode": "vlm" if self.policy.semantic_required else "safety",
             "policy": self.policy.to_dict(),
             "attempts": self.attempts,
         }
+        if self.superseded:
+            result["superseded"] = True
         if self.review is not None:
             result["review"] = self.review.to_dict()
         return result
@@ -496,7 +518,12 @@ def review_candidate_bytes(
     declared_height: int,
     source_image: bytes | None = None,
 ) -> ReviewResult:
-    """Independently review encoded bytes against one immutable ChartSpec."""
+    """Check encoded candidate safety against one immutable ChartSpec.
+
+    Semantic fidelity is intentionally not evaluated here. Source comparison
+    is performed by the internal VLM reviewer; this function remains as a
+    compatibility-named, deterministic artifact boundary.
+    """
     issues: list[ReviewIssue] = []
     evidence: list[dict[str, Any]] = []
     checks: dict[str, str] = {}
@@ -514,8 +541,10 @@ def review_candidate_bytes(
     if not isinstance(content, bytes) or not content:
         issues.append(_issue("empty_artifact", "artifact", "candidate image is empty"))
         checks["encoded_artifact"] = "failed"
-        return ReviewResult(ReviewStatus.FAILED, checks, tuple(issues), tuple(evidence))
-    if media_type.lower() != "image/png":
+        checks["render_fidelity"] = "not_run"
+        checks["layout_readability"] = "not_run"
+        return ReviewResult(ReviewStatus.FAILED, checks, tuple(issues), tuple(evidence), review_mode="safety")
+    if not isinstance(media_type, str) or media_type.lower() != "image/png":
         issues.append(_issue("unsupported_artifact", "artifact.mediaType", "generated chart candidates must be PNG"))
     try:
         from io import BytesIO
@@ -530,39 +559,47 @@ def review_candidate_bytes(
             if all(low == high for low, high in extrema):
                 issues.append(_issue("blank_artifact", "artifact", "candidate image is a uniform blank canvas"))
             evidence.append({"kind": "encoded_artifact", "format": image_format, "width": actual_size[0], "height": actual_size[1]})
-        checks["encoded_artifact"] = "failed" if any(item.location.startswith("artifact") or item.code in {"dimension_mismatch", "blank_artifact"} for item in issues) else "passed"
+        checks["encoded_artifact"] = "failed" if any(item.location.startswith("artifact") or item.code in {"dimension_mismatch", "blank_artifact", "unsupported_artifact"} for item in issues) else "passed"
     except (UnidentifiedImageError, OSError, ValueError) as exc:
         issues.append(_issue("artifact_decode", "artifact", f"candidate could not be decoded: {exc}"))
         checks["encoded_artifact"] = "failed"
-
-    with tempfile.NamedTemporaryFile(suffix=".png") as stream:
-        stream.write(content)
-        stream.flush()
-        data, sensor_error = _sensor_result(Path(stream.name), spec.metadata.chart_type)
-    sensor_issues, sensor_evidence = _compare_sensor(spec, data, sensor_error)
-    issues.extend(sensor_issues)
-    evidence.extend(sensor_evidence)
-    checks["render_fidelity"] = "failed" if any(item.severity == "error" and item.code not in {"sensor_warning"} for item in sensor_issues) else "passed"
-    checks["layout_readability"] = "warning" if any(item.severity == "warning" for item in issues) else "passed"
-
-    if source_image is not None:
-        # Source comparison is intentionally structural, never pixel equality.
-        with tempfile.NamedTemporaryFile(suffix=".png") as stream:
-            stream.write(source_image)
-            stream.flush()
-            source_data, source_error = _sensor_result(Path(stream.name), spec.metadata.chart_type)
-        if source_data is None:
-            issues.append(_issue("source_evidence_unavailable", "source", source_error or "source evidence unavailable"))
-        else:
-            source_issues, _ = _compare_sensor(spec, source_data, source_error)
-            for item in source_issues:
-                if item.severity == "error":
-                    issues.append(replace(item, code=f"source_{item.code}"))
-            evidence.append({"kind": "source_structural_comparison", "available": True, "issueCount": len(source_issues)})
-
+    checks["render_fidelity"] = "not_run"
+    checks["layout_readability"] = "not_run"
     blocking = any(item.severity == "error" for item in issues)
     status = ReviewStatus.FAILED if blocking else ReviewStatus.COMPLETED
-    return ReviewResult(status, checks, tuple(issues[:MAX_REVIEW_ISSUES]), tuple(evidence[:MAX_REVIEW_EVIDENCE]))
+    return ReviewResult(
+        status,
+        checks,
+        tuple(issues[:MAX_REVIEW_ISSUES]),
+        tuple(evidence[:MAX_REVIEW_EVIDENCE]),
+        decision="pass" if not blocking else "fail",
+        confidence=1.0 if not blocking else 0.0,
+        review_mode="safety",
+    )
+
+
+def _merge_review_results(safety: ReviewResult, semantic: ReviewResult) -> ReviewResult:
+    """Combine code-owned safety checks with the VLM semantic decision."""
+    status = (
+        ReviewStatus.TIMED_OUT
+        if safety.status is ReviewStatus.TIMED_OUT or semantic.status is ReviewStatus.TIMED_OUT
+        else ReviewStatus.FAILED
+        if safety.status is ReviewStatus.FAILED or semantic.status is ReviewStatus.FAILED
+        else ReviewStatus.COMPLETED
+    )
+    return ReviewResult(
+        status=status,
+        checks={**dict(safety.checks), **dict(semantic.checks)},
+        issues=(safety.issues + semantic.issues)[:MAX_REVIEW_ISSUES],
+        evidence=(safety.evidence + semantic.evidence)[:MAX_REVIEW_EVIDENCE],
+        model_decision_required=False,
+        decision=semantic.decision,
+        confidence=semantic.confidence,
+        review_mode="vlm",
+        candidate_id=semantic.candidate_id,
+        review_id=semantic.review_id,
+        chart_spec_digest=semantic.chart_spec_digest,
+    )
 
 
 class ChartReviewManager:
@@ -592,6 +629,14 @@ class ChartReviewManager:
                 return self._items[existing_id][0]
             metadata = image.metadata if isinstance(image.metadata, Mapping) else {}
             policy = select_review_policy(spec, source_attachment_ids=source_attachment_ids, explicit_review=explicit_review)
+            for prior_id, (prior, prior_spec) in tuple(self._items.items()):
+                if (
+                    prior.run_id == run_id
+                    and prior.chart_type == spec.metadata.chart_type.value
+                    and prior.publication_status is PublicationStatus.REJECTED
+                    and prior.status is CandidateStatus.REVIEW_FAILED
+                ):
+                    self._items[prior_id] = (replace(prior, superseded=True), prior_spec)
             candidate = ChartCandidate(
                 candidate_id=f"cand_{uuid4().hex}",
                 review_id=f"review_{uuid4().hex}",
@@ -613,6 +658,18 @@ class ChartReviewManager:
             self._keys[key] = candidate.candidate_id
             return candidate
 
+    def supersede_failed_for_retry(self, run_id: str, chart_type: str) -> None:
+        """Keep a prior rejected attempt attributable without blocking its retry."""
+        with self._lock:
+            for candidate_id, (candidate, spec) in tuple(self._items.items()):
+                if (
+                    candidate.run_id == run_id
+                    and candidate.chart_type == chart_type
+                    and candidate.publication_status is PublicationStatus.REJECTED
+                    and candidate.status is CandidateStatus.REVIEW_FAILED
+                ):
+                    self._items[candidate_id] = (replace(candidate, superseded=True), spec)
+
     def get(self, candidate_id: str, review_id: str | None = None) -> ChartCandidate | None:
         with self._lock:
             item = self._items.get(candidate_id)
@@ -624,7 +681,31 @@ class ChartReviewManager:
                 self._items[candidate_id] = (candidate, item[1])
             return candidate
 
-    def process(self, candidate: ChartCandidate, *, decision: Mapping[str, Any] | None = None) -> ChartCandidate:
+    def get_spec(self, candidate_id: str, review_id: str | None = None) -> ChartSpec | None:
+        with self._lock:
+            item = self._items.get(candidate_id)
+            if item is None or (review_id is not None and item[0].review_id != review_id):
+                return None
+            return item[1]
+
+    def source_payload(self, candidate: ChartCandidate) -> tuple[bytes, str] | None:
+        """Load one authorized source image for an internal reviewer."""
+        if self.attachments is None or not candidate.source_attachment_ids:
+            return None
+        item, error = self.attachments.validate(candidate.source_attachment_ids[0])
+        if error or item is None:
+            return None
+        try:
+            return Path(item.canonical_path).read_bytes(), item.media_type
+        except OSError:
+            return None
+
+    def process(
+        self,
+        candidate: ChartCandidate,
+        *,
+        semantic_result: ReviewResult | None = None,
+    ) -> ChartCandidate:
         with self._lock:
             current_item = self._items.get(candidate.candidate_id)
             if current_item is None or current_item[0].review_id != candidate.review_id:
@@ -632,59 +713,52 @@ class ChartReviewManager:
             current, spec = current_item
             if current.status in {CandidateStatus.VERIFIED, CandidateStatus.WARNING, CandidateStatus.REVIEW_FAILED, CandidateStatus.TIMED_OUT, CandidateStatus.RETRY_EXHAUSTED}:
                 return current
-            if current.review_status is ReviewStatus.REQUIRES_MODEL_DECISION and decision is None:
+            if current.review_status is ReviewStatus.REQUIRES_MODEL_DECISION and semantic_result is None:
                 return current
             if current.attempts >= current.policy.max_attempts:
                 current = replace(current, status=CandidateStatus.RETRY_EXHAUSTED, review_status=ReviewStatus.FAILED, publication_status=PublicationStatus.REJECTED)
                 self._items[current.candidate_id] = (current, spec)
                 return current
             current = replace(current, attempts=current.attempts + 1)
-            source_image = self._load_source(current.source_attachment_ids)
-            if current.policy.source_linked and source_image is None:
-                result = ReviewResult(
-                    ReviewStatus.FAILED,
-                    {"source_evidence": "failed"},
-                    (_issue("source_evidence_unavailable", "source", "authorized source attachment is unavailable"),),
-                )
-            else:
-                result = review_candidate_bytes(
-                    spec,
-                    current.content,
-                    media_type=current.media_type,
-                    declared_width=current.width,
-                    declared_height=current.height,
-                    source_image=source_image,
-                )
-            if result.status is ReviewStatus.COMPLETED and current.policy.semantic_required and decision is None:
-                # A deterministic pass is enough only when source evidence did
-                # not leave an association unresolved. Explicit decisions are
-                # accepted as a second, structured evidence binding.
-                unresolved = any(issue.code.startswith("source_") or issue.code in {"sensor_warning", "sensor_unavailable"} for issue in result.issues)
-                if unresolved:
-                    result = replace(result, status=ReviewStatus.REQUIRES_MODEL_DECISION, model_decision_required=True)
-            if result.status is ReviewStatus.REQUIRES_MODEL_DECISION:
-                if decision is None:
-                    current = replace(current, attempts=current.attempts, review_status=result.status, review=result)
+            safety_result = review_candidate_bytes(
+                spec,
+                current.content,
+                media_type=current.media_type,
+                declared_width=current.width,
+                declared_height=current.height,
+            )
+            if safety_result.blocking:
+                result = safety_result
+            elif current.policy.semantic_required and semantic_result is None:
+                current = replace(current, attempts=current.attempts, review_status=ReviewStatus.PENDING)
+                self._items[current.candidate_id] = (current, spec)
+                return current
+            elif current.policy.semantic_required:
+                if any(
+                    value is not None and value != expected
+                    for value, expected in (
+                        (semantic_result.candidate_id, current.candidate_id),
+                        (semantic_result.review_id, current.review_id),
+                        (semantic_result.chart_spec_digest, current.chart_spec_digest),
+                    )
+                ):
+                    result = ReviewResult(
+                        status=ReviewStatus.FAILED,
+                        checks={"vlm_review": "failed"},
+                        issues=(ReviewIssue(
+                            "review_identity_mismatch",
+                            "review",
+                            "VLM review result does not match the candidate context",
+                        ),),
+                        decision="fail",
+                        confidence=0.0,
+                        review_mode="vlm",
+                    )
                 else:
-                    accepted = bool(decision.get("accepted"))
-                    decision_text = str(decision.get("reason", ""))[:MAX_REVIEW_TEXT]
-                    evidence_refs = decision.get("evidence_refs")
-                    valid_refs = tuple(
-                        str(item)[:120]
-                        for item in evidence_refs[:MAX_REVIEW_EVIDENCE]
-                        if isinstance(item, str) and item.strip()
-                    ) if isinstance(evidence_refs, list) else ()
-                    decision_issue = ()
-                    if not accepted:
-                        decision_issue = (_issue("model_decision_rejected", "decision", decision_text or "model rejected the candidate"),)
-                    elif current.policy.semantic_required and not valid_refs:
-                        accepted = False
-                        decision_issue = (_issue("model_decision_missing_evidence", "decision.evidence_refs", "accepted model decisions must cite bounded evidence references"),)
-                    decision_evidence = tuple(result.evidence) + (({"kind": "model_decision", "evidenceRefs": list(valid_refs)},) if valid_refs else ())
-                    result = ReviewResult(ReviewStatus.COMPLETED if accepted else ReviewStatus.FAILED, result.checks, decision_issue, decision_evidence, False)
-                    current = self._apply_result(current, result)
+                    result = _merge_review_results(safety_result, semantic_result)
             else:
-                current = self._apply_result(current, result)
+                result = safety_result
+            current = self._apply_result(current, result)
             self._items[current.candidate_id] = (current, spec)
             return current
 
@@ -697,30 +771,11 @@ class ChartReviewManager:
             return replace(candidate, status=CandidateStatus.REVIEW_FAILED, review_status=ReviewStatus.FAILED, publication_status=PublicationStatus.REJECTED, review=result)
         return replace(candidate, status=CandidateStatus.VERIFIED, review_status=ReviewStatus.COMPLETED, publication_status=PublicationStatus.PUBLISHED, review=result)
 
-    def _load_source(self, attachment_ids: Sequence[str]) -> bytes | None:
-        if self.attachments is None or not attachment_ids:
-            return None
-        for attachment_id in attachment_ids[:1]:
-            item, error = self.attachments.validate(attachment_id)
-            if error or item is None:
-                return None
-            try:
-                return Path(item.canonical_path).read_bytes()
-            except OSError:
-                return None
-        return None
-
-    def review_tool(self):
-        """Compatibility facade; the canonical factory lives in tools.adapters."""
-        from ..tools.adapters.review import review_generated_chart_tool
-
-        return review_generated_chart_tool(self)
-
     def gate(self, run_id: str) -> dict[str, Any]:
         with self._lock:
             candidates = [item[0] for item in self._items.values() if item[0].run_id == run_id]
         pending = [item for item in candidates if item.policy.semantic_required and item.publication_status is PublicationStatus.UNPUBLISHED]
-        failed = [item for item in candidates if item.publication_status is PublicationStatus.REJECTED]
+        failed = [item for item in candidates if item.publication_status is PublicationStatus.REJECTED and not item.superseded]
         return {
             "ok": not pending and not failed,
             "pending": [item.safe_metadata() for item in pending[:MAX_REVIEW_EVIDENCE]],

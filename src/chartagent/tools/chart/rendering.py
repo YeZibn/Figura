@@ -651,8 +651,8 @@ RENDER_CHART = Tool(
         "output is requested; do not use with incomplete specs, unsupported chart "
         "types, or as a substitute for the mandatory post-generation review. A "
         "successful tool call means only that rendering and local artifact checks "
-        "passed: the image remains a candidate until review_generated_chart accepts "
-        "it and publication status is reported."
+        "passed: the image remains a candidate until the automatic VLM review "
+        "completes and publication status is reported."
     ),
     parameters={
         "type": "object",
