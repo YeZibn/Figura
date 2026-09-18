@@ -31,6 +31,8 @@ from chartagent.tools.core.result import GeneratedImage
 from chartagent.trace import TraceEvent
 from chartagent.client.models import NormalizedResult, ToolCall
 from chartagent.tools import Tool, ToolRegistry, ToolResult
+from chartagent.tools.chart import register_chart_tools
+from tests.test_dashboard_decomposition import COMPLEX_IMAGE, REGIONS
 
 
 def _completed_run(run_id: str, text: str = "问题", answer: str = "答案") -> Run:
@@ -299,6 +301,107 @@ def test_gateway_idempotency_reuses_accepted_run_and_rejects_conflicts(tmp_path)
     with pytest.raises(GatewayFault) as conflict:
         service.start_run(session_id, "另一请求", raw_idempotency_key="intent-1")
     assert conflict.value.code == "idempotency_conflict"
+    service.close()
+
+
+def test_gateway_inherits_persisted_active_source_for_follow_up_prompt(tmp_path):
+    database = tmp_path / "sessions.db"
+    source = tmp_path / "source.png"
+    source.write_bytes(_png_bytes())
+    service = GatewayService(database=database, readiness_probe=lambda: {"status": "ready"})
+    session_id = service.create_session("active-source")['session']['id']
+    memory = SQLiteAgentMemory("active-source", database=database, create=False)
+    try:
+        registry = AttachmentRegistry(
+            session_id=memory.session.id,
+            save=memory.save_attachment,
+            load=memory.get_attachment,
+        )
+        attachment = registry.register(str(source))
+        memory.set_active_source([attachment.id])
+    finally:
+        memory.close()
+
+    session, prompt, resolved = service._prepare_prompt(session_id, "继续分析", [])
+    assert session.id == session_id
+    assert resolved == (attachment.id,)
+    assert attachment.id in prompt
+    service.close()
+
+
+def test_gateway_dashboard_follow_up_reuses_panel_and_measures_local_scope(tmp_path):
+    database = tmp_path / "dashboard-reuse.db"
+    service = GatewayService(database=database, readiness_probe=lambda: {"status": "ready"})
+    session_id = service.create_session("dashboard-reuse")['session']['id']
+    uploaded = service.upload_attachment(session_id, "dashboard.png", "image/png", COMPLEX_IMAGE.read_bytes())
+    attachment_id = uploaded["attachment"]["attachment_id"]
+    tool_names: list[str] = []
+    panel_id: str | None = None
+    runtime_number = 0
+
+    class ScriptedClient:
+        def __init__(self, follow_up: bool):
+            self.follow_up = follow_up
+            self.steps = 0
+
+        def chat(self, messages, **_kwargs):
+            nonlocal panel_id
+            self.steps += 1
+            if self.steps > 1:
+                return NormalizedResult(content="已完成")
+            if self.follow_up:
+                assert panel_id
+                name = "measure_bars"
+                arguments = {"attachment_id": attachment_id, "panel_id": panel_id}
+            else:
+                name = "decompose_chart_image"
+                arguments = {"attachment_id": attachment_id, "regions": REGIONS}
+            tool_names.append(name)
+            return NormalizedResult(tool_calls=[ToolCall(f"call-{len(tool_names)}", name, json.dumps(arguments, ensure_ascii=False))])
+
+    def runtime_factory(name, *, run_id, trace_sink, visual_observation_sink):
+        nonlocal runtime_number
+        runtime_number += 1
+        memory = SQLiteAgentMemory(name, database=database, create=False)
+        attachments = AttachmentRegistry(
+            session_id=memory.session.id,
+            save=memory.save_attachment,
+            load=memory.get_attachment,
+            panel_store=memory,
+        )
+        registry = ToolRegistry()
+        register_chart_tools(registry, attachments=attachments)
+        agent = Agent(
+            ScriptedClient(runtime_number > 1),
+            registry,
+            memory=memory,
+            run_id=run_id,
+            trace=trace_sink,
+            visual_observation_sink=visual_observation_sink,
+            attachments=attachments,
+        )
+        return AgentRuntime(agent, memory, attachments)
+
+    service._runtime_factory = runtime_factory
+    first = service.start_run(session_id, "拆解 dashboard", [attachment_id], raw_idempotency_key="dashboard-1")
+    first_run = service.get_run(session_id, first["run"]["runId"])
+    assert first_run.wait_terminal(timeout=8)
+    memory = SQLiteAgentMemory("dashboard-reuse", database=database, create=False)
+    try:
+        handoffs = memory.list_panel_handoffs(attachment_id)
+        assert handoffs, [(event.kind, event.payload) for event in first_run.iter_events()]
+        panel_id = handoffs[0].panel_id
+    finally:
+        memory.close()
+
+    second = service.start_run(session_id, "测量刚才的柱状图", [], raw_idempotency_key="dashboard-2")
+    second_run = service.get_run(session_id, second["run"]["runId"])
+    assert second_run.wait_terminal(timeout=8)
+    assert tool_names == ["decompose_chart_image", "measure_bars"]
+    measurement = next(event for event in second_run.iter_events() if event.kind == "tool_result" and event.payload.get("tool_name") == "measure_bars")
+    result = measurement.payload["result"]
+    assert result["data"]["scope"]["mode"] == "panel"
+    assert result["data"]["scope"]["local_image_size"][0] < result["data"]["scope"]["source_image_size"][0]
     service.close()
 
 

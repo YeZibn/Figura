@@ -27,24 +27,28 @@ types."""
 
 _DASHBOARD_POLICY = """When an attached image contains multiple cards, charts,
 or small visual panels, first inspect the image with multimodal vision (load the
-authorized attachment when needed) and propose the semantic regions yourself.
-Then call decompose_chart_image once with bounded regions containing a name and
-normalized bbox_norm=[x, y, width, height], plus optional role/chart_type hints.
-The default path validates those VLM-proposed bounds deterministically and
-returns named panel crops, stable panel IDs, source coordinates, analysis scopes,
+authorized attachment when needed). Before proposing new regions, use the
+session's persisted panel inventory: if a matching active panel ID exists,
+reuse it and do not call decompose_chart_image again. Only call
+decompose_chart_image when no valid panel matches, the source attachment
+changed, a panel is stale, or the user explicitly requests re-segmentation.
+When decomposition is needed, propose bounded semantic regions containing a
+name and normalized bbox_norm=[x, y, width, height], plus optional role/chart_type
+hints. The result returns stable panel IDs, source coordinates, analysis scopes,
 resource references, and warnings. SAM is optional boundary evidence and must
 only be requested explicitly when the VLM box is genuinely ambiguous.
-When routing a panel to a local bar, line, pie, or scatter sensor, keep the
-source attachment_id and pass the returned panel_id; the Agent will inject the
-matching scoped layout context and source transform. Treat the returned scope
-as a bounded search area, not as a calibrated measurement frame: each sensor
-must still find and validate its own inner plot, axes, or circle. Do not rescan
-the whole dashboard when a usable panel scope exists.
+When routing any panel to OCR or a bar, line, pie, or scatter sensor, keep the
+source attachment_id and pass the stable panel_id. The runtime resolves the
+physical local crop and source-coordinate transform. Treat PanelScope as a
+bounded search area, not as a calibrated MeasurementFrame: each sensor must
+still find and validate its own inner plot, axes, or circle. Never rescan the
+whole dashboard when a usable panel scope exists.
 Do not call OCR to discover or associate dashboard panels. Use extract_text only
-later when a small printed label or value still needs targeted evidence. Panel,
-segmentation, and crop output is spatial evidence only: it does not prove chart values,
-calibration, or a valid ChartSpec. For a clear single chart, use the
-specialized sensor directly when decomposition would add no evidence."""
+after a panel is selected and always pass its panel_id when the source is a
+multi-panel image. Panel, segmentation, and crop output is spatial evidence
+only: it does not prove chart values, calibration, or a valid ChartSpec. For a
+clear single chart, use the specialized sensor directly when decomposition
+would add no evidence."""
 
 _LAYOUT_POLICY = """Use inspect_chart_layout only when the chart's spatial
 layout is genuinely uncertain, such as rotation, horizontal orientation,
@@ -105,11 +109,14 @@ unpublished, failed, rejected, timed_out, and retry_exhausted candidates must
 not be described as verified or published.
 
 When a blocking review result is exposed, use only its bounded decision,
-checks, and issue code/location/severity/message as correction evidence. Revise
-the ChartSpec, call assemble_spec, then call render_chart for a new candidate;
-do not skip assembly or claim that a failed candidate was repaired without a
-new automatic review. If the retry budget is exhausted, provide a bounded
-non-published explanation."""
+checks, and issue code/location/severity/message as correction evidence. Treat
+source_binding_failure as a request to restore or reselect the source rather
+than as a reason to invent data. For semantic or render issues, revise the
+ChartSpec, call assemble_spec, then call render_chart for a new candidate; do
+not skip assembly, repeatedly submit the same spec, or claim that a failed
+candidate was repaired without a new automatic review. If the retry budget is
+exhausted, provide a bounded non-published explanation and preserve the
+diagnostics."""
 
 _ANSWER_POLICY = """In the final answer distinguish observed facts, inferred
 claims, warnings, and unresolved limitations. Treat the rendered candidate as

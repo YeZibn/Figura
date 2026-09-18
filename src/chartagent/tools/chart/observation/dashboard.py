@@ -11,6 +11,7 @@ from typing import Any, Sequence
 import numpy as np
 from PIL import Image
 
+from ....panels import PanelHandoff, handoff_from_panel, normalize_bbox, stable_panel_id
 from ...core.definition import Tool
 from ...core.result import GeneratedImage, ToolResult
 from .foundation import image_size
@@ -597,6 +598,203 @@ def decompose_chart_image(
     return ToolResult(data, images=tuple(images), warnings=tuple(warnings))
 
 
+def _panel_from_handoff(handoff: PanelHandoff, image_dimensions: Sequence[int]) -> dict[str, Any]:
+    """Rebuild the bounded model-facing panel record without re-segmenting."""
+    width, height = (int(value) for value in image_dimensions[:2])
+    left, top, box_width, box_height = handoff.source_bbox
+    scope = list(handoff.analysis_scope)
+    panel = {
+        "id": handoff.panel_id,
+        "name": handoff.name,
+        "slug": handoff.slug,
+        "role": handoff.role,
+        "chart_type": handoff.chart_type,
+        "proposal": {
+            "proposal_id": f"handoff_{handoff.panel_id}",
+            "bbox_norm": [round(left / width, 6), round(top / height, 6), round(box_width / width, 6), round(box_height / height, 6)],
+            "bbox_px": list(handoff.source_bbox),
+            "confidence": handoff.confidence,
+        },
+        "bbox_px": list(handoff.source_bbox),
+        "polygon_px": _bbox_polygon(handoff.source_bbox),
+        "status": "accepted" if handoff.status == "active" else "partial",
+        "segmentation": {
+            "source": "persisted_handoff",
+            "confidence": handoff.confidence,
+            "proposal_confidence": handoff.confidence,
+            "boundary_bbox_px": list(handoff.source_bbox),
+        },
+        "confidence": handoff.confidence,
+        "warnings": list(handoff.warnings),
+        "evidence": list(dict.fromkeys([*handoff.evidence, "persisted_panel_handoff"])),
+        "crop": {
+            "name": f"{handoff.panel_id}_{handoff.slug}.png",
+            "slug": handoff.slug,
+            "bbox_px": list(handoff.analysis_scope),
+            "source_origin_px": list(handoff.source_origin),
+            "size_px": [scope[2], scope[3]],
+            "resource_key": f"{handoff.panel_id}_crop",
+            "resource_ref": None,
+            "status": "pending",
+        },
+    }
+    panel["layout_context"] = _panel_layout_context(
+        panel,
+        image_dimensions=image_dimensions,
+        attachment_id=handoff.attachment_id,
+    )
+    panel["layout_context"]["analysis_scope"]["bbox_px"] = scope
+    panel["layout_context"]["analysis_scope"]["source_origin_px"] = list(handoff.source_origin)
+    panel["layout_context"]["panel"]["source_bbox_px"] = list(handoff.source_bbox)
+    panel["layout_context"]["panel"]["scope_bbox_px"] = scope
+    panel["analysis_transform"] = {
+        "source_origin_px": list(handoff.source_origin),
+        "scale": [1.0, 1.0],
+        "local_to_source": "x_source = x_local + source_origin_px[0]; y_source = y_local + source_origin_px[1]",
+    }
+    return panel
+
+
+def reuse_decomposition(
+    image_path: str,
+    handoffs: Sequence[PanelHandoff],
+    *,
+    attachment_id: str | None = None,
+) -> ToolResult | dict:
+    """Return previously accepted panels and fresh bounded crops.
+
+    This path intentionally does not call the segmenter or re-run proposal
+    validation.  The attachment hash and panel authorization are checked by
+    the caller before this function is reached.
+    """
+    path = Path(image_path)
+    if not path.is_file():
+        return {"error": "dashboard image could not be resolved"}
+    try:
+        with Image.open(path) as source:
+            chart_image = source.convert("RGB")
+    except Exception as exc:  # noqa: BLE001 - tool boundary
+        return {"error": f"decompose_chart_image reuse failed: {type(exc).__name__}"}
+    image_dimensions = image_size(np.asarray(chart_image))
+    panels = [_panel_from_handoff(item, image_dimensions) for item in handoffs[:_MAX_PANELS]]
+    warnings = ["reused persisted panel handoffs; dashboard decomposition was not repeated"]
+    images: list[GeneratedImage] = [GeneratedImage(
+        render_dashboard_overlay(chart_image, panels, warnings=warnings),
+        "image/png",
+        "复用的 dashboard 面板范围和局部 crop",
+        metadata={"kind": "dashboard_decomposition_overlay", "image_role": "overlay", "panel_count": len(panels), "reuse": True},
+    )]
+    for panel in panels:
+        content, origin, dimensions = _make_crop(chart_image, panel["crop"]["bbox_px"])
+        panel["crop"]["status"] = "available"
+        panel["crop"]["image_index"] = len(images)
+        panel["crop"]["size_px"] = dimensions
+        images.append(GeneratedImage(
+            content,
+            "image/png",
+            f"复用局部区域 {panel['id']}：{panel['name']}",
+            metadata={
+                "kind": "dashboard_panel_crop",
+                "image_role": "crop",
+                "resource_key": panel["crop"]["resource_key"],
+                "panel_id": panel["id"],
+                "crop_name": panel["crop"]["name"],
+                "source_origin_x": origin[0],
+                "source_origin_y": origin[1],
+                "width": dimensions[0],
+                "height": dimensions[1],
+                "reuse": True,
+            },
+        ))
+        panel["layout_context"]["panel"]["crop_ref"] = panel["crop"].get("resource_ref")
+    status = "accepted" if panels and all(panel["status"] == "accepted" for panel in panels) else "partial"
+    data = {
+        "kind": "chart_image_decomposition",
+        "image_size": image_dimensions,
+        "status": status,
+        "reuse": True,
+        "proposals": [panel["proposal"] for panel in panels],
+        "panels": panels,
+        "segmentation": {"mode": "persisted_handoff", "panel_count": len(panels), "accepted_count": len(panels), "crop_count": len(panels), "crop_limit": _MAX_CROPS},
+        "confidence": {"overall": float(np.mean([panel["confidence"] for panel in panels])) if panels else 0.0},
+        "warnings": warnings,
+    }
+    return ToolResult(data, images=tuple(images), warnings=tuple(warnings))
+
+
+def stabilize_decomposition_result(
+    result: ToolResult | dict,
+    *,
+    session_id: str,
+    attachment_id: str,
+    attachment_sha256: str,
+    origin_run_id: str | None,
+    panel_store: Any,
+) -> ToolResult | dict:
+    """Replace run-local panel ordinals and persist the accepted handoffs."""
+    if not isinstance(result, ToolResult) or not isinstance(result.data, dict):
+        return result
+    data = dict(result.data)
+    panels = data.get("panels")
+    if not isinstance(panels, list):
+        return result
+    changed_ids: dict[str, str] = {}
+    stable_panels: list[PanelHandoff] = []
+    for panel in panels:
+        if not isinstance(panel, dict):
+            continue
+        source_bbox = normalize_bbox(panel.get("bbox_px"))
+        if source_bbox is None:
+            continue
+        name = str(panel.get("name") or "Panel")
+        chart_type = str(panel.get("chart_type") or "unknown")
+        existing = panel_store.match_panel_handoff(
+            attachment_id,
+            attachment_sha256,
+            name=name,
+            chart_type=chart_type,
+            source_bbox=source_bbox,
+            minimum_iou=0.55,
+        )
+        stable_id = existing.panel_id if existing is not None else stable_panel_id(attachment_sha256, name, chart_type, source_bbox)
+        old_id = str(panel.get("id") or "")
+        if old_id and old_id != stable_id:
+            changed_ids[old_id] = stable_id
+        panel["id"] = stable_id
+        crop = panel.get("crop") if isinstance(panel.get("crop"), dict) else {}
+        crop["name"] = f"{stable_id}_{panel.get('slug', 'panel')}.png"
+        crop["resource_key"] = f"{stable_id}_crop"
+        panel["crop"] = crop
+        layout = panel.get("layout_context")
+        if isinstance(layout, dict):
+            layout["context_id"] = f"{stable_id}_layout"
+            panel_info = dict(layout.get("panel") or {})
+            panel_info["id"] = stable_id
+            layout["panel"] = panel_info
+        handoff = handoff_from_panel(
+            session_id=session_id,
+            attachment_id=attachment_id,
+            attachment_sha256=attachment_sha256,
+            panel=panel,
+            origin_run_id=origin_run_id,
+            panel_id=stable_id,
+            revision=existing.revision if existing is not None else 1,
+            supersedes_panel_id=None,
+        )
+        stable_panels.append(panel_store.save_panel_handoff(handoff))
+    images = list(result.images)
+    if changed_ids:
+        for index, image in enumerate(images):
+            metadata = dict(image.metadata) if isinstance(image.metadata, dict) else {}
+            if isinstance(metadata.get("panel_id"), str) and metadata["panel_id"] in changed_ids:
+                metadata["panel_id"] = changed_ids[metadata["panel_id"]]
+            metadata["panel_registry"] = "persisted"
+            images[index] = GeneratedImage(image.content, image.media_type, image.caption, metadata)
+    data["panels"] = panels
+    data["panel_registry"] = {"status": "persisted", "panel_ids": [item.panel_id for item in stable_panels]}
+    return ToolResult(data, images=tuple(images), warnings=result.warnings, evidence=result.evidence)
+
+
 DECOMPOSE_CHART_IMAGE = Tool(
     name="decompose_chart_image",
     description=(
@@ -680,4 +878,4 @@ DECOMPOSE_CHART_IMAGE = Tool(
 )
 
 
-__all__ = ["DECOMPOSE_CHART_IMAGE", "decompose_chart_image"]
+__all__ = ["DECOMPOSE_CHART_IMAGE", "decompose_chart_image", "reuse_decomposition", "stabilize_decomposition_result"]

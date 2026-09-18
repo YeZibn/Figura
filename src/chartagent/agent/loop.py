@@ -56,6 +56,7 @@ _MAX_LAYOUT_CONTEXTS = 32
 _GEOMETRY_TOOL_NAMES = frozenset(
     {"measure_bars", "extract_line_series", "extract_scatter_points", "extract_pie_slices"}
 )
+_SCOPED_TOOL_NAMES = _GEOMETRY_TOOL_NAMES | {"extract_text"}
 _RENDER_TOOL_NAMES = frozenset({"render_chart", "generate_chart"})
 
 
@@ -240,6 +241,7 @@ class Agent:
                     self.attachments.bind_run(attachment_id, run.id)
         else:
             run_attachment_ids = ()
+        self._hydrate_persisted_panel_contexts(layout_contexts, run_attachment_ids)
         if not self._current_messages or self._current_messages[-1].get("role") != "user":
             self._current_messages.append(user_message)  # type: ignore[arg-type]
         tools = registry_tools(self.registry)
@@ -337,7 +339,28 @@ class Agent:
                     self._current_messages.append(assistant_message)
                     self._messages.append(assistant_message)
                     self.memory.append(run, "assistant", {"message": assistant_message})
+                    gate_message = {"role": "user", "content": review_gate_context(gate)}
                     self.memory.append(run, "review_gate", {"state": gate})
+                    if gate.get("retryable") and turn < self.max_steps:
+                        self._current_messages.append(gate_message)  # type: ignore[arg-type]
+                        self._messages.append(gate_message)  # type: ignore[arg-type]
+                        self._checkpoint(
+                            run,
+                            phase="review",
+                            next_action=str((gate.get("recoveryActions") or [{}])[0].get("action", "correct_chart_spec")),
+                            state=self._checkpoint_state(
+                                user_input,
+                                self._current_messages,
+                                layout_contexts,
+                                run_attachment_ids,
+                                turn,
+                                pending_tool_calls=(),
+                                visual_references=checkpoint_references,
+                            ),
+                        )
+                        if emitter is not None:
+                            emitter.emit("chart_review_repair_required", turn=turn, state=gate)
+                        continue
                     if emitter is not None:
                         emitter.emit("generated_chart_rejected", turn=turn, state=gate, reason="review_failed")
                     self.memory.append(run, "terminal", {"answer": _REVIEW_FAILED_MSG, "review_gate": gate})
@@ -787,6 +810,8 @@ class Agent:
         if context is None:
             return arguments
         parsed["layout_context"] = context
+        # Keep the public call compatible with direct test/custom sensors; the
+        # authorized adapter recovers the panel ID from the injected context.
         parsed.pop("panel_id", None)
         return json.dumps(parsed, ensure_ascii=False, separators=(",", ":"))
 
@@ -797,7 +822,7 @@ class Agent:
         layout_contexts: dict[str, dict[str, Any]],
     ) -> str | None:
         """Reject an unresolved explicit panel route before sensor dispatch."""
-        if tool_name not in _GEOMETRY_TOOL_NAMES:
+        if tool_name not in _SCOPED_TOOL_NAMES:
             return None
         try:
             parsed = json.loads(arguments) if arguments.strip() else {}
@@ -819,6 +844,56 @@ class Agent:
         if not isinstance(scope, dict) or not isinstance(scope.get("bbox_px"), (list, tuple)):
             return f"panel routing failed: {panel_id!r} has no usable analysis scope"
         return None
+
+    def _hydrate_persisted_panel_contexts(
+        self,
+        layout_contexts: dict[str, dict[str, Any]],
+        attachment_ids: Sequence[str],
+    ) -> None:
+        """Load durable panel scopes into this run's routing cache."""
+        store = getattr(self.attachments, "panel_store", None)
+        if store is None or not hasattr(store, "list_panel_handoffs"):
+            return
+        ids = tuple(attachment_ids)
+        if not ids and hasattr(store, "get_active_source"):
+            ids = tuple(getattr(store.get_active_source(), "attachment_ids", ()) or ())
+        for attachment_id in ids[:16]:
+            try:
+                handoffs = store.list_panel_handoffs(attachment_id)
+            except Exception:  # noqa: BLE001 - persisted routing is advisory
+                continue
+            for handoff in handoffs[:_MAX_LAYOUT_CONTEXTS]:
+                context = {
+                    "version": 1,
+                    "context_id": f"{handoff.panel_id}_layout",
+                    "source_attachment_id": handoff.attachment_id,
+                    "coordinate_system": "polar_2d" if handoff.chart_type == "pie" else "cartesian_2d" if handoff.role == "chart" or handoff.chart_type in {"bar", "line", "scatter"} else "unknown",
+                    "analysis_scope": {
+                        "role": "panel_scope",
+                        "bbox_px": list(handoff.analysis_scope),
+                        "source_origin_px": list(handoff.source_origin),
+                        "confidence": handoff.confidence,
+                        "evidence": ["persisted_panel_handoff"],
+                    },
+                    "measurement_frame": None,
+                    "panel": {
+                        "id": handoff.panel_id,
+                        "name": handoff.name,
+                        "source_bbox_px": list(handoff.source_bbox),
+                        "scope_bbox_px": list(handoff.analysis_scope),
+                    },
+                    "validation": {
+                        "status": "accepted" if handoff.status == "active" else "partial",
+                        "accepted_for_analysis": handoff.status == "active",
+                        "accepted_for_measurement": False,
+                        "confidence": handoff.confidence,
+                        "warnings": list(handoff.warnings),
+                    },
+                    "evidence": ["persisted_panel_handoff", "source_coordinates"],
+                }
+                layout_contexts[f"{attachment_id}::{handoff.panel_id}"] = context
+                if len(layout_contexts) >= _MAX_LAYOUT_CONTEXTS:
+                    return
 
     @staticmethod
     def _remember_layout_context(
@@ -941,13 +1016,15 @@ class Agent:
                             status=ReviewStatus.FAILED,
                             checks={"source_evidence": "failed"},
                             issues=(ReviewIssue(
-                                "source_evidence_unavailable",
-                                "source",
-                                "authorized source attachment is unavailable",
+                                "source_binding_failure",
+                                "source_attachment_ids",
+                                "authorized source attachment is unavailable; bind an active source before retrying",
                             ),),
                             decision="fail",
                             confidence=0.0,
                             review_mode="vlm",
+                            suggested_action="rebind_source",
+                            recovery_classification="source_binding_failure",
                         )
                     else:
                         if emitter is not None:

@@ -132,7 +132,7 @@ function mapRunEvent(event: GatewayRunEvent, sessionId: string): AgentRunEvent {
     payload.artifacts = payload.artifacts.map((item) => {
       if (!item || typeof item !== 'object') return item
       const reference = item as Partial<GeneratedChartReference>
-      if (reference.status === 'unavailable' || reference.status === 'failed') return item
+      if (reference.status === 'unavailable') return item
       const chartReference = reference as GeneratedChartReference
       const resource = chartPreviewResource(sessionId, event.runId, chartReference)
       const url = reference.artifactId

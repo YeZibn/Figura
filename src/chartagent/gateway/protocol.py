@@ -531,6 +531,7 @@ class SessionTranscript:
     messages: tuple[ConversationText, ...] = ()
     attachments: tuple[Mapping[str, Any], ...] = ()
     runs: tuple[Mapping[str, Any], ...] = ()
+    active_source_attachment_ids: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -539,6 +540,7 @@ class SessionTranscript:
             "messages": [message.to_dict() for message in self.messages],
             "attachments": [dict(attachment) for attachment in self.attachments],
             "runs": [dict(run) for run in self.runs],
+            "activeSourceAttachmentIds": list(self.active_source_attachment_ids[:16]),
         }
 
 

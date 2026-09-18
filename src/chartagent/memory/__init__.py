@@ -1,7 +1,8 @@
 """Provider-neutral bounded session memory for ChartAgent."""
 
 from .models import Attachment, Record, Run, RunStatus, Session, SessionStats
+from ..panels import ActiveSourceContext, CandidateLineage, PanelHandoff
 from .store import AgentMemory, InMemoryAgentMemory
 from .sqlite import SQLiteAgentMemory
 
-__all__ = ["AgentMemory", "Attachment", "InMemoryAgentMemory", "Record", "Run", "RunStatus", "Session", "SessionStats", "SQLiteAgentMemory"]
+__all__ = ["ActiveSourceContext", "AgentMemory", "Attachment", "CandidateLineage", "InMemoryAgentMemory", "PanelHandoff", "Record", "Run", "RunStatus", "Session", "SessionStats", "SQLiteAgentMemory"]

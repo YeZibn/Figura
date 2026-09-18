@@ -14,6 +14,7 @@ from chartagent.review import (
     build_vlm_review_messages,
     VLM_REVIEW_SYSTEM_PROMPT,
 )
+from chartagent.review.vlm import review_candidate_with_vlm
 from chartagent.attachments import AttachmentRegistry
 from dataclasses import replace
 import pytest
@@ -152,6 +153,76 @@ def test_source_linked_candidate_cannot_finish_before_vlm_review():
     assert candidate.status is CandidateStatus.REVIEW_PENDING
     assert manager.gate("run-2")["ok"] is False
     assert manager.gate("run-2")["pending"][0]["candidateId"] == candidate.candidate_id
+
+
+def test_failed_review_exposes_recovery_action_and_candidate_lineage():
+    spec = _bar_spec()
+    rendered = render_chart(spec.to_dict())
+    manager = ChartReviewManager()
+    first = manager.create_candidate("run-repair", "call-1", rendered.images[0], spec, source_attachment_ids=("att_source",))
+    failed_result = parse_vlm_review(json.dumps({
+        "decision": "fail",
+        "confidence": 0.9,
+        "checks": {"chart_type": "pass", "orientation": "pass", "layout": "pass", "data_mapping": "fail", "labels": "pass", "readability": "pass"},
+        "issues": [{"code": "value_mismatch", "location": "dataset[0].value", "severity": "error", "message": "数据不一致"}],
+    }))
+    failed = manager.process(first, semantic_result=replace(failed_result, candidate_id=first.candidate_id, review_id=first.review_id, chart_spec_digest=first.chart_spec_digest))
+    gate = manager.gate("run-repair")
+    assert gate["retryable"] is True
+    assert gate["recoveryActions"][0]["action"] == "correct_chart_spec"
+
+    second = manager.create_candidate("run-repair", "call-2", rendered.images[0], spec, source_attachment_ids=("att_source",))
+    assert second.parent_candidate_id == first.candidate_id
+    assert second.lineage_attempt == 2
+    assert gate["failed"][0].get("superseded") is not True
+
+
+def test_review_correction_budget_ends_in_explicit_unpublished_state():
+    spec = _bar_spec()
+    rendered = render_chart(spec.to_dict())
+    manager = ChartReviewManager()
+    result = parse_vlm_review(json.dumps({
+        "decision": "fail",
+        "confidence": 0.9,
+        "checks": {"chart_type": "pass", "orientation": "pass", "layout": "fail", "data_mapping": "pass", "labels": "pass", "readability": "pass"},
+        "issues": [{"code": "layout_mismatch", "location": "axes", "severity": "error", "message": "布局不一致"}],
+    }))
+    current = None
+    for index in range(4):
+        current = manager.create_candidate("run-exhaust", f"call-{index}", rendered.images[0], spec, source_attachment_ids=("att_source",))
+        if current.status is CandidateStatus.RETRY_EXHAUSTED:
+            break
+        current = manager.process(current, semantic_result=replace(result, candidate_id=current.candidate_id, review_id=current.review_id, chart_spec_digest=current.chart_spec_digest))
+    assert current is not None
+    assert current.status is CandidateStatus.RETRY_EXHAUSTED
+    assert current.publication_status is PublicationStatus.REJECTED
+    assert manager.gate("run-exhaust")["retryable"] is False
+
+
+def test_vlm_review_retries_one_transient_provider_failure():
+    spec = _bar_spec()
+    rendered = render_chart(spec.to_dict())
+    manager = ChartReviewManager()
+    candidate = manager.create_candidate("run-vlm-retry", "call", rendered.images[0], spec)
+
+    class Client:
+        calls = 0
+
+        def chat(self, _messages, **_kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                raise TimeoutError("temporary")
+            return type("Result", (), {"content": json.dumps({
+                "decision": "pass",
+                "confidence": 0.9,
+                "checks": {name: "pass" for name in ("chart_type", "orientation", "layout", "data_mapping", "labels", "readability")},
+                "issues": [],
+            })})()
+
+    client = Client()
+    result = review_candidate_with_vlm(client, candidate, spec)
+    assert client.calls == 2
+    assert result.decision == "pass"
 
 
 def test_vlm_review_blocks_a_chartspec_value_mismatch():

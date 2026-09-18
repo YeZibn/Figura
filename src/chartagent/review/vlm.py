@@ -276,8 +276,14 @@ def review_candidate_with_vlm(
     source_media_type: str = "image/png",
     chat_kwargs: Mapping[str, Any] | None = None,
     trace_kwargs: Mapping[str, Any] | None = None,
+    max_attempts: int = 2,
 ) -> ReviewResult:
-    """Run exactly one extra multimodal model call with no tools."""
+    """Run a bounded extra multimodal model call with no tools.
+
+    Invalid model JSON is a semantic result and is not retried. Provider/runtime
+    exceptions receive one bounded retry because the review call is otherwise
+    independent from the main Agent turn.
+    """
     messages = build_vlm_review_messages(
         candidate,
         spec,
@@ -298,17 +304,21 @@ def review_candidate_with_vlm(
         value = (trace_kwargs or {}).get(key)
         if value is not None:
             kwargs[key] = value
-    try:
-        result = client.chat(messages, **kwargs)
-    except Exception as exc:  # noqa: BLE001 - provider failure is a review result.
-        parsed = _invalid_result(f"internal VLM review call failed: {type(exc).__name__}")
-        return replace(
-            parsed,
-            candidate_id=candidate.candidate_id,
-            review_id=candidate.review_id,
-            chart_spec_digest=candidate.chart_spec_digest,
-        )
-    parsed = parse_vlm_review(getattr(result, "content", ""))
+    parsed: ReviewResult | None = None
+    attempts = max(1, min(int(max_attempts), 2))
+    for attempt in range(attempts):
+        try:
+            result = client.chat(messages, **kwargs)
+        except Exception as exc:  # noqa: BLE001 - provider failure is a review result.
+            if attempt + 1 < attempts:
+                continue
+            parsed = _invalid_result(f"internal VLM review call failed: {type(exc).__name__}")
+            parsed = replace(parsed, suggested_action="retry_review", recovery_classification="transient_review_failure")
+            break
+        parsed = parse_vlm_review(getattr(result, "content", ""))
+        break
+    if parsed is None:  # pragma: no cover - defensive loop boundary
+        parsed = _invalid_result("internal VLM review call did not return a result")
     return replace(
         parsed,
         candidate_id=candidate.candidate_id,

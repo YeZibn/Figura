@@ -1,4 +1,4 @@
-"""Whole-image OCR sensor exposed through the chart tool protocol."""
+"""Scoped OCR sensor exposed through the chart tool protocol."""
 
 from __future__ import annotations
 
@@ -81,7 +81,8 @@ def extract_text(image_path: str) -> ToolResult | dict:
 EXTRACT_TEXT = Tool(
     name="extract_text",
     description=(
-        "Run OCR over the entire authorized chart image and return detected text "
+        "Run OCR over the authorized chart image, or over the requested panel "
+        "scope when panel_id is provided, and return detected text "
         "snippets with stable IDs, pixel bounding boxes, confidence scores, and a "
         "labeled overlay. Use when labels, titles, annotations, or printed values "
         "are needed; do not use it as a substitute for measuring geometry or for "

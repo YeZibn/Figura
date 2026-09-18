@@ -11,8 +11,9 @@ from typing import Any
 
 from .context import build_context, recovery_messages, sanitize_payload
 from .models import Attachment, Record, Run, RunStatus, Session, SessionStats, bounded, utc_now
+from ..panels import ActiveSourceContext, PanelHandoff, bbox_iou
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def default_database_path() -> Path:
@@ -47,6 +48,8 @@ class SQLiteAgentMemory:
             raise RuntimeError(f"unsupported session database version: {row[0]}")
         if not row:
             self.connection.execute("INSERT INTO schema_meta(version) VALUES (?)", (SCHEMA_VERSION,))
+        elif int(row[0]) < SCHEMA_VERSION:
+            self.connection.execute("UPDATE schema_meta SET version = ?", (SCHEMA_VERSION,))
         self.connection.executescript("""
         CREATE TABLE IF NOT EXISTS sessions (
           id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
@@ -67,9 +70,27 @@ class SQLiteAgentMemory:
           canonical_path TEXT NOT NULL, filename TEXT NOT NULL, media_type TEXT NOT NULL,
           byte_count INTEGER NOT NULL, sha256 TEXT NOT NULL, created_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS session_state (
+          session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+          active_attachment_ids_json TEXT NOT NULL DEFAULT '[]',
+          updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS panel_handoffs (
+          session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+          panel_id TEXT NOT NULL,
+          revision INTEGER NOT NULL,
+          attachment_id TEXT NOT NULL REFERENCES attachments(id) ON DELETE CASCADE,
+          attachment_sha256 TEXT NOT NULL,
+          status TEXT NOT NULL,
+          record_json TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY(session_id, panel_id, revision)
+        );
         CREATE INDEX IF NOT EXISTS idx_runs_session ON runs(session_id, ordinal);
         CREATE INDEX IF NOT EXISTS idx_records_run ON records(run_id, sequence);
         CREATE INDEX IF NOT EXISTS idx_attachments_session ON attachments(session_id, ordinal);
+        CREATE INDEX IF NOT EXISTS idx_panel_handoffs_attachment ON panel_handoffs(session_id, attachment_id, status);
         """)
         self.connection.commit()
         try:
@@ -338,6 +359,149 @@ class SQLiteAgentMemory:
                  attachment.canonical_path, attachment.filename, attachment.media_type,
                  attachment.byte_count, attachment.sha256, attachment.created_at),
             )
+
+    def set_active_source(self, attachment_ids: list[str] | tuple[str, ...]) -> ActiveSourceContext:
+        """Persist the session's explicit active source references."""
+        normalized = tuple(item for item in attachment_ids[:16] if isinstance(item, str) and item)
+        now = utc_now()
+        with self.connection:
+            self.connection.execute(
+                """INSERT INTO session_state(session_id, active_attachment_ids_json, updated_at)
+                   VALUES (?, ?, ?)
+                   ON CONFLICT(session_id) DO UPDATE SET
+                     active_attachment_ids_json = excluded.active_attachment_ids_json,
+                     updated_at = excluded.updated_at""",
+                (self.session.id, json.dumps(list(normalized), ensure_ascii=False), now),
+            )
+            self.connection.execute("UPDATE sessions SET updated_at = ? WHERE id = ?", (now, self.session.id))
+        return ActiveSourceContext(self.session.id, normalized, "explicit", now)
+
+    def get_active_source(self) -> ActiveSourceContext:
+        row = self.connection.execute(
+            "SELECT active_attachment_ids_json, updated_at FROM session_state WHERE session_id = ?",
+            (self.session.id,),
+        ).fetchone()
+        if row is None:
+            return ActiveSourceContext(self.session.id)
+        try:
+            values = json.loads(row["active_attachment_ids_json"])
+        except (TypeError, json.JSONDecodeError):
+            values = []
+        ids = tuple(item for item in values if isinstance(item, str)) if isinstance(values, list) else ()
+        return ActiveSourceContext(self.session.id, ids[:16], "session", row["updated_at"])
+
+    def save_panel_handoff(self, handoff: PanelHandoff) -> PanelHandoff:
+        if handoff.session_id != self.session.id:
+            raise ValueError("panel handoff belongs to another session")
+        now = utc_now()
+        payload = handoff.to_dict()
+        payload["updatedAt"] = now
+        stored = PanelHandoff.from_dict(payload)
+        with self.connection:
+            self.connection.execute(
+                """INSERT INTO panel_handoffs(
+                   session_id, panel_id, revision, attachment_id, attachment_sha256,
+                   status, record_json, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(session_id, panel_id, revision) DO UPDATE SET
+                     attachment_id = excluded.attachment_id,
+                     attachment_sha256 = excluded.attachment_sha256,
+                     status = excluded.status,
+                     record_json = excluded.record_json,
+                     updated_at = excluded.updated_at""",
+                (
+                    stored.session_id,
+                    stored.panel_id,
+                    stored.revision,
+                    stored.attachment_id,
+                    stored.attachment_sha256,
+                    stored.status,
+                    json.dumps(stored.to_dict(), ensure_ascii=False),
+                    stored.updated_at or now,
+                    stored.updated_at or now,
+                ),
+            )
+        return stored
+
+    def save_panel_handoffs(self, handoffs: list[PanelHandoff] | tuple[PanelHandoff, ...]) -> list[PanelHandoff]:
+        return [self.save_panel_handoff(item) for item in handoffs]
+
+    def list_panel_handoffs(self, attachment_id: str | None = None, *, include_stale: bool = False) -> list[PanelHandoff]:
+        query = "SELECT record_json FROM panel_handoffs WHERE session_id = ?"
+        params: list[Any] = [self.session.id]
+        if attachment_id:
+            query += " AND attachment_id = ?"
+            params.append(attachment_id)
+        if not include_stale:
+            query += " AND status = 'active'"
+        query += " ORDER BY attachment_id, panel_id, revision"
+        rows = self.connection.execute(query, params).fetchall()
+        result: list[PanelHandoff] = []
+        for row in rows:
+            try:
+                result.append(PanelHandoff.from_dict(json.loads(row["record_json"])))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                continue
+        return result
+
+    def get_panel_handoff(self, panel_id: str, *, attachment_id: str | None = None, revision: int | None = None) -> PanelHandoff | None:
+        query = "SELECT record_json FROM panel_handoffs WHERE session_id = ? AND panel_id = ?"
+        params: list[Any] = [self.session.id, panel_id]
+        if attachment_id:
+            query += " AND attachment_id = ?"
+            params.append(attachment_id)
+        if revision is not None:
+            query += " AND revision = ?"
+            params.append(int(revision))
+        query += " ORDER BY revision DESC LIMIT 1"
+        row = self.connection.execute(query, params).fetchone()
+        if row is None:
+            return None
+        try:
+            handoff = PanelHandoff.from_dict(json.loads(row["record_json"]))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return None
+        return handoff if handoff.status == "active" else None
+
+    def match_panel_handoff(
+        self,
+        attachment_id: str,
+        attachment_sha256: str,
+        *,
+        name: str | None = None,
+        chart_type: str | None = None,
+        source_bbox: list[int] | tuple[int, ...] | None = None,
+        minimum_iou: float = 0.55,
+    ) -> PanelHandoff | None:
+        candidates = [item for item in self.list_panel_handoffs(attachment_id) if item.attachment_sha256 == attachment_sha256]
+        if not candidates:
+            return None
+        normalized_name = (name or "").strip().casefold()
+        normalized_type = (chart_type or "").strip().casefold()
+        scored: list[tuple[float, PanelHandoff]] = []
+        for item in candidates:
+            score = bbox_iou(item.source_bbox, source_bbox)
+            if normalized_name and normalized_name == item.name.casefold():
+                score = max(score, 1.0 if source_bbox is None else score + 0.35)
+            elif normalized_name and normalized_name in item.name.casefold():
+                score += 0.15
+            if normalized_type and normalized_type == item.chart_type.casefold():
+                score += 0.1
+            scored.append((score, item))
+        if not scored:
+            return None
+        score, item = max(scored, key=lambda value: value[0])
+        return item if score >= minimum_iou else None
+
+    def invalidate_panel_handoff(self, panel_id: str, *, reason: str = "stale") -> bool:
+        now = utc_now()
+        with self.connection:
+            cursor = self.connection.execute(
+                """UPDATE panel_handoffs SET status = 'stale', updated_at = ?
+                   WHERE session_id = ? AND panel_id = ? AND status = 'active'""",
+                (now, self.session.id, panel_id),
+            )
+        return cursor.rowcount > 0
 
     def update_attachment_run(self, attachment_id: str, run_id: str) -> None:
         with self.connection:

@@ -40,7 +40,7 @@ export type ConversationItem =
   | { id: string; kind: 'visual_observation'; toolName: string; caption: string; imageUrl?: string; previewResource?: PreviewResource; timestamp: string }
   | { id: string; kind: 'error'; text: string; timestamp: string }
 
-export type SessionData = { session: Session; messages: ConversationItem[]; attachments: Attachment[]; runs: RunSummary[] }
+export type SessionData = { session: Session; messages: ConversationItem[]; attachments: Attachment[]; runs: RunSummary[]; activeSourceAttachmentIds?: string[] }
 export type RunStatus = 'running' | 'completed' | 'failed' | 'interrupted'
 export type RunState = 'idle' | 'connecting' | 'running' | 'reconnecting' | 'cancel_requested' | 'completed' | 'failed' | 'interrupted' | 'history-gap' | 'unavailable'
 export type Provider = 'openai' | 'qwen' | 'deepseek'

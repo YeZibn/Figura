@@ -6,7 +6,7 @@ import hashlib
 import mimetypes
 import os
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 from uuid import uuid4
 
 from ..memory.models import Attachment
@@ -15,11 +15,12 @@ from .policy import DEFAULT_MAX_ATTACHMENT_BYTES, SUPPORTED_IMAGE_TYPES
 
 
 class AttachmentRegistry:
-    def __init__(self, *, session_id: str | None = None, max_bytes: int = DEFAULT_MAX_ATTACHMENT_BYTES, save: Callable[[Attachment], None] | None = None, load: Callable[[str], Attachment | None] | None = None) -> None:
+    def __init__(self, *, session_id: str | None = None, max_bytes: int = DEFAULT_MAX_ATTACHMENT_BYTES, save: Callable[[Attachment], None] | None = None, load: Callable[[str], Attachment | None] | None = None, panel_store: Any = None) -> None:
         self.session_id = session_id
         self.max_bytes = max_bytes
         self._save = save
         self._load = load
+        self.panel_store = panel_store
         self._items: dict[str, Attachment] = {}
 
     def register(

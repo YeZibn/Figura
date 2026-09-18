@@ -16,13 +16,16 @@ def review_gate_context(gate: Mapping[str, Any]) -> str:
     pending = gate.get("pending")
     failed = gate.get("failed")
     published = gate.get("published")
-    required_action = "review_pending_candidates" if pending else "correct_failed_candidates" if failed else "resolve_review_outcome"
+    retryable = bool(gate.get("retryable"))
+    required_action = "review_pending_candidates" if pending else "correct_failed_candidates" if failed and retryable else "stop_unpublished" if failed else "resolve_review_outcome"
     payload = {
         "type": "chart_review_gate",
         "required_action": required_action,
         "pending": list(pending) if isinstance(pending, list) else [],
         "failed": list(failed) if isinstance(failed, list) else [],
         "published": list(published) if isinstance(published, list) else [],
+        "retryable": retryable,
+        "recovery_actions": list(gate.get("recoveryActions", ()))[:16] if isinstance(gate.get("recoveryActions"), list) else [],
     }
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 

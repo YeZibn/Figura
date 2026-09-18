@@ -258,6 +258,10 @@ class GatewayService:
             memory = self._memory_factory(session.name, create=False)
             try:
                 item = memory.get_attachment(attachment_id)
+                if item is not None:
+                    active_ids = memory.get_active_source().attachment_ids
+                    if attachment_id in active_ids:
+                        memory.set_active_source([value for value in active_ids if value != attachment_id])
             finally:
                 memory.close()
             if item is None:
@@ -579,12 +583,12 @@ class GatewayService:
         raw_retry_of: object = None,
     ) -> ManagedRun | HistoricalRun:
         text = validate_message_text(raw_text)
-        attachment_ids = validate_attachment_ids(raw_attachment_ids)
+        validate_attachment_ids(raw_attachment_ids)
         idempotency_key = validate_idempotency_key(raw_idempotency_key)
         retry_of = raw_retry_of.strip() if isinstance(raw_retry_of, str) else None
         if retry_of is not None and (not retry_of or len(retry_of) > 128):
             raise GatewayFault("invalid_request", 400, "retryOf is invalid")
-        session, prompt = self._prepare_prompt(session_id, raw_text, raw_attachment_ids)
+        session, prompt, attachment_ids = self._prepare_prompt(session_id, raw_text, raw_attachment_ids)
         requested_provider = validate_provider(raw_provider)
         try:
             readiness = _safe_readiness(self._readiness_probe())
@@ -693,27 +697,45 @@ class GatewayService:
         session_id: object,
         raw_text: object,
         raw_attachment_ids: object,
-    ) -> tuple[Any, str]:
+    ) -> tuple[Any, str, tuple[str, ...]]:
         text = validate_message_text(raw_text)
         session = self._resolve_session(session_id)
-        attachment_ids = validate_attachment_ids(raw_attachment_ids)
+        requested_ids = validate_attachment_ids(raw_attachment_ids)
+        attachment_ids = requested_ids
         attachment_metadata: list[dict[str, Any]] = []
-        if attachment_ids:
-            memory = self._memory_factory(session.name, create=False)
-            try:
-                registry = self._registry(memory)
-                for attachment_id in attachment_ids:
-                    item = registry.get(attachment_id)
-                    if item is None:
-                        raise GatewayFault("attachment_not_found", 404, "Attachment was not found")
-                    item, error = self._validated_attachment(memory, item)
-                    if error:
-                        raise GatewayFault("attachment_unavailable", 409, "Attachment is unavailable")
-                    attachment_metadata.append(item.metadata())
-            finally:
-                memory.close()
+        memory = self._memory_factory(session.name, create=False)
+        try:
+            registry = self._registry(memory)
+            if not requested_ids:
+                active = memory.get_active_source().attachment_ids
+                if len(active) == 1:
+                    attachment_ids = active
+                elif len(active) > 1:
+                    raise GatewayFault(
+                        "source_binding_required",
+                        409,
+                        "当前会话存在多个活动源图，请明确选择要使用的附件",
+                        "ambiguous_active_source",
+                    )
+            for attachment_id in attachment_ids:
+                item = registry.get(attachment_id)
+                if item is None:
+                    raise GatewayFault("attachment_not_found", 404, "Attachment was not found")
+                item, error = self._validated_attachment(memory, item)
+                if error:
+                    raise GatewayFault(
+                        "attachment_unavailable",
+                        409,
+                        "Attachment is unavailable",
+                        "source_attachment_unavailable",
+                    )
+                attachment_metadata.append(item.metadata())
+            if requested_ids:
+                memory.set_active_source(list(requested_ids))
+        finally:
+            memory.close()
         prompt = build_registered_attachment_turn(text, attachment_metadata) if attachment_metadata else text
-        return session, prompt
+        return session, prompt, tuple(attachment_ids)
 
     def _execute_run(
         self,
@@ -1002,6 +1024,7 @@ class GatewayService:
             (),
             (),
             (),
+            (),
         )
 
     def _load_transcript(self, session) -> SessionTranscript:
@@ -1023,7 +1046,9 @@ class GatewayService:
             attachments,
             canonical_run_ids=(item["runId"] for item in runs),
         )
-        return replace(transcript, runs=runs)
+        active_source = memory.get_active_source()
+        active_ids = tuple(active_source.attachment_ids) if active_source is not None else ()
+        return replace(transcript, runs=runs, active_source_attachment_ids=active_ids[:16])
 
     def _validated_attachment(self, memory: SQLiteAgentMemory, item):
         if not self._attachment_store.is_managed_path(memory.session.id, item.canonical_path):
@@ -1066,6 +1091,7 @@ class GatewayService:
             session_id=memory.session.id,
             save=memory.save_attachment if save else None,
             load=memory.get_attachment,
+            panel_store=memory,
         )
 
     def _attachment_summary(self, memory: SQLiteAgentMemory, item) -> AttachmentSummary:

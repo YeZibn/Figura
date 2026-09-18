@@ -58,6 +58,7 @@ def create_agent_runtime(
         session_id=memory.session.id if memory else None,
         save=memory.save_attachment if memory else None,
         load=memory.get_attachment if memory else None,
+        panel_store=memory,
     )
     registry = registry_cls()
     review_manager = ChartReviewManager(attachments=attachments)

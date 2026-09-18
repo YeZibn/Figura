@@ -1147,7 +1147,10 @@ class GatewayHistoryStore:
             if int(count) >= self.max_artifacts:
                 return None
             candidate_status = str(metadata.get("candidateStatus", "review_pending"))
-            managed_path = str(path) if candidate_status not in {"review_failed", "timed_out", "retry_exhausted", "expired"} else ""
+            # Failed candidates remain previewable for diagnosis and repair. They
+            # are still never promoted unless the publication gate later sees a
+            # verified/warning candidate with a matching review context.
+            managed_path = str(path) if candidate_status != "expired" else ""
             try:
                 if managed_path:
                     path.write_bytes(content)

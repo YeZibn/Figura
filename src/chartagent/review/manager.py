@@ -136,6 +136,8 @@ class ReviewResult:
     candidate_id: str | None = None
     review_id: str | None = None
     chart_spec_digest: str | None = None
+    suggested_action: str | None = None
+    recovery_classification: str | None = None
 
     @property
     def blocking(self) -> bool:
@@ -167,6 +169,10 @@ class ReviewResult:
             result["reviewId"] = self.review_id
         if self.chart_spec_digest is not None:
             result["chartSpecDigest"] = self.chart_spec_digest
+        if self.suggested_action is not None:
+            result["suggestedAction"] = self.suggested_action
+        if self.recovery_classification is not None:
+            result["recoveryClassification"] = self.recovery_classification
         return result
 
 
@@ -193,6 +199,9 @@ class ChartCandidate:
     deadline_at: float = 0.0
     content: bytes = field(default=b"", repr=False, compare=False)
     superseded: bool = False
+    parent_candidate_id: str | None = None
+    lineage_attempt: int = 1
+    panel_ids: tuple[str, ...] = ()
 
     def safe_metadata(self) -> dict[str, Any]:
         result: dict[str, Any] = {
@@ -213,7 +222,14 @@ class ChartCandidate:
             "reviewMode": "vlm" if self.policy.semantic_required else "safety",
             "policy": self.policy.to_dict(),
             "attempts": self.attempts,
+            "lineageAttempt": self.lineage_attempt,
         }
+        if self.parent_candidate_id:
+            result["parentCandidateId"] = self.parent_candidate_id
+        if self.panel_ids:
+            result["panelIds"] = list(self.panel_ids[:16])
+        if self.source_attachment_ids:
+            result["sourceAttachmentIds"] = list(self.source_attachment_ids[:16])
         if self.superseded:
             result["superseded"] = True
         if self.review is not None:
@@ -599,6 +615,8 @@ def _merge_review_results(safety: ReviewResult, semantic: ReviewResult) -> Revie
         candidate_id=semantic.candidate_id,
         review_id=semantic.review_id,
         chart_spec_digest=semantic.chart_spec_digest,
+        suggested_action=semantic.suggested_action,
+        recovery_classification=semantic.recovery_classification,
     )
 
 
@@ -629,14 +647,68 @@ class ChartReviewManager:
                 return self._items[existing_id][0]
             metadata = image.metadata if isinstance(image.metadata, Mapping) else {}
             policy = select_review_policy(spec, source_attachment_ids=source_attachment_ids, explicit_review=explicit_review)
+            parent_candidate_id: str | None = None
+            lineage_attempt = 1
             for prior_id, (prior, prior_spec) in tuple(self._items.items()):
                 if (
                     prior.run_id == run_id
                     and prior.chart_type == spec.metadata.chart_type.value
                     and prior.publication_status is PublicationStatus.REJECTED
-                    and prior.status is CandidateStatus.REVIEW_FAILED
+                    and prior.status in {CandidateStatus.REVIEW_FAILED, CandidateStatus.RETRY_EXHAUSTED}
+                    and not prior.superseded
                 ):
+                    if parent_candidate_id is None or prior.lineage_attempt > lineage_attempt:
+                        parent_candidate_id = prior.candidate_id
+                        lineage_attempt = prior.lineage_attempt + 1
                     self._items[prior_id] = (replace(prior, superseded=True), prior_spec)
+            panel_values = metadata.get("panelIds", metadata.get("panel_ids", ()))
+            panel_ids = tuple(
+                item[:160]
+                for item in panel_values
+                if isinstance(item, str) and item.strip()
+            )[:16] if isinstance(panel_values, (list, tuple)) else ()
+            if lineage_attempt > policy.max_attempts:
+                exhausted = ReviewResult(
+                    status=ReviewStatus.FAILED,
+                    checks={"review_lifecycle": "failed"},
+                    issues=(ReviewIssue(
+                        "retry_exhausted",
+                        "review.attempts",
+                        "candidate correction retry budget has been exhausted",
+                    ),),
+                    decision="fail",
+                    confidence=0.0,
+                    review_mode="vlm" if policy.semantic_required else "safety",
+                    suggested_action="stop_and_keep_unpublished",
+                    recovery_classification="retry_exhausted",
+                )
+                candidate = ChartCandidate(
+                    candidate_id=f"cand_{uuid4().hex}",
+                    review_id=f"review_{uuid4().hex}",
+                    run_id=run_id,
+                    chart_spec_digest=digest,
+                    chart_type=spec.metadata.chart_type.value,
+                    title=str(metadata.get("title") or spec.metadata.title or "图表")[:240],
+                    media_type=str(image.media_type).lower(),
+                    byte_count=len(image.content),
+                    width=int(metadata.get("width", 0) or 0),
+                    height=int(metadata.get("height", 0) or 0),
+                    policy=policy,
+                    status=CandidateStatus.RETRY_EXHAUSTED,
+                    review_status=ReviewStatus.FAILED,
+                    publication_status=PublicationStatus.REJECTED,
+                    review=exhausted,
+                    source_attachment_ids=tuple(source_attachment_ids)[:16],
+                    created_at=time.monotonic(),
+                    deadline_at=time.monotonic() + policy.deadline_seconds,
+                    content=image.content,
+                    parent_candidate_id=parent_candidate_id,
+                    lineage_attempt=lineage_attempt,
+                    panel_ids=panel_ids,
+                )
+                self._items[candidate.candidate_id] = (candidate, spec)
+                self._keys[key] = candidate.candidate_id
+                return candidate
             candidate = ChartCandidate(
                 candidate_id=f"cand_{uuid4().hex}",
                 review_id=f"review_{uuid4().hex}",
@@ -653,6 +725,9 @@ class ChartReviewManager:
                 created_at=time.monotonic(),
                 deadline_at=time.monotonic() + policy.deadline_seconds,
                 content=image.content,
+                parent_candidate_id=parent_candidate_id,
+                lineage_attempt=lineage_attempt,
+                panel_ids=panel_ids,
             )
             self._items[candidate.candidate_id] = (candidate, spec)
             self._keys[key] = candidate.candidate_id
@@ -764,6 +839,13 @@ class ChartReviewManager:
 
     def _apply_result(self, candidate: ChartCandidate, result: ReviewResult) -> ChartCandidate:
         if result.blocking:
+            if result.recovery_classification is None:
+                source_failure = any(issue.code == "source_binding_failure" for issue in result.issues)
+                result = replace(
+                    result,
+                    suggested_action="rebind_source" if source_failure else "correct_chart_spec",
+                    recovery_classification="source_binding_failure" if source_failure else "semantic_rejection",
+                )
             return replace(candidate, status=CandidateStatus.REVIEW_FAILED, review_status=result.status, publication_status=PublicationStatus.REJECTED, review=result)
         if result.warning:
             if candidate.policy.allow_warnings:
@@ -776,11 +858,24 @@ class ChartReviewManager:
             candidates = [item[0] for item in self._items.values() if item[0].run_id == run_id]
         pending = [item for item in candidates if item.policy.semantic_required and item.publication_status is PublicationStatus.UNPUBLISHED]
         failed = [item for item in candidates if item.publication_status is PublicationStatus.REJECTED and not item.superseded]
+        recovery_actions = []
+        for item in failed:
+            recovery = item.review.recovery_classification if item.review is not None else None
+            action = item.review.suggested_action if item.review is not None else None
+            if recovery or action:
+                recovery_actions.append({
+                    "candidateId": item.candidate_id,
+                    "classification": recovery or "review_failure",
+                    "action": action or "correct_chart_spec",
+                })
+        retryable = bool(failed) and not any(item.status is CandidateStatus.RETRY_EXHAUSTED for item in failed)
         return {
             "ok": not pending and not failed,
             "pending": [item.safe_metadata() for item in pending[:MAX_REVIEW_EVIDENCE]],
             "failed": [item.safe_metadata() for item in failed[:MAX_REVIEW_EVIDENCE]],
             "published": [item.safe_metadata() for item in candidates if item.publication_status in {PublicationStatus.PUBLISHED, PublicationStatus.PUBLISHED_WITH_WARNING}],
+            "retryable": retryable,
+            "recoveryActions": recovery_actions[:MAX_REVIEW_EVIDENCE],
         }
 
     def decorate_image(self, image: GeneratedImage, candidate: ChartCandidate) -> GeneratedImage:

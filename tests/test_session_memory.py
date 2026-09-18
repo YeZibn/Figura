@@ -121,7 +121,7 @@ def test_authorized_chart_tools_keep_identity_and_hide_local_paths():
     source_by_name = {tool.name: tool for tool in CHART_TOOLS}
 
     expected_fields = {
-        "extract_text": {"attachment_id"},
+        "extract_text": {"attachment_id", "panel_id"},
         "decompose_chart_image": {"attachment_id", "regions", "segmentation_mode", "max_panels", "crop_padding"},
         "inspect_chart_layout": {"attachment_id", "layout_hint", "chart_type"},
         "measure_bars": {"attachment_id", "panel_id"},
