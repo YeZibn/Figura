@@ -123,6 +123,68 @@ def render_ocr_overlay(image: Image.Image, snippets: list[dict]) -> bytes:
     return _png_bytes(overlay)
 
 
+def render_dashboard_overlay(
+    image: Image.Image,
+    panels: list[dict],
+    snippets: list[dict] | None = None,
+    warnings: list[str] | None = None,
+) -> bytes:
+    """Draw semantic panel boundaries, names, crop status, and warnings."""
+    overlay = image.convert("RGB").copy()
+    draw = ImageDraw.Draw(overlay)
+    colors = [
+        "#0066ff",
+        "#008f5a",
+        "#b000b5",
+        "#d66b00",
+        "#00a6a6",
+        "#e60000",
+    ]
+    for index, panel in enumerate(panels):
+        color = colors[index % len(colors)]
+        polygon = panel.get("polygon_px") if isinstance(panel, dict) else None
+        points = [
+            (
+                max(0, min(overlay.width - 1, int(round(point[0])))),
+                max(0, min(overlay.height - 1, int(round(point[1])))),
+            )
+            for point in polygon or []
+            if isinstance(point, (list, tuple)) and len(point) >= 2
+        ]
+        bbox = panel.get("bbox_px") if isinstance(panel, dict) else None
+        if len(points) >= 3:
+            draw.line([*points, points[0]], fill=color, width=3, joint="curve")
+            label_point = points[0]
+        elif isinstance(bbox, (list, tuple)) and len(bbox) == 4:
+            x, y, width, height = map(int, bbox)
+            draw.rectangle(
+                (x, y, min(overlay.width - 1, x + width - 1), min(overlay.height - 1, y + height - 1)),
+                outline=color,
+                width=3,
+            )
+            label_point = (x, y)
+        else:
+            continue
+        status = str(panel.get("status", "partial"))
+        role = str(panel.get("role", "unknown"))
+        chart_type = str(panel.get("chart_type", "unknown"))
+        name = " ".join(str(panel.get("name", "")).split())[:36]
+        crop = panel.get("crop") if isinstance(panel.get("crop"), dict) else {}
+        crop_status = str(crop.get("status", "unknown"))
+        _tag(
+            draw,
+            label_point,
+            f'{panel.get("id", "panel")} {name} {role}/{chart_type} {status} crop:{crop_status}',
+            image_size=overlay.size,
+        )
+
+    if warnings:
+        _tag(draw, (8, 8), "DASHBOARD PARTIAL" if panels else "NO PANELS", image_size=overlay.size)
+    elif not panels:
+        _tag(draw, (8, 8), "NO PANELS", image_size=overlay.size)
+    return _png_bytes(overlay)
+
+
 def render_bar_overlay(
     image: Image.Image,
     bars: list[dict],

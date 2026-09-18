@@ -7,6 +7,7 @@ from ...attachments import AttachmentRegistry
 from ..core.definition import Tool
 from ..core.registry import ToolRegistry
 from .observation.bars import MEASURE_BARS
+from .observation.dashboard import DECOMPOSE_CHART_IMAGE
 from .observation.line import EXTRACT_LINE_SERIES
 from .observation.layout_tool import INSPECT_CHART_LAYOUT
 from .observation.ocr import EXTRACT_TEXT
@@ -17,6 +18,7 @@ from .specification import ASSEMBLE_SPEC
 
 CHART_TOOLS = [
     EXTRACT_TEXT,
+    DECOMPOSE_CHART_IMAGE,
     INSPECT_CHART_LAYOUT,
     MEASURE_BARS,
     EXTRACT_LINE_SERIES,
@@ -37,6 +39,7 @@ def register_chart_tools(
     for tool in CHART_TOOLS:
         if attachments is not None and tool.name in {
             "extract_text",
+            "decompose_chart_image",
             "inspect_chart_layout",
             "measure_bars",
             "extract_line_series",

@@ -158,6 +158,34 @@ In the Agent REPL, enter an image as `@/path/to/chart.png` or `@"/path with spac
 
 Tool-generated overlays are returned as in-memory visual observations for the next model turn. Their bytes, source-image bytes, provider reasoning, raw responses, credentials, and trace events are not persisted in session memory.
 
+For images containing several cards or charts, the Agent first uses
+multimodal vision to propose named semantic regions, then calls the
+attachment-authorized `decompose_chart_image` tool once. The tool does not use
+OCR to discover dashboard topology: it validates the VLM `bbox_norm` proposals,
+optionally refines each one with a lazily loaded SAM-family backend, and
+returns stable panel IDs, named crops, source-coordinate transforms, managed
+resource references, and warnings. `auto` is the default: SAM is used only
+when its optional runtime is configured; otherwise the VLM bounds remain as
+partial deterministic fallback evidence. Set `FIGURA_SAM_CHECKPOINT` to enable
+the current SAM adapter, with optional `FIGURA_SAM_MODEL_TYPE` (default
+`vit_b`) and `FIGURA_SAM_DEVICE` (default `cpu`). Model weights are not
+downloaded automatically. If the package, checkpoint, or runtime is
+unavailable, the tool keeps usable panel crops and marks the affected evidence
+as partial instead of failing the whole image. The tool bounds proposals at 32
+panels and crops at 12 resources; generated-image byte/count and observation
+retention limits are enforced by the managed resource boundary. When routing a
+panel to a bar, line, pie, or scatter sensor, keep the source `attachment_id`
+and pass its `panel_id`; the Agent injects the scoped source layout so the
+sensor does not silently rescan the full dashboard. Spatial decomposition
+evidence remains separate from chart measurement and value extraction.
+
+Run this workflow in the canonical Conda environment so RapidOCR and any
+optional vision dependencies resolve consistently:
+
+```bash
+conda run -n agent python -m pytest -q tests/test_dashboard_decomposition.py
+```
+
 To redraw structured data, the Agent can pass an existing or newly assembled
 `ChartSpec` to the optional `render_chart` tool. The tool validates the shared
 specification and supports `bar`, `line`, `pie`, and `scatter` charts with

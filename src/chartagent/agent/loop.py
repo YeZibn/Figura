@@ -36,7 +36,7 @@ from ..tools.core import ToolRegistry, dispatch_observation
 from ..tools.core.presentation import get_tool_presentation
 from ..memory import AgentMemory, InMemoryAgentMemory, RunStatus
 from ..review import ChartReviewManager, ReviewIssue, ReviewResult, ReviewStatus, review_candidate_with_vlm
-from ..tools.core.result import GeneratedImage
+from ..tools.core.result import DispatchedObservation, GeneratedImage
 from .tool_schema import registry_tools, tool_to_openai_schema
 from .messages import assistant_entry, tool_entry
 from .review_gate import (
@@ -50,10 +50,64 @@ from .observations import observation_status
 # Sentinel returned when the step budget is exhausted.
 VisualObservationSink = Callable[[str, str, Sequence[GeneratedImage]], Sequence[dict[str, Any]]]
 _LAYOUT_TOOL_NAME = "inspect_chart_layout"
+_DECOMPOSE_TOOL_NAME = "decompose_chart_image"
 _GEOMETRY_TOOL_NAMES = frozenset(
     {"measure_bars", "extract_line_series", "extract_scatter_points", "extract_pie_slices"}
 )
 _RENDER_TOOL_NAMES = frozenset({"render_chart", "generate_chart"})
+
+
+def _attach_visual_observation_refs(
+    observation: DispatchedObservation,
+    references: Sequence[dict[str, Any]],
+) -> DispatchedObservation:
+    """Attach managed visual-resource refs to decomposition crop records."""
+    if not references or not observation.images:
+        return observation
+    try:
+        payload = json.loads(observation.content)
+    except (TypeError, json.JSONDecodeError):
+        return observation
+    if not isinstance(payload, dict):
+        return observation
+    data = payload.get("data")
+    if not isinstance(data, dict) or not isinstance(data.get("panels"), list):
+        return observation
+    by_key = {
+        str(reference.get("resourceKey")): reference
+        for reference in references
+        if isinstance(reference, dict) and isinstance(reference.get("resourceKey"), str)
+    }
+    ordered_refs = [reference for reference in references if isinstance(reference, dict)]
+    for image_index, image in enumerate(observation.images):
+        metadata = image.metadata if hasattr(image.metadata, "get") else {}
+        panel_id = metadata.get("panel_id") if isinstance(metadata, dict) else None
+        resource_key = metadata.get("resource_key") if isinstance(metadata, dict) else None
+        if not isinstance(panel_id, str):
+            continue
+        panel = next(
+            (item for item in data["panels"] if isinstance(item, dict) and item.get("id") == panel_id),
+            None,
+        )
+        if panel is None or not isinstance(panel.get("crop"), dict):
+            continue
+        reference = by_key.get(resource_key) if isinstance(resource_key, str) else None
+        if reference is None and len(ordered_refs) == len(observation.images):
+            reference = ordered_refs[image_index]
+        crop = dict(panel["crop"])
+        crop["resource_ref"] = dict(reference) if isinstance(reference, dict) else None
+        crop["status"] = "persisted" if reference is not None else "unavailable"
+        panel["crop"] = crop
+        layout_context = panel.get("layout_context")
+        if isinstance(layout_context, dict):
+            panel_context = dict(layout_context.get("panel") or {})
+            panel_context["crop_ref"] = crop["resource_ref"]
+            layout_context["panel"] = panel_context
+    payload["data"] = data
+    return DispatchedObservation(
+        content=json.dumps(payload, ensure_ascii=False),
+        images=observation.images,
+    )
 
 
 class AgentInterrupted(RuntimeError):
@@ -368,7 +422,7 @@ class Agent:
                     self.registry, call.name, dispatch_arguments
                 )
                 self._raise_if_interrupted(run)
-                if call.name == _LAYOUT_TOOL_NAME:
+                if call.name in {_LAYOUT_TOOL_NAME, _DECOMPOSE_TOOL_NAME}:
                     self._remember_layout_context(
                         observation.content,
                         call.arguments,
@@ -394,10 +448,6 @@ class Agent:
                 self._raise_if_interrupted(run)
                 if review_operation_id:
                     self._complete_work_unit(review_operation_id, "review", {"status": "completed"})
-                tool_message = tool_entry(call, observation.content)
-                self._current_messages.append(tool_message)
-                self._messages.append(tool_message)
-                self.memory.append(run, "tool", {"message": tool_message, "tool_name": call.name, "status": observation_status(observation.content)})
                 observation_refs: Sequence[dict[str, Any]] = ()
                 sink_images = observation.images
                 if self._visual_observation_sink is not None and sink_images:
@@ -410,6 +460,11 @@ class Agent:
                         )
                     except Exception:  # noqa: BLE001 - observation diagnostics cannot abort the Agent
                         observation_refs = ()
+                observation = _attach_visual_observation_refs(observation, observation_refs)
+                tool_message = tool_entry(call, observation.content)
+                self._current_messages.append(tool_message)
+                self._messages.append(tool_message)
+                self.memory.append(run, "tool", {"message": tool_message, "tool_name": call.name, "status": observation_status(observation.content)})
                 checkpoint_references.extend(
                     item for item in observation_refs if isinstance(item, dict)
                 )
@@ -698,12 +753,18 @@ class Agent:
         if not isinstance(parsed, dict) or parsed.get("layout_context") is not None:
             return arguments
         attachment_id = parsed.get("attachment_id")
-        context = layout_contexts.get(attachment_id) if isinstance(attachment_id, str) else None
+        panel_id = parsed.get("panel_id")
+        context = None
+        if isinstance(attachment_id, str) and isinstance(panel_id, str) and panel_id:
+            context = layout_contexts.get(f"{attachment_id}::{panel_id}")
+        if context is None and isinstance(attachment_id, str):
+            context = layout_contexts.get(attachment_id)
         if context is None and len(layout_contexts) == 1:
             context = next(iter(layout_contexts.values()))
         if context is None:
             return arguments
         parsed["layout_context"] = context
+        parsed.pop("panel_id", None)
         return json.dumps(parsed, ensure_ascii=False, separators=(",", ":"))
 
     @staticmethod
@@ -719,12 +780,34 @@ class Agent:
             return
         if not isinstance(payload, dict) or not isinstance(parsed_arguments, dict):
             return
-        data = payload.get("data")
-        context = data.get("layout_context") if isinstance(data, dict) else None
-        if not isinstance(context, dict):
-            return
         attachment_id = parsed_arguments.get("attachment_id")
         if not isinstance(attachment_id, str) or not attachment_id:
+            return
+        data = payload.get("data")
+        if not isinstance(data, dict):
+            return
+        if isinstance(data.get("panels"), list):
+            for panel in data["panels"]:
+                if not isinstance(panel, dict) or not isinstance(panel.get("id"), str):
+                    continue
+                context = panel.get("layout_context")
+                if not isinstance(context, dict):
+                    continue
+                cached = dict(context)
+                cached["source_attachment_id"] = attachment_id
+                panel_summary = dict(cached.get("panel") or {})
+                panel_summary.update(
+                    {
+                        "id": panel["id"],
+                        "name": panel.get("name"),
+                        "chart_type": panel.get("chart_type"),
+                    }
+                )
+                cached["panel"] = panel_summary
+                layout_contexts[f"{attachment_id}::{panel['id']}"] = cached
+            return
+        context = data.get("layout_context")
+        if not isinstance(context, dict):
             return
         cached = dict(context)
         cached["source_attachment_id"] = attachment_id

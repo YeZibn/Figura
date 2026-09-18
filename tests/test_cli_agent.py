@@ -254,6 +254,7 @@ def test_agent_repl_registers_builtin_and_chart_tools(monkeypatch):
         "parse_json",
         "read_json_file",
         "extract_text",
+        "decompose_chart_image",
         "inspect_chart_layout",
         "measure_bars",
         "extract_line_series",

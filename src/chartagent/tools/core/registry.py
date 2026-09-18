@@ -13,7 +13,12 @@ import json
 from typing import Dict, List
 
 from .definition import Tool
-from .result import DispatchedObservation, normalize_tool_result
+from .result import (
+    DEFAULT_MAX_DASHBOARD_IMAGES,
+    DEFAULT_MAX_GENERATED_IMAGES,
+    DispatchedObservation,
+    normalize_tool_result,
+)
 
 
 class ToolRegistry:
@@ -83,6 +88,11 @@ def dispatch_observation(
     try:
         return normalize_tool_result(
             result,
+            max_images=(
+                DEFAULT_MAX_DASHBOARD_IMAGES
+                if name == "decompose_chart_image"
+                else DEFAULT_MAX_GENERATED_IMAGES
+            ),
             source_tool=name,
             source_attachment_id=args.get("attachment_id")
             if isinstance(args.get("attachment_id"), str)

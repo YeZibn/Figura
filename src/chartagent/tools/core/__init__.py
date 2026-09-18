@@ -11,6 +11,7 @@ from .registry import ToolRegistry, dispatch, dispatch_observation
 from .result import (
     DEFAULT_MAX_GENERATED_IMAGE_BYTES,
     DEFAULT_MAX_GENERATED_IMAGES,
+    DEFAULT_MAX_DASHBOARD_IMAGES,
     SUPPORTED_GENERATED_IMAGE_MIME_TYPES,
     DispatchedObservation,
     GeneratedImage,
@@ -34,6 +35,7 @@ __all__ = [
     "SUPPORTED_GENERATED_IMAGE_MIME_TYPES",
     "DEFAULT_MAX_GENERATED_IMAGE_BYTES",
     "DEFAULT_MAX_GENERATED_IMAGES",
+    "DEFAULT_MAX_DASHBOARD_IMAGES",
     "ToolCatalog",
     "ToolPresentation",
     "DEFAULT_TOOL_CATALOG",

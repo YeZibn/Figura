@@ -914,6 +914,10 @@ class GatewayService:
                 if fallback is not None:
                     reference = fallback.to_dict()
             if reference is not None:
+                resource_key = metadata.get("resource_key") if isinstance(metadata, Mapping) else None
+                if isinstance(resource_key, str) and resource_key:
+                    reference = dict(reference)
+                    reference["resourceKey"] = resource_key[:96]
                 references.append(reference)
         return references
 

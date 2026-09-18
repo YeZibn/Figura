@@ -13,8 +13,10 @@ SUPPORTED_GENERATED_IMAGE_MIME_TYPES = frozenset(
 )
 DEFAULT_MAX_GENERATED_IMAGE_BYTES = 10 * 1024 * 1024
 DEFAULT_MAX_GENERATED_IMAGES = 4
+DEFAULT_MAX_DASHBOARD_IMAGES = 16
 _EVIDENCE_TYPES = {
     "extract_text": "text",
+    "decompose_chart_image": "layout",
     "inspect_chart_layout": "layout",
     "measure_bars": "geometry",
     "extract_line_series": "geometry",
@@ -22,6 +24,10 @@ _EVIDENCE_TYPES = {
     "extract_scatter_points": "geometry",
 }
 _EVIDENCE_REFERENCE_KEYS = (
+    "panels",
+    "proposals",
+    "crops",
+    "ocr",
     "frame",
     "plot_frame",
     "plot_area",
@@ -274,4 +280,5 @@ __all__ = [
     "SUPPORTED_GENERATED_IMAGE_MIME_TYPES",
     "DEFAULT_MAX_GENERATED_IMAGE_BYTES",
     "DEFAULT_MAX_GENERATED_IMAGES",
+    "DEFAULT_MAX_DASHBOARD_IMAGES",
 ]

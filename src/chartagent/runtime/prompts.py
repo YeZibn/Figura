@@ -25,6 +25,23 @@ not call unrelated tools merely to make the process look complete, and do not
 treat any one tool result as a universal replacement for the other evidence
 types."""
 
+_DASHBOARD_POLICY = """When an attached image contains multiple cards, charts,
+or small visual panels, first inspect the image with multimodal vision (load the
+authorized attachment when needed) and propose the semantic regions yourself.
+Then call decompose_chart_image once with bounded regions containing a name and
+normalized bbox_norm=[x, y, width, height], plus optional role/chart_type hints.
+The tool uses SAM to refine those proposed boundaries and returns named panel
+crops, stable panel IDs, source coordinates, resource references, and warnings.
+When routing a panel to a local bar, line, pie, or scatter sensor, keep the
+source attachment_id and pass the returned panel_id; the Agent will inject the
+matching scoped layout context and source transform. Do not rescan the whole
+dashboard when a usable crop exists.
+Do not call OCR to discover or associate dashboard panels. Use extract_text only
+later when a small printed label or value still needs targeted evidence. Panel,
+SAM, and crop output is spatial evidence only: it does not prove chart values,
+calibration, or a valid ChartSpec. For a clear single chart, use the
+specialized sensor directly when decomposition would add no evidence."""
+
 _LAYOUT_POLICY = """Use inspect_chart_layout only when the chart's spatial
 layout is genuinely uncertain, such as rotation, horizontal orientation,
 dense annotations, or disagreement between visual and geometric evidence. It
@@ -103,6 +120,7 @@ AGENT_SYSTEM_PROMPT = "\n\n".join(
         _ROLE_AND_GOAL,
         _EVIDENCE_POLICY,
         _TOOL_POLICY,
+        _DASHBOARD_POLICY,
         _LAYOUT_POLICY,
         _RESTORATION_POLICY,
         _GENERATION_POLICY,
