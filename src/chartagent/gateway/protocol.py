@@ -26,7 +26,7 @@ MAX_CHECKPOINT_PAYLOAD = 64 * 1024
 MAX_OPERATION_RESULT = 16 * 1024
 MAX_RECOVERY_REASON = 240
 MAX_OPERATION_ID = 160
-SUPPORTED_PROVIDERS = ("openai", "qwen")
+SUPPORTED_PROVIDERS = ("openai", "qwen", "deepseek")
 MAX_ARTIFACT_CAPTION = 500
 MAX_ARTIFACT_TITLE = 240
 MAX_ARTIFACT_CHART_TYPE = 64
@@ -423,7 +423,7 @@ def validate_provider(value: object, *, allow_none: bool = True) -> str | None:
     if value is None and allow_none:
         return None
     if not isinstance(value, str) or value.strip().lower() not in SUPPORTED_PROVIDERS:
-        raise GatewayFault("invalid_provider", 400, "provider must be openai or qwen")
+        raise GatewayFault("invalid_provider", 400, "provider must be openai, qwen, or deepseek")
     return value.strip().lower()
 
 

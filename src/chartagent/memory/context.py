@@ -8,13 +8,23 @@ from typing import Any, Iterable
 from .models import Record, Run, RunStatus
 
 SENSITIVE_KEYS = frozenset({"reasoning", "raw", "raw_response", "credentials", "api_key", "authorization", "image_bytes", "data_url"})
+PRIVATE_REASONING_LIMIT = 48 * 1024
 
 
-def sanitize_payload(payload: Any, *, limit: int = 12000) -> Any:
+def sanitize_payload(
+    payload: Any,
+    *,
+    limit: int = 12000,
+    preserve_private_reasoning: bool = False,
+) -> Any:
     if isinstance(payload, dict):
         clean = {}
         for key, value in payload.items():
             lower = str(key).lower()
+            if lower == "reasoning_content":
+                if preserve_private_reasoning and isinstance(value, str) and len(value) <= PRIVATE_REASONING_LIMIT:
+                    clean[str(key)] = value
+                continue
             if lower in SENSITIVE_KEYS:
                 continue
             if lower in {"url", "uri"} and isinstance(value, str) and value.startswith("data:"):
@@ -23,7 +33,7 @@ def sanitize_payload(payload: Any, *, limit: int = 12000) -> Any:
             # Tool messages carry JSON text. Truncating that text as a plain
             # string can create unmatched braces and invalid provider input.
             if str(key) == "message" and isinstance(value, dict) and value.get("role") == "tool":
-                message = sanitize_payload(value, limit=limit)
+                message = sanitize_payload(value, limit=limit, preserve_private_reasoning=preserve_private_reasoning)
                 content = value.get("content")
                 if isinstance(content, str) and len(content) > limit:
                     try:
@@ -33,10 +43,10 @@ def sanitize_payload(payload: Any, *, limit: int = 12000) -> Any:
                     message["content"] = _bounded_json(parsed, limit)
                 clean[str(key)] = message
             else:
-                clean[str(key)] = sanitize_payload(value, limit=limit)
+                clean[str(key)] = sanitize_payload(value, limit=limit, preserve_private_reasoning=preserve_private_reasoning)
         return clean
     if isinstance(payload, (list, tuple)):
-        return [sanitize_payload(v, limit=limit) for v in payload[:100]]
+        return [sanitize_payload(v, limit=limit, preserve_private_reasoning=preserve_private_reasoning) for v in payload[:100]]
     if isinstance(payload, str):
         if payload.startswith("data:"):
             return "[binary content omitted from memory]"
@@ -85,7 +95,7 @@ def recovery_messages(state: dict[str, Any] | None, *, budget: int = 24000) -> l
     for item in raw[:48]:
         if not isinstance(item, dict) or item.get("role") not in {"user", "assistant", "tool", "system"}:
             continue
-        clean = sanitize_payload(item)
+        clean = sanitize_payload(item, preserve_private_reasoning=True)
         size = json_size(clean)
         if used + size > max(1024, budget):
             break

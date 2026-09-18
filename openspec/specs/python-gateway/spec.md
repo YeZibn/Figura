@@ -10,9 +10,9 @@ Provide a local, browser-compatible gateway that lets the ChartAgent desktop cli
 
 The system SHALL provide a versioned loopback HTTP/JSON Gateway with bounded
 Agent readiness for each supported provider. Health responses MAY identify
-`openai` and `qwen`, the safe availability state of each, and the default
-provider, but MUST NOT expose credentials, raw endpoint values, or provider
-payloads.
+`openai`, `qwen`, and `deepseek`, the safe availability state of each, and the
+default provider, but MUST NOT expose credentials, raw endpoint values, or
+provider payloads.
 
 #### Scenario: Health reports provider capabilities
 
@@ -122,9 +122,9 @@ reason.
 
 #### Scenario: Run uses the requested provider
 
-- **WHEN** a valid run request specifies `qwen`
-- **THEN** the accepted run and Agent runtime use Qwen configuration and the
-  run metadata identifies `qwen`
+- **WHEN** a valid run request specifies `openai`, `qwen`, or `deepseek`
+- **THEN** the accepted run and Agent runtime use that provider's configuration
+  and the run metadata identifies the selected provider
 
 #### Scenario: Omitted provider uses the default
 

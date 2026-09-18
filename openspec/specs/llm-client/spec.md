@@ -15,12 +15,15 @@ logs, and loads its environment (key, base_url, default model) from `.env` via
 
 The client SHALL resolve an explicit provider selection before resolving
 provider-scoped connection and behavior settings. The supported providers are
-`openai` and `qwen`. OpenAI SHALL use `OPENAI_API_KEY`, `OPENAI_BASE_URL`, and
-`OPENAI_MODEL`, where `OPENAI_BASE_URL` remains the existing OpenAI relay
-configured by the deployment. Qwen SHALL use `QWEN_API_KEY`, `QWEN_BASE_URL`,
-and `QWEN_MODEL`, with the documented DashScope-compatible endpoint and
-`qwen3.8-flash` as the documented example. `CHARTAGENT_PROVIDER` SHALL select
-the default provider and SHALL default to `openai` for backward compatibility.
+`openai`, `qwen`, and `deepseek`. OpenAI SHALL use `OPENAI_API_KEY`,
+`OPENAI_BASE_URL`, and `OPENAI_MODEL`, where `OPENAI_BASE_URL` remains the
+existing OpenAI relay configured by the deployment. Qwen SHALL use
+`QWEN_API_KEY`, `QWEN_BASE_URL`, and `QWEN_MODEL`, with the documented
+DashScope-compatible endpoint. DeepSeek SHALL use `DEEPSEEK_API_KEY`,
+`DEEPSEEK_BASE_URL`, and `DEEPSEEK_MODEL`, defaulting to
+`https://api.deepseek.com` and the official model ID `deepseek-flash`.
+`CHARTAGENT_PROVIDER` SHALL select the default provider and SHALL default to
+`openai` for backward compatibility.
 Legacy `DASHSCOPE_API_KEY`, `DASHSCOPE_BASE_URL`, and `DASH_MODEL` MAY be used
 only as lower-priority Qwen aliases. Provider-scoped values MUST NOT leak across
 providers. Environment loading MUST remain stable across repository-root and
@@ -38,9 +41,17 @@ frontend launch directories and MUST NOT log credentials.
 - **THEN** the client uses Qwen credentials, endpoint, and model, with legacy
   DashScope aliases considered only when the corresponding Qwen value is absent
 
+#### Scenario: DeepSeek uses its own configuration
+
+- **WHEN** provider `deepseek` is selected and DeepSeek configuration is present
+- **THEN** the client uses `DEEPSEEK_API_KEY`, `DEEPSEEK_BASE_URL`, and
+  `DEEPSEEK_MODEL`, defaulting the endpoint and model to the documented
+  DeepSeek Flash values
+
 #### Scenario: Unknown provider is invalid
 
-- **WHEN** configuration resolves a provider other than `openai` or `qwen`
+- **WHEN** configuration resolves a provider other than `openai`, `qwen`, or
+  `deepseek`
 - **THEN** client construction or readiness returns a bounded invalid
   configuration result without attempting a provider request
 
@@ -99,11 +110,13 @@ frontend launch directories and MUST NOT log credentials.
 
 Every client invocation SHALL use the common Chat Completions contract with a
 model, `messages`, and explicit `stream`. Standard tools SHALL be sent through
-`tools` for both providers. OpenAI SHALL preserve the current relay request
-behavior, including its supported standard parameters. Qwen SHALL receive only
-parameters supported by its compatibility contract and SHALL receive
-`extra_body.enable_thinking` when Qwen thinking is enabled. Provider-specific
-fields MUST NOT be sent to the other provider.
+`tools` for all supported providers. OpenAI SHALL preserve the current relay
+request behavior, including its supported standard parameters. Qwen SHALL
+receive only parameters supported by its compatibility contract and SHALL
+receive `extra_body.enable_thinking` when Qwen thinking is enabled. DeepSeek
+SHALL use its OpenAI-compatible endpoint, the standard `tools` field, and
+`extra_body.thinking` for its documented thinking-mode switch. Provider-
+specific fields MUST NOT be sent to the other provider.
 
 #### Scenario: OpenAI request remains compatible with the relay
 
@@ -118,24 +131,37 @@ fields MUST NOT be sent to the other provider.
 - **THEN** the request includes `extra_body: {"enable_thinking": true}` and
   retains the common messages, stream, and tools fields
 
+#### Scenario: DeepSeek thinking request is constructed
+
+- **WHEN** a DeepSeek run has thinking enabled
+- **THEN** the request includes `extra_body: {"thinking": {"type": "enabled"}}`,
+  the configured reasoning effort when present, and retains the common
+  messages, stream, and tools fields
+
+#### Scenario: DeepSeek non-thinking request is constructed
+
+- **WHEN** a DeepSeek run has thinking disabled
+- **THEN** the request does not enable DeepSeek thinking and does not send
+  Qwen-specific thinking fields
+
 #### Scenario: Provider-specific fields are isolated
 
-- **WHEN** either provider receives a request
+- **WHEN** any supported provider receives a request
 - **THEN** the request contains no provider-specific field belonging to the
   other provider
 
 #### Scenario: Plain standard request is constructed
 
-- **WHEN** an OpenAI caller sends messages without tools, reasoning, or an
-  output limit
+- **WHEN** a caller sends messages without tools, reasoning, or an output limit
 - **THEN** the provider receives `model`, `messages`, and `stream`, with no
-  provider-specific thinking body and no deprecated token-limit field
+  unrequested provider-specific thinking body and no deprecated token-limit
+  field
 
 #### Scenario: Standard tools and reasoning are propagated
 
-- **WHEN** an OpenAI caller supplies tool definitions and `reasoning_effort`
+- **WHEN** a caller supplies tool definitions and a supported reasoning effort
 - **THEN** the provider receives the same definitions under `tools` and the
-  reasoning level under `reasoning_effort`
+  provider-compatible reasoning level under `reasoning_effort`
 
 #### Scenario: OpenAI streaming requests include usage metadata
 
@@ -148,15 +174,28 @@ fields MUST NOT be sent to the other provider.
 
 Every provider invocation SHALL return the existing normalized structure with
 `content`, `reasoning`, `tool_calls`, `finish_reason`, `usage`, and `raw`.
-Qwen `reasoning_content` in non-streaming messages and streaming deltas SHALL
-be normalized into `reasoning`; ordinary content and tool calls SHALL retain
-their existing semantics.
+Provider-returned `reasoning_content` in non-streaming messages and streaming
+deltas SHALL be normalized into `reasoning`; ordinary content and tool calls
+SHALL retain their existing semantics.
 
 #### Scenario: Qwen reasoning is normalized
 
 - **WHEN** Qwen returns `reasoning_content` followed by content
 - **THEN** the result exposes the two parts separately and preserves the raw
   provider response or ordered chunks
+
+#### Scenario: DeepSeek reasoning is normalized
+
+- **WHEN** DeepSeek returns `reasoning_content` followed by content or tool
+  calls
+- **THEN** the result exposes the two parts separately and preserves the raw
+  provider response or ordered chunks
+
+#### Scenario: DeepSeek tool calls remain dispatchable
+
+- **WHEN** DeepSeek returns one or more standard function tool calls
+- **THEN** the result contains their IDs, names, and JSON argument strings in
+  the same normalized list used by the other providers
 
 #### Scenario: Qwen tool calls remain dispatchable
 
@@ -200,15 +239,39 @@ subsequent messages.
 
 ### Requirement: Reasoning content is isolated from multi-turn history
 
-The client SHALL continue to exclude normalized reasoning, including Qwen
-`reasoning_content`, from assistant history while preserving content and
-applicable tool calls for subsequent turns.
+The client SHALL keep provider-returned reasoning out of user-visible
+transcripts and ordinary persisted assistant content. Qwen reasoning SHALL
+remain excluded from follow-up history. When DeepSeek thinking mode is used
+with tools, the runtime SHALL carry the exact provider-returned
+`reasoning_content` privately in the required subsequent outbound assistant
+message, together with content and tool calls, without exposing it through the
+normal answer or trace surface.
 
 #### Scenario: Qwen follow-up excludes reasoning
 
 - **WHEN** a Qwen response contains reasoning and the Agent performs another
   turn
 - **THEN** the follow-up assistant history contains no reasoning text
+
+#### Scenario: DeepSeek tool follow-up preserves required reasoning
+
+- **WHEN** a DeepSeek thinking response contains `reasoning_content` and tool
+  calls
+- **THEN** the next tool-capable request includes that exact reasoning field in
+  the provider-required assistant message and the tool remains dispatchable
+
+#### Scenario: DeepSeek final answer does not expose reasoning
+
+- **WHEN** a DeepSeek thinking response completes without another tool call
+- **THEN** the user-facing answer contains only normalized content and does not
+  contain provider reasoning unless explicit diagnostic display is enabled
+
+#### Scenario: DeepSeek no-tool follow-up can omit reasoning
+
+- **WHEN** a DeepSeek response is followed by a request without tools and the
+  provider does not require reasoning replay
+- **THEN** the runtime may omit reasoning from the ordinary follow-up history
+  while preserving valid message ordering
 
 #### Scenario: Follow-up after a reasoning reply
 
@@ -220,32 +283,45 @@ applicable tool calls for subsequent turns.
 
 #### Scenario: Streaming reasoning reply
 
-- **WHEN** a streaming provider returns reasoning and content deltas
-- **THEN** reasoning deltas and content deltas are collected into separate
-  normalized fields, and reasoning is not carried into subsequent assistant
-  history
+- **WHEN** a supported provider returns reasoning and content deltas
+- **THEN** reasoning deltas and content deltas are collected separately, and
+  only DeepSeek tool-capable follow-ups retain the provider-required reasoning
+  field
 
 ### Requirement: Explicit behavior knobs for provider-specific options
 
 Provider behavior controls SHALL be explicit and documented. OpenAI SHALL use
 the current `reasoning_effort` behavior. Qwen thinking SHALL be controlled by
-the selected-provider configuration, with `QWEN_ENABLE_THINKING` defaulting to
-the documented Qwen integration behavior, and SHALL be translated only for
-Qwen into `extra_body.enable_thinking`. The client MUST NOT send
-`reasoning_effort` to Qwen unless Qwen support for that field is explicitly
-validated and configured.
+the selected-provider configuration and translated only for Qwen into
+`extra_body.enable_thinking`. DeepSeek thinking SHALL be controlled by
+DeepSeek-scoped configuration and translated only for DeepSeek into
+`extra_body.thinking`, with its reasoning effort passed through the documented
+standard field when configured. The client MUST NOT send another provider's
+thinking fields.
 
 #### Scenario: Qwen thinking can be disabled
 
 - **WHEN** Qwen is selected and thinking is disabled
 - **THEN** the request omits `extra_body.enable_thinking` or sends the
-  provider-documented false value, and does not invent OpenAI reasoning fields
+  provider-documented false value, and does not invent DeepSeek thinking fields
+
+#### Scenario: DeepSeek thinking can be disabled
+
+- **WHEN** DeepSeek is selected and thinking is disabled
+- **THEN** the request does not enable `extra_body.thinking` and does not send
+  Qwen thinking parameters
+
+#### Scenario: DeepSeek effort is explicit
+
+- **WHEN** DeepSeek is selected with a configured reasoning effort
+- **THEN** the request sends the configured effort using the documented
+  `reasoning_effort` field
 
 #### Scenario: OpenAI reasoning remains unchanged
 
 - **WHEN** OpenAI is selected and a reasoning effort is supplied
 - **THEN** the request sends the existing OpenAI reasoning field and omits Qwen
-  thinking parameters
+  and DeepSeek thinking parameters
 
 #### Scenario: Reasoning effort is sent as the standard field
 

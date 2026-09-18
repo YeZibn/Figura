@@ -240,13 +240,17 @@ class LLMClient:
             request["tools"] = tools
         if max_completion_tokens is not None:
             request["max_completion_tokens"] = max_completion_tokens
-        if temperature is not None:
+        if temperature is not None and not (cfg.provider == "deepseek" and cfg.enable_thinking):
             request["temperature"] = temperature
         effort = reasoning_effort if reasoning_effort is not None else cfg.reasoning_effort
-        if cfg.provider == "openai" and effort is not None:
+        if cfg.provider in {"openai", "deepseek"} and effort is not None:
             request["reasoning_effort"] = effort
         if cfg.provider == "qwen" and cfg.enable_thinking:
             request["extra_body"] = {"enable_thinking": True}
+        if cfg.provider == "deepseek":
+            request["extra_body"] = {
+                "thinking": {"type": "enabled" if cfg.enable_thinking else "disabled"},
+            }
 
         trace = self._trace
         if trace_sink is not None:

@@ -173,6 +173,7 @@ def test_gateway_provider_selection_is_snapshotted_and_persisted(tmp_path):
         "providers": {
             "openai": {"status": "ready", "provider": "openai", "model": "relay-model"},
             "qwen": {"status": "ready", "provider": "qwen", "model": "qwen3.8-flash"},
+            "deepseek": {"status": "ready", "provider": "deepseek", "model": "deepseek-flash"},
         },
     }
     service = GatewayService(database=database, runtime_factory=runtime_factory, readiness_probe=readiness)
@@ -190,6 +191,45 @@ def test_gateway_provider_selection_is_snapshotted_and_persisted(tmp_path):
     assert history["run"]["model"] == "qwen3.8-flash"
     assert history["events"][0]["payload"]["provider"] == "qwen"
     assert history["events"][0]["payload"]["model"] == "qwen3.8-flash"
+
+
+def test_gateway_provider_selection_snapshots_deepseek_model(tmp_path):
+    captured: list[dict[str, object]] = []
+
+    class FakeAgent:
+        def run(self, text):
+            return "deepseek run complete"
+
+    class FakeRuntime:
+        agent = FakeAgent()
+
+        def close(self):
+            return None
+
+    def runtime_factory(name, *, provider=None, model=None, run_id=None, **kwargs):
+        captured.append({"provider": provider, "model": model})
+        return FakeRuntime()
+
+    service = GatewayService(
+        database=tmp_path / "deepseek.db",
+        runtime_factory=runtime_factory,
+        readiness_probe=lambda: {
+            "status": "ready",
+            "provider": "openai",
+            "providers": {
+                "openai": {"status": "ready", "provider": "openai", "model": "relay-model"},
+                "qwen": {"status": "unavailable", "reason": "missing_configuration"},
+                "deepseek": {"status": "ready", "provider": "deepseek", "model": "deepseek-flash"},
+            },
+        },
+    )
+    session_id = service.create_session("deepseek-selection")["session"]["id"]
+    accepted = service.start_run(session_id, "use deepseek", raw_provider="deepseek")
+    run = service.get_run(session_id, accepted["run"]["runId"])
+    assert run.wait_terminal(timeout=2)
+    assert accepted["run"]["provider"] == "deepseek"
+    assert accepted["run"]["model"] == "deepseek-flash"
+    assert captured == [{"provider": "deepseek", "model": "deepseek-flash"}]
 
 
 def test_gateway_rejects_unavailable_provider_before_runtime(tmp_path):

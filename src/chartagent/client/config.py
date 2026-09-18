@@ -19,8 +19,10 @@ from dotenv import load_dotenv
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_QWEN_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 DEFAULT_QWEN_MODEL = "qwen3.8-flash"
+DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+DEFAULT_DEEPSEEK_MODEL = "deepseek-flash"
 DEFAULT_PROVIDER = "openai"
-SUPPORTED_PROVIDERS = ("openai", "qwen")
+SUPPORTED_PROVIDERS = ("openai", "qwen", "deepseek")
 DEFAULT_TIMEOUT = 60.0
 DEFAULT_MAX_RETRIES = 2
 
@@ -36,6 +38,13 @@ _QWEN_MODEL = "QWEN_MODEL"
 _QWEN_TIMEOUT = "QWEN_TIMEOUT"
 _QWEN_MAX_RETRIES = "QWEN_MAX_RETRIES"
 _QWEN_ENABLE_THINKING = "QWEN_ENABLE_THINKING"
+_DEEPSEEK_API_KEY = "DEEPSEEK_API_KEY"
+_DEEPSEEK_BASE_URL = "DEEPSEEK_BASE_URL"
+_DEEPSEEK_MODEL = "DEEPSEEK_MODEL"
+_DEEPSEEK_TIMEOUT = "DEEPSEEK_TIMEOUT"
+_DEEPSEEK_MAX_RETRIES = "DEEPSEEK_MAX_RETRIES"
+_DEEPSEEK_ENABLE_THINKING = "DEEPSEEK_ENABLE_THINKING"
+_DEEPSEEK_REASONING_EFFORT = "DEEPSEEK_REASONING_EFFORT"
 _LEGACY_ENV_API_KEY = "DASHSCOPE_API_KEY"
 _LEGACY_ENV_BASE_URL = "DASHSCOPE_BASE_URL"
 _LEGACY_ENV_MODEL = "DASH_MODEL"
@@ -127,10 +136,10 @@ def resolve_config(
 
     selected_provider = provider if provider is not None else (_env_value(_ENV_PROVIDER) or DEFAULT_PROVIDER)
     if not isinstance(selected_provider, str):
-        raise ValueError("Unsupported provider; expected openai or qwen")
+        raise ValueError("Unsupported provider; expected openai, qwen, or deepseek")
     selected_provider = selected_provider.strip().lower()
     if selected_provider not in SUPPORTED_PROVIDERS:
-        raise ValueError("Unsupported provider; expected openai or qwen")
+        raise ValueError("Unsupported provider; expected openai, qwen, or deepseek")
 
     if selected_provider == "qwen":
         key_names = (_QWEN_API_KEY, _LEGACY_ENV_API_KEY)
@@ -141,6 +150,19 @@ def resolve_config(
         default_base_url = DEFAULT_QWEN_BASE_URL
         default_model = DEFAULT_QWEN_MODEL
         default_thinking = True
+        thinking_name = _QWEN_ENABLE_THINKING
+        reasoning_effort_name = None
+    elif selected_provider == "deepseek":
+        key_names = (_DEEPSEEK_API_KEY,)
+        base_names = (_DEEPSEEK_BASE_URL,)
+        model_names = (_DEEPSEEK_MODEL,)
+        timeout_names = (_DEEPSEEK_TIMEOUT,)
+        retry_names = (_DEEPSEEK_MAX_RETRIES,)
+        default_base_url = DEFAULT_DEEPSEEK_BASE_URL
+        default_model = DEFAULT_DEEPSEEK_MODEL
+        default_thinking = True
+        thinking_name = _DEEPSEEK_ENABLE_THINKING
+        reasoning_effort_name = _DEEPSEEK_REASONING_EFFORT
     else:
         key_names = (_OPENAI_API_KEY,)
         base_names = (_OPENAI_BASE_URL,)
@@ -150,10 +172,13 @@ def resolve_config(
         default_base_url = DEFAULT_BASE_URL
         default_model = ""
         default_thinking = False
+        thinking_name = None
+        reasoning_effort_name = None
 
     env_timeout = _env_float(*timeout_names)
     env_max_retries = _env_int(*retry_names)
-    env_thinking = _env_bool(_QWEN_ENABLE_THINKING) if selected_provider == "qwen" else None
+    env_thinking = _env_bool(thinking_name) if thinking_name is not None else None
+    env_reasoning_effort = _env_value(reasoning_effort_name) if reasoning_effort_name else None
     return ClientConfig(
         provider=selected_provider,
         api_key=(
@@ -181,7 +206,11 @@ def resolve_config(
             if max_retries is not None
             else (env_max_retries if env_max_retries is not None else DEFAULT_MAX_RETRIES)
         ),
-        reasoning_effort=reasoning_effort,
+        reasoning_effort=(
+            reasoning_effort
+            if reasoning_effort is not None
+            else env_reasoning_effort
+        ),
         enable_thinking=(
             enable_thinking
             if enable_thinking is not None

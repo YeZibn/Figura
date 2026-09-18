@@ -7,8 +7,17 @@ from openai.types.chat import ChatCompletionMessageParam
 from ..client.models import NormalizedResult, ToolCall
 
 
-def assistant_entry(result: NormalizedResult) -> ChatCompletionMessageParam:
+def assistant_entry(
+    result: NormalizedResult,
+    *,
+    include_reasoning: bool = False,
+) -> ChatCompletionMessageParam:
     entry: dict = {"role": "assistant", "content": result.content}
+    if include_reasoning and result.reasoning:
+        # DeepSeek thinking + tools requires this exact provider-private field
+        # on the assistant message that precedes a tool result. Callers must
+        # keep the default false for ordinary records and user-facing output.
+        entry["reasoning_content"] = result.reasoning
     if result.tool_calls:
         entry["tool_calls"] = [
             {

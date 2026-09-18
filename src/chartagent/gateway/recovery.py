@@ -3,8 +3,9 @@
 Checkpoints are a journal boundary, not a second event stream.  This module
 keeps the representation deliberately boring: JSON-safe state, opaque
 references, a digest, and a version that can be rejected when the shape
-changes.  Provider responses, image bytes, credentials, and local paths never
-belong in a checkpoint.
+changes. Provider responses, image bytes, credentials, and local paths never
+belong in a checkpoint; the only provider-private exception is bounded
+DeepSeek reasoning required for an authorized tool continuation.
 """
 
 from __future__ import annotations
@@ -15,7 +16,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from ..trace import sanitize_payload, truncate_text
+from ..memory.context import PRIVATE_REASONING_LIMIT, sanitize_payload as sanitize_memory_payload
+from ..trace import sanitize_payload as sanitize_trace_payload, truncate_text
 from .protocol import (
     CHECKPOINT_SCHEMA_VERSION,
     CheckpointPhase,
@@ -35,6 +37,18 @@ _REMOVED_KEYS = frozenset({
     "image_bytes", "bytes", "data_url", "raw_response", "raw_provider_response",
 })
 _REFERENCE_PREFIXES = ("att_", "obs_", "cand_", "art_", "review_")
+
+
+def _has_oversized_private_reasoning(value: Any) -> bool:
+    if isinstance(value, Mapping):
+        return any(
+            (str(key).lower() == "reasoning_content" and isinstance(item, str) and len(item) > PRIVATE_REASONING_LIMIT)
+            or _has_oversized_private_reasoning(item)
+            for key, item in value.items()
+        )
+    if isinstance(value, (list, tuple)):
+        return any(_has_oversized_private_reasoning(item) for item in value)
+    return False
 
 
 def _strip_internal(value: Any, *, depth: int = 0) -> Any:
@@ -62,7 +76,12 @@ def sanitize_checkpoint_state(state: Mapping[str, Any] | None) -> dict[str, Any]
         state = {}
     if not isinstance(state, Mapping):
         raise CheckpointError("checkpoint state must be an object")
-    clean = _strip_internal(sanitize_payload(state))
+    if _has_oversized_private_reasoning(state):
+        raise CheckpointError("provider reasoning context exceeds checkpoint limit")
+    # This is the authorized checkpoint boundary. It is the only durable
+    # path allowed to retain DeepSeek's exact reasoning_content for a later
+    # tool continuation; ordinary memory and trace sanitizers remove it.
+    clean = _strip_internal(sanitize_memory_payload(state, preserve_private_reasoning=True))
     if not isinstance(clean, dict):
         raise CheckpointError("checkpoint state must be an object")
     encoded = json.dumps(clean, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -201,7 +220,7 @@ class RecoveryCheckpoint:
 def bounded_operation_result(value: Mapping[str, Any] | None) -> str | None:
     if value is None:
         return None
-    clean = _strip_internal(sanitize_payload(value))
+    clean = _strip_internal(sanitize_trace_payload(value))
     encoded = json.dumps(clean, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     if len(encoded) > MAX_OPERATION_RESULT:
         return json.dumps({"truncated": True}, ensure_ascii=False, separators=(",", ":"))

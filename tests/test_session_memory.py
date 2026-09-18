@@ -222,8 +222,17 @@ def test_context_summarizes_complete_old_runs_and_filters_sensitive_values():
 
 
 def test_sanitize_payload_removes_data_urls_and_provider_fields():
-    clean = sanitize_payload({"raw": "provider", "reasoning": "private", "image": {"url": "data:image/png;base64,AAAA"}, "ok": 1})
+    clean = sanitize_payload({"raw": "provider", "reasoning": "private", "reasoning_content": "private-provider", "image": {"url": "data:image/png;base64,AAAA"}, "ok": 1})
     assert clean == {"image": {"url": "[image content omitted from memory]"}, "ok": 1}
+
+
+def test_checkpoint_context_can_replay_bounded_private_reasoning():
+    from chartagent.gateway.recovery import sanitize_checkpoint_state
+
+    state = {"messages": [{"role": "assistant", "content": "", "reasoning_content": "keep exactly"}]}
+    clean = sanitize_checkpoint_state(state)
+    assert clean["messages"][0]["reasoning_content"] == "keep exactly"
+    assert "reasoning_content" not in sanitize_payload(state)["messages"][0]
 
 
 def test_oversized_tool_content_remains_valid_json_with_marker():

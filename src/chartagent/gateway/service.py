@@ -628,7 +628,7 @@ class GatewayService:
                     "Agent service is unavailable",
                     "invalid_configuration",
                 )
-            if requested_provider == "qwen" and readiness.get("provider") is None:
+            if requested_provider in {"qwen", "deepseek"} and readiness.get("provider") is None:
                 raise GatewayFault(
                     "agent_unavailable",
                     503,

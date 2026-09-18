@@ -66,7 +66,8 @@ def _normalized_key(key: object) -> str:
 
 
 def _is_sensitive_key(key: object) -> bool:
-    return bool(_SENSITIVE_KEY.search(_normalized_key(key)))
+    normalized = _normalized_key(key)
+    return normalized == "reasoningcontent" or bool(_SENSITIVE_KEY.search(normalized))
 
 
 def _safe_string(value: str, limit: int) -> str:

@@ -39,7 +39,7 @@ const clone = <T,>(value: T): T => structuredClone(value)
 
 export const mockClient: ChartAgentClient = {
   async getHealth() {
-    return { version: 'v1', status: 'ok', service: 'Figura Gateway（模拟）', agent: { status: 'ready' as const, provider: 'openai', model: 'gpt-4o-mini', providers: { openai: { status: 'ready' as const, provider: 'openai', model: 'gpt-4o-mini' }, qwen: { status: 'ready' as const, provider: 'qwen', model: 'qwen3.8-flash' } } } }
+    return { version: 'v1', status: 'ok', service: 'Figura Gateway（模拟）', agent: { status: 'ready' as const, provider: 'openai', model: 'gpt-4o-mini', providers: { openai: { status: 'ready' as const, provider: 'openai', model: 'gpt-4o-mini' }, qwen: { status: 'ready' as const, provider: 'qwen', model: 'qwen3.8-flash' }, deepseek: { status: 'ready' as const, provider: 'deepseek', model: 'deepseek-flash' } } } }
   },
 
   async listSessions() { await wait(120); return Object.values(data).map((entry) => clone(entry.session)) },
@@ -87,7 +87,7 @@ export const mockClient: ChartAgentClient = {
     const runId = `run_mock_${Date.now()}`
     pendingRuns.set(runId, { text, attachmentIds })
     const target = data[sessionId]
-    const model = provider === 'qwen' ? 'qwen3.8-flash' : 'gpt-4o-mini'
+    const model = provider === 'qwen' ? 'qwen3.8-flash' : provider === 'deepseek' ? 'deepseek-flash' : 'gpt-4o-mini'
     if (target) target.runs.push({ runId, sessionId, status: 'running', provider, model, retryOf: options.retryOf, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), eventCount: 0, parentRunId: options.retryOf, rootRunId: options.retryOf || runId, continuationKind: options.retryOf ? 'retry' : null, recovery: { status: 'available', checkpointId: `chk_${runId}`, checkpointVersion: 1, phase: 'accepted', nextAction: 'model' } })
     if (options.idempotencyKey) idempotentRuns.set(options.idempotencyKey, runId)
     return { runId, sessionId, status: 'running', provider, model, retryOf: options.retryOf, parentRunId: options.retryOf, rootRunId: options.retryOf || runId, continuationKind: options.retryOf ? 'retry' : null, recovery: { status: 'available', checkpointId: `chk_${runId}`, checkpointVersion: 1, phase: 'accepted', nextAction: 'model' } }
@@ -167,7 +167,7 @@ export const mockClient: ChartAgentClient = {
     }
     const schedule = (delay: number, action: () => void) => timers.push(setTimeout(action, delay))
     const provider = target?.runs.find((item) => item.runId === runId)?.provider || 'openai'
-    const model = target?.runs.find((item) => item.runId === runId)?.model || (provider === 'qwen' ? 'qwen3.8-flash' : 'gpt-4o-mini')
+    const model = target?.runs.find((item) => item.runId === runId)?.model || (provider === 'qwen' ? 'qwen3.8-flash' : provider === 'deepseek' ? 'deepseek-flash' : 'gpt-4o-mini')
     schedule(20, () => emit('run_started', 1, { status: 'running', provider, model }))
     schedule(130, () => emit('model_started', 2, { turn: 1, provider, model }))
     schedule(260, () => emit('tool_call', 3, { tool_name: 'measure_bars', call_id: 'mock-call-1', arguments: { attachment_id: 'selected' } }))

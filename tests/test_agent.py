@@ -271,6 +271,29 @@ def test_assistant_history_keeps_tool_calls_strips_reasoning():
     assert entry["tool_calls"][0]["id"] == "c1"
 
 
+def test_deepseek_tool_followup_replays_reasoning_only_to_model_context():
+    registry = ToolRegistry()
+    registry.register(Tool("inspect", "inspect", {"type": "object"}, lambda: {"ok": True}))
+
+    class DeepSeekClient(ScriptedClient):
+        config = type("Config", (), {"provider": "deepseek", "enable_thinking": True})()
+
+    client = DeepSeekClient([
+        NormalizedResult(
+            reasoning="private deepseek plan",
+            tool_calls=[ToolCall("call-1", "inspect", "{}")],
+        ),
+        NormalizedResult(content="done", reasoning="final private thought"),
+    ])
+    agent = Agent(client, registry)
+
+    assert agent.run("inspect") == "done"
+    assistant_messages = [message for message in client.calls[1]["messages"] if message.get("role") == "assistant"]
+    assert assistant_messages[0]["reasoning_content"] == "private deepseek plan"
+    assert all("reasoning_content" not in record.payload.get("message", {}) for record in agent.memory.runs[0].records)
+    assert "final private thought" not in repr(agent.memory.runs[0].records)
+
+
 def test_registry_tools_lists_openai_schema():
     tools = registry_tools(_registry())
     assert len(tools) == 4

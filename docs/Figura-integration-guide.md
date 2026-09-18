@@ -47,8 +47,8 @@ npm --prefix frontend run smoke
 
 ## 配置与约束
 
-`.env` 通过 `CHARTAGENT_PROVIDER` 选择默认来源（默认 `openai`）。OpenAI 使用现有中转站的 `OPENAI_API_KEY`、`OPENAI_BASE_URL`、`OPENAI_MODEL`；Qwen 使用 `QWEN_API_KEY`、`QWEN_BASE_URL`、`QWEN_MODEL`，以及可选的 `QWEN_TIMEOUT`、`QWEN_MAX_RETRIES`、`QWEN_ENABLE_THINKING`。`DASHSCOPE_*` 与 `DASH_MODEL` 仅作为 Qwen 的旧别名，不能影响 OpenAI。不要提交或打印真实密钥。Gateway 默认只绑定回环地址，附件和 Run 使用 opaque ID。
+`.env` 通过 `CHARTAGENT_PROVIDER` 选择默认来源（默认 `openai`）。OpenAI 使用现有中转站的 `OPENAI_API_KEY`、`OPENAI_BASE_URL`、`OPENAI_MODEL`；Qwen 使用 `QWEN_API_KEY`、`QWEN_BASE_URL`、`QWEN_MODEL`，以及可选的 `QWEN_TIMEOUT`、`QWEN_MAX_RETRIES`、`QWEN_ENABLE_THINKING`；DeepSeek 使用 `DEEPSEEK_API_KEY`、`DEEPSEEK_BASE_URL`、`DEEPSEEK_MODEL`，默认地址为 `https://api.deepseek.com`、官方模型 ID 为 `deepseek-flash`，并支持 `DEEPSEEK_TIMEOUT`、`DEEPSEEK_MAX_RETRIES`、`DEEPSEEK_ENABLE_THINKING`、`DEEPSEEK_REASONING_EFFORT`。`DASHSCOPE_*` 与 `DASH_MODEL` 仅作为 Qwen 的旧别名，不能影响 OpenAI 或 DeepSeek。不要提交或打印真实密钥。Gateway 默认只绑定回环地址，附件和 Run 使用 opaque ID。
 
-前端只提交 `provider: "openai" | "qwen"`，密钥、地址、模型和 provider-specific body 始终由本地 Gateway 解析。provider 在 Run 接受时固定，切换选择只作用于下一次运行；健康接口仅暴露来源可用性、默认来源和安全 reason code。
+前端只提交 `provider: "openai" | "qwen" | "deepseek"`，密钥、地址、模型和 provider-specific body 始终由本地 Gateway 解析。provider 在 Run 接受时固定，切换选择只作用于下一次运行；健康接口仅暴露来源可用性、默认来源和安全 reason code。DeepSeek thinking + tools 的 `reasoning_content` 只保留在模型请求所需的内部上下文中，不进入普通 transcript、桌面事件或默认 trace。
 
 用户界面使用简体中文。新增协议字段要同时更新前端类型、Gateway 行为、测试和 OpenSpec。Python 使用四空格和 `snake_case`，React 组件使用 `PascalCase`；提交前运行 `git diff --check`。

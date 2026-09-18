@@ -11,8 +11,9 @@ Loop semantics (native function calling, not text ReAct):
 - model returns no ``tool_calls`` -> Final Answer; stop and return ``content``.
 - step budget reached -> bounded stop, no unbounded loop.
 
-Reasoning is never echoed into history (deep-thinking providers 400 otherwise),
-matching the client's ``append_to_history`` contract.
+Reasoning is never echoed into ordinary records or user-visible history. The
+DeepSeek thinking + tools path retains its provider-required reasoning field
+only in the internal model message immediately preceding a tool result.
 """
 
 from __future__ import annotations
@@ -375,10 +376,21 @@ class Agent:
                     )
                 return result.content
 
-            assistant_message = assistant_entry(result)
+            assistant_message = assistant_entry(
+                result,
+                include_reasoning=(
+                    getattr(getattr(self.client, "config", None), "provider", None) == "deepseek"
+                    and getattr(getattr(self.client, "config", None), "enable_thinking", False)
+                    and bool(result.reasoning)
+                ),
+            )
+            # ``assistant_message`` is the model-facing message. The memory
+            # record stays sanitized and content/tool-call-only so provider
+            # reasoning cannot leak into transcripts or ordinary records.
+            assistant_record = assistant_entry(result)
             self._current_messages.append(assistant_message)
             self._messages.append(assistant_message)
-            self.memory.append(run, "assistant", {"message": assistant_message})
+            self.memory.append(run, "assistant", {"message": assistant_record})
             self._checkpoint(
                 run,
                 phase="model",

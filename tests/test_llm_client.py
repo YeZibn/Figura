@@ -33,6 +33,13 @@ _PROVIDER_ENV_NAMES = (
     "QWEN_TIMEOUT",
     "QWEN_MAX_RETRIES",
     "QWEN_ENABLE_THINKING",
+    "DEEPSEEK_API_KEY",
+    "DEEPSEEK_BASE_URL",
+    "DEEPSEEK_MODEL",
+    "DEEPSEEK_TIMEOUT",
+    "DEEPSEEK_MAX_RETRIES",
+    "DEEPSEEK_ENABLE_THINKING",
+    "DEEPSEEK_REASONING_EFFORT",
 )
 
 
@@ -135,6 +142,37 @@ def test_openai_does_not_fallback_to_dashscope():
 def test_qwen_thinking_can_be_disabled():
     cfg = resolve_config(provider="qwen", enable_thinking=False, env={})
     assert cfg.enable_thinking is False
+
+
+def test_deepseek_uses_scoped_defaults_and_explicit_precedence():
+    cfg = resolve_config(
+        provider="deepseek",
+        base_url="http://explicit",
+        env={
+            "DEEPSEEK_API_KEY": "deepseek-key",
+            "DEEPSEEK_BASE_URL": "http://env",
+            "DEEPSEEK_MODEL": "deepseek-env-model",
+            "DEEPSEEK_TIMEOUT": "12",
+            "DEEPSEEK_MAX_RETRIES": "4",
+            "DEEPSEEK_ENABLE_THINKING": "false",
+            "DEEPSEEK_REASONING_EFFORT": "high",
+            "QWEN_API_KEY": "must-not-leak",
+        },
+    )
+    assert cfg.provider == "deepseek"
+    assert cfg.api_key == "deepseek-key"
+    assert cfg.base_url == "http://explicit"
+    assert cfg.model == "deepseek-env-model"
+    assert cfg.timeout == 12.0
+    assert cfg.max_retries == 4
+    assert cfg.enable_thinking is False
+    assert cfg.reasoning_effort == "high"
+
+    defaults = resolve_config(provider="deepseek", env={})
+    assert defaults.base_url == "https://api.deepseek.com"
+    assert defaults.model == "deepseek-flash"
+    assert defaults.enable_thinking is True
+    assert defaults.api_key is None
 
 
 def test_environment_file_contract_is_stable_across_launch_directories(tmp_path, monkeypatch):
@@ -337,6 +375,80 @@ def test_qwen_preserves_multimodal_tool_call_contract(backend_factory):
     assert result.tool_calls[0].arguments == '{"image_id":"att_1"}'
     assert backend.calls[0]["messages"] == messages
     assert backend.calls[0]["tools"] == tools
+
+
+def test_deepseek_request_translates_thinking_and_keeps_image_tool_contract(backend_factory):
+    tools = [{"type": "function", "function": {"name": "inspect", "parameters": {}}}]
+    messages = [{
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "检查图片"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,hidden"}},
+        ],
+    }]
+    client, backend = backend_factory(
+        [lambda _: non_streaming("ok")],
+        provider="deepseek",
+        model="deepseek-flash",
+        reasoning_effort="high",
+        enable_thinking=True,
+    )
+
+    client.chat(messages, stream=False, model="deepseek-flash", tools=tools, temperature=0.2)
+
+    request = backend.calls[0]
+    assert request["messages"] == messages
+    assert request["tools"] == tools
+    assert request["extra_body"] == {"thinking": {"type": "enabled"}}
+    assert request["reasoning_effort"] == "high"
+    assert "temperature" not in request
+    assert "enable_thinking" not in request["extra_body"]
+
+
+def test_deepseek_can_disable_thinking_without_qwen_fields(backend_factory):
+    client, backend = backend_factory(
+        [lambda _: non_streaming("ok")],
+        provider="deepseek",
+        enable_thinking=False,
+    )
+    client.chat([{"role": "user", "content": "x"}], stream=False, model="deepseek-flash")
+    assert backend.calls[0]["extra_body"] == {"thinking": {"type": "disabled"}}
+    assert "enable_thinking" not in backend.calls[0]
+
+
+def test_deepseek_streaming_normalizes_reasoning_and_tool_calls():
+    from chartagent.client.client import _collect_streaming_deltas
+
+    chunks = [
+        SimpleNamespace(
+            choices=[SimpleNamespace(
+                delta=SimpleNamespace(
+                    reasoning_content="plan",
+                    content=None,
+                    tool_calls=[SimpleNamespace(index=0, id="call_1", function=SimpleNamespace(name="inspect", arguments='{"x'))],
+                ),
+                finish_reason=None,
+            )],
+            usage=None,
+        ),
+        SimpleNamespace(
+            choices=[SimpleNamespace(
+                delta=SimpleNamespace(
+                    reasoning_content=" now",
+                    content=None,
+                    tool_calls=[SimpleNamespace(index=0, id=None, function=SimpleNamespace(name=None, arguments='":1}'))],
+                ),
+                finish_reason="tool_calls",
+            )],
+            usage=None,
+        ),
+        SimpleNamespace(choices=[], usage=SimpleNamespace(prompt_tokens=4, completion_tokens=3, total_tokens=7)),
+    ]
+    result = _collect_streaming_deltas(iter(chunks))
+    assert result.reasoning == "plan now"
+    assert result.tool_calls[0].name == "inspect"
+    assert result.tool_calls[0].arguments == '{"x":1}'
+    assert result.usage.total_tokens == 7
 
 
 def test_provider_request_trace_does_not_copy_exception_details(backend_factory):
