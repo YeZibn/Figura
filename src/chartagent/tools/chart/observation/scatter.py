@@ -31,7 +31,7 @@ from .coordinates import (
 )
 from .ocr import extract_text
 from .overlays import render_scatter_overlay
-from .layout import context_for_evidence
+from .layout import context_for_evidence, context_scope, filter_snippets_to_scope
 
 _COLOR_TOLERANCE = 34
 _MAX_MARKER_SIDE_RATIO = 0.12
@@ -154,6 +154,7 @@ def _legend_entries(
     palette: list[np.ndarray],
     frame: dict[str, Any] | None,
     snippets: list[dict[str, Any]],
+    search_area: list[int] | None = None,
 ) -> list[dict[str, Any]]:
     """Associate small color swatches outside the frame with nearby OCR."""
     polygon = frame.get("polygon_px") if frame else None
@@ -164,6 +165,13 @@ def _legend_entries(
         for swatch in _connected_components(color_mask(rgb, color, tolerance=32), min_area=4):
             left, top, box_width, box_height = swatch["bbox"]
             if max(box_width, box_height) > 100 or swatch["area"] > 2500:
+                continue
+            if search_area is not None and not (
+                left < search_area[0] + search_area[2]
+                and left + box_width > search_area[0]
+                and top < search_area[1] + search_area[3]
+                and top + box_height > search_area[1]
+            ):
                 continue
             if inside_polygon(swatch["center"], polygon):
                 continue
@@ -226,8 +234,15 @@ def _build_series(
     snippets: list[dict[str, Any]],
     x_model: dict[str, Any] | None,
     y_model: dict[str, Any] | None,
+    legend_scope: list[int] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[str], list[dict[str, Any]]]:
-    legend = _legend_entries(rgb, palette, frame, snippets)
+    legend = _legend_entries(
+        rgb,
+        palette,
+        frame,
+        snippets,
+        legend_scope,
+    )
     series: list[dict[str, Any]] = []
     warnings: list[str] = []
     for palette_index, color in enumerate(palette):
@@ -363,10 +378,14 @@ def _empty_result(
     )
 
 
-def _ocr_snippets(path: Path) -> list[dict[str, Any]]:
+def _ocr_snippets(
+    path: Path,
+    scope: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     result = extract_text(str(path))
     if isinstance(result, ToolResult) and isinstance(result.data, list):
-        return [item for item in result.data if isinstance(item, dict)]
+        snippets = [item for item in result.data if isinstance(item, dict)]
+        return filter_snippets_to_scope(snippets, scope)
     return []
 
 
@@ -389,9 +408,10 @@ def extract_scatter_points(
     except Exception as exc:  # noqa: BLE001 - tool boundary
         return _error(f"input is not a readable image ({type(exc).__name__})")
 
-    search_area = default_plot_area(rgb)
+    scope = context_scope(layout_context)
+    search_area = scope.get("bbox_px") if scope else default_plot_area(rgb)
     palette = detect_color_palette(rgb, region=search_area, max_colors=8)
-    snippets = _ocr_snippets(path)
+    snippets = _ocr_snippets(path, scope) if scope else _ocr_snippets(path)
     x_ticks, y_ticks = numeric_ticks(snippets, search_area)
     frame, orientation, detection_area = detect_cartesian_frame(
         rgb,
@@ -399,6 +419,7 @@ def extract_scatter_points(
         palette,
         snippets,
         layout_context=layout_context,
+        strict_search_area=scope is not None,
     )
     x_axis_points = frame.get("x_axis", {}).get("points_px") if frame and frame.get("x_axis") else None
     y_axis_points = frame.get("y_axis", {}).get("points_px") if frame and frame.get("y_axis") else None
@@ -415,6 +436,7 @@ def extract_scatter_points(
         snippets=snippets,
         x_model=x_model,
         y_model=y_model,
+        legend_scope=scope.get("bbox_px") if scope else None,
     )
     if not series:
         return _empty_result(chart_image, "no reliable scatter point population detected", layout_context)

@@ -227,6 +227,14 @@ def _panel_layout_context(
         coordinate_system = "cartesian_2d"
     else:
         coordinate_system = "unknown"
+    scope = {
+        "role": "panel_scope",
+        "bbox_px": [left, top, box_width, box_height],
+        "source_origin_px": [left, top],
+        "local_to_source": "x_source = x_local + source_origin_px[0]; y_source = y_local + source_origin_px[1]",
+        "confidence": max(0.0, min(1.0, confidence)),
+        "evidence": list(panel.get("evidence", []))[:8],
+    }
     return {
         "version": 1,
         "context_id": f"{panel['id']}_layout",
@@ -234,26 +242,25 @@ def _panel_layout_context(
         "image_size": [width, height],
         "coordinate_system": coordinate_system,
         "orientation": "unknown",
-        "measurement_frame": {
-            "role": "measurement_frame",
-            "bbox_px": [left, top, box_width, box_height],
-            "confidence": max(0.0, min(1.0, confidence)),
-            "evidence": list(panel.get("evidence", []))[:8],
-        },
+        "analysis_scope": scope,
+        "measurement_frame": None,
         "annotation_regions": {},
         "axes": {"x": None, "y": None},
         "panel": {
             "id": panel["id"],
             "name": panel.get("name"),
+            "source_bbox_px": [left, top, box_width, box_height],
+            "scope_bbox_px": [left, top, box_width, box_height],
             "crop_ref": panel.get("crop", {}).get("resource_ref"),
         },
         "validation": {
             "status": "accepted" if status == "accepted" else "partial",
-            "accepted_for_measurement": status == "accepted",
+            "accepted_for_measurement": False,
+            "accepted_for_analysis": status == "accepted",
             "confidence": max(0.0, min(1.0, confidence)),
             "warnings": list(panel.get("warnings", []))[:12],
         },
-        "evidence": ["dashboard_panel", "vlm_region_proposal", "source_coordinates"],
+        "evidence": ["dashboard_panel", "vlm_region_proposal", "deterministic_scope", "source_coordinates"],
     }
 
 
@@ -394,7 +401,7 @@ def decompose_chart_image(
     *,
     segmenter: PanelSegmenter | None = None,
 ) -> ToolResult | dict:
-    """Refine VLM-proposed regions with SAM and return reusable named crops."""
+    """Validate VLM-proposed regions and return reusable named panel crops."""
     path = Path(image_path)
     if not path.is_file():
         return {"error": "dashboard image could not be resolved"}
@@ -520,7 +527,7 @@ def decompose_chart_image(
         GeneratedImage(
             render_dashboard_overlay(chart_image, panels, warnings=warnings),
             "image/png",
-            "Dashboard semantic regions, SAM boundaries, crop names, and warnings",
+        "Dashboard semantic regions, panel scopes, optional boundaries, crop names, and warnings",
             metadata={
                 "kind": "dashboard_decomposition_overlay",
                 "image_role": "overlay",
@@ -595,8 +602,9 @@ DECOMPOSE_CHART_IMAGE = Tool(
     description=(
         "Use when需要对授权的复杂图表图片执行 VLM 引导的语义分区；调用前先根据图片提出 "
         "regions，每个 region 提供 name、bbox_norm，以及可选 role/chart_type。"
-        "工具随后使用 SAM 细化边界，return 带稳定 ID 和名称的局部 crop、源图坐标、"
-        "crop 引用、置信度、警告和预览；do not 用它提取图表数值，也不要依赖 OCR 来发现区域。"
+        "工具随后使用确定性边界校验并 return 带稳定 ID 和名称的局部 crop、源图坐标、"
+        "analysis scope、crop 引用、置信度、警告和预览；SAM 只在显式请求时作为可选边界证据。"
+        "do not 用它提取图表数值，也不要依赖 OCR 来发现区域。"
         "必要时后续再按需调用 extract_text、柱状图、折线图、饼图或散点图传感器。"
     ),
     parameters={
@@ -646,7 +654,7 @@ DECOMPOSE_CHART_IMAGE = Tool(
             "segmentation_mode": {
                 "type": "string",
                 "enum": ["auto", "deterministic", "sam"],
-                "description": "Bounded segmentation policy; auto uses SAM when configured and a VLM-bbox fallback otherwise.",
+                "description": "Bounded segmentation policy; auto uses deterministic VLM-bbox scopes, while sam is explicit opt-in.",
                 "default": "auto",
             },
             "max_panels": {

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -22,7 +23,7 @@ from .foundation import (
 from .coordinates import polar_frame
 from .ocr import extract_text
 from .overlays import render_pie_overlay
-from .layout import context_for_evidence, context_frame
+from .layout import context_for_evidence, context_frame, context_scope
 
 _ANGLE_SAMPLES = 720
 _RADII = (0.58, 0.70, 0.82, 0.91, 0.97)
@@ -128,7 +129,28 @@ def _pie_palette(
     return selected
 
 
-def _circle_candidate(rgb: np.ndarray, palette: list[np.ndarray]) -> dict[str, Any] | None:
+def _bbox_intersects_region(
+    bbox: Sequence[int],
+    region: Sequence[int] | None,
+) -> bool:
+    if region is None or len(region) < 4:
+        return True
+    left, top, width, height = map(int, bbox[:4])
+    region_left, region_top, region_width, region_height = map(int, region[:4])
+    return (
+        left < region_left + region_width
+        and left + width > region_left
+        and top < region_top + region_height
+        and top + height > region_top
+    )
+
+
+def _circle_candidate(
+    rgb: np.ndarray,
+    palette: list[np.ndarray],
+    *,
+    region: Sequence[int] | None = None,
+) -> dict[str, Any] | None:
     """Find and score a source-image pie-region hypothesis."""
     if not palette:
         return None
@@ -139,6 +161,8 @@ def _circle_candidate(rgb: np.ndarray, palette: list[np.ndarray]) -> dict[str, A
             color_mask(rgb, color, tolerance=_COLOR_TOLERANCE),
             min_area=min_area,
         ):
+            if not _bbox_intersects_region(component["bbox"], region):
+                continue
             components.append({**component, "palette_index": palette_index})
     if not components:
         return None
@@ -363,13 +387,25 @@ def _slice_at(sectors: list[dict[str, Any]], angle: float) -> dict[str, Any] | N
     return None
 
 
-def _ocr_snippets(path: Path) -> list[dict[str, Any]]:
+def _ocr_snippets(
+    path: Path,
+    scope: Sequence[int] | None = None,
+) -> list[dict[str, Any]]:
     try:
         result = extract_text(str(path))
     except Exception:  # noqa: BLE001 - OCR is optional evidence at this boundary.
         return []
     if isinstance(result, ToolResult) and isinstance(result.data, list):
-        return [item for item in result.data if isinstance(item, dict)]
+        snippets = [item for item in result.data if isinstance(item, dict)]
+        if scope is None or len(scope) < 4:
+            return snippets
+        return [
+            item
+            for item in snippets
+            if isinstance(item.get("bbox"), (list, tuple))
+            and len(item["bbox"]) == 4
+            and _bbox_intersects_region(item["bbox"], scope)
+        ]
     return []
 
 
@@ -455,6 +491,7 @@ def _legend(
     region: dict[str, Any],
     palette: list[np.ndarray],
     snippets: list[dict[str, Any]],
+    search_region: Sequence[int] | None = None,
 ) -> tuple[list[dict[str, Any]], set[str]]:
     entries: list[dict[str, Any]] = []
     used_text: set[str] = set()
@@ -465,6 +502,8 @@ def _legend(
         components = _connected_components(mask, min_area=12)
         candidates = []
         for component in components:
+            if not _bbox_intersects_region(component["bbox"], search_region):
+                continue
             component_x, component_y = component["center"]
             distance = math.hypot(component_x - center_x, component_y - center_y)
             if (
@@ -635,9 +674,11 @@ def extract_pie_slices(
     except Exception as exc:  # noqa: BLE001 - tool boundary
         return _error(f"input is not a readable image ({type(exc).__name__})")
 
+    scope = context_scope(layout_context)
     layout = context_frame(layout_context) if isinstance(layout_context, dict) and layout_context.get("coordinate_system") == "polar_2d" else None
-    palette = _pie_palette(rgb, region=layout.get("bbox_px") if layout else None)
-    plot_region = _circle_candidate(rgb, palette)
+    search_region = layout.get("bbox_px") if layout else (scope.get("bbox_px") if scope else None)
+    palette = _pie_palette(rgb, region=search_region)
+    plot_region = _circle_candidate(rgb, palette, region=search_region)
     if plot_region is None:
         return _empty_result(chart_image, "no reliable pie region detected", layout_context=layout_context)
     if plot_region.get("status") != "supported" or plot_region.get("shape") != "circle":
@@ -721,8 +762,8 @@ def extract_pie_slices(
     if any(item["measure"]["support"] < _MIN_RATIO_SUPPORT for item in sectors):
         warnings.append("one or more sector boundaries have insufficient support")
 
-    snippets = _ocr_snippets(path)
-    legend, legend_text = _legend(rgb, plot_region, palette, snippets)
+    snippets = _ocr_snippets(path, scope.get("bbox_px") if scope else None)
+    legend, legend_text = _legend(rgb, plot_region, palette, snippets, search_region)
     ocr_warnings, ocr_text, ocr_conflicts = _attach_ocr(sectors, plot_region, snippets)
     warnings.extend(ocr_warnings)
     conflicts.extend(ocr_conflicts)

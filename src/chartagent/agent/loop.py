@@ -52,6 +52,7 @@ from .observations import observation_status
 VisualObservationSink = Callable[[str, str, Sequence[GeneratedImage]], Sequence[dict[str, Any]]]
 _LAYOUT_TOOL_NAME = "inspect_chart_layout"
 _DECOMPOSE_TOOL_NAME = "decompose_chart_image"
+_MAX_LAYOUT_CONTEXTS = 32
 _GEOMETRY_TOOL_NAMES = frozenset(
     {"measure_bars", "extract_line_series", "extract_scatter_points", "extract_pie_slices"}
 )
@@ -226,7 +227,7 @@ class Agent:
             raw_layouts = recovery.get("layoutContexts")
             if isinstance(raw_layouts, dict):
                 layout_contexts = {
-                    str(key): value for key, value in list(raw_layouts.items())[:16]
+                    str(key): value for key, value in list(raw_layouts.items())[:_MAX_LAYOUT_CONTEXTS]
                     if isinstance(value, dict)
                 }
         user_message = {"role": "user", "content": user_input}
@@ -430,9 +431,19 @@ class Agent:
                     call.arguments,
                     layout_contexts,
                 )
-                observation = dispatch_observation(
-                    self.registry, call.name, dispatch_arguments
+                routing_error = self._panel_routing_error(
+                    call.name,
+                    call.arguments,
+                    layout_contexts,
                 )
+                if routing_error is not None:
+                    observation = DispatchedObservation(
+                        json.dumps({"error": routing_error}, ensure_ascii=False)
+                    )
+                else:
+                    observation = dispatch_observation(
+                        self.registry, call.name, dispatch_arguments
+                    )
                 self._raise_if_interrupted(run)
                 if call.name in {_LAYOUT_TOOL_NAME, _DECOMPOSE_TOOL_NAME}:
                     self._remember_layout_context(
@@ -780,6 +791,36 @@ class Agent:
         return json.dumps(parsed, ensure_ascii=False, separators=(",", ":"))
 
     @staticmethod
+    def _panel_routing_error(
+        tool_name: str,
+        arguments: str,
+        layout_contexts: dict[str, dict[str, Any]],
+    ) -> str | None:
+        """Reject an unresolved explicit panel route before sensor dispatch."""
+        if tool_name not in _GEOMETRY_TOOL_NAMES:
+            return None
+        try:
+            parsed = json.loads(arguments) if arguments.strip() else {}
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(parsed, dict) or "panel_id" not in parsed:
+            return None
+        panel_id = parsed.get("panel_id")
+        attachment_id = parsed.get("attachment_id")
+        if not isinstance(panel_id, str) or not panel_id.strip():
+            return "panel routing failed: panel_id must be a non-empty stable identifier"
+        if not isinstance(attachment_id, str) or not attachment_id.strip():
+            return "panel routing failed: attachment_id is required with panel_id"
+        key = f"{attachment_id}::{panel_id}"
+        context = layout_contexts.get(key)
+        if not isinstance(context, dict):
+            return f"panel routing failed: {panel_id!r} is not registered for this attachment"
+        scope = context.get("analysis_scope", context.get("panel_scope"))
+        if not isinstance(scope, dict) or not isinstance(scope.get("bbox_px"), (list, tuple)):
+            return f"panel routing failed: {panel_id!r} has no usable analysis scope"
+        return None
+
+    @staticmethod
     def _remember_layout_context(
         content: str,
         arguments: str,
@@ -817,6 +858,8 @@ class Agent:
                 )
                 cached["panel"] = panel_summary
                 layout_contexts[f"{attachment_id}::{panel['id']}"] = cached
+                while len(layout_contexts) > _MAX_LAYOUT_CONTEXTS:
+                    layout_contexts.pop(next(iter(layout_contexts)))
             return
         context = data.get("layout_context")
         if not isinstance(context, dict):
@@ -824,6 +867,8 @@ class Agent:
         cached = dict(context)
         cached["source_attachment_id"] = attachment_id
         layout_contexts[attachment_id] = cached
+        while len(layout_contexts) > _MAX_LAYOUT_CONTEXTS:
+            layout_contexts.pop(next(iter(layout_contexts)))
 
     @staticmethod
     def _review_items(content: str) -> list[dict[str, Any]]:

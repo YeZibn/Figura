@@ -64,6 +64,26 @@ def annotated_chart_path(tmp_path):
     return path
 
 
+def _side_by_side_panel(png_bytes: bytes, path: Path) -> list[int]:
+    """Place identical charts in adjacent panels and return the right scope."""
+    with Image.open(BytesIO(png_bytes)) as source:
+        chart = source.convert("RGB")
+    canvas = Image.new("RGB", (chart.width * 2, chart.height), "white")
+    canvas.paste(chart, (0, 0))
+    canvas.paste(chart, (chart.width, 0))
+    canvas.save(path)
+    return [chart.width, 0, chart.width, chart.height]
+
+
+def _panel_scope(bbox: list[int], coordinate_system: str = "cartesian_2d") -> dict:
+    return {
+        "source_attachment_id": "att_dashboard",
+        "coordinate_system": coordinate_system,
+        "analysis_scope": {"bbox_px": bbox, "source_origin_px": bbox[:2]},
+        "validation": {"status": "accepted", "accepted_for_analysis": True},
+    }
+
+
 def test_common_chart_evidence_separates_coordinate_models_and_calibration():
     rgb = np.zeros((40, 60, 3), dtype=np.uint8)
     frame = cartesian_frame(
@@ -418,6 +438,19 @@ def test_measure_bars_matches_true_ratios(annotated_chart_path, monkeypatch):
     assert labels == ["BASELINE", *[str(bar["id"]) for bar in data["bars"]]]
 
 
+def test_measure_bars_scope_excludes_adjacent_panel(tmp_path):
+    png_bytes, _ = annotated_bar_chart()
+    chart_path = tmp_path / "adjacent-bars.png"
+    scope = _side_by_side_panel(png_bytes, chart_path)
+
+    result = measure_bars(str(chart_path), _panel_scope(scope))
+
+    assert isinstance(result, ToolResult)
+    assert result.data["bars"]
+    assert all(bar["geometry"]["bbox_px"][0] >= scope[0] for bar in result.data["bars"])
+    assert result.data["evidence"]["layout_context"]["analysis_scope"]["bbox_px"] == scope
+
+
 def test_measure_bars_keeps_independent_baseline_when_layout_is_offset(
     annotated_chart_path,
 ):
@@ -625,6 +658,24 @@ def test_extract_line_series_preserves_colored_series_and_points(tmp_path, monke
     assert data["warnings"]
     with Image.open(BytesIO(result.images[0].content)) as overlay:
         assert overlay.size == (720, 480)
+
+
+def test_extract_line_series_scope_excludes_adjacent_panel(tmp_path, monkeypatch):
+    png_bytes, _ = line_chart()
+    chart_path = tmp_path / "adjacent-lines.png"
+    scope = _side_by_side_panel(png_bytes, chart_path)
+    monkeypatch.setattr("chartagent.tools.chart.observation.line.extract_text", lambda _path: ToolResult([]))
+
+    result = extract_line_series(str(chart_path), _panel_scope(scope))
+
+    assert isinstance(result, ToolResult)
+    assert result.data["series"]
+    assert all(
+        point["x_px"] >= scope[0]
+        for series in result.data["series"]
+        for point in series["points"]
+    )
+    assert result.data["evidence"]["layout_context"]["analysis_scope"]["bbox_px"] == scope
 
 
 def test_extract_line_series_calibrates_when_tick_evidence_is_available(tmp_path, monkeypatch):
@@ -964,6 +1015,20 @@ def test_extract_scatter_points_preserves_series_and_calibrated_coordinates(tmp_
         assert ImageChops.difference(source.convert("RGB"), overlay.convert("RGB")).getbbox()
 
 
+def test_extract_scatter_points_scope_excludes_adjacent_panel(tmp_path, monkeypatch):
+    png_bytes, _ = scatter_chart()
+    chart_path = tmp_path / "adjacent-scatter.png"
+    scope = _side_by_side_panel(png_bytes, chart_path)
+    monkeypatch.setattr("chartagent.tools.chart.observation.scatter.extract_text", lambda _path: ToolResult([]))
+
+    result = extract_scatter_points(str(chart_path), _panel_scope(scope))
+
+    assert isinstance(result, ToolResult)
+    assert result.data["points"]
+    assert all(point["x_px"] >= scope[0] for point in result.data["points"])
+    assert result.data["evidence"]["layout_context"]["analysis_scope"]["bbox_px"] == scope
+
+
 def test_extract_scatter_points_preserves_pixel_evidence_when_uncalibrated(tmp_path, monkeypatch):
     png_bytes, _ = scatter_chart()
     chart_path = tmp_path / "uncalibrated-scatter.png"
@@ -1111,6 +1176,20 @@ def test_extract_pie_slices_measures_clean_sectors(tmp_path, monkeypatch):
     with Image.open(BytesIO(result.images[0].content)) as overlay, Image.open(chart_path) as source:
         assert overlay.size == source.size
         assert ImageChops.difference(source.convert("RGB"), overlay.convert("RGB")).getbbox()
+
+
+def test_extract_pie_slices_scope_excludes_adjacent_panel(tmp_path, monkeypatch):
+    png_bytes, _ = pie_chart(values=(35, 25, 20, 20))
+    chart_path = tmp_path / "adjacent-pies.png"
+    scope = _side_by_side_panel(png_bytes, chart_path)
+    monkeypatch.setattr("chartagent.tools.chart.observation.pie.extract_text", lambda _path: ToolResult([]))
+
+    result = extract_pie_slices(str(chart_path), _panel_scope(scope, "polar_2d"))
+
+    assert isinstance(result, ToolResult)
+    assert result.data["sectors"]
+    assert result.data["plot_region"]["bbox_px"][0] >= scope[0]
+    assert result.data["evidence"]["layout_context"]["analysis_scope"]["bbox_px"] == scope
 
 
 def test_extract_pie_slices_surfaces_independent_center_conflict(tmp_path, monkeypatch):

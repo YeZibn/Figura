@@ -27,7 +27,7 @@ from .foundation import (
     rgb_to_hex,
 )
 from .coordinates import axis_geometry, cartesian_frame, fit_dominant_axis_line
-from .layout import context_for_evidence, context_frame
+from .layout import context_for_evidence, context_frame, context_scope
 from .overlays import render_bar_overlay
 
 Orientation = Literal["vertical", "horizontal"]
@@ -337,11 +337,18 @@ def _visible_axis_reference(
     rgb: np.ndarray,
     candidates: list[dict[str, Any]],
     orientation: Orientation,
+    search_area: list[int] | None = None,
+    strict_search_area: bool = False,
 ) -> dict[str, Any] | None:
     """Return visible zero-axis evidence in the same scalar space as bars."""
     if not candidates:
         return None
-    axis = fit_dominant_axis_line(rgb, axis="x" if orientation == "vertical" else "y")
+    axis = fit_dominant_axis_line(
+        rgb,
+        axis="x" if orientation == "vertical" else "y",
+        search_area=search_area,
+        strict_search_area=strict_search_area,
+    )
     if axis is None:
         return None
     return {
@@ -710,13 +717,15 @@ def _measure_chart(
     layout_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     layout = context_frame(layout_context)
+    scope = context_scope(layout_context)
     measurement_area = layout.get("bbox_px") if layout else None
-    palette = detect_color_palette(rgb, region=measurement_area, max_colors=8)
+    search_area = measurement_area or (scope.get("bbox_px") if scope else None)
+    palette = detect_color_palette(rgb, region=search_area, max_colors=8)
     vertical_candidates: list[dict[str, Any]] = []
     horizontal_candidates: list[dict[str, Any]] = []
     for series_index, color in enumerate(palette, start=1):
-        vertical_candidates.extend(_bar_candidates(rgb, color, series_index, measurement_area, orientation="vertical"))
-        horizontal_candidates.extend(_bar_candidates(rgb, color, series_index, measurement_area, orientation="horizontal"))
+        vertical_candidates.extend(_bar_candidates(rgb, color, series_index, search_area, orientation="vertical"))
+        horizontal_candidates.extend(_bar_candidates(rgb, color, series_index, search_area, orientation="horizontal"))
     vertical_score = _orientation_score(vertical_candidates, "vertical")
     horizontal_score = _orientation_score(horizontal_candidates, "horizontal")
     if not vertical_candidates and not horizontal_candidates:
@@ -753,7 +762,13 @@ def _measure_chart(
         prefer_outer=stacked,
     )
     warnings: list[str] = []
-    visible_axis = _visible_axis_reference(rgb, candidates, orientation)
+    visible_axis = _visible_axis_reference(
+        rgb,
+        candidates,
+        orientation,
+        search_area,
+        strict_search_area=scope is not None,
+    )
     baseline_cross_check: dict[str, Any] | None = None
     if baseline is not None and visible_axis is not None:
         residuals = []

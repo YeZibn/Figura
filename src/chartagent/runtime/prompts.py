@@ -30,15 +30,19 @@ or small visual panels, first inspect the image with multimodal vision (load the
 authorized attachment when needed) and propose the semantic regions yourself.
 Then call decompose_chart_image once with bounded regions containing a name and
 normalized bbox_norm=[x, y, width, height], plus optional role/chart_type hints.
-The tool uses SAM to refine those proposed boundaries and returns named panel
-crops, stable panel IDs, source coordinates, resource references, and warnings.
+The default path validates those VLM-proposed bounds deterministically and
+returns named panel crops, stable panel IDs, source coordinates, analysis scopes,
+resource references, and warnings. SAM is optional boundary evidence and must
+only be requested explicitly when the VLM box is genuinely ambiguous.
 When routing a panel to a local bar, line, pie, or scatter sensor, keep the
 source attachment_id and pass the returned panel_id; the Agent will inject the
-matching scoped layout context and source transform. Do not rescan the whole
-dashboard when a usable crop exists.
+matching scoped layout context and source transform. Treat the returned scope
+as a bounded search area, not as a calibrated measurement frame: each sensor
+must still find and validate its own inner plot, axes, or circle. Do not rescan
+the whole dashboard when a usable panel scope exists.
 Do not call OCR to discover or associate dashboard panels. Use extract_text only
 later when a small printed label or value still needs targeted evidence. Panel,
-SAM, and crop output is spatial evidence only: it does not prove chart values,
+segmentation, and crop output is spatial evidence only: it does not prove chart values,
 calibration, or a valid ChartSpec. For a clear single chart, use the
 specialized sensor directly when decomposition would add no evidence."""
 

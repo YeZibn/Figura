@@ -261,16 +261,20 @@ class FallbackPanelSegmenter:
 
 
 def build_panel_segmenter(mode: str = "auto") -> PanelSegmenter:
-    """Build a bounded backend without loading optional models unnecessarily."""
+    """Build a bounded backend without loading optional models by default.
+
+    Dashboard cards are rectangular semantic regions, so the default ``auto``
+    path intentionally stays deterministic.  SAM remains an explicit opt-in
+    experiment and is never activated merely because a checkpoint happens to
+    be present in the environment.
+    """
     normalized = str(mode or "auto").strip().lower()
     if normalized not in {"auto", "deterministic", "sam"}:
         normalized = "auto"
-    if normalized == "deterministic":
+    if normalized in {"auto", "deterministic"}:
         return DeterministicPanelSegmenter()
     sam = SamPanelSegmenter()
-    if normalized == "sam" or os.getenv("FIGURA_SAM_CHECKPOINT"):
-        return FallbackPanelSegmenter(sam)
-    return DeterministicPanelSegmenter()
+    return FallbackPanelSegmenter(sam)
 
 
 __all__ = [

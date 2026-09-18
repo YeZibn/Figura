@@ -26,7 +26,12 @@ from .foundation import (
 from .coordinates import apply_axis_transform, axis_output, detect_cartesian_frame, fit_axis_transform
 from .ocr import extract_text
 from .overlays import render_line_overlay
-from .layout import context_for_evidence, context_region
+from .layout import (
+    context_for_evidence,
+    context_region,
+    context_scope,
+    filter_snippets_to_scope,
+)
 
 _TRACE_TOLERANCE = 30
 
@@ -110,6 +115,7 @@ def _legend_entries(
     palette: list[np.ndarray],
     plot_area: list[int],
     snippets: list[dict[str, Any]],
+    search_area: list[int] | None = None,
 ) -> list[dict[str, Any]]:
     """Associate color swatches outside the plot frame with OCR labels."""
     x, y, width, height = plot_area
@@ -128,6 +134,15 @@ def _legend_entries(
             for component in components
             if max(component["bbox"][2:]) <= 100
             and component["area"] <= 2500
+            and (
+                search_area is None
+                or (
+                    component["bbox"][0] < search_area[0] + search_area[2]
+                    and component["bbox"][0] + component["bbox"][2] > search_area[0]
+                    and component["bbox"][1] < search_area[1] + search_area[3]
+                    and component["bbox"][1] + component["bbox"][3] > search_area[1]
+                )
+            )
             and (
                 component["center"][0] >= right - 2
                 or component["center"][1] <= y + 6
@@ -457,13 +472,15 @@ def extract_line_series(
     except Exception as exc:  # noqa: BLE001 - tool boundary
         return {"error": f"extract_line_series failed: {type(exc).__name__}"}
 
-    search_area = default_plot_area(rgb)
+    scope = context_scope(layout_context)
+    search_area = scope.get("bbox_px") if scope else default_plot_area(rgb)
     preliminary_palette = _line_palette(rgb, search_area)
     frame, orientation, detection_area = detect_cartesian_frame(
         rgb,
         search_area,
         preliminary_palette,
         layout_context=layout_context,
+        strict_search_area=scope is not None,
     )
     plot_area = list(frame.get("bbox") if frame else detection_area)
     if frame is None:
@@ -478,7 +495,7 @@ def extract_line_series(
             "evidence": [],
         }
     palette = _line_palette(rgb, plot_area)
-    snippets = _ocr_snippets(path)
+    snippets = _ocr_snippets(path, scope) if scope else _ocr_snippets(path)
     x_ticks, y_ticks = numeric_ticks(snippets, plot_area)
     x_tick_region = context_region(layout_context, "x_ticks")
     x_anchors = ordered_text_anchors(
@@ -492,7 +509,13 @@ def extract_line_series(
     y_axis_points = frame.get("y_axis", {}).get("points_px") if frame.get("y_axis") else None
     x_model = fit_axis_transform(x_ticks, x_axis_points)
     y_model = fit_axis_transform(y_ticks, y_axis_points)
-    legend = _legend_entries(rgb, palette, plot_area, snippets)
+    legend = _legend_entries(
+        rgb,
+        palette,
+        plot_area,
+        snippets,
+        scope.get("bbox_px") if scope else None,
+    )
 
     series: list[dict[str, Any]] = []
     filled_region_detected = False
@@ -646,10 +669,14 @@ def extract_line_series(
     )
 
 
-def _ocr_snippets(image_path: Path) -> list[dict[str, Any]]:
+def _ocr_snippets(
+    image_path: Path,
+    scope: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     result = extract_text(str(image_path))
     if isinstance(result, ToolResult) and isinstance(result.data, list):
-        return [snippet for snippet in result.data if isinstance(snippet, dict)]
+        snippets = [snippet for snippet in result.data if isinstance(snippet, dict)]
+        return filter_snippets_to_scope(snippets, scope)
     return []
 
 

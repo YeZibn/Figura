@@ -83,25 +83,36 @@ def _neutral_axis_line(
     *,
     axis: str,
     search_area: Sequence[int] | None = None,
+    strict_search_area: bool = False,
 ) -> dict[str, Any] | None:
     """Find a long low-saturation gray axis, including light renderer spines."""
     height, width = rgb.shape[:2]
+    if strict_search_area and search_area is not None and len(search_area) >= 4:
+        search_left, search_top, search_width, search_height = map(int, search_area[:4])
+        search_left = max(0, min(width - 1, search_left))
+        search_top = max(0, min(height - 1, search_top))
+        search_right = max(search_left + 1, min(width, search_left + search_width))
+        search_bottom = max(search_top + 1, min(height, search_top + search_height))
+    else:
+        search_left, search_top, search_right, search_bottom = 0, 0, width, height
+    search_width = search_right - search_left
+    search_height = search_bottom - search_top
     channels = rgb.astype(np.int16)
     brightness = channels.mean(axis=2)
     spread = channels.max(axis=2) - channels.min(axis=2)
     neutral = (spread <= 8) & (brightness >= 120) & (brightness <= 248)
     if axis == "x":
-        row_start = max(0, int(height * 0.58))
-        row_end = min(height, int(height * 0.97))
-        col_start = max(0, int(width * 0.04))
-        col_end = min(width, int(width * 0.98))
+        row_start = max(search_top, int(height * 0.58))
+        row_end = min(search_bottom, int(height * 0.97))
+        col_start = max(search_left, int(width * 0.04))
+        col_end = min(search_right, int(width * 0.98))
         candidates = []
         for row in range(row_start, row_end):
             indices = np.flatnonzero(neutral[row, col_start:col_end]) + col_start
-            if len(indices) < width * 0.35:
+            if len(indices) < search_width * 0.35:
                 continue
             span = float(np.ptp(indices))
-            if span >= width * 0.45:
+            if span >= search_width * 0.45:
                 candidates.append((row, indices, span))
         if not candidates:
             return None
@@ -118,17 +129,17 @@ def _neutral_axis_line(
             "source": "neutral_axis_pixels",
         }
 
-    col_start = max(0, int(width * 0.04))
-    col_end = min(width, int(width * 0.48))
-    row_start = max(0, int(height * 0.05))
-    row_end = min(height, int(height * 0.96))
+    col_start = max(search_left, int(width * 0.04))
+    col_end = min(search_right, int(width * 0.48))
+    row_start = max(search_top, int(height * 0.05))
+    row_end = min(search_bottom, int(height * 0.96))
     candidates = []
     for column in range(col_start, col_end):
         indices = np.flatnonzero(neutral[row_start:row_end, column]) + row_start
-        if len(indices) < height * 0.25:
+        if len(indices) < search_height * 0.25:
             continue
         span = float(np.ptp(indices))
-        if span >= height * 0.45:
+        if span >= search_height * 0.45:
             candidates.append((column, indices, span))
     if not candidates:
         return None
@@ -151,29 +162,43 @@ def fit_dominant_axis_line(
     *,
     axis: str,
     search_area: Sequence[int] | None = None,
+    strict_search_area: bool = False,
 ) -> dict[str, Any] | None:
     """Find a long dark x or y axis and retain its source-image geometry."""
     if axis not in {"x", "y"}:
         raise ValueError("axis must be x or y")
-    neutral = _neutral_axis_line(rgb, axis=axis, search_area=search_area)
+    neutral = _neutral_axis_line(
+        rgb,
+        axis=axis,
+        search_area=search_area,
+        strict_search_area=strict_search_area,
+    )
     if neutral is not None:
         return neutral
     dark = np.max(rgb, axis=2) <= _DARK_PIXEL
     height, width = dark.shape
     yy, xx = np.nonzero(dark)
+    if strict_search_area and search_area is not None and len(search_area) >= 4:
+        search_left, search_top, search_width, search_height = map(int, search_area[:4])
+        search_left = max(0, min(width - 1, search_left))
+        search_top = max(0, min(height - 1, search_top))
+        search_right = max(search_left + 1, min(width, search_left + search_width))
+        search_bottom = max(search_top + 1, min(height, search_top + search_height))
+    else:
+        search_left, search_top, search_right, search_bottom = 0, 0, width, height
     if axis == "x":
         keep = (
-            (xx >= int(width * 0.08))
-            & (xx <= int(width * 0.97))
-            & (yy >= int(height * 0.52))
-            & (yy <= int(height * 0.96))
+            (xx >= max(search_left, int(width * 0.08)))
+            & (xx <= min(search_right, int(width * 0.97)))
+            & (yy >= max(search_top, int(height * 0.52)))
+            & (yy <= min(search_bottom, int(height * 0.96)))
         )
     else:
         keep = (
-            (xx >= int(width * 0.04))
-            & (xx <= int(width * 0.46))
-            & (yy >= int(height * 0.06))
-            & (yy <= int(height * 0.94))
+            (xx >= max(search_left, int(width * 0.04)))
+            & (xx <= min(search_right, int(width * 0.46)))
+            & (yy >= max(search_top, int(height * 0.06)))
+            & (yy <= min(search_bottom, int(height * 0.94)))
         )
     xx, yy = xx[keep].astype(float), yy[keep].astype(float)
     if len(xx) < 20:
@@ -196,6 +221,12 @@ def fit_dominant_axis_line(
             projected = xx[inliers] if axis == "x" else yy[inliers]
             span = float(np.ptp(projected)) if len(projected) else 0.0
             minimum_span = width * 0.38 if axis == "x" else height * 0.38
+            if strict_search_area:
+                minimum_span = (
+                    (search_right - search_left) * 0.38
+                    if axis == "x"
+                    else (search_bottom - search_top) * 0.38
+                )
             if span < minimum_span:
                 continue
             expected = (
@@ -376,6 +407,7 @@ def detect_cartesian_frame(
     palette: list[np.ndarray] | None = None,
     snippets: list[dict[str, Any]] | None = None,
     layout_context: dict[str, Any] | None = None,
+    strict_search_area: bool = False,
 ) -> tuple[dict[str, Any] | None, str, list[int]]:
     """Infer a source-image Cartesian frame from axes and colored evidence.
 
@@ -386,8 +418,18 @@ def detect_cartesian_frame(
     palette = palette or []
     snippets = snippets or []
     accepted_layout = context_frame(layout_context)
-    x_axis = fit_dominant_axis_line(rgb, axis="x", search_area=search_area)
-    y_axis = fit_dominant_axis_line(rgb, axis="y", search_area=search_area)
+    x_axis = fit_dominant_axis_line(
+        rgb,
+        axis="x",
+        search_area=search_area,
+        strict_search_area=strict_search_area,
+    )
+    y_axis = fit_dominant_axis_line(
+        rgb,
+        axis="y",
+        search_area=search_area,
+        strict_search_area=strict_search_area,
+    )
     layout_frame: dict[str, Any] | None = None
     layout_validation = layout_context.get("validation", {}) if isinstance(layout_context, dict) else {}
     layout_checks = layout_validation.get("checks", {}) if isinstance(layout_validation, dict) else {}

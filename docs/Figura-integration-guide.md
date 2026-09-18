@@ -41,7 +41,7 @@ npm --prefix frontend run smoke
 
 ## 关键行为
 
-图片上传只登记并持久化附件，不会自动发送给模型。Agent 需要视觉检查时调用 `load_image(attachment_id)`，也可以继续调用 OCR 和图表传感器。
+图片上传只登记并持久化附件，不会自动发送给模型。Agent 需要视觉检查时调用 `load_image(attachment_id)`；复杂 dashboard 先由多模态模型提出语义 bbox，再由 `decompose_chart_image` 生成确定性的 panel scope 和 crop。后续柱状图、折线图、饼图、散点图传感器通过 `attachment_id + panel_id` 消费对应 scope，并在 scope 内独立寻找真正的 measurement frame。OCR 只作为后续标签、刻度或数值证据，不参与 dashboard 拓扑发现。
 
 一次提问对应一个 Run。Run 会持久化模型回合、工具调用、工具结果、视觉观察、生成图表和最终答案，并通过 SSE 增量展示。前端应保留执行详情，最终答案使用安全 Markdown 渲染；生成图表通过 artifact ID 预览或下载。
 

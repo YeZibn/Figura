@@ -162,22 +162,25 @@ For images containing several cards or charts, the Agent first uses
 multimodal vision to propose named semantic regions, then calls the
 attachment-authorized `decompose_chart_image` tool once. The tool does not use
 OCR to discover dashboard topology: it validates the VLM `bbox_norm` proposals,
-optionally refines each one with a lazily loaded SAM-family backend, and
-returns stable panel IDs, named crops, source-coordinate transforms, managed
-resource references, and warnings. `auto` is the default: SAM is used only
-when its optional runtime is configured; otherwise the VLM bounds remain as
-partial deterministic fallback evidence. Set `FIGURA_SAM_CHECKPOINT` to enable
-the current SAM adapter, with optional `FIGURA_SAM_MODEL_TYPE` (default
-`vit_b`) and `FIGURA_SAM_DEVICE` (default `cpu`). Model weights are not
+returns stable panel IDs, named crops, source-coordinate analysis scopes,
+managed resource references, and warnings. `auto` is the default and uses
+deterministic VLM rectangular bounds with bounded padding; it never loads SAM
+merely because a checkpoint exists in the environment. Use
+`segmentation_mode: "sam"` for an explicit SAM experiment. The optional SAM
+adapter accepts `FIGURA_SAM_CHECKPOINT`, with optional `FIGURA_SAM_MODEL_TYPE`
+(default `vit_b`) and `FIGURA_SAM_DEVICE` (default `cpu`). Model weights are not
 downloaded automatically. If the package, checkpoint, or runtime is
-unavailable, the tool keeps usable panel crops and marks the affected evidence
-as partial instead of failing the whole image. The tool bounds proposals at 32
+unavailable, the tool keeps the validated VLM scope and marks the affected
+boundary evidence as partial instead of failing the whole image. The tool bounds proposals at 32
 panels and crops at 12 resources; generated-image byte/count and observation
 retention limits are enforced by the managed resource boundary. When routing a
 panel to a bar, line, pie, or scatter sensor, keep the source `attachment_id`
-and pass its `panel_id`; the Agent injects the scoped source layout so the
-sensor does not silently rescan the full dashboard. Spatial decomposition
-evidence remains separate from chart measurement and value extraction.
+and pass its `panel_id`; the Agent injects the matching analysis scope and
+source transform. Each sensor still detects its own inner measurement frame,
+axes, baseline, center, or calibration, so it does not silently treat the
+whole card as a plot or rescan an unrelated dashboard panel. Spatial
+decomposition evidence remains separate from chart measurement and value
+extraction.
 
 Run this workflow in the canonical Conda environment so RapidOCR and any
 optional vision dependencies resolve consistently:

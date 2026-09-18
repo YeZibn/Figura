@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 import sqlite3
 
 import pytest
@@ -178,6 +179,62 @@ def test_agent_continuation_reuses_checkpointed_tool_boundary():
     assert agent.run("继续") == "done"
     assert calls == ["tool"]
     assert client.calls == 1
+
+
+def test_agent_continuation_restores_checkpointed_panel_scope():
+    registry = ToolRegistry()
+    seen: list[dict] = []
+
+    def sensor(attachment_id: str, layout_context: dict | None = None):
+        assert attachment_id == "att_dashboard"
+        assert layout_context is not None
+        seen.append(layout_context)
+        return {"ok": True}
+
+    registry.register(Tool(
+        "measure_bars",
+        "measure bars",
+        {
+            "type": "object",
+            "properties": {
+                "attachment_id": {"type": "string"},
+                "panel_id": {"type": "string"},
+                "layout_context": {"type": "object", "additionalProperties": True},
+            },
+            "required": ["attachment_id", "panel_id"],
+        },
+        sensor,
+    ))
+
+    class Client:
+        def chat(self, messages, **kwargs):
+            return NormalizedResult(content="continued", tool_calls=[])
+
+    scope = {
+        "context_id": "panel_2_layout",
+        "analysis_scope": {"bbox_px": [100, 200, 300, 240]},
+        "validation": {"status": "accepted", "accepted_for_analysis": True},
+    }
+    recovery = {
+        "nextAction": "tool",
+        "pendingToolCalls": [{
+            "id": "call-1",
+            "name": "measure_bars",
+            "arguments": json.dumps({"attachment_id": "att_dashboard", "panel_id": "panel_2"}),
+        }],
+        "messages": [{"role": "user", "content": "继续"}],
+        "layoutContexts": {"att_dashboard::panel_2": scope},
+    }
+
+    agent = Agent(
+        Client(),
+        registry,
+        recovery_context=recovery,
+        operation_begin=lambda operation_id, kind: {"operationId": operation_id, "state": "not_started"},
+    )
+
+    assert agent.run("继续") == "continued"
+    assert seen[0]["analysis_scope"] == scope["analysis_scope"]
 
 
 def test_agent_continuation_blocks_in_flight_tool():

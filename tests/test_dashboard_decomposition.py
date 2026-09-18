@@ -1,4 +1,4 @@
-"""Tests for VLM-guided SAM dashboard decomposition and named crops."""
+"""Tests for VLM-guided dashboard decomposition and named crops."""
 
 import json
 from io import BytesIO
@@ -16,6 +16,7 @@ from chartagent.tools.chart.observation.pie import extract_pie_slices
 from chartagent.tools.chart.observation.segmentation import (
     DeterministicPanelSegmenter,
     SegmentationResult,
+    build_panel_segmenter,
 )
 
 
@@ -107,7 +108,11 @@ def test_dashboard_crop_frames_preserve_source_coordinates_and_layout_context():
         assert 0 <= bbox[1] < image_size[1]
         assert bbox[0] + bbox[2] <= image_size[0]
         assert bbox[1] + bbox[3] <= image_size[1]
-        assert panel["layout_context"]["measurement_frame"]["bbox_px"] == bbox
+        context = panel["layout_context"]
+        assert context["analysis_scope"]["bbox_px"] == bbox
+        assert context["measurement_frame"] is None
+        assert context["validation"]["accepted_for_measurement"] is False
+        assert context["validation"]["accepted_for_analysis"] is True
         assert panel["analysis_transform"]["source_origin_px"] == bbox[:2]
         assert panel["crop"]["name"].startswith(panel["id"] + "_")
 
@@ -221,6 +226,14 @@ def test_explicit_sam_mode_degrades_without_optional_backend(monkeypatch):
     assert all(panel["segmentation"]["source"] == "deterministic_fallback" for panel in result.data["panels"])
 
 
+def test_auto_mode_does_not_activate_sam_from_environment(monkeypatch):
+    monkeypatch.setenv("FIGURA_SAM_CHECKPOINT", "/tmp/sam-checkpoint.pth")
+
+    segmenter = build_panel_segmenter("auto")
+
+    assert isinstance(segmenter, DeterministicPanelSegmenter)
+
+
 def test_authorized_decomposition_contract_accepts_vlm_regions_and_hides_paths():
     attachments = AttachmentRegistry(session_id="dashboard-test")
     item = attachments.register(str(COMPLEX_IMAGE))
@@ -286,19 +299,24 @@ def test_panel_context_can_be_handed_to_existing_chart_sensor():
     chart_panels = [panel for panel in result.data["panels"] if panel["role"] == "chart"]
 
     assert len(chart_panels) == 3
-    assert all(panel["layout_context"]["validation"]["accepted_for_measurement"] for panel in chart_panels)
+    assert all(panel["layout_context"]["validation"]["accepted_for_analysis"] for panel in chart_panels)
     assert all(panel["layout_context"]["panel"]["id"] == panel["id"] for panel in chart_panels)
 
-    bar_result = measure_bars(str(COMPLEX_IMAGE), layout_context=chart_panels[0]["layout_context"])
+    first_bar_result = measure_bars(str(COMPLEX_IMAGE), layout_context=chart_panels[0]["layout_context"])
+    second_bar_result = measure_bars(str(COMPLEX_IMAGE), layout_context=chart_panels[1]["layout_context"])
     pie_result = extract_pie_slices(str(COMPLEX_IMAGE), layout_context=chart_panels[-1]["layout_context"])
-    for sensor_result in (bar_result, pie_result):
+    assert first_bar_result.data["bars"]
+    assert second_bar_result.data["bars"]
+    assert pie_result.data["plot_region"]["bbox_px"][0] >= chart_panels[-1]["bbox_px"][0]
+    assert "donut" in " ".join(pie_result.data["warnings"])
+    for sensor_result in (first_bar_result, second_bar_result, pie_result):
         sensor_data = sensor_result.data if isinstance(sensor_result, ToolResult) else sensor_result
         assert isinstance(sensor_data, dict)
         sensor_context = sensor_data.get("layout_context") or sensor_data["evidence"]["layout_context"]
-        assert sensor_context["measurement_frame"]["bbox_px"] in [
-            chart_panels[0]["bbox_px"],
-            chart_panels[-1]["bbox_px"],
+        assert sensor_context["analysis_scope"]["bbox_px"] in [
+            panel["bbox_px"] for panel in chart_panels
         ]
+        assert sensor_context["measurement_frame"] is None
 
 
 def test_panel_id_selects_the_matching_scoped_layout_context():
@@ -320,6 +338,32 @@ def test_panel_id_selects_the_matching_scoped_layout_context():
     parsed = json.loads(arguments)
     assert parsed["layout_context"]["coordinate_system"] == "polar_2d"
     assert parsed["layout_context"]["measurement_frame"]["bbox_px"] == [900, 200, 300, 300]
+
+
+def test_unresolved_panel_route_is_bounded_before_sensor_dispatch():
+    error = Agent._panel_routing_error(
+        "measure_bars",
+        json.dumps({"attachment_id": "att_dashboard", "panel_id": "missing_panel"}),
+        {
+            "att_dashboard::panel_2": {
+                "analysis_scope": {"bbox_px": [100, 200, 300, 240]},
+            }
+        },
+    )
+
+    assert error is not None
+    assert "not registered" in error
+
+
+def test_resolved_panel_route_requires_an_analysis_scope():
+    error = Agent._panel_routing_error(
+        "extract_pie_slices",
+        json.dumps({"attachment_id": "att_dashboard", "panel_id": "panel_4"}),
+        {"att_dashboard::panel_4": {"measurement_frame": {"bbox_px": [1, 2, 3, 4]}}},
+    )
+
+    assert error is not None
+    assert "no usable analysis scope" in error
 
 
 def test_decomposition_contexts_are_cached_per_attachment_and_panel():

@@ -491,6 +491,71 @@ def context_frame(context: Mapping[str, Any] | None) -> dict[str, Any] | None:
     return dict(frame)
 
 
+def context_scope(context: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    """Return a bounded panel search scope without treating it as a plot frame.
+
+    Dashboard decomposition intentionally supplies a coarse panel scope before
+    a chart-specific sensor has identified axes or the inner plot.  Keeping
+    this separate from ``context_frame`` prevents a whole card's title and
+    legend from being mistaken for calibrated chart geometry.
+    """
+    if not isinstance(context, Mapping):
+        return None
+    validation = context.get("validation")
+    if not isinstance(validation, Mapping):
+        return None
+    if validation.get("status") not in {"accepted", "partial"}:
+        return None
+    scope = context.get("analysis_scope", context.get("panel_scope"))
+    if not isinstance(scope, Mapping):
+        return None
+    bbox = scope.get("bbox_px")
+    if not isinstance(bbox, Sequence) or len(bbox) < 4:
+        return None
+    try:
+        values = [int(value) for value in bbox[:4]]
+    except (TypeError, ValueError):
+        return None
+    if values[2] <= 0 or values[3] <= 0:
+        return None
+    return {**dict(scope), "bbox_px": values}
+
+
+def filter_snippets_to_scope(
+    snippets: Sequence[Mapping[str, Any]],
+    scope: Mapping[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """Keep OCR snippets whose boxes overlap a source-image scope."""
+    if not isinstance(scope, Mapping):
+        return [dict(item) for item in snippets if isinstance(item, Mapping)]
+    raw_scope = scope.get("bbox_px")
+    if not isinstance(raw_scope, Sequence) or len(raw_scope) < 4:
+        return [dict(item) for item in snippets if isinstance(item, Mapping)]
+    left, top, width, height = (float(value) for value in raw_scope[:4])
+    right, bottom = left + width, top + height
+    filtered: list[dict[str, Any]] = []
+    for item in snippets:
+        if not isinstance(item, Mapping):
+            continue
+        raw_bbox = item.get("bbox")
+        if not isinstance(raw_bbox, Sequence) or len(raw_bbox) < 4:
+            continue
+        try:
+            item_left, item_top, item_width, item_height = (
+                float(value) for value in raw_bbox[:4]
+            )
+        except (TypeError, ValueError):
+            continue
+        if (
+            item_left < right
+            and item_left + item_width > left
+            and item_top < bottom
+            and item_top + item_height > top
+        ):
+            filtered.append(dict(item))
+    return filtered
+
+
 def context_region(context: Mapping[str, Any] | None, role: str) -> dict[str, Any] | None:
     if not isinstance(context, Mapping) or role not in ANNOTATION_ROLES:
         return None
@@ -509,8 +574,13 @@ def context_for_evidence(context: Mapping[str, Any] | None) -> dict[str, Any] | 
     validation = context.get("validation") if isinstance(context.get("validation"), Mapping) else {}
     return {
         "context_id": str(context.get("context_id", ""))[:80],
+        "source_attachment_id": str(context.get("source_attachment_id", ""))[:160]
+        if context.get("source_attachment_id") is not None
+        else None,
         "coordinate_system": str(context.get("coordinate_system", "unknown"))[:32],
         "orientation": str(context.get("orientation", "unknown"))[:32],
+        "panel": context.get("panel"),
+        "analysis_scope": context.get("analysis_scope", context.get("panel_scope")),
         "measurement_frame": context.get("measurement_frame"),
         "annotation_regions": context.get("annotation_regions", {}),
         "axes": context.get("axes", {"x": None, "y": None}),
@@ -518,6 +588,7 @@ def context_for_evidence(context: Mapping[str, Any] | None) -> dict[str, Any] | 
         "validation": {
             "status": str(validation.get("status", "rejected")),
             "accepted_for_measurement": bool(validation.get("accepted_for_measurement")),
+            "accepted_for_analysis": bool(validation.get("accepted_for_analysis")),
             "confidence": _confidence(validation.get("confidence")),
             "warnings": [str(item)[:160] for item in validation.get("warnings", []) if isinstance(item, str)][:12],
         },
@@ -531,7 +602,9 @@ __all__ = [
     "LAYOUT_CONTEXT_VERSION",
     "context_for_evidence",
     "context_frame",
+    "context_scope",
     "context_region",
+    "filter_snippets_to_scope",
     "fallback_layout_context",
     "validate_layout_hint",
 ]
