@@ -874,13 +874,9 @@ def extract_pie_slices(
 EXTRACT_PIE_SLICES = Tool(
     name="extract_pie_slices",
     description=(
-        "Measure an ordinary authorized two-dimensional pie chart and return "
-        "source-image plot geometry, stable sector evidence, gated angles and "
-        "ratios, legend/OCR associations, confidence, warnings, and a "
-        "source-sized overlay. Use it for recognizable circular pies; do not "
-        "treat donut, exploded, nested, 3D, perspective, or ambiguous circular "
-        "graphics as complete flat-pie data. Check evidence and warnings before "
-        "using ratios for ChartSpec restoration."
+        "测量普通的二维饼图并返回源图绘图区几何、稳定扇区证据、经过门控的角度和比例、图例/OCR 关联、"
+        "置信度、警告及源尺寸叠加图。用于可识别的圆形饼图；不要把 donut、爆炸、嵌套、3D、透视或含义不明的圆形图形当成完整的平面饼图数据。"
+        "将比例用于 ChartSpec 恢复前必须检查证据和 warnings。"
     ),
     parameters={
         "type": "object",

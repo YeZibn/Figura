@@ -25,6 +25,7 @@ from typing import Any, Callable, List, Optional, Sequence
 from ..client.client import LLMClient
 from ..client.models import NormalizedResult, ToolCall
 from ..multimodal import ToolVisualEvidence, build_tool_observation_content
+from ..prompting import assemble_prompt_context, panel_inventory_from_layout_contexts
 from ..trace import (
     TraceEmitter,
     TraceSink,
@@ -111,6 +112,111 @@ def _attach_visual_observation_refs(
         content=json.dumps(payload, ensure_ascii=False),
         images=observation.images,
     )
+
+
+def _artifact_records_from_observation(
+    tool_name: str,
+    call_id: str,
+    content: str,
+    source_attachment_ids: Sequence[str],
+    references: Sequence[dict[str, Any]] = (),
+) -> list[dict[str, Any]]:
+    """Create a small attributable index while retaining the native result."""
+    try:
+        payload = json.loads(content)
+    except (TypeError, json.JSONDecodeError):
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+    warnings = payload.get("warnings", [])
+    if isinstance(data, dict) and isinstance(data.get("warnings"), list):
+        warnings = data.get("warnings")
+    warnings = [str(item)[:240] for item in warnings[:12]] if isinstance(warnings, list) else []
+    panel_ids = []
+    panels = data.get("panels") if isinstance(data, dict) else None
+    if isinstance(panels, list):
+        panel_ids = [str(item.get("id"))[:96] for item in panels if isinstance(item, dict) and item.get("id")]
+    status = "failed" if payload.get("error") else "observed"
+    records: list[dict[str, Any]] = [
+        {
+            "artifact_id": f"observation:{call_id}"[:128],
+            "kind": "observation",
+            "status": status,
+            "source_attachment_ids": list(source_attachment_ids),
+            "panel_ids": panel_ids,
+            "lineage": [tool_name],
+            "confidence": data.get("confidence") if isinstance(data, dict) else None,
+            "warnings": warnings,
+            "resource_refs": list(references),
+        }
+    ]
+    if tool_name == "assemble_spec" and not payload.get("error"):
+        records.append(
+            {
+                "artifact_id": f"chartspec:{call_id}"[:128],
+                "kind": "ChartSpec",
+                "status": "validated",
+                "source_attachment_ids": list(source_attachment_ids),
+                "panel_ids": panel_ids,
+                "lineage": [f"observation:{call_id}"],
+                "warnings": warnings,
+            }
+        )
+    for item in panels or []:
+        if not isinstance(item, dict) or not item.get("id"):
+            continue
+        crop = item.get("crop") if isinstance(item.get("crop"), dict) else {}
+        crop_refs = [crop.get("resource_ref")] if isinstance(crop.get("resource_ref"), dict) else []
+        records.append(
+            {
+                "artifact_id": f"panel:{item['id']}"[:128],
+                "kind": "panel",
+                "status": item.get("status", "observed"),
+                "source_attachment_ids": list(source_attachment_ids),
+                "panel_ids": [str(item["id"])],
+                "lineage": [f"observation:{call_id}"],
+                "confidence": item.get("confidence"),
+                "warnings": item.get("warnings", []),
+                "resource_refs": crop_refs or list(references),
+            }
+        )
+    review_items = data.get("review") if isinstance(data, dict) else None
+    if not isinstance(review_items, list) and isinstance(data, dict) and isinstance(data.get("candidate"), dict):
+        review_items = [data["candidate"]]
+    if isinstance(review_items, list):
+        for index, item in enumerate(review_items[:16], start=1):
+            if not isinstance(item, dict):
+                continue
+            candidate_id = str(item.get("candidateId") or f"{call_id}:{index}")[:128]
+            candidate_status = str(item.get("candidateStatus") or item.get("status") or "candidate")[:64]
+            records.append(
+                {
+                    "artifact_id": f"candidate:{candidate_id}"[:128],
+                    "kind": "candidate",
+                    "status": candidate_status,
+                    "source_attachment_ids": item.get("sourceAttachmentIds", source_attachment_ids),
+                    "panel_ids": item.get("panelIds", panel_ids),
+                    "lineage": [f"observation:{call_id}"],
+                    "warnings": warnings,
+                    "resource_refs": list(references),
+                }
+            )
+            review = item.get("review")
+            if isinstance(review, dict):
+                records.append(
+                    {
+                        "artifact_id": f"review:{item.get('reviewId') or candidate_id}"[:128],
+                        "kind": "review",
+                        "status": review.get("status", item.get("reviewStatus", "unknown")),
+                        "source_attachment_ids": item.get("sourceAttachmentIds", source_attachment_ids),
+                        "panel_ids": item.get("panelIds", panel_ids),
+                        "lineage": [f"candidate:{candidate_id}"],
+                        "confidence": review.get("confidence"),
+                        "warnings": [str(issue.get("message")) for issue in review.get("issues", []) if isinstance(issue, dict)],
+                    }
+                )
+    return records[:48]
 
 
 class AgentInterrupted(RuntimeError):
@@ -219,6 +325,7 @@ class Agent:
         self._messages = []
         self._current_messages = []
         layout_contexts: dict[str, dict[str, Any]] = {}
+        artifact_records: list[dict[str, Any]] = []
         checkpoint_references: list[dict[str, Any]] = []
         if isinstance(recovery, dict):
             loader = getattr(self.memory, "recovery_context", None)
@@ -231,6 +338,11 @@ class Agent:
                     str(key): value for key, value in list(raw_layouts.items())[:_MAX_LAYOUT_CONTEXTS]
                     if isinstance(value, dict)
                 }
+            raw_artifacts = recovery.get("artifactIndex")
+            if isinstance(raw_artifacts, list):
+                artifact_records = [
+                    item for item in raw_artifacts[:48] if isinstance(item, dict)
+                ]
         user_message = {"role": "user", "content": user_input}
         self.memory.append(run, "user", {"message": user_message, "text": user_input if isinstance(user_input, str) else "[image attachment turn]"})
         if isinstance(user_input, str):
@@ -242,6 +354,9 @@ class Agent:
         else:
             run_attachment_ids = ()
         self._hydrate_persisted_panel_contexts(layout_contexts, run_attachment_ids)
+        selected_panel_id: str | None = None
+        current_tool_name: str | None = None
+        pending_action = "检查当前请求并选择所需证据"
         if not self._current_messages or self._current_messages[-1].get("role") != "user":
             self._current_messages.append(user_message)  # type: ignore[arg-type]
         tools = registry_tools(self.registry)
@@ -259,7 +374,45 @@ class Agent:
             return answer
         for step in range(self.max_steps):
             turn = step + 1
-            system_message = {"role": "system", "content": self._system} if self._system else None
+            system_message = None
+            prompt_metadata: dict[str, Any] | None = None
+            if self._system:
+                review_gate = self._review_manager.gate(run.id)
+                panel_inventory = panel_inventory_from_layout_contexts(layout_contexts)
+                selected_panel = next(
+                    (item for item in panel_inventory if item.get("panel_id") == selected_panel_id),
+                    None,
+                )
+                prompt_context = assemble_prompt_context(
+                    tools=self.registry.list(),
+                    artifacts=artifact_records,
+                    runtime_state={
+                        "run_id": run.id,
+                        "phase": "model",
+                        "active_source": run_attachment_ids,
+                        "selected_panel": selected_panel,
+                        "current_tool": current_tool_name,
+                        "pending_action": pending_action,
+                        "recovery_status": "recovery_context_loaded" if recovery else "none",
+                        "retry_count": max(
+                            [
+                                int(item.get("attempts", 0) or 0)
+                                for item in (review_gate.get("failed") or [])
+                                if isinstance(item, dict)
+                            ]
+                            or [0]
+                        ),
+                        "retry_budget": self.max_steps,
+                        "publication_status": "published" if review_gate.get("published") else "not_published",
+                    },
+                    panel_inventory=panel_inventory,
+                    review_gate=review_gate,
+                )
+                prompt_metadata = prompt_context["metadata"]
+                dynamic = "\n\n".join(
+                    (prompt_context["tools"], prompt_context["runtime"], prompt_context["artifacts"])
+                )
+                system_message = {"role": "system", "content": f"{self._system}\n\n{dynamic}"}
             self._messages = self.memory.context(run, system_message, self.context_budget, current_messages=self._current_messages)
             if emitter is not None and not isinstance(self.client, LLMClient):
                 emitter.emit(
@@ -268,6 +421,7 @@ class Agent:
                     model=self._chat_kwargs.get("model"),
                     message_count=len(self._messages),
                     tool_count=len(tools),
+                    prompt_bundle=prompt_metadata,
                 )
             chat_kwargs = dict(self._chat_kwargs)
             if emitter is not None and isinstance(self.client, LLMClient):
@@ -356,6 +510,7 @@ class Agent:
                                 turn,
                                 pending_tool_calls=(),
                                 visual_references=checkpoint_references,
+                                artifact_records=artifact_records,
                             ),
                         )
                         if emitter is not None:
@@ -382,6 +537,7 @@ class Agent:
                         pending_tool_calls=(),
                         pending_answer=result.content,
                         visual_references=checkpoint_references,
+                        artifact_records=artifact_records,
                     ),
                 )
                 if isinstance(recovery, dict) and recovery.get("nextAction") == "final" and isinstance(recovery.get("pendingAnswer"), str):
@@ -427,11 +583,20 @@ class Agent:
                     turn,
                     pending_tool_calls=result.tool_calls,
                     visual_references=checkpoint_references,
+                    artifact_records=artifact_records,
                 ),
             )
             visual_evidence: list[ToolVisualEvidence] = []
             for call_index, call in enumerate(result.tool_calls):
                 self._raise_if_interrupted(run)
+                current_tool_name = call.name
+                pending_action = f"执行 {call.name} 并把结果作为当前 run 的证据"
+                try:
+                    call_arguments = json.loads(call.arguments) if call.arguments.strip() else {}
+                except (TypeError, json.JSONDecodeError):
+                    call_arguments = {}
+                if isinstance(call_arguments, dict) and isinstance(call_arguments.get("panel_id"), str):
+                    selected_panel_id = call_arguments["panel_id"]
                 operation_kind = "render" if call.name in _RENDER_TOOL_NAMES else "tool"
                 operation_id = f"{operation_kind}:{turn}:{call.id}"
                 operation = self._begin_work_unit(operation_id, operation_kind)
@@ -507,6 +672,16 @@ class Agent:
                     except Exception:  # noqa: BLE001 - observation diagnostics cannot abort the Agent
                         observation_refs = ()
                 observation = _attach_visual_observation_refs(observation, observation_refs)
+                artifact_records.extend(
+                    _artifact_records_from_observation(
+                        call.name,
+                        call.id,
+                        observation.content,
+                        run_attachment_ids,
+                        observation_refs,
+                    )
+                )
+                artifact_records = artifact_records[-48:]
                 tool_message = tool_entry(call, observation.content)
                 self._current_messages.append(tool_message)
                 self._messages.append(tool_message)
@@ -533,8 +708,10 @@ class Agent:
                         turn,
                         pending_tool_calls=remaining_calls,
                         visual_references=checkpoint_references,
+                        artifact_records=artifact_records,
                     ),
                 )
+                pending_action = "处理工具观察并决定下一步证据或 ChartSpec 操作"
                 if emitter is not None:
                     self._raise_if_interrupted(run)
                     image_payload = {"images": summarize_images(observation.images)}
@@ -719,6 +896,7 @@ class Agent:
         pending_tool_calls: Sequence[ToolCall],
         pending_answer: str | None = None,
         visual_references: Sequence[dict[str, Any]] = (),
+        artifact_records: Sequence[dict[str, Any]] = (),
     ) -> dict[str, Any]:
         result = {
             "prompt": user_input if isinstance(user_input, str) else "[image attachment turn]",
@@ -731,6 +909,7 @@ class Agent:
                 for call in pending_tool_calls
             ],
             "visualReferences": list(visual_references)[:32],
+            "artifactIndex": list(artifact_records)[:48],
         }
         if pending_answer is not None:
             result["pendingAnswer"] = pending_answer

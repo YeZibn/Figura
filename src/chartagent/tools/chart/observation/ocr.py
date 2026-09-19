@@ -81,14 +81,9 @@ def extract_text(image_path: str) -> ToolResult | dict:
 EXTRACT_TEXT = Tool(
     name="extract_text",
     description=(
-        "Run OCR over the authorized chart image, or over the requested panel "
-        "scope when panel_id is provided, and return detected text "
-        "snippets with stable IDs, pixel bounding boxes, confidence scores, and a "
-        "labeled overlay. Use when labels, titles, annotations, or printed values "
-        "are needed; do not use it as a substitute for measuring geometry or for "
-        "reading stylized, rotated, obscured, or very small text as ground truth. "
-        "OCR output is visual evidence and may be empty or contain recognition "
-        "errors, so compare confidence and the overlay with other evidence."
+        "对授权图像或指定 panel scope 执行 OCR，返回带稳定 ID、像素框、置信度和标注叠加图的文字片段。"
+        "当需要标题、坐标标签、图例、注释或打印数值时使用；不要用它替代几何测量，也不要把风格化、旋转、遮挡或过小文字当成绝对真值。"
+        "OCR 结果属于可能为空或有识别错误的视觉证据，应结合置信度、叠加图和其他证据判断。"
     ),
     parameters={
         "type": "object",

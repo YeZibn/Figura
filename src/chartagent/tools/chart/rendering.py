@@ -645,14 +645,9 @@ def render_chart(
 RENDER_CHART = Tool(
     name="render_chart",
     description=(
-        "Render a validated ChartSpec into a bounded PNG chart candidate and return "
-        "the image, render metadata, deterministic validation summary, and any "
-        "warnings. Use after assembling chart data when a visual "
-        "output is requested; do not use with incomplete specs, unsupported chart "
-        "types, or as a substitute for the mandatory post-generation review. A "
-        "successful tool call means only that rendering and local artifact checks "
-        "passed: the image remains a candidate until the automatic VLM review "
-        "completes and publication status is reported."
+        "将已校验的 ChartSpec 渲染为有界 PNG 候选图，并返回图片、渲染元数据、确定性校验摘要和 warnings。"
+        "用户需要视觉输出且图表数据已组装后使用；不要传入不完整 spec 或不支持的 chart_type，也不要用它替代生成后的强制 VLM review。"
+        "调用成功只表示渲染和本地 artifact 检查通过，图片仍是 candidate，直到自动审核完成并报告 publication status。"
     ),
     parameters={
         "type": "object",

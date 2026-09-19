@@ -283,18 +283,18 @@ def test_agent_repl_uses_advisory_chart_default(monkeypatch):
 
     assert cli_mod.run_agent_repl() == 0
     assert captured["system"] == cli_mod.AGENT_SYSTEM_PROMPT
-    assert "evidence" in captured["system"]
+    assert "证据" in captured["system"]
     assert "VLM" in captured["system"]
     assert "review_generated_chart" not in captured["system"]
     assert "published_with_warning" in captured["system"]
-    assert "candidate image or preview" in captured["system"]
-    assert "publicationStatus is authoritative" in captured["system"]
-    assert "reviewStatus=completed only means" in captured["system"]
-    assert "call assemble_spec, then call render_chart" in captured["system"]
-    assert "post-render" in captured["system"]
-    assert "OCR/CV/geometry/layout tools" in captured["system"]
-    assert "Tool success" in captured["system"] or "Tool execution success" in captured["system"]
-    assert "registered tool descriptions and parameter schemas" in captured["system"]
+    assert "候选预览" in captured["system"]
+    assert "publication status" in captured["system"]
+    assert "reviewStatus=completed" in captured["system"]
+    assert "assemble_spec" in captured["system"] and "render_chart" in captured["system"]
+    assert "VLM review" in captured["system"]
+    assert "OCR" in captured["system"] and "几何" in captured["system"]
+    assert "工具调用成功" in captured["system"]
+    assert "当前 runtime 实际注册" in captured["system"]
 
 
 def test_agent_repl_accepts_explicit_system_override(monkeypatch):

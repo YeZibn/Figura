@@ -999,14 +999,9 @@ def measure_bars(
 MEASURE_BARS = Tool(
     name="measure_bars",
     description=(
-        "Measure two-dimensional vertical, horizontal, rotated, grouped, or "
-        "stacked bars in an authorized chart image. return source-image polygon "
-        "geometry, a fitted zero baseline, signed value-axis lengths, normalized "
-        "ratios, stable category/series identities, confidence, warnings, and "
-        "a source-sized overlay. Use it when bar geometry or relative magnitudes "
-        "are required. do not use it for 3D, strongly perspective, or "
-        "heavily occluded bars, or as proof of exact source values without axis "
-        "calibration."
+        "测量授权图像中的二维竖直、横向、旋转、分组或堆叠柱。返回源图多边形几何、拟合的零基线、"
+        "带符号的数值轴长度、归一化比例、稳定 category/series 身份、置信度、警告和源尺寸叠加图。"
+        "当需要柱体几何或相对大小时使用；不要用于 3D、强透视或严重遮挡的柱，也不要在缺少坐标标定时把结果当成精确源值。"
     ),
     parameters={
         "type": "object",

@@ -52,24 +52,11 @@ def inspect_chart_layout(
 INSPECT_CHART_LAYOUT = Tool(
     name="inspect_chart_layout",
     description=(
-        "Use this optional tool after loading an authorized chart image when "
-        "the spatial layout is genuinely uncertain: for example, rotation, "
-        "horizontal orientation, dense annotations, or disagreement between "
-        "visual and geometric evidence. Do not call it merely to initialize a "
-        "geometry sensor, and do not require it before OCR or assemble_spec. "
-        "When supplying layout_hint, use "
-        "canonical normalized fields: measurement_frame.bbox_norm, optional "
-        "axes.x/y.points_norm=[[x1, y1], [x2, y2]], annotation_regions, "
-        "orientation, coordinate_system, and polar_region; keep all region "
-        "coordinates in 0..1 and supply chart_type when known. The hint is "
-        "advisory evidence: do not include local paths, image bytes, chart "
-        "values, or fabricated calibration, and omit an entire uncertain axis "
-        "rather than giving one endpoint. The result returns a reusable "
-        "layout_context with accepted, partial, or rejected validation status; "
-        "only accepted_for_measurement=true may constrain a sensor, while "
-        "rejected or fallback contexts must preserve independent pixel evidence "
-        "and warnings. If uncertain, still call the tool with layout_hint "
-        "omitted to obtain the bounded deterministic fallback."
+        "当图表空间布局确实不确定时可选使用，例如存在旋转、横向方向、密集标注，或视觉与几何证据冲突。"
+        "不要为了初始化几何传感器而调用，也不要求在 OCR 或 assemble_spec 前调用。layout_hint 使用归一化的 "
+        "measurement_frame.bbox_norm、可选的 axes.x/y.points_norm、annotation_regions、orientation、"
+        "coordinate_system 和 polar_region，所有坐标保持在 0..1。它只是辅助证据，不得包含本地路径、图片字节、图表数值或虚构标定。"
+        "结果返回可复用的 layout_context；只有 accepted_for_measurement=true 才能约束传感器，rejected 或 fallback 必须保留独立像素证据和 warnings。"
     ),
     parameters={
         "type": "object",

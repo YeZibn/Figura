@@ -549,13 +549,9 @@ def extract_scatter_points(
 EXTRACT_SCATTER_POINTS = Tool(
     name="extract_scatter_points",
     description=(
-        "Use for clean authorized two-dimensional scatter charts: extract "
-        "source-image evidence, infer its frame and orientation, and return stable series "
-        "and point IDs, marker geometry, optional evidence-backed x/y calibration, "
-        "overlap/density/outlier evidence, confidence, warnings, and a source-sized "
-        "overlay. Pixel-only points remain available when calibration is incomplete. "
-        "Use it only with corroboration; do not use for strong perspective, 3D, dense unresolved, or non-scatter "
-        "graphics as exact semantic truth."
+        "用于清晰的二维散点图：提取源图证据、推断绘图区和方向，并返回稳定 series/point ID、标记几何、"
+        "可选的有证据支持的 x/y 标定、重叠/密度/离群点证据、置信度、警告和源尺寸叠加图。标定不足时仍保留仅像素点。"
+        "只应结合其他证据使用；不要把强透视、3D、密集且无法解析或非散点图形当成精确语义真值。"
     ),
     parameters={
         "type": "object",

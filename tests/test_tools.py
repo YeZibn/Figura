@@ -187,9 +187,9 @@ def test_registered_tools_have_actionable_descriptions_and_explicit_schemas():
     assert len({tool.name for tool in tools}) == len(tools)
     for tool in tools:
         assert len(tool.description) >= 80
-        assert "Use" in tool.description
-        assert "do not" in tool.description
-        assert "return" in tool.description or "result" in tool.description
+        assert any(marker in tool.description for marker in ("Use", "使用", "用于"))
+        assert any(marker in tool.description for marker in ("do not", "不要"))
+        assert any(marker in tool.description for marker in ("return", "result", "返回", "结果"))
         assert tool.group
         assert tool.parameters["type"] == "object"
         assert "required" in tool.parameters

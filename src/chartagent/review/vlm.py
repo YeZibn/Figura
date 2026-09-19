@@ -9,6 +9,7 @@ from collections.abc import Mapping
 from dataclasses import replace
 from typing import Any, Sequence
 
+from ..prompting import build_reviewer_prompt
 from ..spec import ChartSpec
 from ..tools.core.result import GeneratedImage
 from .manager import (
@@ -35,7 +36,7 @@ _REQUIRED_ISSUE_FIELDS = frozenset({"code", "location", "severity", "message"})
 MAX_REVIEW_RESPONSE = 8_000
 MAX_REVIEW_SPEC = 24_000
 
-VLM_REVIEW_SYSTEM_PROMPT = """你是 Figura 的图表视觉一致性审核器，不是图表生成器。
+_LEGACY_VLM_REVIEW_SYSTEM_PROMPT = """你是 Figura 的图表视觉一致性审核器，不是图表生成器。
 
 你只能根据本次消息中的三类证据进行一次审核：
 1. 原图（如果提供）：判断源图的视觉语义、方向、布局和标签关系；
@@ -103,6 +104,10 @@ VLM_REVIEW_SYSTEM_PROMPT = """你是 Figura 的图表视觉一致性审核器，
 decision 的关系必须一致：pass 要求六项 checks 全为 pass 且 issues 为空；
 pass_with_warning 不得有 fail 或 error，且必须至少有一个 warning；fail 必须至少有一个
 fail check 或 error issue。confidence 必须是 0 到 1 之间的数字。"""
+
+# Keep the old literal only as a migration fallback; production callers use
+# the packaged Markdown resource so the reviewer prompt has one source of truth.
+VLM_REVIEW_SYSTEM_PROMPT = build_reviewer_prompt()
 
 
 def _data_url(content: bytes, media_type: str) -> dict[str, Any]:

@@ -159,13 +159,9 @@ CHART_SPEC_SCHEMA = {
 ASSEMBLE_SPEC = Tool(
     name="assemble_spec",
     description=(
-        "Atomically assemble and validate a generation-ready ChartSpec from a "
-        "closed chart type, optional title/source, axis labels, and typed data "
-        "points. Use after the relevant chart evidence has been collected; do "
-        "not hand-write IR JSON, render an image, or mix category/value points "
-        "with x/y points. A successful result has passed the semantic generation "
-        "constraints; a failure returns bounded located issues and no usable spec. "
-        "Cartesian charts require non-empty x_label and y_label."
+        "从已确定的 chart_type、可选标题/来源、坐标轴标签和类型化数据点原子地组装并校验可生成的 ChartSpec。"
+        "收集相关图表证据后使用；不要手写 IR JSON、直接渲染，或把 category/value 点与 x/y 点混用。"
+        "成功表示通过生成约束；失败会返回有界且带位置的 issues，不会产生可用 spec。笛卡尔图必须提供非空 x_label 和 y_label。"
     ),
     parameters={
         "type": "object",

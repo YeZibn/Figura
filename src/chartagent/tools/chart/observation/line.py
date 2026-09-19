@@ -683,15 +683,9 @@ def _ocr_snippets(
 EXTRACT_LINE_SERIES = Tool(
     name="extract_line_series",
     description=(
-        "Use for clean two-dimensional line charts: extract source-image "
-        "traces and evidence-backed points from an authorized "
-        "single- or multi-series line chart. Return the inferred "
-        "frame, axis calibration, stable series IDs, trace geometry, marker or "
-        "tick-sampled points, confidence, warnings, and a source-sized overlay. "
-        "The result keeps pixel evidence when semantic calibration is missing. "
-        "Do not use for filled areas, strong perspective, 3D, or exact semantic "
-        "values when axes or sampling anchors cannot be calibrated; do not "
-        "use it for unsupported geometry."
+        "用于清晰的二维折线图：从授权的单系列或多系列图表中提取源图轨迹和有证据支持的点。"
+        "返回绘图区、坐标标定、稳定 series ID、轨迹几何、标记或刻度采样点、置信度、警告和源尺寸叠加图；"
+        "语义标定不足时仍保留像素证据。不要用于填充区域、强透视、3D，或在坐标轴/采样锚点无法标定时声称精确语义值。"
     ),
     parameters={
         "type": "object",

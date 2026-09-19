@@ -798,12 +798,10 @@ def stabilize_decomposition_result(
 DECOMPOSE_CHART_IMAGE = Tool(
     name="decompose_chart_image",
     description=(
-        "Use when需要对授权的复杂图表图片执行 VLM 引导的语义分区；调用前先根据图片提出 "
-        "regions，每个 region 提供 name、bbox_norm，以及可选 role/chart_type。"
-        "工具随后使用确定性边界校验并 return 带稳定 ID 和名称的局部 crop、源图坐标、"
-        "analysis scope、crop 引用、置信度、警告和预览；SAM 只在显式请求时作为可选边界证据。"
-        "do not 用它提取图表数值，也不要依赖 OCR 来发现区域。"
-        "必要时后续再按需调用 extract_text、柱状图、折线图、饼图或散点图传感器。"
+        "当授权图片包含多个卡片、图表或视觉面板时使用 VLM 引导的语义分区。调用前根据图片提出 regions，"
+        "每个 region 提供 name、bbox_norm，以及可选 role 和 chart_type。工具会校验边界并返回带稳定 ID、名称、"
+        "源图坐标、analysis scope、crop 引用、置信度、警告和预览的局部结果；SAM 只在显式请求时作为可选边界证据。"
+        "不要用它提取图表数值，也不要依赖 OCR 发现区域；后续按需调用 extract_text 或对应图表传感器。"
     ),
     parameters={
         "type": "object",
