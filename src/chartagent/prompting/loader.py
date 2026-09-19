@@ -123,6 +123,46 @@ def _bounded_list(value: object, limit: int = 16) -> list[object]:
         return []
 
 
+def _bounded_measurement_repair(value: object) -> dict[str, Any] | None:
+    if not isinstance(value, Mapping):
+        return None
+    result: dict[str, Any] = {}
+    for key in (
+        "action",
+        "status",
+        "tool",
+        "attachment_id",
+        "panel_id",
+        "session_id",
+        "attempt_id",
+        "parent_attempt_id",
+        "next_action",
+    ):
+        if value.get(key) is not None:
+            result[key] = _bounded_text(value.get(key), 240)
+    if isinstance(value.get("fields"), (list, tuple)):
+        result["fields"] = [_bounded_text(item, 96) for item in list(value["fields"])[:8]]
+    target = value.get("target")
+    if isinstance(target, Mapping):
+        safe_target: dict[str, Any] = {}
+        for key in (
+            "target_id",
+            "panel_id",
+            "parent_attempt_id",
+            "region_kind",
+            "reason",
+            "bbox_source_px",
+            "source_image_size",
+            "bbox_px",
+            "local_image_size",
+            "clipped",
+        ):
+            if target.get(key) is not None:
+                safe_target[key] = target.get(key)
+        result["target"] = safe_target
+    return result or None
+
+
 def _tool_record(tool: Any) -> dict[str, Any]:
     if isinstance(tool, Mapping):
         if isinstance(tool.get("function"), Mapping):
@@ -245,6 +285,7 @@ def build_runtime_context(
         "retry_count": max(0, int(state.get("retry_count", 0) or 0)),
         "retry_budget": max(0, int(state.get("retry_budget", 0) or 0)),
         "publication_status": _bounded_text(state.get("publication_status"), 64) or "not_published",
+        "measurement_repair": _bounded_measurement_repair(state.get("measurement_repair")),
     }
     inventory = [dict(item) for item in list(panel_inventory)[:_MAX_PANEL_COUNT] if isinstance(item, Mapping)]
     payload = {

@@ -40,6 +40,7 @@ _SENSITIVE_KEY = re.compile(
     r"|authorization|auth|cookie|privatekey|clientsecret"
 )
 _IMAGE_DATA_URL = re.compile(r"data:image/[^;\s]+;base64,[^\s]+", re.IGNORECASE)
+_LOCAL_PATH = re.compile(r"(?:/(?:Users|private|tmp|var|home|opt|etc)/|[A-Za-z]:\\)")
 
 TraceSink = Callable[["TraceEvent"], None]
 
@@ -74,6 +75,7 @@ def _safe_string(value: str, limit: int) -> str:
     # A tool argument or provider field may contain a data URL even when it is
     # not nested under a clearly named image key.
     value = _IMAGE_DATA_URL.sub("[IMAGE_DATA_OMITTED]", value)
+    value = _LOCAL_PATH.sub("[PATH_OMITTED]", value)
     return truncate_text(value, limit)
 
 

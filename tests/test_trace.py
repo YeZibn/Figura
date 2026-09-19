@@ -89,6 +89,23 @@ def test_trace_event_serializes_in_order_and_redacts_bounded_data():
     assert "truncated" in encoded
 
 
+def test_trace_redacts_local_paths_inside_measurement_arguments():
+    event = TraceEvent(
+        "tool_call",
+        payload={
+            "arguments": {
+                "measurement_target": {
+                    "reason": "复查 /Users/yezibin/Project/Figura/photo/chart.png",
+                }
+            }
+        },
+    )
+
+    encoded = event.to_json()
+    assert "/Users/yezibin/Project/Figura" not in encoded
+    assert "[PATH_OMITTED]" in encoded
+
+
 def test_trace_event_direct_payload_is_json_safe():
     event = TraceEvent(
         "visual_observation",

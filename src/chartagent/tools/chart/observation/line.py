@@ -32,6 +32,7 @@ from .layout import (
     context_scope,
     filter_snippets_to_scope,
 )
+from .scope import measurement_target_region
 
 _TRACE_TOLERANCE = 30
 
@@ -414,6 +415,7 @@ def _empty_result(
     image: Image.Image,
     warning: str,
     layout_context: dict[str, Any] | None = None,
+    measurement_target: dict[str, Any] | None = None,
 ) -> ToolResult:
     rgb = np.asarray(image.convert("RGB"))
     confidence = confidence_map(
@@ -443,6 +445,8 @@ def _empty_result(
         "series": [],
         "confidence": confidence,
         "warnings": [warning],
+        "measurement_target": dict(measurement_target) if isinstance(measurement_target, dict) else None,
+        "focus": {"requested": bool(measurement_target), "region_px": None, "search_scope": "panel_or_chart"},
     }
     return ToolResult(
         data,
@@ -460,6 +464,7 @@ def _empty_result(
 def extract_line_series(
     image_path: str,
     layout_context: dict[str, Any] | None = None,
+    measurement_target: dict[str, Any] | None = None,
 ) -> ToolResult | dict:
     """Extract source-image line traces and evidence-backed data points."""
     path = Path(image_path)
@@ -473,7 +478,18 @@ def extract_line_series(
         return {"error": f"extract_line_series failed: {type(exc).__name__}"}
 
     scope = context_scope(layout_context)
-    search_area = scope.get("bbox_px") if scope else default_plot_area(rgb)
+    base_search_area = scope.get("bbox_px") if scope else default_plot_area(rgb)
+    focus_region = measurement_target_region(
+        measurement_target,
+        width=int(rgb.shape[1]),
+        height=int(rgb.shape[0]),
+    )
+    focus_fallback = bool(
+        focus_region
+        and base_search_area
+        and focus_region[2] * focus_region[3] < max(1, base_search_area[2] * base_search_area[3] * 0.08)
+    )
+    search_area = base_search_area if focus_fallback else (focus_region or base_search_area)
     preliminary_palette = _line_palette(rgb, search_area)
     frame, orientation, detection_area = detect_cartesian_frame(
         rgb,
@@ -555,6 +571,8 @@ def extract_line_series(
         series.append(entry)
 
     warnings: list[str] = []
+    if focus_fallback:
+        warnings.append("focus target was too narrow; panel context retained for trace validation")
     conflicts: list[dict[str, Any]] = []
     for axis_name, ticks, model in (("x", x_ticks, x_model), ("y", y_ticks, y_model)):
         if len(ticks) >= 2 and model is not None and not model.get("calibrated"):
@@ -589,7 +607,7 @@ def extract_line_series(
     if any(len(entry.get("trace", {}).get("fragments", [])) > 1 for entry in series):
         warnings.append("one or more series contain fragmented trace evidence")
     if not series:
-        return _empty_result(chart_image, "no reliable line series detected", layout_context)
+        return _empty_result(chart_image, "no reliable line series detected", layout_context, measurement_target)
 
     geometry_confidence = 0.9 if all(entry.get("trace", {}).get("polyline_px") for entry in series) else 0.35
     frame_confidence = 0.9 if frame.get("x_axis") and frame.get("y_axis") else 0.35
@@ -649,6 +667,12 @@ def extract_line_series(
         "layout_context": layout_evidence,
         "series": series,
         "warnings": warnings,
+        "measurement_target": dict(measurement_target) if isinstance(measurement_target, dict) else None,
+        "focus": {
+            "requested": bool(measurement_target),
+            "region_px": focus_region,
+            "search_scope": "target_with_panel_context" if focus_region else "panel_or_chart",
+        },
     }
     return ToolResult(
         data,
@@ -697,6 +721,11 @@ EXTRACT_LINE_SERIES = Tool(
             "layout_context": {
                 "type": "object",
                 "description": "Optional validated chart layout context; model hints remain advisory.",
+                "additionalProperties": True,
+            },
+            "measurement_target": {
+                "type": "object",
+                "description": "Optional bounded source-coordinate focus target for a remeasurement.",
                 "additionalProperties": True,
             },
         },

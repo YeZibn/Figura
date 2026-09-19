@@ -43,7 +43,7 @@ def _measurement_gate_error(gate: Mapping[str, Any], location: str) -> dict[str,
     bounded = {
         key: value
         for key, value in gate.items()
-        if key in {"status", "code", "location", "message", "next_action", "measurement_status", "issues"}
+        if key in {"status", "code", "location", "message", "next_action", "measurement_status", "issues", "repair_action"}
     }
     raw_location = str(bounded.get("location") or "measurement_ref")
     bounded["location"] = raw_location if raw_location.startswith(location) else f"{location}.{raw_location}"[:160]

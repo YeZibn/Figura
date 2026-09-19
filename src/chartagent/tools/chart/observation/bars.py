@@ -29,6 +29,7 @@ from .foundation import (
 from .coordinates import axis_geometry, cartesian_frame, fit_dominant_axis_line
 from .layout import context_for_evidence, context_frame, context_scope
 from .overlays import render_bar_overlay
+from .scope import measurement_target_region
 
 Orientation = Literal["vertical", "horizontal"]
 
@@ -37,6 +38,7 @@ def _empty_result(
     chart_image: Image.Image,
     warnings: list[str] | None = None,
     layout_context: dict[str, Any] | None = None,
+    measurement_target: dict[str, Any] | None = None,
 ) -> ToolResult:
     warning_list = warnings or ["no bar geometry or baseline detected"]
     rgb = np.asarray(chart_image)
@@ -64,6 +66,8 @@ def _empty_result(
         "bars": [],
         "confidence": confidence,
         "warnings": warning_list,
+        "measurement_target": dict(measurement_target) if isinstance(measurement_target, dict) else None,
+        "focus": {"requested": bool(measurement_target), "region_px": None, "search_scope": "panel_or_chart"},
     }
     return ToolResult(
         data,
@@ -715,11 +719,28 @@ def _stack_evidence(
 def _measure_chart(
     rgb: np.ndarray,
     layout_context: dict[str, Any] | None = None,
+    measurement_target: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     layout = context_frame(layout_context)
     scope = context_scope(layout_context)
     measurement_area = layout.get("bbox_px") if layout else None
-    search_area = measurement_area or (scope.get("bbox_px") if scope else None)
+    base_search_area = measurement_area or (scope.get("bbox_px") if scope else None)
+    focus_region = measurement_target_region(
+        measurement_target,
+        width=int(rgb.shape[1]),
+        height=int(rgb.shape[0]),
+    )
+    search_area = focus_region or base_search_area
+    focus_fallback = bool(
+        focus_region
+        and base_search_area
+        and focus_region[2] * focus_region[3] < max(1, base_search_area[2] * base_search_area[3] * 0.08)
+    )
+    if focus_fallback:
+        # A thin baseline target cannot recover complete bar geometry on its
+        # own. Keep it in the envelope while retaining the frame needed for a
+        # valid re-audit.
+        search_area = base_search_area
     palette = detect_color_palette(rgb, region=search_area, max_colors=8)
     vertical_candidates: list[dict[str, Any]] = []
     horizontal_candidates: list[dict[str, Any]] = []
@@ -736,8 +757,10 @@ def _measure_chart(
             "baseline": None,
             "plot_area": None,
             "palette": palette,
-            "warnings": ["no bar geometry or baseline detected"],
+            "warnings": ["no bar geometry or baseline detected"]
+            + (["focus target was too narrow; panel context retained"] if focus_fallback else []),
             "layout_context": layout_context,
+            "focus_region": focus_region,
         }
     orientation: Orientation = "vertical" if vertical_score >= horizontal_score else "horizontal"
     candidates = vertical_candidates if orientation == "vertical" else horizontal_candidates
@@ -762,6 +785,8 @@ def _measure_chart(
         prefer_outer=stacked,
     )
     warnings: list[str] = []
+    if focus_fallback:
+        warnings.append("focus target was too narrow; panel context retained for geometry validation")
     visible_axis = _visible_axis_reference(
         rgb,
         candidates,
@@ -825,12 +850,14 @@ def _measure_chart(
         "palette": palette,
         "warnings": warnings,
         "layout_context": layout_context,
+        "focus_region": focus_region,
     }
 
 
 def measure_bars(
     image_path: str,
     layout_context: dict[str, Any] | None = None,
+    measurement_target: dict[str, Any] | None = None,
 ) -> ToolResult | dict:
     """Measure two-dimensional bars with source-image geometry evidence."""
     path = Path(image_path)
@@ -844,11 +871,11 @@ def measure_bars(
     except Exception as exc:  # noqa: BLE001 - tool boundary
         return {"error": f"measure_bars failed for {image_path}: {exc}"}
 
-    measured = _measure_chart(rgb, layout_context)
+    measured = _measure_chart(rgb, layout_context, measurement_target)
     candidates = measured["candidates"]
     baseline = measured["baseline"]
     if not candidates:
-        return _empty_result(chart_image, measured["warnings"], layout_context)
+        return _empty_result(chart_image, measured["warnings"], layout_context, measurement_target)
 
     orientation: Orientation = measured.get("axis_orientation", "vertical")
     stacked = measured["bar_mode"] == "stacked"
@@ -982,6 +1009,12 @@ def measure_bars(
         "confidence": confidence,
         "warnings": warnings,
         "layout_context": context_for_evidence(layout_context),
+        "measurement_target": dict(measurement_target) if isinstance(measurement_target, dict) else None,
+        "focus": {
+            "requested": bool(measurement_target),
+            "region_px": measured.get("focus_region"),
+            "search_scope": "target_with_panel_context" if measured.get("focus_region") else "panel_or_chart",
+        },
     }
     return ToolResult(
         data,
@@ -1013,6 +1046,11 @@ MEASURE_BARS = Tool(
             "layout_context": {
                 "type": "object",
                 "description": "Optional validated chart layout context; model hints remain advisory.",
+                "additionalProperties": True,
+            },
+            "measurement_target": {
+                "type": "object",
+                "description": "Optional bounded source-coordinate focus target for a remeasurement.",
                 "additionalProperties": True,
             },
         },

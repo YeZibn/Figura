@@ -374,11 +374,52 @@ def _truncate_tool_result_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
     }
     optional = {
         field: payload[field]
-        for field in ("image_count", "observations", "artifacts")
+        for field in (
+            "image_count",
+            "observations",
+            "artifacts",
+            "measurement_status",
+            "measurement_reference",
+            "measurement_issue_count",
+            "measurement_blocking",
+            "measurement_repair_action",
+            "measurement_repair_status",
+            "measurement_target",
+        )
         if field in payload
     }
     body = payload.get("result")
     encoded_body = json.dumps(body, ensure_ascii=False, separators=(",", ":"))
+
+    if isinstance(body, Mapping) and isinstance(body.get("data"), Mapping):
+        data = body["data"]
+        compact_data = {
+            key: data[key]
+            for key in (
+                "scope",
+                "focus",
+                "measurement_target",
+                "orientation",
+                "axis_orientation",
+                "bar_mode",
+                "plot_area",
+                "plot_frame",
+                "axes",
+                "baseline",
+                "confidence",
+                "warnings",
+            )
+            if key in data
+        }
+        compact_body: dict[str, Any] = {"data": compact_data}
+        for key in ("warnings", "images"):
+            if key in body:
+                compact_body[key] = body[key]
+        structured = dict(identity)
+        structured.update(optional)
+        structured["result"] = compact_body
+        if len(json.dumps(structured, ensure_ascii=False, separators=(",", ":"))) <= MAX_EVENT_PAYLOAD:
+            return structured
 
     def fit(optional_fields: Mapping[str, Any]) -> dict[str, Any] | None:
         """Find the largest preview that still fits the event envelope."""

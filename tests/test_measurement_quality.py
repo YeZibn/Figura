@@ -149,6 +149,148 @@ def test_blocking_warning_requires_remeasurement():
     )
 
 
+def test_measurement_target_is_bounded_and_round_trips_with_repair_action():
+    base = attach_measurement_quality(
+        _bar_data(),
+        source_tool="measure_bars",
+        warnings=["baseline fit is uncertain; measurements may be partial"],
+        image_count=1,
+        source_attachment_id="att_chart",
+        source_panel_id="panel_bars",
+        source_run_id="run_1",
+    )
+    sessions: dict[str, MeasurementSession] = {}
+    session = register_measurement(sessions, base)
+    assert session is not None
+    action = base["measurement"]["quality"]["repair_action"]
+    assert action["action"] == "remeasure"
+    assert action["target"]["region_kind"] == "panel"
+    assert action["target"]["parent_attempt_id"] == base["measurement"]["reference"]["attempt_id"]
+
+    target = {
+        "target_id": "baseline-focus",
+        "panel_id": "panel_bars",
+        "parent_attempt_id": base["measurement"]["reference"]["attempt_id"],
+        "region_kind": "baseline",
+        "fields": ["baseline", "bars.measure", "ignored"],
+        "bbox_source_px": [20, 180, 260, 24],
+        "source_image_size": [320, 240],
+        "reason": "复查柱体底边与零基线",
+    }
+    normalized, error = session.validate_repair_target(
+        target,
+        tool="measure_bars",
+        parent_attempt_id=base["measurement"]["reference"]["attempt_id"],
+    )
+    assert error is None
+    assert normalized is not None
+    child = attach_measurement_quality(
+        _bar_data(),
+        source_tool="measure_bars",
+        image_count=1,
+        source_attachment_id="att_chart",
+        source_panel_id="panel_bars",
+        source_run_id="run_1",
+        parent_attempt_id=base["measurement"]["reference"]["attempt_id"],
+        measurement_target=normalized,
+    )
+    register_measurement(sessions, child)
+    restored = sessions_from_state(sessions_to_state(sessions))
+    restored_attempt = restored[session.session_id].attempts[-1]
+    assert restored_attempt.parent_attempt_id == base["measurement"]["reference"]["attempt_id"]
+    assert restored_attempt.target["bbox_source_px"] == [20.0, 180.0, 260.0, 24.0]
+    assert restored_attempt.target_fingerprint
+
+
+def test_measurement_target_rejects_cross_panel_duplicate_and_budget_exhaustion():
+    base = attach_measurement_quality(
+        _bar_data(),
+        source_tool="measure_bars",
+        image_count=1,
+        source_attachment_id="att_chart",
+        source_panel_id="panel_bars",
+        source_run_id="run_1",
+    )
+    sessions: dict[str, MeasurementSession] = {}
+    session = register_measurement(sessions, base)
+    assert session is not None
+    current = base["measurement"]["reference"]["attempt_id"]
+    target = {
+        "target_id": "focus-1",
+        "panel_id": "panel_other",
+        "parent_attempt_id": current,
+        "region_kind": "bars",
+        "fields": ["bars"],
+        "bbox_source_px": [10, 10, 100, 100],
+    }
+    _, error = session.validate_repair_target(target, tool="measure_bars", parent_attempt_id=current)
+    assert error is not None
+    assert error["code"] == "measurement_panel_mismatch"
+
+    target["panel_id"] = "panel_bars"
+    normalized, error = session.validate_repair_target(target, tool="measure_bars", parent_attempt_id=current)
+    assert error is None and normalized is not None
+    child = attach_measurement_quality(
+        _bar_data(),
+        source_tool="measure_bars",
+        image_count=1,
+        source_attachment_id="att_chart",
+        source_panel_id="panel_bars",
+        source_run_id="run_1",
+        parent_attempt_id=current,
+        measurement_target=normalized,
+    )
+    register_measurement(sessions, child)
+    _, duplicate_error = session.validate_repair_target(
+        {**target, "target_id": "same-geometry", "parent_attempt_id": session.current_attempt_id},
+        tool="measure_bars",
+        parent_attempt_id=session.current_attempt_id,
+    )
+    assert duplicate_error is not None
+    assert duplicate_error["code"] == "measurement_target_duplicate"
+
+    for index in range(2, 4):
+        parent = session.current_attempt_id
+        candidate = {
+            "target_id": f"focus-{index}",
+            "panel_id": "panel_bars",
+            "parent_attempt_id": parent,
+            "region_kind": "bars",
+            "fields": [f"bars[{index}]"],
+            "bbox_source_px": [10 + index, 10, 100, 100],
+        }
+        normalized, error = session.validate_repair_target(candidate, tool="measure_bars", parent_attempt_id=parent)
+        assert error is None and normalized is not None
+        register_measurement(
+            sessions,
+            attach_measurement_quality(
+                _bar_data(),
+                source_tool="measure_bars",
+                image_count=1,
+                source_attachment_id="att_chart",
+                source_panel_id="panel_bars",
+                source_run_id="run_1",
+                parent_attempt_id=parent,
+                measurement_target=normalized,
+            ),
+        )
+    assert session.repair_budget_remaining == 0
+    _, exhausted = session.validate_repair_target(
+        {
+            "target_id": "focus-4",
+            "panel_id": "panel_bars",
+            "parent_attempt_id": session.current_attempt_id,
+            "region_kind": "bars",
+            "fields": ["bars[4]"],
+            "bbox_source_px": [20, 20, 100, 100],
+        },
+        tool="measure_bars",
+        parent_attempt_id=session.current_attempt_id,
+    )
+    assert exhausted is not None
+    assert exhausted["code"] == "measurement_repair_budget_exhausted"
+
+
 def test_dispatch_adds_measurement_contract_with_server_context():
     registry = ToolRegistry()
     registry.register(
@@ -220,6 +362,27 @@ def test_assemble_spec_requires_code_owned_accepted_reference():
     assert blocked["error"] == "measurement evidence gate failed"
     assert blocked["measurement_gate"]["next_action"]
 
+    failed = attach_measurement_quality(
+        _bar_data(),
+        source_tool="measure_bars",
+        warnings=["baseline fit is uncertain; measurements may be partial"],
+        image_count=1,
+        source_attachment_id="att_chart",
+        source_panel_id="panel_bars",
+        source_run_id="run_2",
+    )
+    failed_sessions: dict[str, MeasurementSession] = {}
+    register_measurement(failed_sessions, failed)
+    blocked_with_action = assemble_spec(
+        chart_type="bar",
+        points=[{"category": "A", "value": 1}],
+        x_label="类别",
+        y_label="数值",
+        measurement_ref=failed["measurement"]["reference"],
+        _measurement_context=failed_sessions,
+    )
+    assert blocked_with_action["measurement_gate"]["repair_action"]["action"] == "remeasure"
+
 
 def test_agent_passes_run_owned_measurement_session_to_assemble_gate():
     class Client:
@@ -284,6 +447,112 @@ def test_agent_passes_run_owned_measurement_session_to_assemble_gate():
     assert answer == "完成"
 
 
+def test_agent_reuses_repair_action_for_a_bounded_targeted_attempt():
+    calls: list[dict] = []
+    events = []
+
+    def sensor(attachment_id: str, panel_id: str | None = None, measurement_target: dict | None = None):
+        calls.append({
+            "attachment_id": attachment_id,
+            "panel_id": panel_id,
+            "measurement_target": measurement_target,
+        })
+        data = _bar_data()
+        if len(calls) == 1:
+            data = dict(data)
+            data["warnings"] = ["baseline fit is uncertain; measurements may be partial"]
+        return ToolResult(data, [GeneratedImage(b"overlay", "image/png", "bar overlay")])
+
+    class Client:
+        def __init__(self):
+            self.calls = 0
+            self.repair_context_seen = False
+
+        def chat(self, messages, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                return NormalizedResult(
+                    tool_calls=[
+                        ToolCall(
+                            "measure-1",
+                            "measure_bars",
+                            json.dumps({"attachment_id": "att_chart"}),
+                        )
+                    ],
+                    finish_reason="tool_calls",
+                )
+            if self.calls == 2:
+                tool_message = next(item for item in reversed(messages) if item.get("role") == "tool")
+                payload = json.loads(tool_message["content"])
+                measurement = payload["data"]["measurement"]
+                target = dict(measurement["quality"]["repair_action"]["target"])
+                target.update(
+                    {
+                        "target_id": "baseline-focus",
+                        "bbox_source_px": [20, 160, 280, 40],
+                        "source_image_size": [320, 240],
+                    }
+                )
+                return NormalizedResult(
+                    tool_calls=[
+                        ToolCall(
+                            "measure-2",
+                            "measure_bars",
+                            json.dumps(
+                                {
+                                    "attachment_id": "att_chart",
+                                    "measurement_target": target,
+                                },
+                                ensure_ascii=False,
+                            ),
+                        )
+                    ],
+                    finish_reason="tool_calls",
+                )
+            self.repair_context_seen = any(
+                item.get("role") == "user" and "质量门禁返回了测量修复上下文" in str(item.get("content"))
+                for item in messages
+            )
+            return NormalizedResult(content="完成", finish_reason="stop")
+
+    registry = ToolRegistry()
+    registry.register(
+        Tool(
+            "measure_bars",
+            "measure bars",
+            {
+                "type": "object",
+                "properties": {
+                    "attachment_id": {"type": "string"},
+                    "panel_id": {"type": "string"},
+                    "measurement_target": {"type": "object", "additionalProperties": True},
+                },
+            },
+            sensor,
+        )
+    )
+    client = Client()
+    answer = Agent(
+        client,
+        registry,
+        system="测试定向修复",
+        max_steps=4,
+        trace=events.append,
+    ).run("读取 att_chart 的 panel_bars")
+
+    assert answer == "完成"
+    assert len(calls) == 2
+    assert calls[1]["measurement_target"]["parent_attempt_id"]
+    assert client.repair_context_seen is True
+    repair_events = [event for event in events if event.kind == "measurement_repair_required"]
+    assert len(repair_events) == 1
+    repair = repair_events[0].payload["repair"]
+    assert repair["parent_attempt_id"]
+    assert repair["target"]["region_kind"] == "panel"
+    assert "baseline" in repair["fields"]
+    assert all("/Users/" not in event.to_json() for event in events)
+
+
 def test_measurement_sessions_are_included_in_checkpoint_recovery_state():
     data = attach_measurement_quality(
         _bar_data(),
@@ -307,3 +576,67 @@ def test_measurement_sessions_are_included_in_checkpoint_recovery_state():
 
     restored = sessions_from_state(state["measurementSessions"])
     assert restored[data["measurement"]["reference"]["session_id"]].accepted_attempt() is not None
+
+
+def test_checkpoint_marks_exhausted_measurement_repair_as_terminal():
+    sessions: dict[str, MeasurementSession] = {}
+    initial = attach_measurement_quality(
+        _bar_data(),
+        source_tool="measure_bars",
+        warnings=["baseline fit is uncertain; measurements may be partial"],
+        image_count=1,
+        source_attachment_id="att_chart",
+        source_panel_id="panel_bars",
+        source_run_id="run_1",
+    )
+    session = register_measurement(sessions, initial)
+    assert session is not None
+
+    for index in range(1, session.max_repair_attempts + 1):
+        parent = session.current_attempt_id
+        target = {
+            "target_id": f"baseline-{index}",
+            "panel_id": "panel_bars",
+            "parent_attempt_id": parent,
+            "region_kind": "baseline",
+            "fields": ["baseline"],
+            "bbox_source_px": [20 + index, 180, 260, 24],
+            "source_image_size": [320, 240],
+        }
+        normalized, error = session.validate_repair_target(
+            target,
+            tool="measure_bars",
+            parent_attempt_id=parent,
+        )
+        assert error is None and normalized is not None
+        register_measurement(
+            sessions,
+            attach_measurement_quality(
+                _bar_data(),
+                source_tool="measure_bars",
+                warnings=["baseline fit is uncertain; measurements may be partial"],
+                image_count=1,
+                source_attachment_id="att_chart",
+                source_panel_id="panel_bars",
+                source_run_id="run_1",
+                parent_attempt_id=parent,
+                measurement_target=normalized,
+            ),
+        )
+
+    assert session.repair_budget_remaining == 0
+    action = session.pending_repair_action()
+    assert action is not None
+    assert action["status"] == "exhausted"
+    assert action["budget_remaining"] == 0
+
+    state = Agent._checkpoint_state(
+        "继续修复",
+        [],
+        {},
+        ["att_chart"],
+        4,
+        pending_tool_calls=(),
+        measurement_sessions=sessions,
+    )
+    assert state["pendingMeasurementRepair"]["status"] == "exhausted"

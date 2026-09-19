@@ -400,6 +400,7 @@ def test_gateway_dashboard_follow_up_reuses_panel_and_measures_local_scope(tmp_p
     assert tool_names == ["decompose_chart_image", "measure_bars"]
     measurement = next(event for event in second_run.iter_events() if event.kind == "tool_result" and event.payload.get("tool_name") == "measure_bars")
     result = measurement.payload["result"]
+    assert "data" in result, result
     assert result["data"]["scope"]["mode"] == "panel"
     assert result["data"]["scope"]["local_image_size"][0] < result["data"]["scope"]["source_image_size"][0]
     service.close()
@@ -553,6 +554,85 @@ def test_managed_run_interrupt_is_terminal_and_blocks_late_events(tmp_path):
     assert history is not None
     assert history["run"]["status"] == "interrupted"
     assert history["run"]["terminalCode"] == "user_cancelled"
+    memory.close()
+    manager.close()
+
+
+def test_gateway_replays_measurement_repair_events_and_checkpoint_after_reconnect(tmp_path):
+    database = tmp_path / "measurement-repair-replay.db"
+    store = GatewayHistoryStore(database)
+    memory = SQLiteAgentMemory("measurement-repair-replay", database=database)
+    manager = RunManager(history_store=store)
+    run = manager.create(memory.session.id)
+    parent_attempt = "matt_parent"
+    target = {
+        "target_id": "baseline-focus",
+        "panel_id": "panel_bars",
+        "parent_attempt_id": parent_attempt,
+        "region_kind": "baseline",
+        "fields": ["baseline", "bars.measure"],
+        "bbox_source_px": [120, 300, 420, 36],
+        "source_image_size": [640, 480],
+        "reason": "复查 /Users/yezibin/Project/Figura/private-chart.png",
+    }
+    run.publish(
+        "measurement_repair_required",
+        {
+            "attachment_id": "att_eval",
+            "panel_id": "panel_bars",
+            "parent_attempt_id": parent_attempt,
+            "target": target,
+            "status": "available",
+            "next_action": "在同一 panel 内重新测量",
+        },
+    )
+    checkpoint = run.create_checkpoint(
+        {
+            "measurementSessions": {
+                "ms_eval": {
+                    "session_id": "ms_eval",
+                    "attachment_id": "att_eval",
+                    "panel_id": "panel_bars",
+                    "current_attempt_id": parent_attempt,
+                    "max_repair_attempts": 3,
+                    "attempts": [],
+                }
+            },
+            "pendingMeasurementRepair": {
+                "status": "available",
+                "parent_attempt_id": parent_attempt,
+                "target": target,
+            },
+        },
+        phase="tool",
+        next_action="model",
+    )
+    assert checkpoint is True
+    run.publish(
+        "measurement_repair_exhausted",
+        {
+            "attachment_id": "att_eval",
+            "panel_id": "panel_bars",
+            "parent_attempt_id": parent_attempt,
+            "status": "exhausted",
+            "next_action": "保留失败证据并停止定向重测",
+        },
+    )
+    run.complete("未发布")
+
+    history = store.get_checkpoint(memory.session.id, run.run_id)
+    assert history is not None
+    assert history.state["pendingMeasurementRepair"]["status"] == "available"
+    assert "/Users/yezibin/Project/Figura" not in json.dumps(history.state)
+
+    events = list(run.iter_events(after_sequence=1))
+    assert [event.kind for event in events] == [
+        "measurement_repair_required",
+        "measurement_repair_exhausted",
+    ]
+    assert events[0].payload["target"]["target_id"] == "baseline-focus"
+    assert "/Users/yezibin/Project/Figura" not in json.dumps(events[0].payload)
+
     memory.close()
     manager.close()
 

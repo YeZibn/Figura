@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -37,6 +38,7 @@ _REMOVED_KEYS = frozenset({
     "image_bytes", "bytes", "data_url", "raw_response", "raw_provider_response",
 })
 _REFERENCE_PREFIXES = ("att_", "obs_", "cand_", "art_", "review_")
+_LOCAL_PATH = re.compile(r"(?:/(?:Users|private|tmp|var|home|opt|etc)/|[A-Za-z]:\\)")
 
 
 def _has_oversized_private_reasoning(value: Any) -> bool:
@@ -67,6 +69,8 @@ def _strip_internal(value: Any, *, depth: int = 0) -> Any:
         return [_strip_internal(item, depth=depth + 1) for item in value[:64]]
     if isinstance(value, tuple):
         return [_strip_internal(item, depth=depth + 1) for item in value[:64]]
+    if isinstance(value, str):
+        return _LOCAL_PATH.sub("[PATH_OMITTED]", value)
     return value
 
 

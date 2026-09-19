@@ -185,6 +185,7 @@ def normalize_tool_result(
     source_panel_id: str | None = None,
     source_run_id: str | None = None,
     source_parent_attempt_id: str | None = None,
+    source_measurement_target: Mapping[str, Any] | None = None,
 ) -> DispatchedObservation:
     """Normalize a legacy value or enriched ``ToolResult``.
 
@@ -213,7 +214,8 @@ def normalize_tool_result(
                 source_attachment_id=source_attachment_id,
                 source_panel_id=source_panel_id or _panel_id_from_data(result),
                 source_run_id=source_run_id,
-                source_parent_attempt_id=source_parent_attempt_id,
+                parent_attempt_id=source_parent_attempt_id,
+                measurement_target=source_measurement_target,
             )
             return DispatchedObservation(
                 json.dumps(
@@ -256,6 +258,11 @@ def normalize_tool_result(
         metadata.append(image_metadata)
 
     data_payload = result.data
+    resolved_measurement_target = source_measurement_target
+    if resolved_measurement_target is None and isinstance(result.data, Mapping):
+        candidate_target = result.data.get("measurement_target")
+        if isinstance(candidate_target, Mapping):
+            resolved_measurement_target = candidate_target
     if source_tool in {
         "measure_bars",
         "extract_line_series",
@@ -276,6 +283,7 @@ def normalize_tool_result(
             source_panel_id=source_panel_id or _panel_id_from_data(result.data),
             source_run_id=source_run_id,
             parent_attempt_id=source_parent_attempt_id,
+            measurement_target=resolved_measurement_target,
             captions=[image.caption for image in images],
         )
 

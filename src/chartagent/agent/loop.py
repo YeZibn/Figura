@@ -69,6 +69,106 @@ _SCOPED_TOOL_NAMES = _GEOMETRY_TOOL_NAMES | {"extract_text"}
 _RENDER_TOOL_NAMES = frozenset({"render_chart", "generate_chart"})
 
 
+def _measurement_repair_context_from_content(content: str) -> dict[str, Any] | None:
+    """Extract a bounded repair action for the next model turn."""
+    try:
+        payload = json.loads(content)
+    except (TypeError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    direct = payload.get("measurement_repair")
+    if isinstance(direct, Mapping):
+        return {str(key): value for key, value in list(direct.items())[:16]}
+    gate = payload.get("measurement_gate")
+    gate_action = gate.get("repair_action") if isinstance(gate, Mapping) else None
+    if isinstance(gate_action, Mapping):
+        return {str(key): value for key, value in list(gate_action.items())[:16]}
+    data = payload.get("data") if isinstance(payload.get("data"), Mapping) else None
+    measurement = data.get("measurement") if isinstance(data, Mapping) else None
+    quality = measurement.get("quality") if isinstance(measurement, Mapping) else None
+    action = quality.get("repair_action") if isinstance(quality, Mapping) else None
+    if not isinstance(action, Mapping):
+        return None
+    result = {str(key): value for key, value in list(action.items())[:16]}
+    if isinstance(measurement, Mapping):
+        reference = measurement.get("reference")
+        if isinstance(reference, Mapping):
+            result.setdefault("session_id", reference.get("session_id"))
+            result.setdefault("attempt_id", reference.get("attempt_id"))
+    return result
+
+
+def _measurement_repair_context_from_sessions(
+    sessions: Mapping[str, MeasurementSession],
+) -> dict[str, Any] | None:
+    for session in reversed(list(sessions.values())):
+        action = session.pending_repair_action()
+        if not isinstance(action, Mapping):
+            continue
+        result = dict(action)
+        result.setdefault("session_id", session.session_id)
+        result.setdefault("attachment_id", session.attachment_id)
+        result.setdefault("panel_id", session.panel_id)
+        result.setdefault("budget_remaining", session.repair_budget_remaining)
+        return result
+    return None
+
+
+def _repair_target_context(
+    target: object,
+    sessions: Mapping[str, MeasurementSession],
+    *,
+    source_attachment_id: str | None,
+    source_panel_id: str | None,
+    source_tool: str,
+    parent_attempt_id: str | None,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """Validate a model target before an authorized sensor is dispatched."""
+    if not isinstance(target, Mapping):
+        return None, {
+            "status": "rejected",
+            "code": "measurement_target_invalid",
+            "location": "measurement_target",
+            "message": "measurement_target must be an object",
+            "next_action": "重新读取当前 panel 的 repair_action",
+        }
+    if not source_attachment_id:
+        return None, {
+            "status": "rejected",
+            "code": "measurement_source_mismatch",
+            "location": "measurement_target",
+            "message": "targeted remeasurement requires the current attachment",
+            "next_action": "恢复当前来源后再发起定向重测",
+        }
+    session = next(
+        (
+            item
+            for item in reversed(list(sessions.values()))
+            if item.attachment_id == source_attachment_id and item.panel_id == source_panel_id
+        ),
+        None,
+    )
+    if session is None:
+        return None, {
+            "status": "rejected",
+            "code": "measurement_session_not_found",
+            "location": "measurement_target",
+            "message": "targeted remeasurement has no current measurement session",
+            "next_action": "先读取当前 panel 的完整测量结果，再根据 repair_action 重测",
+        }
+    normalized, error = session.validate_repair_target(
+        target,
+        tool=source_tool,
+        parent_attempt_id=parent_attempt_id,
+    )
+    if error is not None:
+        return None, error
+    if normalized is not None:
+        normalized["panel_id"] = source_panel_id
+    return normalized, None
+
+
 def _attach_visual_observation_refs(
     observation: DispatchedObservation,
     references: Sequence[dict[str, Any]],
@@ -301,6 +401,32 @@ def _measurement_trace_fields(content: str) -> dict[str, Any]:
             len(quality.get("issues", [])) if isinstance(quality.get("issues"), list) else 0,
         )
         result["measurement_blocking"] = bool(quality.get("blocking"))
+        repair_action = quality.get("repair_action")
+        if isinstance(repair_action, Mapping):
+            result["measurement_repair_action"] = {
+                key: repair_action.get(key)
+                for key in ("action", "status", "tool", "attachment_id", "panel_id", "parent_attempt_id", "fields", "target", "next_action")
+                if repair_action.get(key) is not None
+            }
+            result["measurement_repair_status"] = str(repair_action.get("status") or "available")[:32]
+    target = measurement.get("target")
+    if isinstance(target, Mapping):
+        result["measurement_target"] = {
+            key: target.get(key)
+            for key in (
+                "target_id",
+                "panel_id",
+                "parent_attempt_id",
+                "region_kind",
+                "fields",
+                "bbox_source_px",
+                "source_image_size",
+                "bbox_px",
+                "local_image_size",
+                "clipped",
+            )
+            if target.get(key) is not None
+        }
     return result
 
 
@@ -435,6 +561,7 @@ class Agent:
         artifact_records: list[dict[str, Any]] = []
         checkpoint_references: list[dict[str, Any]] = []
         measurement_sessions: dict[str, MeasurementSession] = {}
+        pending_measurement_repair: dict[str, Any] | None = None
         if isinstance(recovery, dict):
             loader = getattr(self.memory, "recovery_context", None)
             hydrated = loader(recovery, budget=self.context_budget) if callable(loader) else []
@@ -452,6 +579,9 @@ class Agent:
                     item for item in raw_artifacts[:48] if isinstance(item, dict)
                 ]
             measurement_sessions = sessions_from_state(recovery.get("measurementSessions"))
+            pending_measurement_repair = _measurement_repair_context_from_sessions(measurement_sessions)
+            if isinstance(recovery.get("pendingMeasurementRepair"), dict):
+                pending_measurement_repair = dict(recovery["pendingMeasurementRepair"])
         user_message = {"role": "user", "content": user_input}
         self.memory.append(run, "user", {"message": user_message, "text": user_input if isinstance(user_input, str) else "[image attachment turn]"})
         if isinstance(user_input, str):
@@ -502,6 +632,7 @@ class Agent:
                         "selected_panel": selected_panel,
                         "current_tool": current_tool_name,
                         "pending_action": pending_action,
+                        "measurement_repair": pending_measurement_repair,
                         "recovery_status": "recovery_context_loaded" if recovery else "none",
                         "retry_count": max(
                             [
@@ -726,25 +857,55 @@ class Agent:
                         call_id=call.id,
                         arguments=summarize_arguments(call.arguments),
                     )
-                dispatch_arguments = self._layout_arguments(
-                    call.name,
-                    call.arguments,
-                    layout_contexts,
-                )
                 source_panel_id = call_arguments.get("panel_id") if isinstance(call_arguments.get("panel_id"), str) else None
                 source_attachment_id = call_arguments.get("attachment_id") if isinstance(call_arguments.get("attachment_id"), str) else None
+                raw_measurement_target = call_arguments.get("measurement_target") if isinstance(call_arguments, dict) else None
+                if source_panel_id is None and isinstance(raw_measurement_target, Mapping):
+                    candidate_panel = raw_measurement_target.get("panel_id")
+                    if isinstance(candidate_panel, str) and candidate_panel.strip():
+                        source_panel_id = candidate_panel
                 parent_attempt_id = None
                 if call.name in MEASUREMENT_TOOLS:
                     for session in reversed(list(measurement_sessions.values())):
                         if session.attachment_id == source_attachment_id and session.panel_id in {source_panel_id, None, "__source__"}:
                             parent_attempt_id = session.current_attempt_id
                             break
-                routing_error = self._panel_routing_error(
+                prepared_target: dict[str, Any] | None = None
+                repair_error: dict[str, Any] | None = None
+                if call.name in MEASUREMENT_TOOLS and raw_measurement_target is not None:
+                    prepared_target, repair_error = _repair_target_context(
+                        raw_measurement_target,
+                        measurement_sessions,
+                        source_attachment_id=source_attachment_id,
+                        source_panel_id=source_panel_id,
+                        source_tool=call.name,
+                        parent_attempt_id=parent_attempt_id,
+                    )
+                    if repair_error is None and prepared_target is not None:
+                        call_arguments["measurement_target"] = prepared_target
+                dispatch_arguments = self._layout_arguments(
                     call.name,
-                    call.arguments,
+                    json.dumps(call_arguments, ensure_ascii=False, separators=(",", ":"))
+                    if isinstance(call_arguments, dict)
+                    else call.arguments,
                     layout_contexts,
                 )
-                if routing_error is not None:
+                routing_error = self._panel_routing_error(
+                    call.name,
+                    dispatch_arguments,
+                    layout_contexts,
+                )
+                if repair_error is not None:
+                    observation = DispatchedObservation(
+                        json.dumps(
+                            {
+                                "error": "measurement repair rejected",
+                                "measurement_repair": repair_error,
+                            },
+                            ensure_ascii=False,
+                        )
+                    )
+                elif routing_error is not None:
                     observation = DispatchedObservation(
                         json.dumps({"error": routing_error}, ensure_ascii=False)
                     )
@@ -756,6 +917,7 @@ class Agent:
                         source_run_id=run.id,
                         source_panel_id=source_panel_id,
                         source_parent_attempt_id=parent_attempt_id,
+                        source_measurement_target=prepared_target,
                         measurement_context=measurement_sessions if call.name == "assemble_spec" else None,
                     )
                 self._raise_if_interrupted(run)
@@ -804,6 +966,49 @@ class Agent:
                         measurement_data = measurement_payload.get("data") if isinstance(measurement_payload, dict) else None
                         if isinstance(measurement_data, dict):
                             register_measurement(measurement_sessions, measurement_data)
+                    except (TypeError, json.JSONDecodeError):
+                        pass
+                repair_context = _measurement_repair_context_from_content(observation.content)
+                if repair_context is not None:
+                    pending_measurement_repair = repair_context
+                    repair_status = str(repair_context.get("status") or "available")
+                    pending_action = str(
+                        repair_context.get("next_action")
+                        or "根据 measurement repair_action 在同一 panel 内定向重测"
+                    )[:240]
+                    repair_message = {
+                        "role": "user",
+                        "content": (
+                            "代码质量门禁返回了测量修复上下文。只能在同一 attachment/panel/session 内处理，"
+                            "不要猜测缺失数值，也不要使用未接受 attempt：\n"
+                            + json.dumps(repair_context, ensure_ascii=False, separators=(",", ":"))
+                        ),
+                    }
+                    self._current_messages.append(repair_message)  # type: ignore[arg-type]
+                    self._messages.append(repair_message)  # type: ignore[arg-type]
+                    self.memory.append(run, "measurement_repair", {"state": repair_context})
+                    if emitter is not None:
+                        repair_event = (
+                            "measurement_repair_required"
+                            if repair_status == "available"
+                            else "measurement_repair_exhausted"
+                            if repair_status == "exhausted"
+                            else "measurement_repair_rejected"
+                        )
+                        emitter.emit(
+                            repair_event,
+                            turn=turn,
+                            tool_name=call.name,
+                            call_id=call.id,
+                            repair=repair_context,
+                        )
+                elif call.name in MEASUREMENT_TOOLS:
+                    try:
+                        payload = json.loads(observation.content)
+                        data = payload.get("data") if isinstance(payload, dict) else None
+                        status = data.get("measurement", {}).get("status") if isinstance(data, dict) and isinstance(data.get("measurement"), dict) else None
+                        if status == "accepted":
+                            pending_measurement_repair = None
                     except (TypeError, json.JSONDecodeError):
                         pass
                 artifact_records.extend(
@@ -1057,6 +1262,7 @@ class Agent:
             "visualReferences": list(visual_references)[:32],
             "artifactIndex": list(artifact_records)[:48],
             "measurementSessions": sessions_to_state(measurement_sessions or {}),
+            "pendingMeasurementRepair": _measurement_repair_context_from_sessions(measurement_sessions or {}),
         }
         if pending_answer is not None:
             result["pendingAnswer"] = pending_answer

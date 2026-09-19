@@ -32,6 +32,7 @@ from .coordinates import (
 from .ocr import extract_text
 from .overlays import render_scatter_overlay
 from .layout import context_for_evidence, context_scope, filter_snippets_to_scope
+from .scope import measurement_target_region
 
 _COLOR_TOLERANCE = 34
 _MAX_MARKER_SIDE_RATIO = 0.12
@@ -341,6 +342,7 @@ def _empty_result(
     image: Image.Image,
     warning: str,
     layout_context: dict[str, Any] | None = None,
+    measurement_target: dict[str, Any] | None = None,
 ) -> ToolResult:
     data = {
         "image_size": image_size(np.asarray(image.convert("RGB"))),
@@ -364,6 +366,8 @@ def _empty_result(
         "overlaps": [],
         "confidence": confidence_map(overall=0.0, geometry=0.0, calibration=0.0, association=0.0),
         "warnings": [warning],
+        "measurement_target": dict(measurement_target) if isinstance(measurement_target, dict) else None,
+        "focus": {"requested": bool(measurement_target), "region_px": None, "search_scope": "panel_or_chart"},
     }
     return ToolResult(
         data,
@@ -396,6 +400,7 @@ def _error(reason: str) -> dict[str, str]:
 def extract_scatter_points(
     image_path: str,
     layout_context: dict[str, Any] | None = None,
+    measurement_target: dict[str, Any] | None = None,
 ) -> ToolResult | dict:
     """Extract source-image marker evidence and optionally calibrated points."""
     path = Path(image_path)
@@ -409,7 +414,18 @@ def extract_scatter_points(
         return _error(f"input is not a readable image ({type(exc).__name__})")
 
     scope = context_scope(layout_context)
-    search_area = scope.get("bbox_px") if scope else default_plot_area(rgb)
+    base_search_area = scope.get("bbox_px") if scope else default_plot_area(rgb)
+    focus_region = measurement_target_region(
+        measurement_target,
+        width=int(rgb.shape[1]),
+        height=int(rgb.shape[0]),
+    )
+    focus_fallback = bool(
+        focus_region
+        and base_search_area
+        and focus_region[2] * focus_region[3] < max(1, base_search_area[2] * base_search_area[3] * 0.08)
+    )
+    search_area = base_search_area if focus_fallback else (focus_region or base_search_area)
     palette = detect_color_palette(rgb, region=search_area, max_colors=8)
     snippets = _ocr_snippets(path, scope) if scope else _ocr_snippets(path)
     x_ticks, y_ticks = numeric_ticks(snippets, search_area)
@@ -426,7 +442,7 @@ def extract_scatter_points(
     x_model = fit_axis_transform(x_ticks, x_axis_points) if x_axis_points else None
     y_model = fit_axis_transform(y_ticks, y_axis_points) if y_axis_points else None
     if not palette:
-        return _empty_result(chart_image, "no reliable scatter point population detected", layout_context)
+        return _empty_result(chart_image, "no reliable scatter point population detected", layout_context, measurement_target)
 
     series, overlaps, warnings, legend = _build_series(
         rgb,
@@ -439,9 +455,11 @@ def extract_scatter_points(
         legend_scope=scope.get("bbox_px") if scope else None,
     )
     if not series:
-        return _empty_result(chart_image, "no reliable scatter point population detected", layout_context)
+        return _empty_result(chart_image, "no reliable scatter point population detected", layout_context, measurement_target)
 
     conflicts: list[dict[str, Any]] = []
+    if focus_fallback:
+        warnings.append("focus target was too narrow; panel context retained for point validation")
     for axis_name, ticks, model in (("x", x_ticks, x_model), ("y", y_ticks, y_model)):
         if len(ticks) >= 2 and model is not None and not model.get("calibrated"):
             conflicts.append(
@@ -526,6 +544,12 @@ def extract_scatter_points(
         "ocr": snippets,
         "confidence": confidence,
         "warnings": warnings,
+        "measurement_target": dict(measurement_target) if isinstance(measurement_target, dict) else None,
+        "focus": {
+            "requested": bool(measurement_target),
+            "region_px": focus_region,
+            "search_scope": "target_with_panel_context" if focus_region else "panel_or_chart",
+        },
     }
     return ToolResult(
         data,
@@ -563,6 +587,11 @@ EXTRACT_SCATTER_POINTS = Tool(
             "layout_context": {
                 "type": "object",
                 "description": "Optional validated chart layout context; model hints remain advisory.",
+                "additionalProperties": True,
+            },
+            "measurement_target": {
+                "type": "object",
+                "description": "Optional bounded source-coordinate focus target for a remeasurement.",
                 "additionalProperties": True,
             },
         },

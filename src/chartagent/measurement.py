@@ -10,10 +10,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from collections.abc import Mapping
-from typing import Any, Iterable
+from typing import Any, Iterable, Sequence
 from uuid import uuid4
 
 
@@ -41,6 +42,25 @@ MAX_MEASUREMENT_ISSUES = 16
 MAX_MEASUREMENT_CHECKS = 16
 MAX_MEASUREMENT_TEXT = 240
 MAX_MEASUREMENT_SCOPE_KEYS = 16
+MAX_MEASUREMENT_TARGET_FIELDS = 8
+MAX_MEASUREMENT_TARGET_ID = 128
+MAX_MEASUREMENT_REGION_KIND = 48
+MAX_REPAIR_ATTEMPTS = 3
+_PATH_PATTERN = re.compile(r"(?:/(?:Users|private|tmp|var|home|opt|etc)/|[A-Za-z]:\\)")
+MEASUREMENT_REGION_KINDS = frozenset(
+    {
+        "panel",
+        "baseline",
+        "bars",
+        "axes",
+        "series",
+        "points",
+        "sectors",
+        "legend",
+        "geometry",
+        "evidence",
+    }
+)
 
 
 def _now() -> str:
@@ -48,7 +68,8 @@ def _now() -> str:
 
 
 def _text(value: object, limit: int = MAX_MEASUREMENT_TEXT) -> str:
-    return str(value or "").strip()[:limit]
+    text = str(value or "").strip()
+    return _PATH_PATTERN.sub("[路径已省略]", text)[:limit]
 
 
 def _bounded_confidence(value: object) -> float | None:
@@ -108,6 +129,155 @@ def measurement_session_id(run_id: str | None, attachment_id: str | None, panel_
 
 def new_attempt_id() -> str:
     return f"matt_{uuid4().hex}"
+
+
+def _finite_number(value: object) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number != number or number in {float("inf"), float("-inf")}:
+        return None
+    return number
+
+
+def _bbox(value: object) -> tuple[float, float, float, float] | None:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)) or len(value) < 4:
+        return None
+    values = tuple(_finite_number(item) for item in value[:4])
+    if any(item is None for item in values):
+        return None
+    left, top, width, height = (float(item) for item in values if item is not None)
+    if left < 0 or top < 0 or width <= 0 or height <= 0:
+        return None
+    return (left, top, width, height)
+
+
+def _image_size(value: object) -> tuple[int, int] | None:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)) or len(value) < 2:
+        return None
+    width = _finite_number(value[0])
+    height = _finite_number(value[1])
+    if width is None or height is None or width <= 0 or height <= 0:
+        return None
+    return (int(round(width)), int(round(height)))
+
+
+@dataclass(frozen=True)
+class MeasurementTarget:
+    """Bounded, source-coordinate focus target for a repair measurement."""
+
+    target_id: str
+    panel_id: str | None
+    parent_attempt_id: str | None
+    region_kind: str
+    fields: tuple[str, ...] = ()
+    bbox_source_px: tuple[float, float, float, float] | None = None
+    source_image_size: tuple[int, int] | None = None
+    reason: str = ""
+    bbox_local_px: tuple[float, float, float, float] | None = None
+    local_image_size: tuple[int, int] | None = None
+    local_to_source: dict[str, Any] | None = None
+    clipped: bool = False
+
+    @classmethod
+    def from_mapping(cls, value: object) -> "MeasurementTarget | None":
+        if not isinstance(value, Mapping):
+            return None
+        target_id = _text(value.get("target_id") or value.get("targetId"), MAX_MEASUREMENT_TARGET_ID)
+        region_kind = _text(value.get("region_kind") or value.get("regionKind") or "panel", MAX_MEASUREMENT_REGION_KIND).lower()
+        if not target_id or not region_kind:
+            return None
+        if region_kind not in MEASUREMENT_REGION_KINDS:
+            region_kind = "geometry"
+        raw_fields = value.get("fields")
+        fields = tuple(
+            _text(item, 80)
+            for item in raw_fields
+            if _text(item, 80)
+        )[:MAX_MEASUREMENT_TARGET_FIELDS] if isinstance(raw_fields, (list, tuple)) else ()
+        return cls(
+            target_id=target_id,
+            panel_id=_text(value.get("panel_id") or value.get("panelId"), 160) or None,
+            parent_attempt_id=_text(value.get("parent_attempt_id") or value.get("parentAttemptId"), 160) or None,
+            region_kind=region_kind,
+            fields=fields,
+            bbox_source_px=_bbox(value.get("bbox_source_px") or value.get("bboxSourcePx")),
+            source_image_size=_image_size(value.get("source_image_size") or value.get("sourceImageSize")),
+            reason=_text(value.get("reason"), 240),
+            bbox_local_px=_bbox(value.get("bbox_px") or value.get("bbox_local_px") or value.get("bboxLocalPx")),
+            local_image_size=_image_size(value.get("local_image_size") or value.get("localImageSize")),
+            local_to_source=_json_safe(value.get("local_to_source") or value.get("localToSource")) if isinstance(value.get("local_to_source") or value.get("localToSource"), Mapping) else None,
+            clipped=bool(value.get("clipped")),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        result: dict[str, Any] = {
+            "target_id": self.target_id,
+            "panel_id": self.panel_id,
+            "parent_attempt_id": self.parent_attempt_id,
+            "region_kind": self.region_kind,
+            "fields": list(self.fields[:MAX_MEASUREMENT_TARGET_FIELDS]),
+            "reason": self.reason[:MAX_MEASUREMENT_TEXT],
+            "clipped": bool(self.clipped),
+        }
+        if self.bbox_source_px is not None:
+            result["bbox_source_px"] = [round(value, 3) for value in self.bbox_source_px]
+        if self.source_image_size is not None:
+            result["source_image_size"] = list(self.source_image_size)
+        if self.bbox_local_px is not None:
+            result["bbox_px"] = [round(value, 3) for value in self.bbox_local_px]
+        if self.local_image_size is not None:
+            result["local_image_size"] = list(self.local_image_size)
+        if self.local_to_source is not None:
+            result["local_to_source"] = _json_safe(self.local_to_source)
+        return result
+
+    def fingerprint(self, *, tool: str | None = None) -> str:
+        """Return a stable identity that ignores model-generated labels/reasons."""
+        payload = {
+            "tool": _text(tool, 80),
+            "panel_id": self.panel_id,
+            "region_kind": self.region_kind,
+            "fields": list(self.fields),
+            "bbox_source_px": list(self.bbox_source_px) if self.bbox_source_px else None,
+            "source_image_size": list(self.source_image_size) if self.source_image_size else None,
+        }
+        digest = hashlib.sha256(
+            json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()[:24]
+        return f"mt_{digest}"
+
+
+def normalize_measurement_target(value: object) -> dict[str, Any] | None:
+    """Normalize a model or adapter target without inventing a source bbox."""
+    target = MeasurementTarget.from_mapping(value)
+    if target is None:
+        return None
+    return target.to_dict()
+
+
+def measurement_target_fingerprint(value: object, *, tool: str | None = None) -> str | None:
+    target = MeasurementTarget.from_mapping(value)
+    return target.fingerprint(tool=tool) if target is not None else None
+
+
+def _repair_error(code: str, message: str, *, status: str = "blocked") -> dict[str, Any]:
+    return {
+        "status": status,
+        "code": _text(code, 80),
+        "location": "measurement_target",
+        "message": _text(message),
+        "next_action": "重新读取当前 measurement.quality.repair_action，并只在同一 panel 内使用新的目标区域",
+    }
+
+
+def _repair_limit(value: object) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = MAX_REPAIR_ATTEMPTS
+    return max(1, min(MAX_REPAIR_ATTEMPTS, parsed))
 
 
 def _source_scope(data: Mapping[str, Any]) -> dict[str, object] | None:
@@ -186,6 +356,49 @@ def _check(checks: list[dict[str, str]], name: str, status: str, detail: str) ->
     checks.append({"name": _text(name, 64), "status": _text(status, 24), "detail": _text(detail)})
 
 
+def _repair_action(
+    *,
+    source_tool: str,
+    source_attachment_id: str | None,
+    source_panel_id: str | None,
+    source_attempt_id: str,
+    issues: Sequence[Mapping[str, Any]],
+    target: dict[str, Any] | None,
+    status: str,
+) -> dict[str, Any] | None:
+    if status not in {"remeasure_required", "partial"}:
+        return None
+    fields: list[str] = []
+    for issue in issues:
+        location = _text(issue.get("location"), 120)
+        if location and location not in fields:
+            fields.append(location)
+        if len(fields) >= MAX_MEASUREMENT_TARGET_FIELDS:
+            break
+    resolved_target = dict(target or {})
+    resolved_target.setdefault("target_id", f"panel-review-{source_attempt_id[:24]}")
+    resolved_target.setdefault("panel_id", source_panel_id)
+    resolved_target.setdefault("parent_attempt_id", source_attempt_id)
+    resolved_target.setdefault("region_kind", "panel")
+    resolved_target.setdefault("fields", fields)
+    if not resolved_target.get("reason"):
+        resolved_target["reason"] = "；".join(
+            _text(issue.get("next_action") or issue.get("message"), 120)
+            for issue in issues[:3]
+        )
+    return {
+        "action": "remeasure",
+        "status": "available",
+        "tool": _text(source_tool, 80),
+        "attachment_id": _text(source_attachment_id, 160) or None,
+        "panel_id": _text(source_panel_id, 160) or None,
+        "parent_attempt_id": source_attempt_id,
+        "fields": fields,
+        "target": normalize_measurement_target(resolved_target) or resolved_target,
+        "next_action": "使用当前 panel 和 parent_attempt_id 发起一次有界的定向重测，然后重新读取 measurement 质量结果",
+    }
+
+
 def audit_measurement(
     data: Mapping[str, Any],
     *,
@@ -195,6 +408,7 @@ def audit_measurement(
     source_attachment_id: str | None = None,
     source_panel_id: str | None = None,
     source_run_id: str | None = None,
+    measurement_target: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Audit common evidence without changing chart-specific sensor fields."""
     chart_data = data if isinstance(data, Mapping) else {}
@@ -307,6 +521,19 @@ def audit_measurement(
     session_id = measurement_session_id(source_run_id, attachment, panel)
     attempt_id = new_attempt_id()
     scope = _source_scope(chart_data)
+    target = normalize_measurement_target(measurement_target)
+    if target is not None:
+        target["panel_id"] = target.get("panel_id") or panel
+        target["parent_attempt_id"] = target.get("parent_attempt_id")
+    repair_action = _repair_action(
+        source_tool=source_tool,
+        source_attachment_id=attachment,
+        source_panel_id=panel,
+        source_attempt_id=attempt_id,
+        issues=issues,
+        target=target,
+        status=status,
+    )
     captions: list[str] = []
     return {
         "status": status,
@@ -323,8 +550,11 @@ def audit_measurement(
             "parent_attempt_id": None,
             "tool": _text(source_tool, 80),
             "scope": scope,
+            "target": target,
+            "target_fingerprint": measurement_target_fingerprint(target, tool=source_tool),
             "created_at": _now(),
         },
+        "target": target,
         "source": {
             "attachment_id": attachment,
             "panel_id": panel,
@@ -336,6 +566,7 @@ def audit_measurement(
             "issues": issues[:MAX_MEASUREMENT_ISSUES],
             "warnings": warning_list[:12],
             "blocking": blocking,
+            "repair_action": repair_action,
         },
         "evidence": {
             "visual_count": max(0, min(int(image_count), 4)),
@@ -354,6 +585,7 @@ def attach_measurement_quality(
     source_panel_id: str | None = None,
     source_run_id: str | None = None,
     parent_attempt_id: str | None = None,
+    measurement_target: Mapping[str, Any] | None = None,
     captions: Iterable[object] = (),
 ) -> dict[str, Any]:
     """Copy chart data and attach a fresh bounded measurement envelope."""
@@ -366,11 +598,31 @@ def attach_measurement_quality(
         source_attachment_id=source_attachment_id,
         source_panel_id=source_panel_id,
         source_run_id=source_run_id,
+        measurement_target=measurement_target,
     )
     attempt = dict(envelope.get("attempt") or {})
     if isinstance(parent_attempt_id, str) and parent_attempt_id:
         attempt["parent_attempt_id"] = parent_attempt_id[:160]
         envelope["attempt"] = attempt
+        if isinstance(envelope.get("target"), dict):
+            target = dict(envelope["target"])
+            target["parent_attempt_id"] = parent_attempt_id[:160]
+            envelope["target"] = target
+            attempt["target"] = target
+            attempt["target_fingerprint"] = measurement_target_fingerprint(target, tool=attempt.get("tool"))
+            envelope["attempt"] = attempt
+            quality = dict(envelope.get("quality") or {})
+            repair_action = quality.get("repair_action")
+            if isinstance(repair_action, dict):
+                repair_action = dict(repair_action)
+                repair_action["parent_attempt_id"] = parent_attempt_id[:160]
+                repair_target = repair_action.get("target")
+                if isinstance(repair_target, dict):
+                    repair_target = dict(repair_target)
+                    repair_target["parent_attempt_id"] = parent_attempt_id[:160]
+                    repair_action["target"] = repair_target
+                quality["repair_action"] = repair_action
+                envelope["quality"] = quality
     evidence = dict(envelope.get("evidence") or {})
     evidence["captions"] = [_text(item, 160) for item in captions if _text(item, 160)][:4]
     envelope["evidence"] = evidence
@@ -396,6 +648,8 @@ class MeasurementAttempt:
     tool: str
     status: str
     scope: dict[str, Any] | None = None
+    target: dict[str, Any] | None = None
+    target_fingerprint: str | None = None
     quality: dict[str, Any] = field(default_factory=dict)
     evidence: dict[str, Any] = field(default_factory=dict)
     created_at: str = field(default_factory=_now)
@@ -415,6 +669,8 @@ class MeasurementAttempt:
         quality = _json_safe(value.get("quality") or {})
         evidence = _json_safe(value.get("evidence") or {})
         scope = _json_safe(attempt.get("scope") or source.get("scope"))
+        target = _json_safe(value.get("target") or attempt.get("target"))
+        target = target if isinstance(target, dict) else None
         return cls(
             attempt_id=attempt_id,
             session_id=session_id,
@@ -425,6 +681,8 @@ class MeasurementAttempt:
             tool=_text(attempt.get("tool"), 80),
             status=status,
             scope=scope if isinstance(scope, dict) else None,
+            target=target,
+            target_fingerprint=_text(attempt.get("target_fingerprint"), 80) or measurement_target_fingerprint(target, tool=attempt.get("tool")),
             quality=quality if isinstance(quality, dict) else {},
             evidence=evidence if isinstance(evidence, dict) else {},
             created_at=_text(attempt.get("created_at"), 64) or _now(),
@@ -437,6 +695,8 @@ class MeasurementAttempt:
         quality = _json_safe(value.get("quality") or {})
         evidence = _json_safe(value.get("evidence") or {})
         scope = _json_safe(value.get("scope"))
+        target = _json_safe(value.get("target"))
+        target = target if isinstance(target, dict) else None
         attempt_id = _text(value.get("attempt_id"), 160)
         session_id = _text(value.get("session_id"), 160)
         if not attempt_id or not session_id:
@@ -454,6 +714,8 @@ class MeasurementAttempt:
             tool=_text(value.get("tool"), 80),
             status=status,
             scope=scope if isinstance(scope, dict) else None,
+            target=target,
+            target_fingerprint=_text(value.get("target_fingerprint"), 80) or measurement_target_fingerprint(target, tool=value.get("tool")),
             quality=quality if isinstance(quality, dict) else {},
             evidence=evidence if isinstance(evidence, dict) else {},
             created_at=_text(value.get("created_at"), 64) or _now(),
@@ -470,6 +732,8 @@ class MeasurementAttempt:
             "tool": self.tool,
             "status": self.status,
             "scope": _json_safe(self.scope),
+            "target": _json_safe(self.target),
+            "target_fingerprint": self.target_fingerprint,
             "quality": _json_safe(self.quality),
             "evidence": _json_safe(self.evidence),
             "created_at": self.created_at,
@@ -492,6 +756,7 @@ class MeasurementSession:
     panel_id: str | None
     attempts: list[MeasurementAttempt] = field(default_factory=list)
     current_attempt_id: str | None = None
+    max_repair_attempts: int = MAX_REPAIR_ATTEMPTS
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "MeasurementSession | None":
@@ -513,6 +778,7 @@ class MeasurementSession:
             panel_id=_text(value.get("panel_id"), 160) or None,
             attempts=attempts,
             current_attempt_id=_text(value.get("current_attempt_id"), 160) or None,
+            max_repair_attempts=_repair_limit(value.get("max_repair_attempts", MAX_REPAIR_ATTEMPTS)),
         )
         if session.current_attempt_id and not any(item.attempt_id == session.current_attempt_id for item in attempts):
             session.current_attempt_id = attempts[-1].attempt_id if attempts else None
@@ -527,10 +793,68 @@ class MeasurementSession:
             return False
         if any(item.attempt_id == attempt.attempt_id for item in self.attempts):
             return False
+        if attempt.target is not None:
+            if self.repair_attempt_count >= self.max_repair_attempts:
+                return False
+            if self.has_target(attempt.target, tool=attempt.tool):
+                return False
         self.attempts.append(attempt)
         self.attempts = self.attempts[-MAX_MEASUREMENT_ATTEMPTS:]
         self.current_attempt_id = attempt.attempt_id
         return True
+
+    @property
+    def repair_attempt_count(self) -> int:
+        return sum(1 for item in self.attempts if item.target is not None)
+
+    @property
+    def repair_budget_remaining(self) -> int:
+        return max(0, self.max_repair_attempts - self.repair_attempt_count)
+
+    def pending_repair_action(self) -> dict[str, Any] | None:
+        current = next(
+            (item for item in reversed(self.attempts) if item.attempt_id == self.current_attempt_id),
+            None,
+        )
+        if current is None or not isinstance(current.quality, Mapping):
+            return None
+        action = current.quality.get("repair_action")
+        if not isinstance(action, Mapping):
+            return None
+        result = dict(action)
+        result["budget_remaining"] = self.repair_budget_remaining
+        if self.repair_budget_remaining <= 0:
+            result["status"] = "exhausted"
+            result["next_action"] = "修复预算已用尽；保留当前失败证据，不得继续创建定向重测"
+        return result
+
+    def has_target(self, target: Mapping[str, Any] | None, *, tool: str | None = None) -> bool:
+        fingerprint = measurement_target_fingerprint(target, tool=tool)
+        return bool(fingerprint and any(item.target_fingerprint == fingerprint for item in self.attempts))
+
+    def validate_repair_target(
+        self,
+        target: Mapping[str, Any] | None,
+        *,
+        tool: str,
+        parent_attempt_id: str | None,
+    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+        normalized = normalize_measurement_target(target)
+        if normalized is None:
+            return None, _repair_error("measurement_target_invalid", "measurement_target is invalid")
+        if self.panel_id and normalized.get("panel_id") not in {None, self.panel_id}:
+            return None, _repair_error("measurement_panel_mismatch", "measurement target does not belong to the current panel")
+        current_parent = parent_attempt_id or self.current_attempt_id
+        requested_parent = normalized.get("parent_attempt_id") or current_parent
+        if not requested_parent or requested_parent != self.current_attempt_id:
+            return None, _repair_error("measurement_parent_mismatch", "measurement target parent attempt is not the current attempt")
+        if self.repair_attempt_count >= self.max_repair_attempts:
+            return None, _repair_error("measurement_repair_budget_exhausted", "measurement repair budget is exhausted", status="exhausted")
+        if self.has_target(normalized, tool=tool):
+            return None, _repair_error("measurement_target_duplicate", "equivalent measurement target was already attempted", status="rejected")
+        normalized["panel_id"] = self.panel_id or normalized.get("panel_id")
+        normalized["parent_attempt_id"] = requested_parent
+        return normalized, None
 
     def accepted_attempt(self) -> MeasurementAttempt | None:
         for attempt in reversed(self.attempts):
@@ -547,6 +871,7 @@ class MeasurementSession:
             "attachment_id": self.attachment_id,
             "panel_id": self.panel_id,
             "current_attempt_id": self.current_attempt_id,
+            "max_repair_attempts": self.max_repair_attempts,
             "attempts": [item.to_dict() for item in self.attempts[-MAX_MEASUREMENT_ATTEMPTS:]],
         }
 
@@ -685,6 +1010,7 @@ def measurement_gate(
             "message": f"measurement attempt status is {attempt.status}, not accepted",
             "measurement_status": attempt.status,
             "issues": _json_safe(issues),
+            "repair_action": _json_safe(quality.get("repair_action")) if isinstance(quality.get("repair_action"), Mapping) else None,
             "next_action": "根据 issue 补充观察或在目标区域重新测量",
         }
     return {
@@ -701,13 +1027,17 @@ def measurement_gate(
 __all__ = [
     "MEASUREMENT_TOOLS",
     "MEASUREMENT_STATUSES",
+    "MAX_REPAIR_ATTEMPTS",
+    "MeasurementTarget",
     "MeasurementAttempt",
     "MeasurementSession",
     "attach_measurement_quality",
     "audit_measurement",
     "measurement_from_data",
     "measurement_gate",
+    "measurement_target_fingerprint",
     "measurement_session_id",
+    "normalize_measurement_target",
     "register_measurement",
     "sessions_from_state",
     "sessions_to_state",

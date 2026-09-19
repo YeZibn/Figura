@@ -215,6 +215,36 @@ def test_cartesian_sensors_retain_independent_geometry_with_accepted_layout(
     assert independent["x_axis"] or independent["y_axis"]
 
 
+@pytest.mark.parametrize(
+    ("chart_factory", "sensor", "region_kind"),
+    [
+        (annotated_bar_chart, measure_bars, "baseline"),
+        (line_chart, extract_line_series, "series"),
+        (pie_chart, extract_pie_slices, "sectors"),
+        (scatter_chart, extract_scatter_points, "points"),
+    ],
+)
+def test_chart_sensors_preserve_targeted_focus_contract(tmp_path, chart_factory, sensor, region_kind):
+    chart_path = tmp_path / f"{sensor.__name__}-target.png"
+    chart_path.write_bytes(chart_factory()[0])
+    with Image.open(chart_path) as image:
+        source_size = [image.width, image.height]
+    target = {
+        "target_id": f"{region_kind}-focus",
+        "panel_id": "panel_chart",
+        "parent_attempt_id": "matt_parent",
+        "region_kind": region_kind,
+        "fields": [region_kind],
+        "bbox_source_px": [20, 20, max(1, source_size[0] - 40), max(1, source_size[1] - 40)],
+        "source_image_size": source_size,
+    }
+    result = sensor(str(chart_path), measurement_target=target)
+    assert isinstance(result, ToolResult)
+    assert result.data["measurement_target"]["bbox_source_px"] == target["bbox_source_px"]
+    assert result.data["focus"]["requested"] is True
+    assert result.data["focus"]["region_px"] == target["bbox_source_px"]
+
+
 def test_generic_series_association_consumes_text_evidence_without_ocr():
     entries = [{"id": "series_1", "color": "#ff0000", "geometry": {"bbox_px": [8, 10, 12, 8]}}]
     associated = associate_series_labels(

@@ -1,0 +1,110 @@
+{
+  "schema_version": 1,
+  "description": "定向测量修复的离线契约评估清单；图片路径只使用仓库相对路径或 synthetic 标识。",
+  "samples": [
+    {
+      "id": "dashboard_text_two_bars_pie",
+      "chart_type": "dashboard",
+      "geometry": "multi_panel",
+      "fixture": "photo/dashboard_text_two_bars_pie.png",
+      "panel_count": 4,
+      "measurement_tools": ["measure_bars", "extract_pie_slices"]
+    },
+    {
+      "id": "bar_vertical",
+      "chart_type": "bar",
+      "geometry": "vertical",
+      "fixture": "synthetic:annotated_bar_chart",
+      "measurement_tool": "measure_bars",
+      "target_region": "bars"
+    },
+    {
+      "id": "bar_horizontal",
+      "chart_type": "bar",
+      "geometry": "horizontal",
+      "fixture": "synthetic:horizontal_bar_chart",
+      "measurement_tool": "measure_bars",
+      "target_region": "bars"
+    },
+    {
+      "id": "bar_rotated",
+      "chart_type": "bar",
+      "geometry": "rotated",
+      "fixture": "synthetic:rotated_bar_chart",
+      "measurement_tool": "measure_bars",
+      "target_region": "baseline"
+    },
+    {
+      "id": "bar_grouped",
+      "chart_type": "bar",
+      "geometry": "grouped",
+      "fixture": "synthetic:grouped_bar_chart",
+      "measurement_tool": "measure_bars",
+      "target_region": "bars.measure"
+    },
+    {
+      "id": "bar_stacked",
+      "chart_type": "bar",
+      "geometry": "stacked",
+      "fixture": "synthetic:stacked_bar_chart",
+      "measurement_tool": "measure_bars",
+      "target_region": "bars.measure"
+    },
+    {
+      "id": "line_multi_series",
+      "chart_type": "line",
+      "geometry": "multi_series",
+      "fixture": "synthetic:line_chart",
+      "measurement_tool": "extract_line_series",
+      "target_region": "series"
+    },
+    {
+      "id": "pie_sectors",
+      "chart_type": "pie",
+      "geometry": "sectors",
+      "fixture": "synthetic:pie_chart",
+      "measurement_tool": "extract_pie_slices",
+      "target_region": "sectors"
+    },
+    {
+      "id": "scatter_multi_series",
+      "chart_type": "scatter",
+      "geometry": "multi_series",
+      "fixture": "synthetic:scatter_chart",
+      "measurement_tool": "extract_scatter_points",
+      "target_region": "points"
+    }
+  ],
+  "failure_cases": [
+    {"id": "target_outside_panel", "expected_behavior": "reject_without_sensor_dispatch"},
+    {"id": "cross_panel_target", "expected_code": "measurement_panel_mismatch"},
+    {"id": "duplicate_target", "expected_code": "measurement_target_duplicate"},
+    {"id": "budget_exhausted", "expected_code": "measurement_repair_budget_exhausted"},
+    {"id": "checkpoint_reconnect", "expected_behavior": "restore_lineage_and_pending_repair"}
+  ],
+  "metrics": {
+    "fields": [
+      "panel_identification",
+      "measurement_field_coverage",
+      "source_coordinate_mapping",
+      "quality_status",
+      "assembly_status"
+    ],
+    "thresholds": {
+      "accepted_after_targeted_repair_min": 1.0,
+      "cross_panel_acceptance_max": 0.0,
+      "duplicate_remeasurement_max": 0.0,
+      "budget_overrun_max": 0.0
+    },
+    "comparison": {
+      "before": {
+        "accepted_after_initial_measurement": 0.0,
+        "targeted_repair_acceptance": 0.0
+      },
+      "after_contract": {
+        "accepted_after_initial_measurement": 0.0,
+        "targeted_repair_acceptance": 1.0
+      }
+    }
+  }
+}
