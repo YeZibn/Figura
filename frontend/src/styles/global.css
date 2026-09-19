@@ -1361,6 +1361,9 @@ button:disabled { cursor: not-allowed; }
 .trace-event-copy strong { color: #4b5e59; font-size: 11px; }
 .trace-event-copy small { color: var(--subtle); font-size: 10px; }
 .trace-event-copy > span { overflow-wrap: anywhere; white-space: pre-wrap; }
+.trace-event.repair.pending .trace-event-dot { border-color: var(--warning); }
+.trace-event.repair.pending .trace-event-copy strong { color: #8b642d; }
+.trace-event.repair.error .trace-event-dot { border-color: var(--danger); }
 .trace-event.error .trace-event-dot { border-color: var(--danger); }
 .trace-tool-header { gap: 9px; padding: 9px 0; }
 .trace-tool-name { display: grid; min-width: 0; flex: 1; gap: 3px; }

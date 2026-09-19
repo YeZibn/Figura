@@ -6,7 +6,8 @@ import { mockClient } from './api/mockClient'
 import { formatBytes, mediaTypeForFile, validateImageFile } from './attachments'
 import { getGatewayRuntimeStatus, type GatewayRuntimeStatus } from './runtime'
 import { createGatewayPreviewLoader, releasePreview, usePreviewResource, type PreviewResourceLoader } from './previewResources'
-import type { AgentRunEvent, Attachment, AttachmentStatus, ConversationItem, GatewayHealth, GeneratedChartReference, Provider, RunState, RunSummary, Session, SessionData } from './types/protocol'
+import { isMeasurementRepairEventKind } from './types/protocol'
+import type { AgentRunEvent, Attachment, AttachmentStatus, ConversationItem, GatewayHealth, GeneratedChartReference, MeasurementRepairSummary, Provider, RunState, RunSummary, Session, SessionData } from './types/protocol'
 import './styles/global.css'
 import './styles/error.css'
 
@@ -102,6 +103,81 @@ function textDetail(value: unknown): string {
   try { return JSON.stringify(value, null, 2) } catch { return '事件内容不可显示' }
 }
 
+function recordValue(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null
+}
+
+function boundedDisplayText(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined
+  const normalized = value.trim()
+  if (!normalized) return undefined
+  const redacted = normalized.replace(/(?:[A-Za-z]:[\\/]|\/(?:Users|home|private|tmp|var|opt|etc)\/)[^\s"'`，。；;]+/g, '[已隐藏路径]')
+  return redacted.slice(0, 120)
+}
+
+function repairField(sources: Record<string, unknown>[], keys: string[]): string | undefined {
+  for (const source of sources) {
+    for (const key of keys) {
+      const value = boundedDisplayText(source[key])
+      if (value) return value
+    }
+  }
+  return undefined
+}
+
+function repairNumberField(sources: Record<string, unknown>[], keys: string[]): number | undefined {
+  for (const source of sources) {
+    for (const key of keys) {
+      const value = source[key]
+      if (typeof value === 'number' && Number.isFinite(value)) return value
+    }
+  }
+  return undefined
+}
+
+function measurementRepairSummary(event: AgentRunEvent): MeasurementRepairSummary | null {
+  if (!isMeasurementRepairEventKind(event.kind)) return null
+  const payload = eventPayload(event)
+  const repair = recordValue(payload.repair) || payload
+  const target = recordValue(repair.target) || recordValue(payload.target) || {}
+  const sources = [repair, payload, target]
+  return {
+    panelId: repairField(sources, ['panel_id', 'panelId']),
+    attemptId: repairField(sources, ['attempt_id', 'attemptId']),
+    parentAttemptId: repairField(sources, ['parent_attempt_id', 'parentAttemptId']),
+    targetType: repairField(sources, ['region_kind', 'target_type', 'targetType', 'kind']),
+    status: repairField(sources, ['status']),
+    code: repairField(sources, ['code']),
+    reason: repairField(sources, ['reason', 'message']),
+    nextAction: repairField(sources, ['next_action', 'nextAction']),
+    budgetRemaining: repairNumberField(sources, ['budget_remaining', 'budgetRemaining']),
+  }
+}
+
+function measurementRepairDetail(event: AgentRunEvent): string {
+  const summary = measurementRepairSummary(event)
+  if (!summary) return ''
+  const details = [
+    summary.panelId ? `面板：${summary.panelId}` : '',
+    summary.targetType ? `目标：${summary.targetType}` : '',
+    summary.attemptId ? `attempt：${summary.attemptId}` : '',
+    summary.parentAttemptId ? `父 attempt：${summary.parentAttemptId}` : '',
+    summary.budgetRemaining !== undefined ? `剩余次数：${summary.budgetRemaining}` : '',
+    summary.reason ? `原因：${summary.reason}` : '',
+    summary.nextAction ? `下一步：${summary.nextAction}` : '',
+  ].filter(Boolean)
+  if (details.length) return details.join(' · ')
+  if (event.kind === 'measurement_repair_required') return '等待同一面板内的定向重测。'
+  if (event.kind === 'measurement_repair_rejected') return '定向重测未被接受，保留当前测量证据。'
+  return '定向重测次数已用尽，当前候选不会自动发布。'
+}
+
+function traceEventDetail(event: AgentRunEvent): string {
+  if (isMeasurementRepairEventKind(event.kind)) return measurementRepairDetail(event)
+  const payload = eventPayload(event)
+  return textDetail(payload.message || payload.status || payload.publication_status || payload.reason || (event.kind === 'generated_chart' ? '生成图表结果已移至最终结果区域' : ''))
+}
+
 type RunTimeline = {
   summary: RunSummary
   events: AgentRunEvent[]
@@ -191,7 +267,10 @@ function generatedArtifacts(events: AgentRunEvent[]): GeneratedChartReference[] 
 
 function mergeEvents(current: AgentRunEvent[], incoming: AgentRunEvent[]): AgentRunEvent[] {
   const byCursor = new Map(current.map((event) => [`${event.runId}:${event.sequence}`, event]))
-  incoming.forEach((event) => byCursor.set(`${event.runId}:${event.sequence}`, event))
+  incoming.forEach((event) => {
+    const key = `${event.runId}:${event.sequence}`
+    if (!byCursor.has(key)) byCursor.set(key, event)
+  })
   return [...byCursor.values()].sort((left, right) => left.sequence - right.sequence)
 }
 
@@ -429,7 +508,7 @@ function GeneratedChartView({ artifact, loader, onPreview }: { artifact: Generat
 }
 
 function eventLabel(event: AgentRunEvent): string {
-  const labels: Record<string, string> = { run_started: '运行已开始', resume_started: '继续执行已开始', model_started: '模型轮次开始', model_completed: '模型轮次完成', operation_completed: '操作结果已保存', recovery_blocked: '继续执行被阻止', progress: '处理中', generated_chart: '图表状态已更新', chart_review_started: '图表审核已开始', chart_review_required: '等待图表审核', chart_review_repair_required: '正在修复并重新审核', generated_chart_published: '图表已发布', generated_chart_rejected: '图表未发布', chart_review_completed: '图表审核完成', final_answer: '最终回答已生成', budget_exhausted: '达到预算上限', run_failed: '运行失败', run_interrupted: '运行已中断', history_gap: '历史记录不完整', tool_result: '工具结果（历史记录不完整）' }
+  const labels: Record<string, string> = { run_started: '运行已开始', resume_started: '继续执行已开始', model_started: '模型轮次开始', model_completed: '模型轮次完成', operation_completed: '操作结果已保存', recovery_blocked: '继续执行被阻止', progress: '处理中', generated_chart: '图表状态已更新', chart_review_started: '图表审核已开始', chart_review_required: '等待图表审核', chart_review_repair_required: '正在修复并重新审核', generated_chart_published: '图表已发布', generated_chart_rejected: '图表未发布', chart_review_completed: '图表审核完成', measurement_repair_required: '需要定向重测', measurement_repair_rejected: '定向重测被拒绝', measurement_repair_exhausted: '定向重测次数已用尽', final_answer: '最终回答已生成', budget_exhausted: '达到预算上限', run_failed: '运行失败', run_interrupted: '运行已中断', history_gap: '历史记录不完整', tool_result: '工具结果（历史记录不完整）' }
   return labels[event.kind] || event.kind
 }
 
@@ -451,7 +530,7 @@ function RunTimeline({ timeline, expanded, onToggle, previewLoader, onPreview, o
       {summary.historyWarning && <div className="trace-warning" role="status">部分执行记录未能持久化，当前显示的过程可能不完整。</div>}
       {timeline.historyGap && <div className="trace-warning" role="status">历史记录存在缺口，未显示缺失的执行步骤。</div>}
       {rows.length === 0 && <div className="trace-empty">没有可恢复的执行事件。</div>}
-      {rows.map((row) => row.kind === 'event' ? <div className={'trace-event ' + (row.event.kind === 'run_failed' || row.event.kind === 'run_interrupted' || row.event.kind === 'history_gap' ? 'error' : '')} key={`${row.event.runId}-${row.event.sequence}`}><span className="trace-event-dot" /><span className="trace-event-copy"><strong>{eventLabel(row.event)}</strong><small>{timestampLabel(row.event.timestamp)}</small><span>{textDetail(eventPayload(row.event).message || eventPayload(row.event).status || eventPayload(row.event).publication_status || eventPayload(row.event).reason || (row.event.kind === 'generated_chart' ? '生成图表结果已移至最终结果区域' : ''))}</span></span></div> : <div className="trace-tool" key={row.step.id}><button className="trace-tool-header" onClick={() => setExpandedSteps((current) => { const next = new Set(current); next.has(row.step.id) ? next.delete(row.step.id) : next.add(row.step.id); return next })} aria-expanded={expandedSteps.has(row.step.id)}><span className="trace-event-dot" /><span className="trace-tool-name"><strong>{row.step.toolLabel || row.step.toolName}</strong><small>{row.step.toolName} · {row.step.callId}</small></span><span className={'run-status ' + row.step.status}>{row.step.status === 'running' ? '运行中' : row.step.status === 'success' ? '完成' : '失败'}</span>{expandedSteps.has(row.step.id) ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</button>{expandedSteps.has(row.step.id) && <div className="trace-tool-detail">{row.step.call && <div><label>调用参数</label><pre>{textDetail(eventPayload(row.step.call).arguments)}</pre></div>}{row.step.result && <div><label>工具结果</label>{row.step.resultTruncated && <small className="trace-warning">工具结果已截断，仅保留有限诊断内容。</small>}<pre>{textDetail(eventPayload(row.step.result).result || eventPayload(row.step.result).message)}</pre></div>}{row.step.observations.map((observation, index) => <ObservationView key={index} observation={observation} loader={previewLoader} onPreview={onPreview} />)}</div>}</div>)}
+      {rows.map((row) => row.kind === 'event' ? <div className={'trace-event ' + (isMeasurementRepairEventKind(row.event.kind) ? `repair ${row.event.kind === 'measurement_repair_required' ? 'pending' : 'error'}` : '') + (row.event.kind === 'run_failed' || row.event.kind === 'run_interrupted' || row.event.kind === 'history_gap' ? ' error' : '')} key={`${row.event.runId}-${row.event.sequence}`}><span className="trace-event-dot" /><span className="trace-event-copy"><strong>{eventLabel(row.event)}</strong><small>{timestampLabel(row.event.timestamp)}{isMeasurementRepairEventKind(row.event.kind) ? ` · ${row.event.kind}` : ''}</small><span>{traceEventDetail(row.event)}</span></span></div> : <div className="trace-tool" key={row.step.id}><button className="trace-tool-header" onClick={() => setExpandedSteps((current) => { const next = new Set(current); next.has(row.step.id) ? next.delete(row.step.id) : next.add(row.step.id); return next })} aria-expanded={expandedSteps.has(row.step.id)}><span className="trace-event-dot" /><span className="trace-tool-name"><strong>{row.step.toolLabel || row.step.toolName}</strong><small>{row.step.toolName} · {row.step.callId}</small></span><span className={'run-status ' + row.step.status}>{row.step.status === 'running' ? '运行中' : row.step.status === 'success' ? '完成' : '失败'}</span>{expandedSteps.has(row.step.id) ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</button>{expandedSteps.has(row.step.id) && <div className="trace-tool-detail">{row.step.call && <div><label>调用参数</label><pre>{textDetail(eventPayload(row.step.call).arguments)}</pre></div>}{row.step.result && <div><label>工具结果</label>{row.step.resultTruncated && <small className="trace-warning">工具结果已截断，仅保留有限诊断内容。</small>}<pre>{textDetail(eventPayload(row.step.result).result || eventPayload(row.step.result).message)}</pre></div>}{row.step.observations.map((observation, index) => <ObservationView key={index} observation={observation} loader={previewLoader} onPreview={onPreview} />)}</div>}</div>)}
     </div>}
   </section>
 }

@@ -9,6 +9,7 @@ const baseMessages: ConversationItem[] = [
 ]
 
 const demoRun: RunSummary = { runId: 'run_mock_demo', sessionId: 'chart-analysis', status: 'completed', createdAt: '2026-09-13T10:39:00+08:00', updatedAt: '2026-09-13T10:40:00+08:00', eventCount: 10, provider: 'openai', model: 'gpt-4o-mini', answer: '这张图表包含三个类别：Alpha 为 8，Beta 为 16，Gamma 为 24。测量得到的柱高约为 1:2:3，与图中打印的数值一致。' }
+const repairDemoRun: RunSummary = { runId: 'run_mock_repair', sessionId: 'sales-review', status: 'failed', createdAt: '2026-09-14T16:10:00+08:00', updatedAt: '2026-09-14T16:12:00+08:00', eventCount: 8, provider: 'qwen', model: 'qwen3.8-flash', terminalCode: 'measurement_repair_exhausted', terminalMessage: '定向重测次数已用尽' }
 const demoEvents: AgentRunEvent[] = [
   { runId: demoRun.runId, sequence: 1, kind: 'run_started', timestamp: '2026-09-13T10:39:00+08:00', payload: { status: 'running', provider: 'openai', model: 'gpt-4o-mini' } },
   { runId: demoRun.runId, sequence: 2, kind: 'tool_call', timestamp: '2026-09-13T10:39:20+08:00', payload: { tool_name: 'load_image', call_id: 'demo-load', arguments: { attachment_id: 'att_demo_chart' } } },
@@ -21,17 +22,27 @@ const demoEvents: AgentRunEvent[] = [
   { runId: demoRun.runId, sequence: 9, kind: 'generated_chart', timestamp: '2026-09-13T10:40:22+08:00', payload: { tool_name: 'render_chart', call_id: 'demo-expired-render', artifacts: [{ artifactKind: 'generated_chart', mediaType: 'image/png', caption: '历史生成图表', chartType: 'line', title: '历史生成图表', width: 640, height: 360, status: 'unavailable', reason: 'artifact_expired' }] } },
   { runId: demoRun.runId, sequence: 10, kind: 'final_answer', timestamp: '2026-09-13T10:40:25+08:00', payload: { answer: demoRun.answer } },
 ]
+const repairDemoEvents: AgentRunEvent[] = [
+  { runId: repairDemoRun.runId, sequence: 1, kind: 'run_started', timestamp: '2026-09-14T16:10:00+08:00', payload: { status: 'running', provider: 'qwen', model: 'qwen3.8-flash' } },
+  { runId: repairDemoRun.runId, sequence: 2, kind: 'tool_result', timestamp: '2026-09-14T16:10:40+08:00', payload: { tool_name: 'measure_bars', call_id: 'repair-measure-1', status: 'success', result: { measurement: 'quality_gate_required' } } },
+  { runId: repairDemoRun.runId, sequence: 3, kind: 'measurement_repair_required', timestamp: '2026-09-14T16:10:41+08:00', payload: { tool_name: 'measure_bars', call_id: 'repair-measure-1', repair: { attachment_id: 'att_demo_chart', panel_id: 'panel_left_bars', parent_attempt_id: 'matt_1', target: { region_kind: 'baseline', fields: ['baseline', 'bars.measure'] }, status: 'available', next_action: '在同一 panel 内重新测量' } } },
+  { runId: repairDemoRun.runId, sequence: 4, kind: 'measurement_repair_rejected', timestamp: '2026-09-14T16:11:05+08:00', payload: { panel_id: 'panel_left_bars', parent_attempt_id: 'matt_1', status: 'rejected', code: 'measurement_target_invalid', reason: '目标区域不再属于当前面板', next_action: '重新读取当前 panel 的 repair_action' } },
+  { runId: repairDemoRun.runId, sequence: 5, kind: 'measurement_repair_required', timestamp: '2026-09-14T16:11:20+08:00', payload: { repair: { panel_id: 'panel_left_bars', attempt_id: 'matt_2', parent_attempt_id: 'matt_1', target: { region_kind: 'bar_group' }, status: 'available', budget_remaining: 1, next_action: '在同一面板内重新测量柱体和基准线' } } },
+  { runId: repairDemoRun.runId, sequence: 6, kind: 'measurement_repair_exhausted', timestamp: '2026-09-14T16:11:50+08:00', payload: { panel_id: 'panel_left_bars', attempt_id: 'matt_2', parent_attempt_id: 'matt_1', status: 'exhausted', budget_remaining: 0, reason: '定向重测未收敛', next_action: '保留失败证据并停止定向重测' } },
+  { runId: repairDemoRun.runId, sequence: 7, kind: 'measurement_repair_future_state', timestamp: '2026-09-14T16:11:51+08:00', payload: { status: 'pending' } },
+  { runId: repairDemoRun.runId, sequence: 8, kind: 'run_failed', timestamp: '2026-09-14T16:12:00+08:00', payload: { code: repairDemoRun.terminalCode, message: repairDemoRun.terminalMessage } },
+]
 
 const data: Record<string, SessionData> = {
   'chart-analysis': { session: { id: 'chart-analysis', name: '图表分析', updatedAt: '今天 10:40', runCount: 12 }, messages: baseMessages, attachments, runs: [demoRun] },
-  'sales-review': { session: { id: 'sales-review', name: '销售复盘', updatedAt: '昨天 16:18', runCount: 7 }, messages: [{ id: 's1', kind: 'assistant', text: '可以开始比较这个会话中的销售图表。', timestamp: '16:18' }], attachments: [], runs: [] },
+  'sales-review': { session: { id: 'sales-review', name: '销售复盘', updatedAt: '昨天 16:18', runCount: 8 }, messages: [{ id: 's1', kind: 'assistant', text: '可以开始比较这个会话中的销售图表。', timestamp: '16:18' }], attachments: [], runs: [repairDemoRun] },
   untitled: { session: { id: 'untitled', name: '未命名会话', updatedAt: '周一 09:12', runCount: 0 }, messages: [], attachments: [], runs: [] },
 }
 
 const pendingRuns = new Map<string, { text: string; attachmentIds: string[] }>()
 const idempotentRuns = new Map<string, string>()
 const idempotentRequests = new Map<string, string>()
-const histories = new Map<string, AgentRunEvent[]>([[demoRun.runId, demoEvents]])
+const histories = new Map<string, AgentRunEvent[]>([[demoRun.runId, demoEvents], [repairDemoRun.runId, repairDemoEvents]])
 type MockSubscription = { interrupt(): void }
 const subscriptions = new Map<string, Set<MockSubscription>>()
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))

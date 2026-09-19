@@ -1,4 +1,5 @@
 import type { ChartAgentClient, RunEventCallbacks, RunResumeOptions, RunStartOptions, RunSubscription } from './client'
+import { measurementRepairEventKinds } from '../types/protocol'
 import type { AgentRunEvent, Attachment, GatewayHealth, GeneratedChartReference, ObservationReference, PreviewResource, Provider, RunHandle, RunHistory, RunSummary, Session, SessionData } from '../types/protocol'
 import { mediaTypeForFile } from '../attachments'
 
@@ -161,6 +162,7 @@ const streamEventKinds = [
   'generated_chart_rejected',
   'chart_review_required',
   'generated_chart_published',
+  ...measurementRepairEventKinds,
   'reasoning',
   'budget_exhausted',
   'final_answer',
