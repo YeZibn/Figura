@@ -1,0 +1,300 @@
+from __future__ import annotations
+
+import json
+from dataclasses import replace
+from pathlib import Path
+
+import pytest
+
+from chartagent.evaluation.gateway import DiagnosticGatewayError, GatewayDiagnosticClient
+from chartagent.evaluation.manifest import DiagnosticManifestError, load_manifest
+from chartagent.evaluation.report import build_report
+from chartagent.evaluation.timeline import build_timeline
+
+
+ROOT = Path(__file__).resolve().parents[1]
+MANIFEST = ROOT / "tests" / "fixtures" / "real_chart_diagnostic_manifest.json"
+
+
+def _event(sequence: int, kind: str, payload: dict | None = None) -> dict:
+    return {"runId": "run_eval", "sequence": sequence, "kind": kind, "payload": payload or {}}
+
+
+def _tool_result(sequence: int, tool_name: str, *, status: str = "success", **payload: object) -> dict:
+    return _event(
+        sequence,
+        "tool_result",
+        {"tool_name": tool_name, "status": status, **payload},
+    )
+
+
+def _history(events: list[dict], *, status: str = "completed", provider: str = "qwen") -> dict:
+    return {
+        "run": {
+            "runId": "run_eval",
+            "sessionId": "session_eval",
+            "status": status,
+            "provider": provider,
+            "model": "qwen-test",
+            "eventCount": len(events),
+        },
+        "events": events,
+        "historyGap": False,
+    }
+
+
+def test_real_diagnostic_manifest_validates_relative_assets_and_fingerprints():
+    manifest = load_manifest(MANIFEST, asset_root=ROOT)
+
+    assert [sample.case_id for sample in manifest.samples] == [
+        "dashboard_text_two_bars_pie",
+        "shareholders_and_adjusted_price",
+    ]
+    assert manifest.samples[0].expected_panel_count == 4
+    assert manifest.samples[0].asset_path == ROOT / "photo" / "dashboard_text_two_bars_pie.png"
+    assert all(not Path(sample.asset).is_absolute() for sample in manifest.samples)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("asset", "/private/chart.png", "绝对路径"),
+        ("sha256", "0" * 64, "指纹不匹配"),
+    ],
+)
+def test_real_diagnostic_manifest_rejects_invalid_asset_identity(tmp_path, field, value, message):
+    raw = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    raw["samples"][0][field] = value
+    path = tmp_path / "manifest.json"
+    path.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
+
+    with pytest.raises(DiagnosticManifestError, match=message):
+        load_manifest(path, asset_root=ROOT)
+
+
+def test_real_diagnostic_manifest_rejects_sensitive_fields(tmp_path):
+    raw = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    raw["api_key"] = "do-not-keep"
+    path = tmp_path / "manifest.json"
+    path.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
+
+    with pytest.raises(DiagnosticManifestError, match="敏感字段"):
+        load_manifest(path, asset_root=ROOT)
+
+
+def test_timeline_projects_complete_multi_panel_chain_without_false_repeated_split():
+    manifest = load_manifest(MANIFEST, asset_root=ROOT)
+    events = [
+        _event(1, "run_started"),
+        _tool_result(
+            2,
+            "decompose_chart_image",
+            result={
+                "data": {
+                    "reuse": False,
+                    "panels": [{"id": f"panel_{index}"} for index in range(1, 5)],
+                }
+            },
+        ),
+        *[
+            _tool_result(2 + index, "measure_bars", panel_id=f"panel_{index}")
+            for index in range(1, 5)
+        ],
+        _event(7, "chart_review_started", {"review_id": "review_1"}),
+        _event(8, "chart_review_completed", {"review_id": "review_1", "review_status": "passed"}),
+        _tool_result(
+            9,
+            "assemble_spec",
+            result={"data": {"panel_ids": [f"panel_{index}" for index in range(1, 5)]}},
+        ),
+        _tool_result(10, "render_chart", result={"status": "available"}),
+        _event(11, "generated_chart", {"artifacts": [{"artifactId": "artifact_1"}]}),
+        _event(12, "final_answer", {"answer": "完成"}),
+    ]
+
+    timeline = build_timeline(_history(events), sample=manifest.samples[0])
+    stages = {stage.name: stage for stage in timeline.stages}
+
+    assert stages["input"].status == "completed"
+    assert stages["decomposition"].status == "completed"
+    assert stages["panel_handoff"].status == "completed"
+    assert stages["measurement"].status == "completed"
+    assert stages["quality_review"].status == "completed"
+    assert stages["assembly"].status == "completed"
+    assert stages["render"].status == "completed"
+    assert timeline.first_failure is None
+    assert timeline.anomalies == []
+    assert timeline.final_references["artifact_ids"] == ["artifact_1"]
+
+
+def test_timeline_distinguishes_reused_split_and_unscoped_measurement():
+    manifest = load_manifest(MANIFEST, asset_root=ROOT)
+    events = [
+        _event(1, "run_started"),
+        _tool_result(
+            2,
+            "decompose_chart_image",
+            result={"data": {"reuse": False, "panels": [{"id": "panel_1"}, {"id": "panel_2"}]}} ,
+        ),
+        _tool_result(
+            3,
+            "decompose_chart_image",
+            result={"data": {"reuse": True, "panels": [{"id": "panel_1"}, {"id": "panel_2"}]}} ,
+        ),
+        _tool_result(4, "measure_bars", result={"data": {"scope": {"mode": "unscoped"}}}),
+        _event(5, "run_interrupted", {"code": "user_cancelled"}),
+    ]
+
+    timeline = build_timeline(
+        _history(events, status="interrupted"),
+        sample=replace(manifest.samples[1], expected_panel_count=2),
+    )
+    codes = {item["code"] for item in timeline.anomalies}
+
+    assert "repeated_decomposition" not in codes
+    assert "unscoped_measurement" in codes
+    assert timeline.first_failure["category"] == "panel_routing"
+    assert timeline.first_failure["stage"] == "measurement"
+
+
+def test_timeline_flags_repeated_split_and_review_failure_without_repair():
+    manifest = load_manifest(MANIFEST, asset_root=ROOT)
+    events = [
+        _event(1, "run_started"),
+        _tool_result(2, "decompose_chart_image", result={"data": {"panels": [{"id": "panel_1"}]}}),
+        _tool_result(3, "decompose_chart_image", result={"data": {"panels": [{"id": "panel_1"}]}}),
+        _event(4, "chart_review_completed", {"review_status": "failed", "reason": "缺少右侧图"}),
+    ]
+
+    timeline = build_timeline(
+        _history(events),
+        sample=replace(manifest.samples[1], expected_panel_count=2),
+    )
+    codes = {item["code"] for item in timeline.anomalies}
+
+    assert "repeated_decomposition" in codes
+    assert "review_failed_without_repair" in codes
+    assert timeline.first_failure["category"] == "decomposition"
+
+
+def test_timeline_flags_assembly_omission_after_successful_measurements():
+    manifest = load_manifest(MANIFEST, asset_root=ROOT)
+    events = [
+        _event(1, "run_started"),
+        _tool_result(
+            2,
+            "decompose_chart_image",
+            result={"data": {"panels": [{"id": "panel_1"}, {"id": "panel_2"}]}},
+        ),
+        _tool_result(3, "measure_bars", panel_id="panel_1"),
+        _tool_result(4, "measure_bars", panel_id="panel_2"),
+        _tool_result(5, "assemble_spec", result={"data": {"panel_ids": ["panel_1"]}}),
+        _tool_result(6, "render_chart", result={"status": "available"}),
+        _event(7, "generated_chart", {"artifacts": [{"artifactId": "artifact_1"}]}),
+    ]
+
+    timeline = build_timeline(
+        _history(events),
+        sample=replace(manifest.samples[1], expected_panel_count=2),
+    )
+
+    omission = next(item for item in timeline.anomalies if item["code"] == "assembly_missing_panels")
+    assert omission["missing_panel_ids"] == ["panel_2"]
+    assert timeline.first_failure["category"] == "assembly_render"
+
+
+def test_timeline_preserves_insufficient_history_as_transport_failure():
+    history = _history(
+        [_event(1, "run_started"), _event(2, "run_interrupted", {"code": "gateway_restarted"})],
+        status="interrupted",
+    )
+    history["historyGap"] = True
+
+    timeline = build_timeline(history)
+
+    assert timeline.history_gap is True
+    assert timeline.first_failure["category"] == "transport_runtime"
+    assert timeline.first_failure["code"] == "history_gap"
+    stages = {stage.name: stage for stage in timeline.stages}
+    assert stages["decomposition"].status == "not_reached"
+    assert stages["render"].status == "not_reached"
+
+
+def test_report_is_bounded_and_does_not_reemit_raw_event_secrets_or_paths():
+    manifest = load_manifest(MANIFEST, asset_root=ROOT)
+    history = _history(
+        [
+            _event(1, "run_started", {"api_key": "secret-value", "path": "/Users/yezibin/private/chart.png"}),
+            _event(2, "run_failed", {"error": "failed at /Users/yezibin/private/chart.png"}),
+        ],
+        status="failed",
+    )
+    report = build_report(history, manifest.samples[1], requested_provider="qwen")
+    encoded = report.to_json()
+    markdown = report.to_markdown()
+
+    assert "secret-value" not in encoded
+    assert "/Users/yezibin" not in encoded
+    assert "/Users/yezibin" not in markdown
+    assert "shareholders_and_adjusted_price" in encoded
+    assert "第一个可确认失败" in markdown
+
+
+def test_gateway_diagnostic_client_requires_provider_and_never_switches_it(monkeypatch):
+    client = GatewayDiagnosticClient("http://127.0.0.1:8765/api/v1")
+    called = False
+
+    def fail_if_called(*args, **kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("provider 校验失败前不应发请求")
+
+    monkeypatch.setattr(client, "create_session", fail_if_called)
+    sample = load_manifest(MANIFEST, asset_root=ROOT).samples[0]
+    with pytest.raises(DiagnosticGatewayError, match="显式指定 provider"):
+        client.run_sample(sample, provider="  ")
+    assert called is False
+
+    monkeypatch.setattr(
+        client,
+        "_request_json",
+        lambda *args, **kwargs: {"run": {"runId": "run_1", "provider": "qwen"}},
+    )
+    with pytest.raises(DiagnosticGatewayError, match="非请求 provider"):
+        client.start_run("session_1", attachment_id="attachment_1", provider="deepseek")
+
+
+def test_gateway_diagnostic_client_uses_gateway_attachment_id_field(monkeypatch):
+    client = GatewayDiagnosticClient("http://127.0.0.1:8765/api/v1")
+    monkeypatch.setattr(
+        client,
+        "_request_json",
+        lambda *args, **kwargs: {"attachment": {"attachment_id": "att_eval"}},
+    )
+    sample = load_manifest(MANIFEST, asset_root=ROOT).samples[0]
+
+    assert client.upload_attachment("session_1", sample) == "att_eval"
+
+
+def test_gateway_diagnostic_client_waits_on_history_without_fallback(monkeypatch):
+    client = GatewayDiagnosticClient(
+        "http://127.0.0.1:8765/api/v1",
+        poll_interval=0.1,
+    )
+    histories = iter(
+        [
+            _history([], status="running", provider="deepseek"),
+            _history([_event(1, "run_started")], status="completed", provider="deepseek"),
+        ]
+    )
+    monkeypatch.setattr(client, "get_run_history", lambda *args, **kwargs: next(histories))
+
+    run = client.wait_for_run(
+        "session_1",
+        {"runId": "run_eval", "provider": "deepseek"},
+        timeout=1,
+    )
+
+    assert run.status == "completed"
+    assert run.requested_provider == "deepseek"
+    assert run.timed_out is False

@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "samples": [
+    {
+      "case_id": "dashboard_text_two_bars_pie",
+      "asset": "photo/dashboard_text_two_bars_pie.png",
+      "sha256": "97141faa135fdb7ed72735ada919352d7e32e2e82940e5de028bde5288153efc",
+      "expected_panels": {
+        "count": 4,
+        "items": [
+          {
+            "name": "Quarterly Business Summary",
+            "role": "text_summary",
+            "chart_type": "text"
+          },
+          {
+            "name": "Revenue by Region",
+            "role": "chart_panel",
+            "chart_type": "bar",
+            "bbox_norm": [0.01, 0.30, 0.36, 0.95]
+          },
+          {
+            "name": "Monthly Orders",
+            "role": "chart_panel",
+            "chart_type": "bar",
+            "bbox_norm": [0.37, 0.30, 0.70, 0.95]
+          },
+          {
+            "name": "Customer Segments",
+            "role": "chart_panel",
+            "chart_type": "pie",
+            "bbox_norm": [0.71, 0.30, 0.99, 0.95]
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "shareholders_and_adjusted_price",
+      "asset": "photo/股东人数与前复权股价折线图.png",
+      "sha256": "be9923b76480e40a76bb791e3634e7d85288e0c6969beb06cc78a6de5017eecc",
+      "expected_panels": {
+        "count": 1,
+        "items": [
+          {
+            "name": "股东人数与前复权股价折线图",
+            "role": "chart_panel",
+            "chart_type": "line"
+          }
+        ]
+      }
+    }
+  ]
+}

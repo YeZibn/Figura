@@ -28,3 +28,6 @@ coverage/
 
 # Local operating-system files
 .DS_Store
+
+# Local ChartAgent runtime data and evaluation artifacts
+.chartagent/
