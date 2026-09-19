@@ -7,7 +7,20 @@ from matplotlib import font_manager
 from matplotlib.font_manager import FontProperties
 from PIL import Image
 
-from chartagent.spec import Axes, Axis, ChartMetadata, ChartSpec, ChartType, DataPoint
+from chartagent.spec import (
+    Axes,
+    Axis,
+    ChartCoverage,
+    ChartFigure,
+    ChartFigureItem,
+    ChartMetadata,
+    ChartSpec,
+    ChartSpecCollection,
+    ChartType,
+    DataPoint,
+    FigureLayout,
+    FigureSource,
+)
 from chartagent.tools import ToolRegistry, dispatch_observation
 from chartagent.tools.chart import rendering
 from chartagent.tools.chart.rendering import MAX_CHART_HEIGHT, render_chart
@@ -44,6 +57,31 @@ def _spec(chart_type: ChartType) -> ChartSpec:
     )
 
 
+def _figure(figure_id: str = "figure-revenue", panel_id: str = "panel-1") -> ChartFigure:
+    return ChartFigure(
+        figure_id=figure_id,
+        source=FigureSource("attachment-dashboard", panel_id),
+        layout=FigureLayout(columns=2),
+        charts=[
+            ChartFigureItem(
+                "q1",
+                ChartSpec(
+                    metadata=ChartMetadata(chart_type=ChartType.PIE, title="Q1 2024"),
+                    dataset=[DataPoint(category="北美", value=0.9), DataPoint(category="欧洲", value=0.5)],
+                ),
+            ),
+            ChartFigureItem(
+                "q2",
+                ChartSpec(
+                    metadata=ChartMetadata(chart_type=ChartType.PIE, title="Q2 2024"),
+                    dataset=[DataPoint(category="北美", value=1.1), DataPoint(category="欧洲", value=0.6)],
+                ),
+            ),
+        ],
+        coverage=ChartCoverage(["Q1 2024", "Q2 2024"], ["Q1 2024", "Q2 2024"], [], "complete"),
+    )
+
+
 def test_render_chart_supports_all_chart_types_and_fixed_dimensions():
     for chart_type in ChartType:
         result = render_chart(_spec(chart_type).to_dict())
@@ -61,6 +99,49 @@ def test_render_chart_supports_all_chart_types_and_fixed_dimensions():
         assert result.data["validation"]["checks"]["artifact"] == "passed"
         assert result.data["font"]["status"] in {"resolved", "fallback"}
         assert result.data["font"]["source"] in {"configured", "system", "fallback"}
+
+
+def test_render_chart_composes_same_source_children_into_one_artifact():
+    result = render_chart(_figure().to_dict())
+
+    assert isinstance(result, ToolResult)
+    assert len(result.images) == 1
+    assert result.data["chart_type"] == "composite"
+    assert result.data["figure_id"] == "figure-revenue"
+    assert result.data["child_chart_ids"] == ["q1", "q2"]
+    assert result.data["coverage"]["status"] == "complete"
+    with Image.open(BytesIO(result.images[0].content)) as image:
+        assert image.format == "PNG"
+        assert image.size == (1200, 800)
+
+
+def test_render_chart_rejects_incomplete_composite_coverage():
+    figure = _figure()
+    incomplete = ChartFigure(
+        figure_id=figure.figure_id,
+        source=figure.source,
+        layout=figure.layout,
+        charts=figure.charts[:1],
+        coverage=ChartCoverage(["Q1 2024", "Q2 2024"], ["Q1 2024"], ["Q2 2024"], "incomplete"),
+    )
+
+    result = render_chart(incomplete.to_dict())
+
+    assert isinstance(result, dict)
+    assert result["validation"]["checks"]["coverage"] == "failed"
+    assert any(issue["code"] == "incomplete_coverage" for issue in result["validation"]["issues"])
+
+
+def test_render_chart_collection_returns_one_image_per_source_figure():
+    first = _figure("figure-1", "panel-1")
+    second = _figure("figure-2", "panel-2")
+
+    result = render_chart(ChartSpecCollection("collection-1", [first, second]).to_dict())
+
+    assert isinstance(result, ToolResult)
+    assert len(result.images) == 2
+    assert result.data["kind"] == "generated_chart_collection"
+    assert [item["figure_id"] for item in result.data["figures"]] == ["figure-1", "figure-2"]
 
 
 def test_render_chart_preserves_multi_series_metadata():

@@ -152,17 +152,46 @@ def _artifact_records_from_observation(
         }
     ]
     if tool_name == "assemble_spec" and not payload.get("error"):
-        records.append(
-            {
-                "artifact_id": f"chartspec:{call_id}"[:128],
-                "kind": "ChartSpec",
-                "status": "validated",
-                "source_attachment_ids": list(source_attachment_ids),
-                "panel_ids": panel_ids,
-                "lineage": [f"observation:{call_id}"],
-                "warnings": warnings,
-            }
-        )
+        assembled_kind = data.get("kind") if isinstance(data, dict) else None
+        if assembled_kind == "chart_figure":
+            records.append(
+                {
+                    "artifact_id": f"figure:{data.get('figure_id') or call_id}"[:128],
+                    "kind": "ChartFigure",
+                    "status": "validated",
+                    "source_attachment_ids": [data.get("source", {}).get("attachment_id")] if isinstance(data.get("source"), dict) else list(source_attachment_ids),
+                    "panel_ids": [data.get("source", {}).get("panel_id")] if isinstance(data.get("source"), dict) else panel_ids,
+                    "lineage": [f"observation:{call_id}"],
+                    "warnings": warnings,
+                    "coverage": data.get("coverage"),
+                    "child_chart_ids": [item.get("chart_id") for item in data.get("charts", []) if isinstance(item, dict)],
+                }
+            )
+        elif assembled_kind == "chart_spec_collection":
+            records.append(
+                {
+                    "artifact_id": f"chartspec-collection:{data.get('collection_id') or call_id}"[:128],
+                    "kind": "ChartSpecCollection",
+                    "status": "validated",
+                    "source_attachment_ids": list(source_attachment_ids),
+                    "panel_ids": panel_ids,
+                    "lineage": [f"observation:{call_id}"],
+                    "warnings": warnings,
+                    "figure_count": len(data.get("figures", [])) if isinstance(data.get("figures"), list) else 0,
+                }
+            )
+        else:
+            records.append(
+                {
+                    "artifact_id": f"chartspec:{call_id}"[:128],
+                    "kind": "ChartSpec",
+                    "status": "validated",
+                    "source_attachment_ids": list(source_attachment_ids),
+                    "panel_ids": panel_ids,
+                    "lineage": [f"observation:{call_id}"],
+                    "warnings": warnings,
+                }
+            )
     for item in panels or []:
         if not isinstance(item, dict) or not item.get("id"):
             continue
@@ -1160,9 +1189,16 @@ class Agent:
         if not isinstance(spec_payload, dict):
             return observation
         try:
-            from ..spec import ChartSpec
+            from ..spec import ChartFigure, ChartSpec, ChartSpecCollection
 
-            spec = ChartSpec.from_dict(spec_payload)
+            collection = None
+            if spec_payload.get("kind") == "chart_figure":
+                figure_specs = [ChartFigure.from_dict(spec_payload)]
+            elif spec_payload.get("kind") == "chart_spec_collection":
+                collection = ChartSpecCollection.from_dict(spec_payload)
+                figure_specs = list(collection.figures)
+            else:
+                figure_specs = [ChartSpec.from_dict(spec_payload)]
         except (TypeError, ValueError, KeyError):
             return observation
         generated: list[GeneratedImage] = []
@@ -1179,11 +1215,18 @@ class Agent:
             if not metadata.get("chart_spec_digest"):
                 generated.append(image)
                 continue
+            review_spec = figure_specs[0]
+            if collection is not None and len(figure_specs) > 1:
+                figure_id = metadata.get("figure_id") or metadata.get("figureId")
+                review_spec = next(
+                    (figure for figure in figure_specs if figure.figure_id == figure_id),
+                    figure_specs[0],
+                )
             candidate = self._review_manager.create_candidate(
                 run_id,
                 call_id,
                 image,
-                spec,
+                review_spec,
                 source_attachment_ids=source_attachment_ids,
             )
             if candidate.review_status is ReviewStatus.PENDING:
@@ -1219,7 +1262,7 @@ class Agent:
                         semantic_result = review_candidate_with_vlm(
                             self.client,
                             candidate,
-                            spec,
+                            review_spec,
                             source_image=source_payload[0],
                             source_media_type=source_payload[1],
                             chat_kwargs=self._chat_kwargs,

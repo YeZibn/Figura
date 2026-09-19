@@ -198,7 +198,8 @@ class GatewayHistoryStore:
                   review_status TEXT,
                   publication_status TEXT,
                   review_mode TEXT,
-                  review_json TEXT
+                  review_json TEXT,
+                  figure_metadata_json TEXT
                 );
                 CREATE INDEX IF NOT EXISTS idx_gateway_runs_session
                   ON gateway_runs(session_id, created_at);
@@ -254,6 +255,7 @@ class GatewayHistoryStore:
                 ("publication_status", "TEXT"),
                 ("review_mode", "TEXT"),
                 ("review_json", "TEXT"),
+                ("figure_metadata_json", "TEXT"),
             ):
                 table = "gateway_runs" if name in {
                     "terminal_code",
@@ -1034,6 +1036,14 @@ class GatewayHistoryStore:
         except (TypeError, json.JSONDecodeError):
             review = None
         review_mode = row["review_mode"] or (review or {}).get("reviewMode")
+        figure_metadata: Mapping[str, Any] = {}
+        if "figure_metadata_json" in row.keys():
+            try:
+                parsed_figure = json.loads(row["figure_metadata_json"] or "{}")
+                if isinstance(parsed_figure, Mapping):
+                    figure_metadata = parsed_figure
+            except (TypeError, json.JSONDecodeError):
+                figure_metadata = {}
         reference = GeneratedChartReference(
             artifact_id=artifact_id,
             media_type=row["media_type"],
@@ -1053,6 +1063,13 @@ class GatewayHistoryStore:
             publication_status=publication,
             review_mode=review_mode,
             review=review,
+            figure_id=figure_metadata.get("figure_id"),
+            collection_id=figure_metadata.get("collection_id"),
+            child_chart_ids=tuple(item for item in figure_metadata.get("child_chart_ids", []) if isinstance(item, str)),
+            source=figure_metadata.get("source") if isinstance(figure_metadata.get("source"), Mapping) else None,
+            layout=figure_metadata.get("layout") if isinstance(figure_metadata.get("layout"), Mapping) else None,
+            coverage=figure_metadata.get("coverage") if isinstance(figure_metadata.get("coverage"), Mapping) else None,
+            chart_types=tuple(item for item in figure_metadata.get("chart_types", []) if isinstance(item, str)),
         )
         return reference.to_dict()
 
@@ -1092,6 +1109,20 @@ class GatewayHistoryStore:
             return None
         if not chart_type or not title or width <= 0 or height <= 0:
             return None
+        figure_metadata = {
+            "figure_id": metadata.get("figureId") or metadata.get("figure_id"),
+            "collection_id": metadata.get("collectionId") or metadata.get("collection_id"),
+            "child_chart_ids": metadata.get("childChartIds") or metadata.get("child_chart_ids") or [],
+            "source": metadata.get("source") if isinstance(metadata.get("source"), Mapping) else None,
+            "layout": metadata.get("layout") if isinstance(metadata.get("layout"), Mapping) else None,
+            "coverage": metadata.get("coverage") if isinstance(metadata.get("coverage"), Mapping) else None,
+            "chart_types": metadata.get("chartTypes") or metadata.get("chart_types") or [],
+        }
+        figure_metadata = {
+            key: value
+            for key, value in figure_metadata.items()
+            if value not in (None, "", [])
+        }
         candidate_root = self.artifact_root / session_id
         candidate_root.mkdir(mode=0o700, parents=True, exist_ok=True)
         self._restrict_permissions(candidate_root, 0o700)
@@ -1161,8 +1192,8 @@ class GatewayHistoryStore:
                        caption, byte_count, sha256, created_at, expires_at,
                        artifact_kind, chart_type, title, width, height,
                        candidate_id, review_id, chart_spec_digest, candidate_status,
-                       review_status, publication_status, review_mode, review_json)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'generated_candidate', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       review_status, publication_status, review_mode, review_json, figure_metadata_json)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'generated_candidate', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         candidate_id, run_id, session_id, managed_path, media_type,
                         truncate_text(caption, MAX_ARTIFACT_CAPTION), len(content),
@@ -1173,6 +1204,7 @@ class GatewayHistoryStore:
                         str(metadata.get("publicationStatus", "unpublished")),
                         str(metadata.get("reviewMode", "safety")),
                         json.dumps(metadata.get("review", {}), ensure_ascii=False)[:MAX_EVENT_PAYLOAD],
+                        json.dumps(figure_metadata, ensure_ascii=False)[:MAX_EVENT_PAYLOAD],
                     ),
                 )
             except Exception:
@@ -1291,6 +1323,16 @@ class GatewayHistoryStore:
             return None
         if generated and (not chart_type or not title or not width or not height):
             return None
+        figure_metadata = {
+            "figure_id": metadata.get("figureId") or metadata.get("figure_id"),
+            "collection_id": metadata.get("collectionId") or metadata.get("collection_id"),
+            "child_chart_ids": metadata.get("childChartIds") or metadata.get("child_chart_ids") or [],
+            "source": metadata.get("source") if isinstance(metadata.get("source"), Mapping) else None,
+            "layout": metadata.get("layout") if isinstance(metadata.get("layout"), Mapping) else None,
+            "coverage": metadata.get("coverage") if isinstance(metadata.get("coverage"), Mapping) else None,
+            "chart_types": metadata.get("chartTypes") or metadata.get("chart_types") or [],
+        }
+        figure_metadata = {key: value for key, value in figure_metadata.items() if value not in (None, "", [])}
         session_root = self.artifact_root / session_id
         session_root.mkdir(mode=0o700, parents=True, exist_ok=True)
         self._restrict_permissions(session_root, 0o700)
@@ -1313,6 +1355,13 @@ class GatewayHistoryStore:
                 title=title,
                 width=width,
                 height=height,
+                figure_id=figure_metadata.get("figure_id"),
+                collection_id=figure_metadata.get("collection_id"),
+                child_chart_ids=tuple(item for item in figure_metadata.get("child_chart_ids", []) if isinstance(item, str)),
+                source=figure_metadata.get("source"),
+                layout=figure_metadata.get("layout"),
+                coverage=figure_metadata.get("coverage"),
+                chart_types=tuple(item for item in figure_metadata.get("chart_types", []) if isinstance(item, str)),
             ).to_dict()
         else:
             reference = {
@@ -1337,8 +1386,8 @@ class GatewayHistoryStore:
                     path.unlink(missing_ok=True)
                     return None
                 connection.execute(
-                    "INSERT INTO gateway_run_artifacts(observation_id, run_id, session_id, managed_path, media_type, caption, byte_count, sha256, created_at, expires_at, artifact_kind, chart_type, title, width, height) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (observation_id, run_id, session_id, str(path), media_type, reference["caption"], len(content), hashlib.sha256(content).hexdigest(), created, expires_at, artifact_kind, chart_type, title, width, height),
+                    "INSERT INTO gateway_run_artifacts(observation_id, run_id, session_id, managed_path, media_type, caption, byte_count, sha256, created_at, expires_at, artifact_kind, chart_type, title, width, height, figure_metadata_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (observation_id, run_id, session_id, str(path), media_type, reference["caption"], len(content), hashlib.sha256(content).hexdigest(), created, expires_at, artifact_kind, chart_type, title, width, height, json.dumps(figure_metadata, ensure_ascii=False)[:MAX_EVENT_PAYLOAD]),
                 )
         except Exception:
             path.unlink(missing_ok=True)

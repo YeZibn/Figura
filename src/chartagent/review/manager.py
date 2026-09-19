@@ -22,7 +22,7 @@ from uuid import uuid4
 from PIL import Image, UnidentifiedImageError
 
 from ..attachments import AttachmentRegistry
-from ..spec import ChartSpec, ChartType, chart_spec_digest
+from ..spec import ChartFigure, ChartSpec, ChartType, chart_figure_digest, chart_spec_digest
 from ..tools.core.result import DispatchedObservation, GeneratedImage
 
 MAX_REVIEW_ISSUES = 32
@@ -30,6 +30,7 @@ MAX_REVIEW_EVIDENCE = 16
 MAX_REVIEW_TEXT = 240
 DEFAULT_REVIEW_DEADLINE_SECONDS = 300.0
 DEFAULT_REVIEW_ATTEMPTS = 3
+ChartSemantic = ChartSpec | ChartFigure
 
 
 class CandidateStatus(str, Enum):
@@ -86,7 +87,7 @@ class ReviewPolicy:
 
 
 def select_review_policy(
-    spec: ChartSpec,
+    spec: ChartSemantic,
     *,
     source_attachment_ids: Sequence[str] = (),
     explicit_review: bool = False,
@@ -95,9 +96,12 @@ def select_review_policy(
     deadline_seconds: float = DEFAULT_REVIEW_DEADLINE_SECONDS,
 ) -> ReviewPolicy:
     """Choose review scope without trusting an unbounded model assertion."""
-    source_linked = bool(source_attachment_ids) or bool(
-        isinstance(spec.metadata.source, str) and spec.metadata.source.strip()
-    )
+    if isinstance(spec, ChartFigure):
+        source_linked = bool(source_attachment_ids) or bool(spec.source.attachment_id.strip())
+    else:
+        source_linked = bool(source_attachment_ids) or bool(
+            isinstance(spec.metadata.source, str) and spec.metadata.source.strip()
+        )
     return ReviewPolicy(
         source_linked=source_linked,
         semantic_required=source_linked or explicit_review,
@@ -202,6 +206,11 @@ class ChartCandidate:
     parent_candidate_id: str | None = None
     lineage_attempt: int = 1
     panel_ids: tuple[str, ...] = ()
+    figure_id: str | None = None
+    collection_id: str | None = None
+    child_chart_ids: tuple[str, ...] = ()
+    figure_source: Mapping[str, str] | None = None
+    coverage: Mapping[str, Any] | None = None
 
     def safe_metadata(self) -> dict[str, Any]:
         result: dict[str, Any] = {
@@ -230,6 +239,25 @@ class ChartCandidate:
             result["panelIds"] = list(self.panel_ids[:16])
         if self.source_attachment_ids:
             result["sourceAttachmentIds"] = list(self.source_attachment_ids[:16])
+        if self.figure_id:
+            result["figureId"] = self.figure_id[:128]
+        if self.collection_id:
+            result["collectionId"] = self.collection_id[:128]
+        if self.child_chart_ids:
+            result["childChartIds"] = list(self.child_chart_ids[:16])
+        if isinstance(self.figure_source, Mapping):
+            result["source"] = {
+                str(key)[:32]: str(value)[:160]
+                for key, value in self.figure_source.items()
+                if isinstance(key, str) and isinstance(value, str)
+            }
+        if isinstance(self.coverage, Mapping):
+            result["coverage"] = {
+                "sourceSeries": [str(item)[:160] for item in self.coverage.get("source_series", [])[:16]],
+                "representedSeries": [str(item)[:160] for item in self.coverage.get("represented_series", [])[:16]],
+                "omittedSeries": [str(item)[:160] for item in self.coverage.get("omitted_series", [])[:16]],
+                "status": str(self.coverage.get("status", "unknown"))[:32],
+            }
         if self.superseded:
             result["superseded"] = True
         if self.review is not None:
@@ -526,7 +554,7 @@ def _compare_sensor(spec: ChartSpec, data: Mapping[str, Any] | None, sensor_erro
 
 
 def review_candidate_bytes(
-    spec: ChartSpec,
+    spec: ChartSemantic,
     content: bytes,
     *,
     media_type: str,
@@ -546,10 +574,27 @@ def review_candidate_bytes(
     try:
         from ..tools.chart.validation import validate_generation
 
-        structural = validate_generation(spec)
-        if structural.blocking:
-            issues.extend(_issue("invalid_chart_spec", item.location, item.message) for item in structural.issues[:MAX_REVIEW_ISSUES])
-        checks["structure"] = "failed" if structural.blocking else "passed"
+        if isinstance(spec, ChartFigure):
+            structural_issues: list[ReviewIssue] = [
+                _issue("invalid_chart_figure", issue.location, issue.message)
+                for issue in spec.validate()
+            ]
+            if spec.coverage.status != "complete":
+                structural_issues.append(_issue("incomplete_coverage", "coverage.status", "figure coverage is incomplete"))
+            for index, child in enumerate(spec.charts):
+                child_validation = validate_generation(child.spec)
+                structural_issues.extend(
+                    _issue("invalid_chart_spec", f"charts[{index}].{issue.location}", issue.message)
+                    for issue in child_validation.issues
+                )
+            issues.extend(structural_issues[:MAX_REVIEW_ISSUES])
+            structural_blocking = any(item.severity == "error" for item in structural_issues)
+        else:
+            structural = validate_generation(spec)
+            structural_blocking = structural.blocking
+            if structural.blocking:
+                issues.extend(_issue("invalid_chart_spec", item.location, item.message) for item in structural.issues[:MAX_REVIEW_ISSUES])
+        checks["structure"] = "failed" if structural_blocking else "passed"
     except Exception as exc:  # pragma: no cover - defensive boundary
         issues.append(_issue("invalid_chart_spec", "spec", str(exc)))
         checks["structure"] = "failed"
@@ -625,7 +670,7 @@ class ChartReviewManager:
 
     def __init__(self, *, attachments: AttachmentRegistry | None = None) -> None:
         self.attachments = attachments
-        self._items: dict[str, tuple[ChartCandidate, ChartSpec]] = {}
+        self._items: dict[str, tuple[ChartCandidate, ChartSemantic]] = {}
         self._keys: dict[tuple[str, str, str], str] = {}
         self._lock = RLock()
 
@@ -634,12 +679,12 @@ class ChartReviewManager:
         run_id: str,
         call_id: str,
         image: GeneratedImage,
-        spec: ChartSpec,
+        spec: ChartSemantic,
         *,
         source_attachment_ids: Sequence[str] = (),
         explicit_review: bool = False,
     ) -> ChartCandidate:
-        digest = chart_spec_digest(spec)
+        digest = chart_figure_digest(spec) if isinstance(spec, ChartFigure) else chart_spec_digest(spec)
         key = (run_id, call_id, digest)
         with self._lock:
             existing_id = self._keys.get(key)
@@ -652,7 +697,7 @@ class ChartReviewManager:
             for prior_id, (prior, prior_spec) in tuple(self._items.items()):
                 if (
                     prior.run_id == run_id
-                    and prior.chart_type == spec.metadata.chart_type.value
+                    and prior.chart_type == ("composite" if isinstance(spec, ChartFigure) else spec.metadata.chart_type.value)
                     and prior.publication_status is PublicationStatus.REJECTED
                     and prior.status in {CandidateStatus.REVIEW_FAILED, CandidateStatus.RETRY_EXHAUSTED}
                     and not prior.superseded
@@ -661,7 +706,15 @@ class ChartReviewManager:
                         parent_candidate_id = prior.candidate_id
                         lineage_attempt = prior.lineage_attempt + 1
                     self._items[prior_id] = (replace(prior, superseded=True), prior_spec)
+            semantic_source_ids = (
+                (spec.source.attachment_id,)
+                if isinstance(spec, ChartFigure) and spec.source.attachment_id.strip()
+                else ()
+            )
+            effective_source_attachment_ids = tuple(dict.fromkeys(tuple(source_attachment_ids) + semantic_source_ids))[:16]
             panel_values = metadata.get("panelIds", metadata.get("panel_ids", ()))
+            if isinstance(spec, ChartFigure) and spec.source.panel_id:
+                panel_values = tuple(panel_values) + (spec.source.panel_id,) if isinstance(panel_values, (list, tuple)) else (spec.source.panel_id,)
             panel_ids = tuple(
                 item[:160]
                 for item in panel_values
@@ -687,8 +740,8 @@ class ChartReviewManager:
                     review_id=f"review_{uuid4().hex}",
                     run_id=run_id,
                     chart_spec_digest=digest,
-                    chart_type=spec.metadata.chart_type.value,
-                    title=str(metadata.get("title") or spec.metadata.title or "图表")[:240],
+                    chart_type="composite" if isinstance(spec, ChartFigure) else spec.metadata.chart_type.value,
+                    title=str(metadata.get("title") or (next((item.title or item.spec.metadata.title for item in spec.charts), "复合图表") if isinstance(spec, ChartFigure) else spec.metadata.title) or "图表")[:240],
                     media_type=str(image.media_type).lower(),
                     byte_count=len(image.content),
                     width=int(metadata.get("width", 0) or 0),
@@ -698,13 +751,18 @@ class ChartReviewManager:
                     review_status=ReviewStatus.FAILED,
                     publication_status=PublicationStatus.REJECTED,
                     review=exhausted,
-                    source_attachment_ids=tuple(source_attachment_ids)[:16],
+                    source_attachment_ids=effective_source_attachment_ids,
                     created_at=time.monotonic(),
                     deadline_at=time.monotonic() + policy.deadline_seconds,
                     content=image.content,
                     parent_candidate_id=parent_candidate_id,
                     lineage_attempt=lineage_attempt,
                     panel_ids=panel_ids,
+                    figure_id=spec.figure_id if isinstance(spec, ChartFigure) else None,
+                    collection_id=metadata.get("collection_id") if isinstance(metadata.get("collection_id"), str) else None,
+                    child_chart_ids=tuple(item.chart_id for item in spec.charts) if isinstance(spec, ChartFigure) else (),
+                    figure_source=spec.source.to_dict() if isinstance(spec, ChartFigure) else None,
+                    coverage=spec.coverage.to_dict() if isinstance(spec, ChartFigure) else None,
                 )
                 self._items[candidate.candidate_id] = (candidate, spec)
                 self._keys[key] = candidate.candidate_id
@@ -714,20 +772,25 @@ class ChartReviewManager:
                 review_id=f"review_{uuid4().hex}",
                 run_id=run_id,
                 chart_spec_digest=digest,
-                chart_type=spec.metadata.chart_type.value,
-                title=str(metadata.get("title") or spec.metadata.title or "图表")[:240],
+                chart_type="composite" if isinstance(spec, ChartFigure) else spec.metadata.chart_type.value,
+                title=str(metadata.get("title") or (next((item.title or item.spec.metadata.title for item in spec.charts), "复合图表") if isinstance(spec, ChartFigure) else spec.metadata.title) or "图表")[:240],
                 media_type=str(image.media_type).lower(),
                 byte_count=len(image.content),
                 width=int(metadata.get("width", 0) or 0),
                 height=int(metadata.get("height", 0) or 0),
                 policy=policy,
-                source_attachment_ids=tuple(source_attachment_ids)[:16],
+                source_attachment_ids=effective_source_attachment_ids,
                 created_at=time.monotonic(),
                 deadline_at=time.monotonic() + policy.deadline_seconds,
                 content=image.content,
                 parent_candidate_id=parent_candidate_id,
                 lineage_attempt=lineage_attempt,
                 panel_ids=panel_ids,
+                figure_id=spec.figure_id if isinstance(spec, ChartFigure) else None,
+                collection_id=metadata.get("collection_id") if isinstance(metadata.get("collection_id"), str) else None,
+                child_chart_ids=tuple(item.chart_id for item in spec.charts) if isinstance(spec, ChartFigure) else (),
+                figure_source=spec.source.to_dict() if isinstance(spec, ChartFigure) else None,
+                coverage=spec.coverage.to_dict() if isinstance(spec, ChartFigure) else None,
             )
             self._items[candidate.candidate_id] = (candidate, spec)
             self._keys[key] = candidate.candidate_id
@@ -756,7 +819,7 @@ class ChartReviewManager:
                 self._items[candidate_id] = (candidate, item[1])
             return candidate
 
-    def get_spec(self, candidate_id: str, review_id: str | None = None) -> ChartSpec | None:
+    def get_spec(self, candidate_id: str, review_id: str | None = None) -> ChartSemantic | None:
         with self._lock:
             item = self._items.get(candidate_id)
             if item is None or (review_id is not None and item[0].review_id != review_id):
@@ -894,6 +957,7 @@ __all__ = [
     "ReviewPolicy",
     "ReviewResult",
     "ReviewStatus",
+    "ChartSemantic",
     "chart_spec_digest",
     "review_candidate_bytes",
     "select_review_policy",

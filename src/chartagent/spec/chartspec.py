@@ -33,6 +33,14 @@ class ChartType(str, Enum):
 # Cartesian kinds require axes; every other kind treats axes as optional (D5).
 _AXES_REQUIRED_TYPES = frozenset({ChartType.BAR, ChartType.LINE, ChartType.SCATTER})
 
+MAX_FIGURE_CHARTS = 8
+MAX_FIGURE_COLUMNS = 4
+MAX_COLLECTION_FIGURES = 16
+MAX_FIGURE_ID_LENGTH = 128
+MAX_FIGURE_SOURCE_LENGTH = 160
+_FIGURE_LAYOUT_TYPES = frozenset({"grid"})
+_COVERAGE_STATUSES = frozenset({"complete", "incomplete", "unknown"})
+
 
 @dataclass(frozen=True)
 class ValidationIssue:
@@ -207,6 +215,251 @@ class ChartSpec:
                         ValidationIssue(f"axes.{name}.label", "axis label must not be empty")
                     )
 
+        return issues
+
+
+@dataclass(frozen=True)
+class FigureSource:
+    """Exact source identity for a composite figure."""
+
+    attachment_id: str
+    panel_id: str
+
+    def to_dict(self) -> Dict[str, str]:
+        return {
+            "attachment_id": self.attachment_id,
+            "panel_id": self.panel_id,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "FigureSource":
+        return cls(
+            attachment_id=str(data.get("attachment_id") or ""),
+            panel_id=str(data.get("panel_id") or ""),
+        )
+
+    def validate(self, location: str = "source") -> List[ValidationIssue]:
+        issues: List[ValidationIssue] = []
+        for field_name, value in (
+            ("attachment_id", self.attachment_id),
+            ("panel_id", self.panel_id),
+        ):
+            if not isinstance(value, str) or not value.strip():
+                issues.append(ValidationIssue(f"{location}.{field_name}", "source identity must not be empty"))
+            elif len(value) > MAX_FIGURE_SOURCE_LENGTH:
+                issues.append(ValidationIssue(f"{location}.{field_name}", "source identity exceeds the configured length limit"))
+        return issues
+
+
+@dataclass(frozen=True)
+class FigureLayout:
+    """Bounded, deterministic layout metadata for one composite figure."""
+
+    type: str = "grid"
+    columns: int = 1
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {"type": self.type, "columns": self.columns}
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "FigureLayout":
+        raw_columns = data.get("columns", 1)
+        try:
+            columns = int(raw_columns)
+        except (TypeError, ValueError):
+            columns = 0
+        return cls(type=str(data.get("type") or "grid"), columns=columns)
+
+    def validate(self, chart_count: int, location: str = "layout") -> List[ValidationIssue]:
+        issues: List[ValidationIssue] = []
+        if self.type not in _FIGURE_LAYOUT_TYPES:
+            issues.append(ValidationIssue(f"{location}.type", "layout type must be grid"))
+        if not 1 <= self.columns <= MAX_FIGURE_COLUMNS:
+            issues.append(ValidationIssue(f"{location}.columns", "layout columns exceed the configured bounds"))
+        if chart_count > 0 and self.columns > chart_count:
+            issues.append(ValidationIssue(f"{location}.columns", "layout columns cannot exceed chart count"))
+        return issues
+
+
+@dataclass(frozen=True)
+class ChartCoverage:
+    """Source-series coverage for one figure."""
+
+    source_series: List[str]
+    represented_series: List[str]
+    omitted_series: List[str]
+    status: str = "unknown"
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "source_series": list(self.source_series),
+            "represented_series": list(self.represented_series),
+            "omitted_series": list(self.omitted_series),
+            "status": self.status,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "ChartCoverage":
+        def _strings(value: Any) -> List[str]:
+            return [item for item in value if isinstance(item, str)] if isinstance(value, list) else []
+
+        return cls(
+            source_series=_strings(data.get("source_series")),
+            represented_series=_strings(data.get("represented_series")),
+            omitted_series=_strings(data.get("omitted_series")),
+            status=str(data.get("status") or "unknown"),
+        )
+
+    def validate(self, location: str = "coverage") -> List[ValidationIssue]:
+        issues: List[ValidationIssue] = []
+        for field_name, values in (
+            ("source_series", self.source_series),
+            ("represented_series", self.represented_series),
+            ("omitted_series", self.omitted_series),
+        ):
+            for index, value in enumerate(values):
+                if not isinstance(value, str) or not value.strip():
+                    issues.append(ValidationIssue(f"{location}.{field_name}[{index}]", "series name must not be empty"))
+                elif len(value) > MAX_FIGURE_SOURCE_LENGTH:
+                    issues.append(ValidationIssue(f"{location}.{field_name}[{index}]", "series name exceeds the configured length limit"))
+        if self.status not in _COVERAGE_STATUSES:
+            issues.append(ValidationIssue(f"{location}.status", "coverage status is invalid"))
+        source = set(self.source_series)
+        represented = set(self.represented_series)
+        omitted = set(self.omitted_series)
+        if not omitted.issubset(source):
+            issues.append(ValidationIssue(f"{location}.omitted_series", "omitted series must come from source_series"))
+        if self.status == "complete" and (omitted or not source.issubset(represented)):
+            issues.append(ValidationIssue(f"{location}.status", "complete coverage cannot contain omitted source series"))
+        return issues
+
+
+@dataclass(frozen=True)
+class ChartFigureItem:
+    """One independently meaningful ChartSpec inside a figure."""
+
+    chart_id: str
+    spec: ChartSpec
+    title: str = ""
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "chart_id": self.chart_id,
+            "title": self.title,
+            "spec": self.spec.to_dict(),
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "ChartFigureItem":
+        return cls(
+            chart_id=str(data.get("chart_id") or ""),
+            title=str(data.get("title") or ""),
+            spec=ChartSpec.from_dict(data.get("spec") or {}),
+        )
+
+
+@dataclass(frozen=True)
+class ChartFigure:
+    """One final canvas containing independent child ChartSpecs."""
+
+    figure_id: str
+    source: FigureSource
+    layout: FigureLayout
+    charts: List[ChartFigureItem]
+    coverage: ChartCoverage
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "kind": "chart_figure",
+            "figure_id": self.figure_id,
+            "source": self.source.to_dict(),
+            "layout": self.layout.to_dict(),
+            "charts": [chart.to_dict() for chart in self.charts],
+            "coverage": self.coverage.to_dict(),
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "ChartFigure":
+        return cls(
+            figure_id=str(data.get("figure_id") or ""),
+            source=FigureSource.from_dict(data.get("source") or {}),
+            layout=FigureLayout.from_dict(data.get("layout") or {}),
+            charts=[ChartFigureItem.from_dict(item) for item in (data.get("charts") or []) if isinstance(item, Mapping)],
+            coverage=ChartCoverage.from_dict(data.get("coverage") or {}),
+        )
+
+    def validate(self) -> List[ValidationIssue]:
+        issues: List[ValidationIssue] = []
+        if not isinstance(self.figure_id, str) or not self.figure_id.strip():
+            issues.append(ValidationIssue("figure_id", "figure ID must not be empty"))
+        elif len(self.figure_id) > MAX_FIGURE_ID_LENGTH:
+            issues.append(ValidationIssue("figure_id", "figure ID exceeds the configured length limit"))
+        issues.extend(self.source.validate())
+        if not self.charts:
+            issues.append(ValidationIssue("charts", "figure must contain at least one chart"))
+        elif len(self.charts) > MAX_FIGURE_CHARTS:
+            issues.append(ValidationIssue("charts", "figure contains too many charts"))
+        chart_ids: set[str] = set()
+        for index, chart in enumerate(self.charts):
+            location = f"charts[{index}]"
+            if not chart.chart_id.strip():
+                issues.append(ValidationIssue(f"{location}.chart_id", "chart ID must not be empty"))
+            elif len(chart.chart_id) > MAX_FIGURE_ID_LENGTH:
+                issues.append(ValidationIssue(f"{location}.chart_id", "chart ID exceeds the configured length limit"))
+            elif chart.chart_id in chart_ids:
+                issues.append(ValidationIssue(f"{location}.chart_id", "chart ID must be unique within a figure"))
+            chart_ids.add(chart.chart_id)
+            for issue in chart.spec.validate():
+                issues.append(ValidationIssue(f"{location}.spec.{issue.location}", issue.message))
+        issues.extend(self.layout.validate(len(self.charts)))
+        issues.extend(self.coverage.validate())
+        return issues
+
+
+@dataclass(frozen=True)
+class ChartSpecCollection:
+    """One ordered batch of figures from one or more source panels."""
+
+    collection_id: str
+    figures: List[ChartFigure]
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "kind": "chart_spec_collection",
+            "collection_id": self.collection_id,
+            "figures": [figure.to_dict() for figure in self.figures],
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "ChartSpecCollection":
+        return cls(
+            collection_id=str(data.get("collection_id") or ""),
+            figures=[ChartFigure.from_dict(item) for item in (data.get("figures") or []) if isinstance(item, Mapping)],
+        )
+
+    def validate(self) -> List[ValidationIssue]:
+        issues: List[ValidationIssue] = []
+        if not self.collection_id.strip():
+            issues.append(ValidationIssue("collection_id", "collection ID must not be empty"))
+        elif len(self.collection_id) > MAX_FIGURE_ID_LENGTH:
+            issues.append(ValidationIssue("collection_id", "collection ID exceeds the configured length limit"))
+        if not self.figures:
+            issues.append(ValidationIssue("figures", "collection must contain at least one figure"))
+        elif len(self.figures) > MAX_COLLECTION_FIGURES:
+            issues.append(ValidationIssue("figures", "collection contains too many figures"))
+        figure_ids: set[str] = set()
+        source_keys: set[tuple[str, str]] = set()
+        for index, figure in enumerate(self.figures):
+            location = f"figures[{index}]"
+            if figure.figure_id in figure_ids:
+                issues.append(ValidationIssue(f"{location}.figure_id", "figure ID must be unique within a collection"))
+            figure_ids.add(figure.figure_id)
+            source_key = (figure.source.attachment_id, figure.source.panel_id)
+            if source_key in source_keys:
+                issues.append(ValidationIssue(f"{location}.source", "source key must be unique within a collection"))
+            source_keys.add(source_key)
+            for issue in figure.validate():
+                issues.append(ValidationIssue(f"{location}.{issue.location}", issue.message))
         return issues
 
 

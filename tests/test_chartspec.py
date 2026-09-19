@@ -8,11 +8,19 @@ import pytest
 from chartagent.spec import (
     Axes,
     Axis,
+    ChartCoverage,
+    ChartFigure,
+    ChartFigureItem,
     ChartMetadata,
     ChartSpec,
+    ChartSpecCollection,
     ChartType,
     DataPoint,
+    FigureLayout,
+    FigureSource,
     ValidationIssue,
+    chart_collection_digest,
+    chart_figure_digest,
 )
 
 
@@ -177,3 +185,101 @@ def test_provenance_optional_both_clean():
     assert without_prov.validate() == []
     assert with_prov.metadata.source == "chart.png"
     assert with_prov.dataset[0].confidence == 0.95
+
+
+def pie_spec(title: str, values: list[tuple[str, float]]) -> ChartSpec:
+    return ChartSpec(
+        metadata=ChartMetadata(chart_type=ChartType.PIE, title=title),
+        dataset=[DataPoint(category=category, value=value) for category, value in values],
+    )
+
+
+def test_figure_and_collection_round_trip_preserve_child_order_and_coverage():
+    figure = ChartFigure(
+        figure_id="figure_sales",
+        source=FigureSource("attachment_1", "panel_1"),
+        layout=FigureLayout(columns=2),
+        charts=[
+            ChartFigureItem("q1", pie_spec("Q1", [("北美", 1), ("欧洲", 2)])),
+            ChartFigureItem("q2", pie_spec("Q2", [("北美", 3), ("欧洲", 4)])),
+        ],
+        coverage=ChartCoverage(
+            source_series=["Q1", "Q2"],
+            represented_series=["Q1", "Q2"],
+            omitted_series=[],
+            status="complete",
+        ),
+    )
+    collection = ChartSpecCollection("collection_1", [figure])
+
+    rebuilt = ChartSpecCollection.from_dict(collection.to_dict())
+
+    assert rebuilt == collection
+    assert [item.chart_id for item in rebuilt.figures[0].charts] == ["q1", "q2"]
+    assert rebuilt.validate() == []
+    assert chart_figure_digest(rebuilt.figures[0]) == chart_figure_digest(figure)
+    assert chart_collection_digest(rebuilt) == chart_collection_digest(collection)
+
+
+def test_figure_validation_locates_invalid_child_and_incomplete_coverage():
+    figure = ChartFigure(
+        figure_id="figure_bad",
+        source=FigureSource("attachment_1", "panel_1"),
+        layout=FigureLayout(columns=2),
+        charts=[
+            ChartFigureItem(
+                "bad",
+                ChartSpec(
+                    metadata=ChartMetadata(chart_type=ChartType.BAR),
+                    dataset=[DataPoint(category="A", value=1)],
+                ),
+            ),
+        ],
+        coverage=ChartCoverage(
+            source_series=["Q1", "Q2"],
+            represented_series=["Q1"],
+            omitted_series=["Q2"],
+            status="incomplete",
+        ),
+    )
+
+    locations = {issue.location for issue in figure.validate()}
+
+    assert "charts[0].spec.axes" in locations
+    assert figure.coverage.omitted_series == ["Q2"]
+
+
+def test_complete_coverage_cannot_hide_omitted_series():
+    figure = ChartFigure(
+        figure_id="figure_incomplete",
+        source=FigureSource("attachment_1", "panel_1"),
+        layout=FigureLayout(columns=1),
+        charts=[ChartFigureItem("q1", pie_spec("Q1", [("A", 1)]))],
+        coverage=ChartCoverage(
+            source_series=["Q1", "Q2"],
+            represented_series=["Q1"],
+            omitted_series=["Q2"],
+            status="complete",
+        ),
+    )
+
+    assert any(issue.location == "coverage.status" for issue in figure.validate())
+
+
+def test_collection_rejects_duplicate_source_figures():
+    figure = ChartFigure(
+        figure_id="figure_1",
+        source=FigureSource("attachment_1", "panel_1"),
+        layout=FigureLayout(),
+        charts=[ChartFigureItem("chart", pie_spec("Q1", [("A", 1)]))],
+        coverage=ChartCoverage(["Q1"], ["Q1"], [], "complete"),
+    )
+    duplicate = ChartFigure(
+        figure_id="figure_2",
+        source=FigureSource("attachment_1", "panel_1"),
+        layout=FigureLayout(),
+        charts=[ChartFigureItem("chart", pie_spec("Q2", [("A", 2)]))],
+        coverage=ChartCoverage(["Q2"], ["Q2"], [], "complete"),
+    )
+
+    assert any(issue.location == "figures[1].source" for issue in ChartSpecCollection("c", [figure, duplicate]).validate())

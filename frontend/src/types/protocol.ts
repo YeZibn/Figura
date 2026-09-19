@@ -124,6 +124,13 @@ export type GeneratedChartReference = {
   reviewStatus?: string
   publicationStatus?: string
   reviewMode?: string
+  figureId?: string
+  collectionId?: string
+  childChartIds?: string[]
+  chartTypes?: string[]
+  source?: { attachment_id?: string; panel_id?: string }
+  layout?: { type?: string; columns?: number }
+  coverage?: { source_series?: string[]; represented_series?: string[]; omitted_series?: string[]; status?: string }
   review?: {
     decision?: string
     confidence?: number

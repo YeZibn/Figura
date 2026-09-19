@@ -1521,6 +1521,85 @@ def test_assemble_spec_failure_is_atomic_and_structured():
     assert all(set(issue) == {"location", "message"} for issue in result["issues"])
 
 
+def _figure_input(*, panel_id: str = "panel_1", include_q2: bool = True) -> dict:
+    charts = [
+        {
+            "chart_id": "q1",
+            "chart_type": "pie",
+            "title": "Q1 2024",
+            "points": [
+                {"category": "North America", "value": 0.9},
+                {"category": "Europe", "value": 0.5},
+            ],
+        },
+    ]
+    if include_q2:
+        charts.append(
+            {
+                "chart_id": "q2",
+                "chart_type": "pie",
+                "title": "Q2 2024",
+                "points": [
+                    {"category": "North America", "value": 1.1},
+                    {"category": "Europe", "value": 0.6},
+                ],
+            }
+        )
+    return {
+        "figure_id": "revenue-by-region",
+        "source": {"attachment_id": "att_dashboard", "panel_id": panel_id},
+        "layout": {"type": "grid", "columns": 2 if include_q2 else 1},
+        "coverage": {
+            "source_series": ["Q1 2024", "Q2 2024"],
+            "represented_series": ["Q1 2024", "Q2 2024"] if include_q2 else ["Q1 2024"],
+            "omitted_series": [] if include_q2 else ["Q2 2024"],
+            "status": "complete" if include_q2 else "incomplete",
+        },
+        "charts": charts,
+    }
+
+
+def test_assemble_spec_builds_one_same_source_figure_from_multiple_children():
+    result = assemble_spec(figure=_figure_input())
+
+    assert result["kind"] == "chart_figure"
+    assert result["source"] == {"attachment_id": "att_dashboard", "panel_id": "panel_1"}
+    assert [item["chart_id"] for item in result["charts"]] == ["q1", "q2"]
+    assert result["coverage"]["status"] == "complete"
+    assert validate_spec(result) == {"ok": True, "issues": []}
+
+
+def test_assemble_spec_builds_collection_without_merging_different_panels():
+    first = _figure_input(panel_id="panel_1")
+    second = _figure_input(panel_id="panel_2")
+    second["figure_id"] = "orders"
+    result = assemble_spec(figures=[first, second], collection_id="dashboard-result")
+
+    assert result["kind"] == "chart_spec_collection"
+    assert [figure["source"]["panel_id"] for figure in result["figures"]] == ["panel_1", "panel_2"]
+    assert validate_spec(result) == {"ok": True, "issues": []}
+
+
+def test_assemble_spec_rejects_incomplete_coverage_atomically():
+    result = assemble_spec(figure=_figure_input(include_q2=False))
+
+    assert result["error"] == "ChartSpec figure assembly failed"
+    assert result["issues"]
+    assert any(issue["location"].endswith("coverage.status") for issue in result["issues"])
+    assert "charts" not in result
+
+
+def test_assemble_spec_rejects_invalid_child_with_located_issue():
+    figure = _figure_input()
+    figure["charts"][1]["points"] = [{"category": "North America"}]
+
+    result = assemble_spec(figure=figure)
+
+    assert result["error"] == "ChartSpec figure assembly failed"
+    assert any("charts[1]" in issue["location"] for issue in result["issues"])
+    assert "charts" not in result
+
+
 def test_chart_spec_schema_is_shared_by_assembly_and_rendering():
     from chartagent.tools.chart.rendering import RENDER_CHART
 

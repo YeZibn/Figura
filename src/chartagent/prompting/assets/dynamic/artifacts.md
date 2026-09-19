@@ -5,3 +5,5 @@
 ```json
 {artifact_summary}
 ```
+
+如果索引中出现 `ChartFigure` 或 `ChartSpecCollection`，把 `figure_id`、精确来源键、子图 ID、layout 和 coverage 当作同一个生成结果的关联信息。一个 figure 的多个子图应当交给一次 composite 渲染和一次 figure 级审核，不要把同源子图当成互相无关的最终图片，也不要用单个子图通过替代来源级 coverage 判断。

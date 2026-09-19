@@ -10,12 +10,13 @@ from dataclasses import replace
 from typing import Any, Sequence
 
 from ..prompting import build_reviewer_prompt
-from ..spec import ChartSpec
+from ..spec import ChartFigure, ChartSpec
 from ..tools.core.result import GeneratedImage
 from .manager import (
     MAX_REVIEW_ISSUES,
     MAX_REVIEW_TEXT,
     ChartCandidate,
+    ChartSemantic,
     ReviewIssue,
     ReviewResult,
     ReviewStatus,
@@ -118,8 +119,24 @@ def _data_url(content: bytes, media_type: str) -> dict[str, Any]:
     }
 
 
-def _safe_spec_payload(spec: ChartSpec) -> dict[str, Any]:
-    """Keep provenance paths and unrelated metadata out of the reviewer input."""
+def _safe_spec_payload(spec: ChartSemantic) -> dict[str, Any]:
+    """Keep provenance paths out while preserving figure-level semantics."""
+    if isinstance(spec, ChartFigure):
+        return {
+            "kind": "chart_figure",
+            "figure_id": spec.figure_id,
+            "source": spec.source.to_dict(),
+            "layout": spec.layout.to_dict(),
+            "coverage": spec.coverage.to_dict(),
+            "charts": [
+                {
+                    "chart_id": child.chart_id,
+                    "title": child.title[:MAX_REVIEW_TEXT],
+                    "spec": _safe_spec_payload(child.spec),
+                }
+                for child in spec.charts[:8]
+            ],
+        }
     payload = spec.to_dict()
     metadata = payload.get("metadata") if isinstance(payload.get("metadata"), Mapping) else {}
     return {
@@ -134,7 +151,7 @@ def _safe_spec_payload(spec: ChartSpec) -> dict[str, Any]:
 
 def build_vlm_review_messages(
     candidate: ChartCandidate,
-    spec: ChartSpec,
+    spec: ChartSemantic,
     *,
     source_image: bytes | None = None,
     source_media_type: str = "image/png",
@@ -151,7 +168,7 @@ def build_vlm_review_messages(
                 f"review_id={candidate.review_id}\n"
                 f"chart_spec_digest={candidate.chart_spec_digest}\n"
                 f"candidate_size={candidate.width}x{candidate.height}\n"
-                f"ChartSpec={spec_text}"
+                f"{'ChartFigure' if isinstance(spec, ChartFigure) else 'ChartSpec'}={spec_text}"
             ),
         },
     ]
@@ -275,7 +292,7 @@ def parse_vlm_review(content: str) -> ReviewResult:
 def review_candidate_with_vlm(
     client: Any,
     candidate: ChartCandidate,
-    spec: ChartSpec,
+    spec: ChartSemantic,
     *,
     source_image: bytes | None = None,
     source_media_type: str = "image/png",

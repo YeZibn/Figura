@@ -263,6 +263,13 @@ class GeneratedChartReference:
     publication_status: str | None = None
     review_mode: str | None = None
     review: Mapping[str, Any] | None = None
+    figure_id: str | None = None
+    collection_id: str | None = None
+    child_chart_ids: tuple[str, ...] = ()
+    source: Mapping[str, Any] | None = None
+    layout: Mapping[str, Any] | None = None
+    coverage: Mapping[str, Any] | None = None
+    chart_types: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         result: dict[str, Any] = {
@@ -292,6 +299,17 @@ class GeneratedChartReference:
             result["publicationStatus"] = self.publication_status
         if self.review_mode:
             result["reviewMode"] = truncate_text(self.review_mode, 32)
+        if self.figure_id:
+            result["figureId"] = truncate_text(self.figure_id, 128)
+        if self.collection_id:
+            result["collectionId"] = truncate_text(self.collection_id, 128)
+        if self.child_chart_ids:
+            result["childChartIds"] = [truncate_text(item, 128) for item in self.child_chart_ids[:16]]
+        if self.chart_types:
+            result["chartTypes"] = [truncate_text(item, 64) for item in self.chart_types[:16]]
+        for key, value in (("source", self.source), ("layout", self.layout), ("coverage", self.coverage)):
+            if isinstance(value, Mapping):
+                result[key] = sanitize_payload(value)
         if isinstance(self.review, Mapping):
             result["review"] = sanitize_payload(self.review)
         if self.reason:

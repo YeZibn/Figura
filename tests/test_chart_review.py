@@ -18,7 +18,19 @@ from chartagent.review.vlm import review_candidate_with_vlm
 from chartagent.attachments import AttachmentRegistry
 from dataclasses import replace
 import pytest
-from chartagent.spec import Axes, Axis, ChartMetadata, ChartSpec, ChartType, DataPoint
+from chartagent.spec import (
+    Axes,
+    Axis,
+    ChartCoverage,
+    ChartFigure,
+    ChartFigureItem,
+    ChartMetadata,
+    ChartSpec,
+    ChartType,
+    DataPoint,
+    FigureLayout,
+    FigureSource,
+)
 from chartagent.tools.chart.rendering import render_chart
 from chartagent.agent import Agent
 from chartagent.client.models import NormalizedResult, ToolCall
@@ -64,12 +76,68 @@ def _other_spec(chart_type: ChartType) -> ChartSpec:
     )
 
 
+def _figure_spec() -> ChartFigure:
+    return ChartFigure(
+        figure_id="figure-review",
+        source=FigureSource("att_source", "panel_sales"),
+        layout=FigureLayout(columns=2),
+        charts=[
+            ChartFigureItem(
+                "q1",
+                ChartSpec(
+                    metadata=ChartMetadata(chart_type=ChartType.PIE, title="Q1"),
+                    dataset=[DataPoint(category="北美", value=1), DataPoint(category="欧洲", value=2)],
+                ),
+            ),
+            ChartFigureItem(
+                "q2",
+                ChartSpec(
+                    metadata=ChartMetadata(chart_type=ChartType.PIE, title="Q2"),
+                    dataset=[DataPoint(category="北美", value=3), DataPoint(category="欧洲", value=4)],
+                ),
+            ),
+        ],
+        coverage=ChartCoverage(["Q1", "Q2"], ["Q1", "Q2"], [], "complete"),
+    )
+
+
 def test_review_policy_is_source_aware_and_digest_is_stable():
     spec = _bar_spec()
     assert chart_spec_digest(spec) == chart_spec_digest(spec.to_dict())
     assert select_review_policy(spec).semantic_required is False
     assert select_review_policy(spec, source_attachment_ids=("att_source",)).semantic_required is True
     assert select_review_policy(spec, source_attachment_ids=("att_source",)).source_linked is True
+
+
+def test_figure_review_uses_one_candidate_context_and_preserves_coverage():
+    figure = _figure_spec()
+    rendered = render_chart(figure.to_dict())
+    manager = ChartReviewManager()
+    candidate = manager.create_candidate("run-figure", "call-figure", rendered.images[0], figure)
+    safe = candidate.safe_metadata()
+
+    assert candidate.chart_type == "composite"
+    assert candidate.figure_id == "figure-review"
+    assert candidate.child_chart_ids == ("q1", "q2")
+    assert safe["coverage"]["status"] == "complete"
+    assert safe["source"]["panel_id"] == "panel_sales"
+
+
+def test_figure_vlm_prompt_contains_all_child_specs_and_coverage():
+    figure = _figure_spec()
+    rendered = render_chart(figure.to_dict())
+    manager = ChartReviewManager()
+    candidate = manager.create_candidate("run-figure-prompt", "call", rendered.images[0], figure)
+
+    messages = build_vlm_review_messages(candidate, figure)
+    text = messages[1]["content"][0]["text"]
+
+    assert "ChartFigure=" in text
+    assert '"figure_id":"figure-review"' in text
+    assert '"child_chart_ids"' not in text
+    assert '"source_series":["Q1","Q2"]' in text
+    assert '"chart_id":"q1"' in text
+    assert '"chart_id":"q2"' in text
 
 
 def test_direct_candidate_is_independently_reviewed_and_promoted():
@@ -434,6 +502,28 @@ def test_gateway_candidate_promotion_requires_matching_completed_review(tmp_path
         memory.close()
 
 
+def test_gateway_persists_composite_figure_metadata(tmp_path):
+    database = tmp_path / "figure-review.db"
+    memory = SQLiteAgentMemory("figure-review-session", database=database)
+    try:
+        store = GatewayHistoryStore(database, artifact_root=tmp_path / "artifacts")
+        run_id = "run-figure-metadata"
+        store.create_run(run_id, memory.session.id)
+        figure = _figure_spec()
+        rendered = render_chart(figure.to_dict())
+        manager = ChartReviewManager()
+        candidate = manager.create_candidate(run_id, "call", rendered.images[0], figure)
+        pending = store.add_candidate(run_id, memory.session.id, manager.decorate_image(rendered.images[0], candidate))
+
+        assert pending is not None
+        assert pending["figureId"] == "figure-review"
+        assert pending["childChartIds"] == ["q1", "q2"]
+        assert pending["source"]["panel_id"] == "panel_sales"
+        assert pending["coverage"]["status"] == "complete"
+    finally:
+        memory.close()
+
+
 def test_agent_final_answer_is_rejected_while_source_linked_candidate_is_pending():
     spec = _bar_spec().to_dict()
 
@@ -454,6 +544,42 @@ def test_agent_final_answer_is_rejected_while_source_linked_candidate_is_pending
 
     assert result == "*stopped: generated chart review failed; no artifact published*"
     assert "review_generated_chart" not in {item["function"]["name"] for item in client.calls[1]}
+
+
+def test_agent_reviews_composite_figure_once_with_tool_free_vlm(tmp_path):
+    figure = _figure_spec()
+    rendered = render_chart(figure.to_dict())
+    source_path = tmp_path / "source-composite.png"
+    source_path.write_bytes(rendered.images[0].content)
+    attachments = AttachmentRegistry()
+    attachment = attachments.register(str(source_path))
+    figure_payload = figure.to_dict()
+    figure_payload["source"]["attachment_id"] = attachment.id
+
+    class Client:
+        def __init__(self):
+            self.calls = []
+
+        def chat(self, _messages, **kwargs):
+            self.calls.append(kwargs)
+            if kwargs.get("tools") is None:
+                return NormalizedResult(content=json.dumps({
+                    "decision": "pass",
+                    "confidence": 0.95,
+                    "checks": {name: "pass" for name in ("chart_type", "orientation", "layout", "data_mapping", "labels", "readability")},
+                    "issues": [],
+                }))
+            if len(self.calls) == 1:
+                return NormalizedResult(tool_calls=[ToolCall("render", "render_chart", json.dumps({"spec": figure_payload}, ensure_ascii=False))])
+            return NormalizedResult(content="复合图表已完成审核")
+
+    client = Client()
+    registry = ToolRegistry()
+    register_chart_tools(registry)
+    result = Agent(client, registry, attachments=attachments, max_steps=3).run("请生成同源复合图")
+
+    assert result == "复合图表已完成审核"
+    assert len([call for call in client.calls if call.get("tools") is None]) == 1
 
 
 def test_failed_vlm_review_trace_has_independent_lifecycle_fields(tmp_path):

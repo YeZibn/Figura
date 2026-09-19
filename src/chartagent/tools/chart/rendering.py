@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import OrderedDict
 from dataclasses import dataclass
 from io import BytesIO
+import math
 import os
 from pathlib import Path
 from typing import Any, Iterable
@@ -21,11 +22,19 @@ from matplotlib.font_manager import FontProperties
 from matplotlib.collections import PathCollection
 from matplotlib.patches import Rectangle, Wedge
 
-from ...spec import chart_spec_digest
-from ...spec import ChartSpec, ChartType, DataPoint
+from ...spec import (
+    ChartFigure,
+    ChartSpec,
+    ChartSpecCollection,
+    ChartType,
+    DataPoint,
+    chart_collection_digest,
+    chart_figure_digest,
+    chart_spec_digest,
+)
 from ..core.result import GeneratedImage, ToolResult
 from ..core.definition import Tool
-from .specification import CHART_SPEC_SCHEMA
+from .specification import CHART_SPEC_SCHEMA, FIGURE_INPUT_SCHEMA
 from .validation import (
     GenerationIssue,
     GenerationValidation,
@@ -478,6 +487,284 @@ def _verify_png(content: bytes, width: int, height: int) -> list[GenerationIssue
     return issues
 
 
+def _render_chart_on_axes(ax: Any, spec: ChartSpec, font: _ResolvedFont) -> None:
+    chart_type = spec.metadata.chart_type
+    if chart_type is ChartType.BAR:
+        _render_bar(ax, spec, font)
+    elif chart_type is ChartType.LINE:
+        _render_line(ax, spec, font)
+    elif chart_type is ChartType.PIE:
+        _render_pie(ax, spec, font)
+    elif chart_type is ChartType.SCATTER:
+        _render_scatter(ax, spec, font)
+    else:  # pragma: no cover - ChartType.from_dict closes this set.
+        raise ValueError(f"unsupported chart type: {chart_type}")
+    _configure_axes(ax, spec, font)
+    _apply_axis_ranges(ax, spec)
+
+
+def _figure_semantic_validation(figure: ChartFigure) -> GenerationValidation:
+    issues: list[GenerationIssue] = [
+        GenerationIssue("invalid_figure", issue.location, issue.message)
+        for issue in figure.validate()
+    ]
+    if figure.coverage.status != "complete":
+        issues.append(
+            GenerationIssue(
+                "incomplete_coverage",
+                "coverage.status",
+                "figure coverage must be complete before rendering",
+            )
+        )
+    for index, child in enumerate(figure.charts):
+        validation = validate_generation(child.spec)
+        issues.extend(
+            GenerationIssue(
+                issue.code,
+                f"charts[{index}].{issue.location}",
+                issue.message,
+                issue.severity,
+                issue.auto_fixed,
+            )
+            for issue in validation.issues
+        )
+    return GenerationValidation(tuple(issues)).bounded()
+
+
+def _composite_validation_summary(
+    semantic: GenerationValidation,
+    audit_issues: list[GenerationIssue],
+    font: _ResolvedFont,
+) -> dict[str, Any]:
+    summary = _validation_summary(semantic, audit_issues, font)
+    all_issues = summary["issues"]
+    summary["checks"]["coverage"] = "failed" if any(
+        issue.get("code") == "incomplete_coverage" for issue in all_issues
+    ) else "passed"
+    if summary["checks"]["coverage"] == "failed":
+        summary["status"] = "failed"
+    return summary
+
+
+def _figure_artifact_error(
+    message: str,
+    semantic: GenerationValidation,
+    audit_issues: list[GenerationIssue] = (),
+    *,
+    artifact: str = "not_run",
+) -> dict[str, Any]:
+    issues = list(semantic.issues) + list(audit_issues)
+    return {
+        "error": message,
+        "issues": [issue.to_dict() for issue in issues[:32]],
+        "validation": {
+            "status": "failed",
+            "checks": {
+                "semantic": "failed" if semantic.blocking else "passed",
+                "fidelity": "failed" if audit_issues else "not_run",
+                "layout": "failed" if any(issue.code == "content_clipped" and issue.severity == "error" for issue in audit_issues) else "not_run",
+                "readability": "not_run",
+                "artifact": artifact,
+                "coverage": "failed" if any(issue.code == "incomplete_coverage" for issue in issues) else "passed",
+            },
+            "issues": [issue.to_dict() for issue in issues[:32]],
+        },
+    }
+
+
+def _render_figure_image(
+    figure: ChartFigure,
+    *,
+    width: int,
+    height: int,
+    font: _ResolvedFont,
+    collection_id: str | None = None,
+) -> ToolResult | dict[str, Any]:
+    semantic_validation = _figure_semantic_validation(figure)
+    if semantic_validation.blocking:
+        return _figure_artifact_error("ChartFigure cannot be rendered", semantic_validation)
+    columns = figure.layout.columns
+    rows = max(1, math.ceil(len(figure.charts) / columns))
+    fig, axes_grid = plt.subplots(
+        rows,
+        columns,
+        figsize=(width / 100, height / 100),
+        dpi=100,
+        squeeze=False,
+    )
+    axes = [axes_grid[row][column] for row in range(rows) for column in range(columns)]
+    audit_issues: list[GenerationIssue] = []
+    content = b""
+    try:
+        for index, (ax, child) in enumerate(zip(axes, figure.charts)):
+            try:
+                _render_chart_on_axes(ax, child.spec, font)
+                ax.set_gid(child.chart_id)
+                if child.title and child.title != child.spec.metadata.title:
+                    _set_font(ax.set_title(child.title[:MAX_TITLE_LENGTH]), font)
+                audit_issues.extend(
+                    GenerationIssue(
+                        issue.code,
+                        f"charts[{index}].{issue.location}",
+                        issue.message,
+                        issue.severity,
+                        issue.auto_fixed,
+                    )
+                    for issue in _audit_figure(fig, ax, child.spec)
+                )
+            except Exception as exc:  # noqa: BLE001 - one child failure stays in the tool boundary.
+                audit_issues.append(
+                    GenerationIssue(
+                        "child_render_failure",
+                        f"charts[{index}]",
+                        f"child chart could not be rendered: {type(exc).__name__}",
+                    )
+                )
+        for ax in axes[len(figure.charts):]:
+            ax.set_visible(False)
+        fig.tight_layout()
+        fig.canvas.draw()
+        if any(issue.severity == "error" for issue in audit_issues):
+            return _figure_artifact_error(
+                "ChartFigure rendered chart failed quality audit",
+                semantic_validation,
+                audit_issues,
+            )
+        output = BytesIO()
+        fig.savefig(output, format="png", dpi=100)
+        content = output.getvalue()
+    finally:
+        plt.close(fig)
+
+    if len(content) > MAX_CHART_BYTES:
+        issue = GenerationIssue("artifact_too_large", "artifact", "rendered chart exceeds the configured byte limit")
+        return _figure_artifact_error("rendered figure exceeds the configured byte limit", semantic_validation, [issue], artifact="failed")
+    artifact_issues = _verify_png(content, width, height)
+    if artifact_issues:
+        return _figure_artifact_error("rendered figure failed artifact verification", semantic_validation, artifact_issues, artifact="failed")
+
+    figure_digest = chart_figure_digest(figure)
+    title = next((child.title or child.spec.metadata.title for child in figure.charts), "复合图表")[:MAX_TITLE_LENGTH]
+    validation = _composite_validation_summary(semantic_validation, audit_issues, font)
+    child_summaries = [
+        {
+            "chart_id": child.chart_id,
+            "chart_type": child.spec.metadata.chart_type.value,
+            "title": (child.title or child.spec.metadata.title)[:MAX_TITLE_LENGTH],
+            "chart_spec_digest": chart_spec_digest(child.spec),
+            "point_count": len(child.spec.dataset),
+        }
+        for child in figure.charts
+    ]
+    data = {
+        "kind": "generated_chart",
+        "chart_type": "composite",
+        "chart_types": [item["chart_type"] for item in child_summaries],
+        "title": title,
+        "chart_spec_digest": figure_digest,
+        "figure_digest": figure_digest,
+        "figure_id": figure.figure_id,
+        "collection_id": collection_id,
+        "source": figure.source.to_dict(),
+        "layout": figure.layout.to_dict(),
+        "coverage": figure.coverage.to_dict(),
+        "child_chart_ids": [item["chart_id"] for item in child_summaries],
+        "children": child_summaries,
+        "media_type": "image/png",
+        "byte_count": len(content),
+        "width": width,
+        "height": height,
+        "point_count": sum(item["point_count"] for item in child_summaries),
+        "validation": validation,
+        "font": {"status": font.status, "source": font.source, "family": font.family},
+    }
+    warnings = tuple(
+        issue["message"]
+        for issue in validation["issues"]
+        if issue.get("severity") == "warning"
+    )
+    image_metadata = {
+        "kind": "generated_chart",
+        "chart_type": "composite",
+        "title": title,
+        "chart_spec_digest": figure_digest,
+        "figure_digest": figure_digest,
+        "figure_id": figure.figure_id,
+        "collection_id": collection_id,
+        "source": figure.source.to_dict(),
+        "layout": figure.layout.to_dict(),
+        "coverage": figure.coverage.to_dict(),
+        "child_chart_ids": [item["chart_id"] for item in child_summaries],
+        "children": child_summaries,
+        "width": width,
+        "height": height,
+        "font_status": font.status,
+        "font_source": font.source,
+        "font_family": font.family,
+    }
+    return ToolResult(
+        data=data,
+        images=(GeneratedImage(content=content, media_type="image/png", caption=f"生成复合图表：{title}", metadata=image_metadata),),
+        warnings=warnings,
+    )
+
+
+def _render_figure_or_collection(
+    spec: dict[str, Any],
+    *,
+    width: int,
+    height: int,
+) -> ToolResult | dict[str, Any]:
+    try:
+        width = int(width)
+        height = int(height)
+    except (TypeError, ValueError):
+        return {"error": "figure dimensions must be integers"}
+    if not 1 <= width <= MAX_CHART_WIDTH or not 1 <= height <= MAX_CHART_HEIGHT:
+        issue = GenerationIssue("invalid_dimensions", "dimensions", f"dimensions must be within {MAX_CHART_WIDTH}x{MAX_CHART_HEIGHT}")
+        return _figure_artifact_error("figure dimensions are invalid", GenerationValidation((issue,)))
+    try:
+        font = _resolve_font()
+        if spec.get("kind") == "chart_figure":
+            figure = ChartFigure.from_dict(spec)
+            return _render_figure_image(figure, width=width, height=height, font=font)
+        collection = ChartSpecCollection.from_dict(spec)
+        collection_issues = collection.validate()
+        if collection_issues:
+            semantic = GenerationValidation(tuple(GenerationIssue("invalid_collection", issue.location, issue.message) for issue in collection_issues))
+            return _figure_artifact_error("ChartSpec collection cannot be rendered", semantic)
+        results: list[GeneratedImage] = []
+        summaries: list[dict[str, Any]] = []
+        warnings: list[str] = []
+        for figure in collection.figures:
+            result = _render_figure_image(
+                figure,
+                width=width,
+                height=height,
+                font=font,
+                collection_id=collection.collection_id,
+            )
+            if isinstance(result, dict):
+                return result
+            results.extend(result.images)
+            warnings.extend(result.warnings)
+            summaries.append(result.data)
+        return ToolResult(
+            data={
+                "kind": "generated_chart_collection",
+                "collection_id": collection.collection_id,
+                "figure_count": len(summaries),
+                "figures": summaries,
+            },
+            images=tuple(results),
+            warnings=tuple(warnings),
+        )
+    except (TypeError, ValueError, KeyError) as exc:
+        return {"error": f"ChartSpec figure cannot be rendered: {str(exc)[:240]}"}
+    except Exception as exc:  # noqa: BLE001 - collection failures stay inside the tool boundary.
+        return {"error": f"chart figure renderer unavailable: {str(exc)[:240]}"}
+
+
 def _validation_summary(
     semantic: GenerationValidation,
     audit_issues: list[GenerationIssue],
@@ -508,6 +795,8 @@ def render_chart(
     height: int = DEFAULT_CHART_HEIGHT,
 ) -> ToolResult | dict[str, Any]:
     """Render a validated ChartSpec as a bounded PNG-backed ToolResult."""
+    if isinstance(spec, dict) and spec.get("kind") in {"chart_figure", "chart_spec_collection"}:
+        return _render_figure_or_collection(spec, width=width, height=height)
     try:
         chart_spec = ChartSpec.from_dict(spec if isinstance(spec, dict) else {})
         semantic_validation = validate_generation(chart_spec)
@@ -531,19 +820,7 @@ def render_chart(
         fig, ax = plt.subplots(figsize=(width / 100, height / 100), dpi=100)
         audit_issues: list[GenerationIssue] = []
         try:
-            chart_type = chart_spec.metadata.chart_type
-            if chart_type is ChartType.BAR:
-                _render_bar(ax, chart_spec, font)
-            elif chart_type is ChartType.LINE:
-                _render_line(ax, chart_spec, font)
-            elif chart_type is ChartType.PIE:
-                _render_pie(ax, chart_spec, font)
-            elif chart_type is ChartType.SCATTER:
-                _render_scatter(ax, chart_spec, font)
-            else:  # pragma: no cover - ChartType.from_dict closes this set.
-                return {"error": f"unsupported chart type: {chart_type}"}
-            _configure_axes(ax, chart_spec, font)
-            _apply_axis_ranges(ax, chart_spec)
+            _render_chart_on_axes(ax, chart_spec, font)
             fig.tight_layout()
             audit_issues = _audit_figure(fig, ax, chart_spec)
             if any(issue.severity == "error" for issue in audit_issues):
@@ -645,14 +922,21 @@ def render_chart(
 RENDER_CHART = Tool(
     name="render_chart",
     description=(
-        "将已校验的 ChartSpec 渲染为有界 PNG 候选图，并返回图片、渲染元数据、确定性校验摘要和 warnings。"
-        "用户需要视觉输出且图表数据已组装后使用；不要传入不完整 spec 或不支持的 chart_type，也不要用它替代生成后的强制 VLM review。"
-        "调用成功只表示渲染和本地 artifact 检查通过，图片仍是 candidate，直到自动审核完成并报告 publication status。"
+        "将已由 assemble_spec 校验的 ChartSpec、同源 ChartFigure 或 ChartSpecCollection 渲染为有界 PNG candidate。"
+        "同一 figure 的多个子图会在一张最终 composite 画布中按受限网格呈现；不要传入不完整 spec，也不要把它替代生成后的强制 VLM review。"
+        "用户需要视觉输出且图表数据已组装后使用；工具返回图片、元数据和校验结果。调用成功只表示渲染和本地 artifact 检查通过，图片仍是 candidate，直到自动审核完成并报告 publication status。"
     ),
     parameters={
         "type": "object",
         "properties": {
-            "spec": CHART_SPEC_SCHEMA,
+            "spec": {
+                **CHART_SPEC_SCHEMA,
+                "oneOf": [
+                    CHART_SPEC_SCHEMA,
+                    FIGURE_INPUT_SCHEMA,
+                    {"type": "object", "description": "ChartSpecCollection，kind 必须为 chart_spec_collection。"},
+                ],
+            },
             "width": {"type": "integer", "minimum": 1, "maximum": MAX_CHART_WIDTH},
             "height": {"type": "integer", "minimum": 1, "maximum": MAX_CHART_HEIGHT},
         },
@@ -671,6 +955,7 @@ __all__ = [
     "MAX_CHART_HEIGHT",
     "MAX_CHART_POINTS",
     "MAX_CHART_WIDTH",
+    "_render_figure_or_collection",
     "RENDER_CHART",
     "render_chart",
 ]
