@@ -40,6 +40,7 @@ MAX_FIGURE_ID_LENGTH = 128
 MAX_FIGURE_SOURCE_LENGTH = 160
 _FIGURE_LAYOUT_TYPES = frozenset({"grid"})
 _COVERAGE_STATUSES = frozenset({"complete", "incomplete", "unknown"})
+_PROVENANCE_FIELDS = ("status", "session_id", "attempt_id", "attachment_id", "panel_id", "tool", "quality")
 
 
 @dataclass(frozen=True)
@@ -164,14 +165,18 @@ class ChartSpec:
     metadata: ChartMetadata
     dataset: List[DataPoint]
     axes: Optional[Axes] = None
+    provenance: Optional[Dict[str, Any]] = None
 
     # -- serialization ------------------------------------------------------ #
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        result = {
             "metadata": self.metadata.to_dict(),
             "axes": self.axes.to_dict() if self.axes is not None else None,
             "dataset": [point.to_dict() for point in self.dataset],
         }
+        if self.provenance is not None:
+            result["provenance"] = _bounded_provenance(self.provenance)
+        return result
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "ChartSpec":
@@ -182,7 +187,8 @@ class ChartSpec:
         axes_raw = data.get("axes")
         axes = Axes.from_dict(axes_raw) if axes_raw else None
         dataset = [DataPoint.from_dict(item) for item in (data.get("dataset") or [])]
-        return cls(metadata=metadata, axes=axes, dataset=dataset)
+        provenance = _bounded_provenance(data.get("provenance"))
+        return cls(metadata=metadata, axes=axes, dataset=dataset, provenance=provenance)
 
     # -- validation --------------------------------------------------------- #
     def validate(self) -> List[ValidationIssue]:
@@ -215,7 +221,37 @@ class ChartSpec:
                         ValidationIssue(f"axes.{name}.label", "axis label must not be empty")
                     )
 
+        if self.provenance is not None:
+            if not isinstance(self.provenance, Mapping):
+                issues.append(ValidationIssue("provenance", "measurement provenance must be an object"))
+            else:
+                for field_name in ("session_id", "attempt_id", "attachment_id"):
+                    if not isinstance(self.provenance.get(field_name), str) or not self.provenance.get(field_name):
+                        issues.append(ValidationIssue(f"provenance.{field_name}", "accepted measurement provenance is missing its identity"))
+                if self.provenance.get("status") != "accepted":
+                    issues.append(ValidationIssue("provenance.status", "measurement provenance must have accepted status"))
+
         return issues
+
+
+def _bounded_provenance(value: object) -> Optional[Dict[str, Any]]:
+    if not isinstance(value, Mapping):
+        return None
+    result: Dict[str, Any] = {}
+    for key in _PROVENANCE_FIELDS:
+        if key not in value:
+            continue
+        item = value.get(key)
+        if key == "quality" and isinstance(item, Mapping):
+            result[key] = {
+                "confidence": dict(item.get("confidence") or {}) if isinstance(item.get("confidence"), Mapping) else {},
+                "blocking": bool(item.get("blocking", False)),
+            }
+        elif isinstance(item, str):
+            result[key] = item[:160]
+        elif isinstance(item, (int, float, bool)) or item is None:
+            result[key] = item
+    return result or None
 
 
 @dataclass(frozen=True)

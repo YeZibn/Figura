@@ -61,6 +61,9 @@ def test_four_layers_are_explicit_and_dynamic_values_do_not_enter_static_layer()
                 "status": "accepted",
                 "panel_ids": ["panel-1"],
                 "warnings": [],
+                "measurement_status": "remeasure_required",
+                "measurement_reference": {"session_id": "ms_1", "attempt_id": "matt_1", "attachment_id": "att_1", "panel_id": "panel-1"},
+                "measurement_issues": [{"code": "baseline_uncertain", "location": "baseline", "severity": "blocking", "message": "基准线不确定", "next_action": "重新测量"}],
             }
         ],
         runtime_state={
@@ -77,6 +80,8 @@ def test_four_layers_are_explicit_and_dynamic_values_do_not_enter_static_layer()
     assert "panel-1" not in context["static"]
     assert "panel-1" in context["runtime"]
     assert "observation:call-1" in context["artifacts"]
+    assert "remeasure_required" in context["artifacts"]
+    assert "baseline_uncertain" in context["artifacts"]
     assert "inspect_fixture" in context["tools"]
     assert "当前没有可调用工具" in assemble_prompt_context()["tools"]
     assert "[]" in assemble_prompt_context()["artifacts"]

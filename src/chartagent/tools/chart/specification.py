@@ -24,6 +24,7 @@ from ...spec import (
     MAX_FIGURE_COLUMNS,
     ValidationIssue,
 )
+from ...measurement import measurement_gate
 from ..core.definition import Tool
 from .validation import MAX_GENERATION_POINTS, MAX_GENERATION_LABEL_LENGTH, validate_generation
 
@@ -38,6 +39,23 @@ def _assembly_error(message: str, location: str) -> dict[str, Any]:
     }
 
 
+def _measurement_gate_error(gate: Mapping[str, Any], location: str) -> dict[str, Any]:
+    bounded = {
+        key: value
+        for key, value in gate.items()
+        if key in {"status", "code", "location", "message", "next_action", "measurement_status", "issues"}
+    }
+    raw_location = str(bounded.get("location") or "measurement_ref")
+    bounded["location"] = raw_location if raw_location.startswith(location) else f"{location}.{raw_location}"[:160]
+    message = str(bounded.get("message") or "measurement evidence was not accepted")[:240]
+    return {
+        "error": "measurement evidence gate failed",
+        "issues": [{"location": bounded["location"], "message": message}],
+        "measurement_gate": bounded,
+        "validation": {"status": "blocked", "checks": {"measurement": "blocked"}},
+    }
+
+
 def _assemble_single_spec(
     chart_type: str,
     points: list[dict],
@@ -45,6 +63,10 @@ def _assemble_single_spec(
     x_label: str = "",
     y_label: str = "",
     source: str | None = None,
+    measurement_ref: Mapping[str, Any] | None = None,
+    measurement_context: Mapping[str, Any] | None = None,
+    expected_source: FigureSource | None = None,
+    location: str = "measurement_ref",
 ) -> dict:
     """Atomically construct and validate a serialization-ready ChartSpec."""
     try:
@@ -54,6 +76,18 @@ def _assemble_single_spec(
 
     if not isinstance(points, list) or not points:
         return _assembly_error("points must be a non-empty array", "points")
+
+    provenance = None
+    if measurement_ref is not None:
+        provenance, gate_error = measurement_gate(
+            measurement_ref,
+            measurement_context,
+            expected_attachment_id=expected_source.attachment_id if expected_source else None,
+            expected_panel_id=expected_source.panel_id if expected_source else None,
+            location=location,
+        )
+        if gate_error is not None:
+            return _measurement_gate_error(gate_error, location)
     if kind in _CARTESIAN_TYPES and (
         not isinstance(x_label, str)
         or not x_label.strip()
@@ -92,6 +126,7 @@ def _assemble_single_spec(
         metadata=ChartMetadata(chart_type=kind, title=title, source=source),
         axes=axes,
         dataset=data_points,
+        provenance=provenance,
     )
     validation = validate_generation(chart_spec)
     if validation.blocking:
@@ -124,10 +159,16 @@ def _figure_child_input(child: Mapping[str, Any]) -> dict[str, Any]:
         "x_label": child.get("x_label", ""),
         "y_label": child.get("y_label", ""),
         "source": child.get("source"),
+        "measurement_ref": child.get("measurement_ref"),
     }
 
 
-def _assemble_figure(figure: Mapping[str, Any], *, location: str = "figure") -> ChartFigure | dict[str, Any]:
+def _assemble_figure(
+    figure: Mapping[str, Any],
+    *,
+    location: str = "figure",
+    measurement_context: Mapping[str, Any] | None = None,
+) -> ChartFigure | dict[str, Any]:
     if not isinstance(figure, Mapping):
         return _collection_error("figure must be an object", location)
     source_raw = figure.get("source")
@@ -147,7 +188,12 @@ def _assemble_figure(figure: Mapping[str, Any], *, location: str = "figure") -> 
         chart_id = raw_child.get("chart_id")
         if not isinstance(chart_id, str) or not chart_id.strip():
             return _collection_error("chart_id must be a non-empty string", f"{child_location}.chart_id")
-        child_result = _assemble_single_spec(**_figure_child_input(raw_child))
+        child_result = _assemble_single_spec(
+            **_figure_child_input(raw_child),
+            measurement_context=measurement_context,
+            expected_source=source,
+            location=f"{child_location}.measurement_ref",
+        )
         if "error" in child_result:
             issues = [
                 {
@@ -212,10 +258,12 @@ def assemble_spec(
     x_label: str = "",
     y_label: str = "",
     source: str | None = None,
+    measurement_ref: dict[str, Any] | None = None,
     *,
     figure: dict[str, Any] | None = None,
     figures: list[dict[str, Any]] | None = None,
     collection_id: str | None = None,
+    _measurement_context: Mapping[str, Any] | None = None,
 ) -> dict:
     """Atomically construct a single ChartSpec, figure, or collection."""
     if figure is not None and figures is not None:
@@ -227,7 +275,11 @@ def assemble_spec(
             return _collection_error("collection contains too many figures", "figures")
         built: list[ChartFigure] = []
         for index, item in enumerate(figures):
-            result = _assemble_figure(item, location=f"figures[{index}]")
+            result = _assemble_figure(
+                item,
+                location=f"figures[{index}]",
+                measurement_context=_measurement_context,
+            )
             if isinstance(result, dict):
                 return result
             built.append(result)
@@ -242,11 +294,20 @@ def assemble_spec(
             }
         return collection.to_dict()
     if figure is not None:
-        result = _assemble_figure(figure)
+        result = _assemble_figure(figure, measurement_context=_measurement_context)
         return result.to_dict() if isinstance(result, ChartFigure) else result
     if chart_type is None:
         return _assembly_error("chart_type is required unless figure or figures is provided", "chart_type")
-    return _assemble_single_spec(chart_type, points or [], title, x_label, y_label, source)
+    return _assemble_single_spec(
+        chart_type,
+        points or [],
+        title,
+        x_label,
+        y_label,
+        source,
+        measurement_ref=measurement_ref,
+        measurement_context=_measurement_context,
+    )
 
 
 def validate_spec(spec: dict) -> dict:
@@ -309,6 +370,33 @@ AXES_SCHEMA = {
     "additionalProperties": False,
 }
 
+MEASUREMENT_REF_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "session_id": {"type": "string", "description": "Server-issued measurement session identity."},
+        "attempt_id": {"type": "string", "description": "Server-issued measurement attempt identity."},
+        "attachment_id": {"type": "string", "description": "Exact source attachment identity from the measurement observation."},
+        "panel_id": {"type": ["string", "null"], "description": "Exact source panel identity from the measurement observation."},
+    },
+    "required": ["session_id", "attempt_id", "attachment_id"],
+    "additionalProperties": False,
+}
+
+MEASUREMENT_PROVENANCE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "status": {"type": "string", "enum": ["accepted"], "description": "Code-owned measurement acceptance status."},
+        "session_id": {"type": "string", "description": "Measurement session identity."},
+        "attempt_id": {"type": "string", "description": "Accepted measurement attempt identity."},
+        "attachment_id": {"type": "string", "description": "Source attachment identity."},
+        "panel_id": {"type": ["string", "null"], "description": "Source panel identity."},
+        "tool": {"type": "string", "description": "Measurement tool that produced the accepted evidence."},
+        "quality": {"type": "object", "additionalProperties": True, "description": "Bounded quality summary retained for downstream audit."},
+    },
+    "required": ["status", "session_id", "attempt_id", "attachment_id"],
+    "additionalProperties": False,
+}
+
 CHART_SPEC_SCHEMA = {
     "type": "object",
     "properties": {
@@ -325,6 +413,7 @@ CHART_SPEC_SCHEMA = {
         },
         "axes": {"oneOf": [AXES_SCHEMA, {"type": "null"}], "description": "Cartesian x/y axes; omit or use null only for pie charts."},
         "dataset": {"type": "array", "items": POINT_SCHEMA, "minItems": 1, "maxItems": MAX_GENERATION_POINTS, "description": "Ordered typed data points; point shape must match the selected chart type."},
+        "provenance": {**MEASUREMENT_PROVENANCE_SCHEMA, "description": "Optional code-owned accepted measurement provenance."},
     },
     "required": ["metadata", "dataset"],
     "additionalProperties": False,
@@ -363,6 +452,7 @@ FIGURE_CHILD_INPUT_SCHEMA = {
         "y_label": {"type": "string", "maxLength": MAX_GENERATION_LABEL_LENGTH, "description": "Cartesian child y-axis label."},
         "points": {"type": "array", "items": POINT_SCHEMA, "minItems": 1, "maxItems": MAX_GENERATION_POINTS, "description": "Child chart data points."},
         "source": {"type": ["string", "null"], "maxLength": MAX_GENERATION_LABEL_LENGTH, "description": "Optional child provenance label."},
+        "measurement_ref": {**MEASUREMENT_REF_SCHEMA, "description": "Optional server-issued accepted measurement reference for this child chart."},
     },
     "required": ["chart_id", "chart_type", "points"],
     "additionalProperties": False,
@@ -394,7 +484,7 @@ ASSEMBLE_SPEC = Tool(
     description=(
         "根据已收集的证据原子地组装并校验 ChartSpec、同源 ChartFigure 或多来源 ChartSpecCollection。"
         "单图使用 chart_type 和 points；同源多子图使用 figure，必须提供 attachment_id、panel_id、coverage 和独立 charts；不同来源使用 figures。"
-        "不要手写内部 IR、合并不同子图的 category/value，或把遗漏系列标记为 complete。失败会返回有界且带路径的 issues；成功结果才可交给 render_chart。"
+        "若使用测量结果，必须原样传入当前观察返回的 measurement_ref，由服务端质量门禁校验；不要手写内部 IR、合并不同子图的 category/value，或把遗漏系列标记为 complete。失败会返回有界且带路径的 issues；成功结果才可交给 render_chart。"
     ),
     parameters={
         "type": "object",
@@ -409,6 +499,7 @@ ASSEMBLE_SPEC = Tool(
             "y_label": {"type": "string", "maxLength": MAX_GENERATION_LABEL_LENGTH, "description": "Required non-empty y-axis label for bar, line, and scatter charts."},
             "points": {"type": "array", "items": POINT_SCHEMA, "minItems": 1, "maxItems": MAX_GENERATION_POINTS, "description": "单图数据点；bar/pie 使用 category/value，line/scatter 使用 x/y。figure 模式填写到 charts 子项。"},
             "source": {"type": ["string", "null"], "maxLength": MAX_GENERATION_LABEL_LENGTH, "description": "单图可选来源标签；不授权访问本地路径。"},
+            "measurement_ref": {**MEASUREMENT_REF_SCHEMA, "description": "可选的服务端测量引用；只有当前 run 中已接受的 measurement reference 才能通过门禁。"},
             "figure": {**FIGURE_INPUT_SCHEMA, "description": "同一 attachment_id + panel_id 下的多个独立子图及其 coverage。"},
             "figures": {"type": "array", "items": FIGURE_INPUT_SCHEMA, "minItems": 1, "maxItems": MAX_COLLECTION_FIGURES, "description": "来自多个 panel 的有序 figure 列表；不同来源不会自动合并。"},
             "collection_id": {"type": "string", "maxLength": 128, "description": "可选的稳定集合 ID。"},
@@ -427,6 +518,8 @@ __all__ = [
     "FIGURE_COVERAGE_SCHEMA",
     "FIGURE_CHILD_INPUT_SCHEMA",
     "FIGURE_SOURCE_SCHEMA",
+    "MEASUREMENT_REF_SCHEMA",
+    "MEASUREMENT_PROVENANCE_SCHEMA",
     "POINT_SCHEMA",
     "assemble_spec",
     "validate_spec",

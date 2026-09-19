@@ -10,6 +10,8 @@
 
 每个子图必须保留自己的 chart type、类别、数值、系列和标题，不能把多个饼图的类别拼成一个普通饼图。figure 必须明确 `source_series`、`represented_series`、`omitted_series` 和 `status`；遗漏系列不得标记为 `complete`，也不得为了继续生成而静默丢弃。成功只代表对应 ChartSpec/figure 的结构和生成约束有效，不代表图片中的每个数值已经视觉核验。
 
+当数据来自测量工具时，先读取结果中的 `measurement.reference` 和 `measurement.status`。只有状态为 `accepted` 时才在 `assemble_spec` 中传入原样的 `measurement_ref`；其他状态必须按照 `measurement.quality.issues` 的 `next_action` 补充观察、重新测量或保留未解析字段。不得手写、复制其他 panel 的 reference，也不得把普通 `source` 文本当作测量来源授权。
+
 如果 `assemble_spec` 返回错误，读取其定位到的 bounded issues，修改输入、重新观察或重新组装；没有成功组装的 ChartSpec、ChartFigure 或 ChartSpecCollection 不得直接返回为结构化结果，也不得交给 `render_chart`。
 
 ## 生成候选与审核

@@ -182,6 +182,9 @@ def normalize_tool_result(
     max_images: int = DEFAULT_MAX_GENERATED_IMAGES,
     source_tool: str | None = None,
     source_attachment_id: str | None = None,
+    source_panel_id: str | None = None,
+    source_run_id: str | None = None,
+    source_parent_attempt_id: str | None = None,
 ) -> DispatchedObservation:
     """Normalize a legacy value or enriched ``ToolResult``.
 
@@ -191,6 +194,37 @@ def normalize_tool_result(
     boundary, which turns them into structured tool errors.
     """
     if not isinstance(result, ToolResult):
+        if (
+            source_tool in {
+                "measure_bars",
+                "extract_line_series",
+                "extract_pie_slices",
+                "extract_scatter_points",
+            }
+            and isinstance(result, Mapping)
+            and "error" not in result
+        ):
+            from ...measurement import attach_measurement_quality
+
+            legacy_data = attach_measurement_quality(
+                result,
+                source_tool=source_tool,
+                image_count=0,
+                source_attachment_id=source_attachment_id,
+                source_panel_id=source_panel_id or _panel_id_from_data(result),
+                source_run_id=source_run_id,
+                source_parent_attempt_id=source_parent_attempt_id,
+            )
+            return DispatchedObservation(
+                json.dumps(
+                    {
+                        "data": legacy_data,
+                        "warnings": ["legacy measurement result was downgraded to provisional"],
+                        "images": [],
+                    },
+                    ensure_ascii=False,
+                )
+            )
         return DispatchedObservation(json.dumps(result, ensure_ascii=False))
 
     warnings = _normalize_warnings(result.warnings)
@@ -221,8 +255,32 @@ def normalize_tool_result(
                     image_metadata[key] = value
         metadata.append(image_metadata)
 
+    data_payload = result.data
+    if source_tool in {
+        "measure_bars",
+        "extract_line_series",
+        "extract_pie_slices",
+        "extract_scatter_points",
+    } and isinstance(result.data, Mapping):
+        # Keep the sensor payload intact and add only a bounded, code-owned
+        # quality envelope at the transport boundary.  The lazy import avoids
+        # coupling the low-level result primitive to chart sensor modules.
+        from ...measurement import attach_measurement_quality
+
+        data_payload = attach_measurement_quality(
+            result.data,
+            source_tool=source_tool,
+            warnings=warnings,
+            image_count=len(images),
+            source_attachment_id=source_attachment_id,
+            source_panel_id=source_panel_id or _panel_id_from_data(result.data),
+            source_run_id=source_run_id,
+            parent_attempt_id=source_parent_attempt_id,
+            captions=[image.caption for image in images],
+        )
+
     payload: dict[str, Any] = {
-        "data": result.data,
+        "data": data_payload,
         "warnings": warnings,
         "images": metadata,
     }
@@ -231,7 +289,7 @@ def normalize_tool_result(
         evidence = build_evidence_summary(
             source_tool=source_tool,
             source_attachment_id=source_attachment_id,
-            data=result.data,
+            data=data_payload,
             warnings=warnings,
             images=images,
         )
@@ -239,6 +297,20 @@ def normalize_tool_result(
         payload["evidence"] = dict(evidence)
     content = json.dumps(payload, ensure_ascii=False)
     return DispatchedObservation(content=content, images=tuple(images))
+
+
+def _panel_id_from_data(data: Mapping[str, Any]) -> str | None:
+    scope = data.get("scope")
+    if isinstance(scope, Mapping):
+        value = scope.get("panel_id")
+        if isinstance(value, str) and value.strip():
+            return value
+    measurement = data.get("measurement")
+    if isinstance(measurement, Mapping):
+        source = measurement.get("source")
+        if isinstance(source, Mapping) and isinstance(source.get("panel_id"), str):
+            return source["panel_id"]
+    return None
 
 
 def _normalize_warnings(warnings: Iterable[object]) -> list[str]:

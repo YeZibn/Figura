@@ -6,6 +6,8 @@
 
 证据之间冲突时保留冲突来源，选择一次有针对性的再观察或在回答中说明限制。不得把某一种工具结果当成所有语义的替代品。
 
+测量工具返回的 `measurement.status` 是代码拥有的质量状态：`accepted` 才能作为确定性 ChartSpec 测量来源；`provisional`、`partial`、`remeasure_required`、`unsupported` 和 `failed` 只能作为待复查证据。不要根据 confidence 自行伪造 accepted，也不要忽略 `measurement.quality.issues`。
+
 ## 工具选择
 
 先用多模态视觉理解图片，形成标题、图表类型、方向、类别、系列和候选值的初步认识。只为解决尚未确定的问题调用工具，不为了形式完整而调用无关工具。

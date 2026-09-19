@@ -270,6 +270,25 @@ def build_artifact_index(records: Iterable[Mapping[str, Any]] = ()) -> str:
             "lineage": [_bounded_text(value, 128) for value in _bounded_list(record.get("lineage"))],
             "confidence": record.get("confidence"),
             "warnings": [_bounded_text(value, 240) for value in _bounded_list(record.get("warnings"), 12)],
+            "measurement_status": _bounded_text(record.get("measurement_status"), 48) or None,
+            "measurement_reference": (
+                {
+                    key: _bounded_text(value, 160) if isinstance(value, str) else value
+                    for key, value in record.get("measurement_reference", {}).items()
+                    if key in {"session_id", "attempt_id", "attachment_id", "panel_id"}
+                }
+                if isinstance(record.get("measurement_reference"), Mapping)
+                else None
+            ),
+            "measurement_issues": [
+                {
+                    key: _bounded_text(value, 240)
+                    for key, value in issue.items()
+                    if key in {"code", "location", "severity", "message", "next_action"}
+                }
+                for issue in _bounded_list(record.get("measurement_issues"), 8)
+                if isinstance(issue, Mapping)
+            ],
             "resource_refs": [
                 {key: _bounded_text(value, 180) for key, value in ref.items() if key in {"resourceKey", "artifactKind", "mediaType"}}
                 for ref in list(record.get("resource_refs") or [])[:8]

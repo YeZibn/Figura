@@ -334,7 +334,8 @@ class RunEvent:
         if len(encoded) > MAX_EVENT_PAYLOAD:
             if self.kind == "tool_result":
                 payload = _truncate_tool_result_payload(payload)
-            else:
+                encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+            if len(encoded) > MAX_EVENT_PAYLOAD:
                 payload = {
                     "truncated": True,
                     "preview": truncate_text(encoded, MAX_EVENT_PAYLOAD // 2),
@@ -378,25 +379,39 @@ def _truncate_tool_result_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
     }
     body = payload.get("result")
     encoded_body = json.dumps(body, ensure_ascii=False, separators=(",", ":"))
-    base = dict(identity)
-    base.update(optional)
-    base["result"] = {"truncated": True, "preview": ""}
-    available = max(256, MAX_EVENT_PAYLOAD - len(json.dumps(base, ensure_ascii=False)) - 32)
-    base["result"] = {
-        "truncated": True,
-        "preview": truncate_text(encoded_body, available),
+
+    def fit(optional_fields: Mapping[str, Any]) -> dict[str, Any] | None:
+        """Find the largest preview that still fits the event envelope."""
+        base = dict(identity)
+        base.update(optional_fields)
+
+        def candidate(preview: str) -> dict[str, Any]:
+            result = dict(base)
+            result["result"] = {"truncated": True, "preview": preview}
+            return result
+
+        empty = candidate("")
+        if len(json.dumps(empty, ensure_ascii=False, separators=(",", ":"))) > MAX_EVENT_PAYLOAD:
+            return None
+        low, high = 0, len(encoded_body)
+        best = empty
+        while low <= high:
+            middle = (low + high) // 2
+            current = candidate(truncate_text(encoded_body, middle))
+            encoded = json.dumps(current, ensure_ascii=False, separators=(",", ":"))
+            if len(encoded) <= MAX_EVENT_PAYLOAD:
+                best = current
+                low = middle + 1
+            else:
+                high = middle - 1
+        return best
+
+    return fit(optional) or fit({}) or {
+        "tool_name": identity.get("tool_name", ""),
+        "call_id": identity.get("call_id", ""),
+        "status": identity.get("status", ""),
+        "result": {"truncated": True, "preview": ""},
     }
-    encoded = json.dumps(base, ensure_ascii=False, separators=(",", ":"))
-    if len(encoded) <= MAX_EVENT_PAYLOAD:
-        return base
-    # Optional visual metadata is useful but less important than identity.
-    base = dict(identity)
-    preview_budget = max(128, MAX_EVENT_PAYLOAD - len(json.dumps(base, ensure_ascii=False)) - 64)
-    base["result"] = {
-        "truncated": True,
-        "preview": truncate_text(encoded_body, preview_budget),
-    }
-    return base
 
 
 def _validate_text(value: object, *, field: str, limit: int) -> str:

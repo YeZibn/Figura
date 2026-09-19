@@ -10,6 +10,7 @@ feed them back to the model.
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from typing import Dict, List
 
 from .definition import Tool
@@ -66,6 +67,11 @@ def dispatch_observation(
     registry: ToolRegistry,
     name: str,
     arguments_json: str,
+    *,
+    source_run_id: str | None = None,
+    source_panel_id: str | None = None,
+    source_parent_attempt_id: str | None = None,
+    measurement_context: Mapping[str, object] | None = None,
 ) -> DispatchedObservation:
     """Dispatch a call with optional validated, in-memory image evidence."""
     tool = registry.get(name)
@@ -80,8 +86,15 @@ def dispatch_observation(
     if not isinstance(args, dict):
         return DispatchedObservation(_error(f"Tool {name!r} expects an object of arguments."))
 
+    call_args = dict(args)
+    # ``_measurement_context`` is an internal, code-owned input.  It is never
+    # part of the model-facing schema and lets the canonical assembler check a
+    # reference against the current Agent run instead of trusting model JSON.
+    if name == "assemble_spec" and measurement_context is not None:
+        call_args["_measurement_context"] = measurement_context
+
     try:
-        result = tool.fn(**args)
+        result = tool.fn(**call_args)
     except Exception as exc:  # noqa: BLE001 - boundary; route to model
         return DispatchedObservation(_error(f"Tool {name!r} failed: {exc}"))
 
@@ -97,6 +110,9 @@ def dispatch_observation(
             source_attachment_id=args.get("attachment_id")
             if isinstance(args.get("attachment_id"), str)
             else None,
+            source_panel_id=source_panel_id,
+            source_run_id=source_run_id,
+            source_parent_attempt_id=source_parent_attempt_id,
         )
     except Exception:  # pragma: no cover - un-serializable result guard
         return DispatchedObservation(_error(f"Tool {name!r} result could not be serialized."))

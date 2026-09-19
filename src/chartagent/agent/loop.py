@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Mapping
 from typing import Any, Callable, List, Optional, Sequence
 
 from ..client.client import LLMClient
@@ -37,6 +38,13 @@ from ..trace import (
 from ..tools.core import ToolRegistry, dispatch_observation
 from ..tools.core.presentation import get_tool_presentation
 from ..memory import AgentMemory, InMemoryAgentMemory, RunStatus
+from ..measurement import (
+    MEASUREMENT_TOOLS,
+    MeasurementSession,
+    register_measurement,
+    sessions_from_state,
+    sessions_to_state,
+)
 from ..review import ChartReviewManager, ReviewIssue, ReviewResult, ReviewStatus, review_candidate_with_vlm
 from ..tools.core.result import DispatchedObservation, GeneratedImage
 from .tool_schema import registry_tools, tool_to_openai_schema
@@ -137,7 +145,15 @@ def _artifact_records_from_observation(
     panels = data.get("panels") if isinstance(data, dict) else None
     if isinstance(panels, list):
         panel_ids = [str(item.get("id"))[:96] for item in panels if isinstance(item, dict) and item.get("id")]
+    measurement = data.get("measurement") if isinstance(data, dict) else None
     status = "failed" if payload.get("error") else "observed"
+    if isinstance(measurement, dict):
+        status = str(measurement.get("status") or status)[:64]
+        reference = measurement.get("reference")
+        if isinstance(reference, dict) and isinstance(reference.get("panel_id"), str):
+            panel_ids = [reference["panel_id"]]
+    measurement_quality = measurement.get("quality") if isinstance(measurement, dict) else None
+    measurement_issues = measurement_quality.get("issues", []) if isinstance(measurement_quality, dict) else []
     records: list[dict[str, Any]] = [
         {
             "artifact_id": f"observation:{call_id}"[:128],
@@ -151,6 +167,14 @@ def _artifact_records_from_observation(
             "resource_refs": list(references),
         }
     ]
+    if isinstance(measurement, dict):
+        records[0].update(
+            {
+                "measurement_status": status,
+                "measurement_reference": dict(measurement.get("reference") or {}) if isinstance(measurement.get("reference"), dict) else None,
+                "measurement_issues": [item for item in measurement_issues[:8] if isinstance(item, dict)],
+            }
+        )
     if tool_name == "assemble_spec" and not payload.get("error"):
         assembled_kind = data.get("kind") if isinstance(data, dict) else None
         if assembled_kind == "chart_figure":
@@ -163,6 +187,7 @@ def _artifact_records_from_observation(
                     "panel_ids": [data.get("source", {}).get("panel_id")] if isinstance(data.get("source"), dict) else panel_ids,
                     "lineage": [f"observation:{call_id}"],
                     "warnings": warnings,
+                    "provenance": data.get("provenance"),
                     "coverage": data.get("coverage"),
                     "child_chart_ids": [item.get("chart_id") for item in data.get("charts", []) if isinstance(item, dict)],
                 }
@@ -177,6 +202,7 @@ def _artifact_records_from_observation(
                     "panel_ids": panel_ids,
                     "lineage": [f"observation:{call_id}"],
                     "warnings": warnings,
+                    "provenance": data.get("provenance"),
                     "figure_count": len(data.get("figures", [])) if isinstance(data.get("figures"), list) else 0,
                 }
             )
@@ -190,6 +216,7 @@ def _artifact_records_from_observation(
                     "panel_ids": panel_ids,
                     "lineage": [f"observation:{call_id}"],
                     "warnings": warnings,
+                    "provenance": data.get("provenance"),
                 }
             )
     for item in panels or []:
@@ -246,6 +273,57 @@ def _artifact_records_from_observation(
                     }
                 )
     return records[:48]
+
+
+def _measurement_trace_fields(content: str) -> dict[str, Any]:
+    """Project only bounded measurement lifecycle fields into trace events."""
+    try:
+        payload = json.loads(content)
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    data = payload.get("data") if isinstance(payload, dict) else None
+    measurement = data.get("measurement") if isinstance(data, dict) else None
+    if not isinstance(measurement, dict):
+        return {}
+    reference = measurement.get("reference")
+    quality = measurement.get("quality")
+    result: dict[str, Any] = {
+        "measurement_status": str(measurement.get("status") or "unknown")[:48],
+        "measurement_reference": {
+            key: reference.get(key)
+            for key in ("session_id", "attempt_id", "attachment_id", "panel_id")
+            if isinstance(reference, dict) and reference.get(key) is not None
+        },
+    }
+    if isinstance(quality, dict):
+        result["measurement_issue_count"] = min(
+            16,
+            len(quality.get("issues", [])) if isinstance(quality.get("issues"), list) else 0,
+        )
+        result["measurement_blocking"] = bool(quality.get("blocking"))
+    return result
+
+
+def _trace_result_summary(content: str) -> Any:
+    """Keep tool-result traces useful without duplicating the quality envelope.
+
+    The model-facing observation keeps the complete measurement envelope.  The
+    Gateway trace already projects its bounded lifecycle fields at the event
+    level, so omitting the duplicate envelope from ``result`` leaves room for
+    the structured sensor data (including panel scope) to remain inspectable.
+    """
+    try:
+        payload = json.loads(content)
+    except (TypeError, json.JSONDecodeError):
+        return summarize_result(content)
+    if isinstance(payload, dict):
+        data = payload.get("data")
+        if isinstance(data, dict) and "measurement" in data:
+            payload = dict(payload)
+            payload["data"] = dict(data)
+            payload["data"].pop("measurement", None)
+        content = json.dumps(payload, ensure_ascii=False)
+    return summarize_result(content)
 
 
 class AgentInterrupted(RuntimeError):
@@ -356,6 +434,7 @@ class Agent:
         layout_contexts: dict[str, dict[str, Any]] = {}
         artifact_records: list[dict[str, Any]] = []
         checkpoint_references: list[dict[str, Any]] = []
+        measurement_sessions: dict[str, MeasurementSession] = {}
         if isinstance(recovery, dict):
             loader = getattr(self.memory, "recovery_context", None)
             hydrated = loader(recovery, budget=self.context_budget) if callable(loader) else []
@@ -372,6 +451,7 @@ class Agent:
                 artifact_records = [
                     item for item in raw_artifacts[:48] if isinstance(item, dict)
                 ]
+            measurement_sessions = sessions_from_state(recovery.get("measurementSessions"))
         user_message = {"role": "user", "content": user_input}
         self.memory.append(run, "user", {"message": user_message, "text": user_input if isinstance(user_input, str) else "[image attachment turn]"})
         if isinstance(user_input, str):
@@ -540,6 +620,7 @@ class Agent:
                                 pending_tool_calls=(),
                                 visual_references=checkpoint_references,
                                 artifact_records=artifact_records,
+                                measurement_sessions=measurement_sessions,
                             ),
                         )
                         if emitter is not None:
@@ -567,6 +648,7 @@ class Agent:
                         pending_answer=result.content,
                         visual_references=checkpoint_references,
                         artifact_records=artifact_records,
+                        measurement_sessions=measurement_sessions,
                     ),
                 )
                 if isinstance(recovery, dict) and recovery.get("nextAction") == "final" and isinstance(recovery.get("pendingAnswer"), str):
@@ -613,6 +695,7 @@ class Agent:
                     pending_tool_calls=result.tool_calls,
                     visual_references=checkpoint_references,
                     artifact_records=artifact_records,
+                    measurement_sessions=measurement_sessions,
                 ),
             )
             visual_evidence: list[ToolVisualEvidence] = []
@@ -648,6 +731,14 @@ class Agent:
                     call.arguments,
                     layout_contexts,
                 )
+                source_panel_id = call_arguments.get("panel_id") if isinstance(call_arguments.get("panel_id"), str) else None
+                source_attachment_id = call_arguments.get("attachment_id") if isinstance(call_arguments.get("attachment_id"), str) else None
+                parent_attempt_id = None
+                if call.name in MEASUREMENT_TOOLS:
+                    for session in reversed(list(measurement_sessions.values())):
+                        if session.attachment_id == source_attachment_id and session.panel_id in {source_panel_id, None, "__source__"}:
+                            parent_attempt_id = session.current_attempt_id
+                            break
                 routing_error = self._panel_routing_error(
                     call.name,
                     call.arguments,
@@ -659,7 +750,13 @@ class Agent:
                     )
                 else:
                     observation = dispatch_observation(
-                        self.registry, call.name, dispatch_arguments
+                        self.registry,
+                        call.name,
+                        dispatch_arguments,
+                        source_run_id=run.id,
+                        source_panel_id=source_panel_id,
+                        source_parent_attempt_id=parent_attempt_id,
+                        measurement_context=measurement_sessions if call.name == "assemble_spec" else None,
                     )
                 self._raise_if_interrupted(run)
                 if call.name in {_LAYOUT_TOOL_NAME, _DECOMPOSE_TOOL_NAME}:
@@ -701,6 +798,14 @@ class Agent:
                     except Exception:  # noqa: BLE001 - observation diagnostics cannot abort the Agent
                         observation_refs = ()
                 observation = _attach_visual_observation_refs(observation, observation_refs)
+                if call.name in MEASUREMENT_TOOLS:
+                    try:
+                        measurement_payload = json.loads(observation.content)
+                        measurement_data = measurement_payload.get("data") if isinstance(measurement_payload, dict) else None
+                        if isinstance(measurement_data, dict):
+                            register_measurement(measurement_sessions, measurement_data)
+                    except (TypeError, json.JSONDecodeError):
+                        pass
                 artifact_records.extend(
                     _artifact_records_from_observation(
                         call.name,
@@ -714,7 +819,16 @@ class Agent:
                 tool_message = tool_entry(call, observation.content)
                 self._current_messages.append(tool_message)
                 self._messages.append(tool_message)
-                self.memory.append(run, "tool", {"message": tool_message, "tool_name": call.name, "status": observation_status(observation.content)})
+                self.memory.append(
+                    run,
+                    "tool",
+                    {
+                        "message": tool_message,
+                        "tool_name": call.name,
+                        "status": observation_status(observation.content),
+                        **_measurement_trace_fields(observation.content),
+                    },
+                )
                 checkpoint_references.extend(
                     item for item in observation_refs if isinstance(item, dict)
                 )
@@ -738,6 +852,7 @@ class Agent:
                         pending_tool_calls=remaining_calls,
                         visual_references=checkpoint_references,
                         artifact_records=artifact_records,
+                        measurement_sessions=measurement_sessions,
                     ),
                 )
                 pending_action = "处理工具观察并决定下一步证据或 ChartSpec 操作"
@@ -768,8 +883,9 @@ class Agent:
                         call_id=call.id,
                         status=observation_status(observation.content),
                         tool_status=observation_status(observation.content),
-                        result=summarize_result(observation.content),
+                        result=_trace_result_summary(observation.content),
                         image_count=len(observation.images),
+                        **_measurement_trace_fields(observation.content),
                     )
                     review_items = self._review_items(observation.content)
                     for item in review_items:
@@ -926,6 +1042,7 @@ class Agent:
         pending_answer: str | None = None,
         visual_references: Sequence[dict[str, Any]] = (),
         artifact_records: Sequence[dict[str, Any]] = (),
+        measurement_sessions: Mapping[str, MeasurementSession] | None = None,
     ) -> dict[str, Any]:
         result = {
             "prompt": user_input if isinstance(user_input, str) else "[image attachment turn]",
@@ -939,6 +1056,7 @@ class Agent:
             ],
             "visualReferences": list(visual_references)[:32],
             "artifactIndex": list(artifact_records)[:48],
+            "measurementSessions": sessions_to_state(measurement_sessions or {}),
         }
         if pending_answer is not None:
             result["pendingAnswer"] = pending_answer

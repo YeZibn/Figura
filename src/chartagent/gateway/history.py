@@ -32,6 +32,7 @@ from .protocol import (
     RecoveryStatus,
     RunEvent,
     RunStatus,
+    _truncate_tool_result_payload,
     utc_timestamp,
 )
 from .recovery import (
@@ -786,7 +787,11 @@ class GatewayHistoryStore:
         payload = dict(event.payload)
         encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
         if len(encoded) > MAX_EVENT_PAYLOAD:
-            payload = {"truncated": True, "preview": truncate_text(encoded, MAX_EVENT_PAYLOAD // 2)}
+            if event.kind == "tool_result":
+                payload = _truncate_tool_result_payload(payload)
+                encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+            if len(encoded) > MAX_EVENT_PAYLOAD:
+                payload = {"truncated": True, "preview": truncate_text(encoded, MAX_EVENT_PAYLOAD // 2)}
             encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
         with self._lock, self._connect() as connection:
             self._cleanup_connection(connection)
