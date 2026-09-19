@@ -11,9 +11,9 @@ from typing import Any, Callable, Sequence
 
 from ..attachments import AttachmentRegistry
 from ..memory import SQLiteAgentMemory
-from ..memory.sqlite import default_database_path
 from ..multimodal import build_registered_attachment_turn
 from ..runtime import AgentRuntime, create_agent_runtime, probe_agent_readiness
+from ..storage import StoragePaths, resolve_storage_paths
 from ..agent import AgentInterrupted, AgentRecoveryBlocked, REVIEW_INCOMPLETE_MESSAGE
 from ..agent.review_gate import _REVIEW_FAILED_MSG
 from ..tools.core.result import GeneratedImage
@@ -108,25 +108,36 @@ class GatewayService:
     def __init__(
         self,
         *,
+        data_dir: str | Path | None = None,
         database: str | Path | None = None,
         model: str | None = None,
         memory_factory: Callable[..., SQLiteAgentMemory] | None = None,
         runtime_factory: Callable[[str], AgentRuntime] | None = None,
         attachment_store: EphemeralAttachmentStore | None = None,
         attachment_root: str | Path | None = None,
+        artifact_root: str | Path | None = None,
         run_manager: RunManager | None = None,
         history_store: GatewayHistoryStore | None = None,
         readiness_probe: Callable[[], dict[str, Any]] | None = None,
     ) -> None:
-        self.database = Path(database).expanduser() if database is not None else default_database_path()
+        self.storage: StoragePaths = resolve_storage_paths(
+            data_dir=data_dir,
+            database=database,
+            attachment_root=attachment_root,
+            artifact_root=artifact_root,
+        )
+        self.database = self.storage.database
         self.model = model
         self._memory_factory = memory_factory or self._open_memory
         self._runtime_factory = runtime_factory or self._build_runtime
         self._attachment_store = attachment_store or EphemeralAttachmentStore(
-            attachment_root,
-            database=self.database,
+            self.storage.attachments,
+            database=self.storage.database,
         )
-        self._history = history_store or GatewayHistoryStore(self.database)
+        self._history = history_store or GatewayHistoryStore(
+            self.storage.database,
+            artifact_root=self.storage.run_artifacts,
+        )
         self._history.interrupt_running_runs()
         self._runs = run_manager or RunManager(history_store=self._history)
         if run_manager is not None:

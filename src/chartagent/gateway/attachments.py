@@ -14,8 +14,9 @@ from uuid import uuid4
 from PIL import Image, UnidentifiedImageError
 
 from ..attachments import DEFAULT_MAX_ATTACHMENT_BYTES, SUPPORTED_IMAGE_TYPES
+from ..storage import project_root, resolve_storage_paths
 
-DEFAULT_ATTACHMENT_ROOT = Path.home() / ".chartagent" / "attachments"
+DEFAULT_ATTACHMENT_ROOT = project_root() / ".chartagent" / "attachments"
 DEFAULT_MAX_SESSION_ATTACHMENT_BYTES = 80 * 1024 * 1024
 MAX_ATTACHMENT_FILENAME = 255
 
@@ -61,15 +62,10 @@ class EphemeralAttachmentStore:
 
     @staticmethod
     def _resolve_root(root: str | Path | None, database: str | Path | None) -> Path:
-        if root is not None:
-            return Path(root).expanduser()
-        configured = os.environ.get("CHARTAGENT_ATTACHMENT_DIR")
-        if configured:
-            return Path(configured).expanduser()
-        if database is not None:
-            return Path(database).expanduser().parent / "attachments"
-        data_dir = os.environ.get("CHARTAGENT_DATA_DIR")
-        return (Path(data_dir).expanduser() if data_dir else DEFAULT_ATTACHMENT_ROOT.parent) / "attachments"
+        return resolve_storage_paths(
+            database=database,
+            attachment_root=root,
+        ).attachments
 
     @staticmethod
     def _restrict_permissions(path: Path, mode: int) -> None:

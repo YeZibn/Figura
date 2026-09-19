@@ -8,12 +8,15 @@ import os
 import sys
 from pathlib import Path
 
+from ..client import load_environment
 from .gateway import DEFAULT_GATEWAY_URL, DiagnosticGatewayError, GatewayDiagnosticClient
 from .manifest import DiagnosticManifestError, load_manifest
 from .report import build_report, write_report
+from ..storage import StorageRootConflict, resolve_storage_paths
 
 
 def main(argv: list[str] | None = None) -> int:
+    load_environment()
     parser = argparse.ArgumentParser(prog="python -m chartagent.evaluation")
     parser.add_argument("--manifest", required=True, help="真实样本清单 JSON")
     parser.add_argument("--asset-root", default=None, help="样本相对路径根目录，默认寻找项目根目录")
@@ -28,7 +31,11 @@ def main(argv: list[str] | None = None) -> int:
         default=os.environ.get("CHARTAGENT_GATEWAY_URL", DEFAULT_GATEWAY_URL),
         help="Gateway API 根地址",
     )
-    parser.add_argument("--output-dir", default=".chartagent/diagnostics")
+    parser.add_argument(
+        "--output-dir",
+        default=None,
+        help="诊断输出目录；默认使用 canonical data root 下的 diagnostics/",
+    )
     parser.add_argument("--timeout", type=float, default=900.0)
     parser.add_argument("--poll-interval", type=float, default=1.0)
     parser.add_argument(
@@ -69,6 +76,12 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"status": "provider_required", "error": "真实运行必须显式指定 --provider"}, ensure_ascii=False))
         return 2
 
+    try:
+        output_dir = resolve_storage_paths(diagnostics_root=args.output_dir).diagnostics
+    except StorageRootConflict as exc:
+        print(json.dumps({"status": "storage_conflict", "error": str(exc)}, ensure_ascii=False))
+        return 2
+
     client = GatewayDiagnosticClient(
         args.base_url,
         poll_interval=args.poll_interval,
@@ -87,7 +100,7 @@ def main(argv: list[str] | None = None) -> int:
                 requested_provider=args.provider,
                 timed_out=run.timed_out,
             )
-            json_path, markdown_path = write_report(report, args.output_dir)
+            json_path, markdown_path = write_report(report, output_dir)
             output.append(
                 {
                     "case_id": sample.case_id,

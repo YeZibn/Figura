@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import sqlite3
 import uuid
 from pathlib import Path
@@ -12,13 +11,13 @@ from typing import Any
 from .context import build_context, recovery_messages, sanitize_payload
 from .models import Attachment, Record, Run, RunStatus, Session, SessionStats, bounded, utc_now
 from ..panels import ActiveSourceContext, PanelHandoff, bbox_iou
+from ..storage import resolve_storage_paths
 
 SCHEMA_VERSION = 2
 
 
 def default_database_path() -> Path:
-    root = os.environ.get("CHARTAGENT_DATA_DIR")
-    return (Path(root) if root else Path.home() / ".chartagent") / "sessions.db"
+    return resolve_storage_paths().database
 
 
 class SQLiteAgentMemory:
@@ -26,7 +25,7 @@ class SQLiteAgentMemory:
 
     def __init__(self, name: str, *, database: str | Path | None = None, context_budget: int = 24000, create: bool = True) -> None:
         bounded(name, 128, "session name")
-        self.database = Path(database) if database else default_database_path()
+        self.database = resolve_storage_paths(database=database).database
         self.database.parent.mkdir(parents=True, exist_ok=True)
         self.context_budget = context_budget
         self.connection = sqlite3.connect(self.database)

@@ -44,6 +44,10 @@ conda run -n agent python -m chartagent.evaluation \
 
 默认输出到 `.chartagent/diagnostics/`，每个样本生成同名 `.json` 和 `.md`：
 
+该目录是 canonical data root 下的 `diagnostics/`。如果设置了
+`CHARTAGENT_DATA_DIR`，或执行命令时传入 `--output-dir`，输出会分别遵循
+对应的显式配置；相对路径以项目根目录为基准。
+
 - JSON 是机器可读事实：样本指纹、run/provider/model、八阶段状态、事件序号、panel/attempt/artifact 引用、异常和第一个可确认失败。
 - Markdown 是人工阅读视图：阶段表、未观察到的阶段、异常面板和最终引用。
 

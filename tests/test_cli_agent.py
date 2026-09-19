@@ -59,6 +59,25 @@ def test_cli_agent_model_forwarded(monkeypatch):
     assert seen["model"] == "qwen-3"
 
 
+def test_cli_data_dir_forwarded_to_agent_repl(monkeypatch, tmp_path):
+    seen = {}
+    monkeypatch.setattr(cli_mod, "run_agent_repl", lambda **kwargs: seen.update(kwargs) or 0)
+
+    assert cli_mod.cli(["--agent", "--data-dir", str(tmp_path / "data")]) == 0
+    assert seen["data_dir"] == str(tmp_path / "data")
+
+
+def test_cli_session_listing_uses_explicit_data_dir(monkeypatch, tmp_path, capsys):
+    from chartagent.memory import SQLiteAgentMemory
+
+    database = tmp_path / "data" / "sessions.db"
+    memory = SQLiteAgentMemory("stored", database=database)
+    memory.close()
+
+    assert cli_mod.cli(["--agent", "--data-dir", str(tmp_path / "data"), "--list-sessions"]) == 0
+    assert "stored" in capsys.readouterr().out
+
+
 def test_cli_trace_options_forwarded_to_agent_repl(monkeypatch):
     seen = {}
     monkeypatch.setattr(cli_mod, "run_agent_repl", lambda **k: seen.update(k) or 0)

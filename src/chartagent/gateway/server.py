@@ -13,6 +13,7 @@ from typing import Any, Iterable
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from ..attachments import DEFAULT_MAX_ATTACHMENT_BYTES
+from ..client import load_environment
 from .protocol import GatewayFault, GATEWAY_VERSION, success
 from .service import GatewayService
 
@@ -520,6 +521,7 @@ def serve(
     *,
     host: str = DEFAULT_HOST,
     port: int = DEFAULT_PORT,
+    data_dir: str | Path | None = None,
     database: str | Path | None = None,
     model: str | None = None,
     allowed_origins: Iterable[str] | None = None,
@@ -527,7 +529,7 @@ def serve(
     """Run the gateway until interrupted."""
     if host not in {"127.0.0.1", "localhost", "::1"}:
         raise ValueError("gateway host must be loopback")
-    service = GatewayService(database=database, model=model)
+    service = GatewayService(data_dir=data_dir, database=database, model=model)
     server = GatewayHTTPServer(
         (host, port),
         service,
@@ -543,11 +545,23 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m chartagent.gateway")
     parser.add_argument("--host", default=DEFAULT_HOST)
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
+    parser.add_argument(
+        "--data-dir",
+        default=None,
+        help="durable data root; relative paths are resolved from the project root",
+    )
     parser.add_argument("--database", default=None)
     parser.add_argument("--model", default=None)
     args = parser.parse_args(argv)
     try:
-        serve(host=args.host, port=args.port, database=args.database, model=args.model)
+        load_environment()
+        serve(
+            host=args.host,
+            port=args.port,
+            data_dir=args.data_dir,
+            database=args.database,
+            model=args.model,
+        )
     except KeyboardInterrupt:
         return 0
     except ValueError as exc:

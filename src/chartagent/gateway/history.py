@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import shutil
 import time
 from collections.abc import Mapping
@@ -13,7 +12,7 @@ from threading import RLock
 from typing import Any
 from uuid import uuid4
 
-from ..memory.sqlite import default_database_path
+from ..storage import resolve_storage_paths
 from ..trace import truncate_text
 from .protocol import (
     CHECKPOINT_SCHEMA_VERSION,
@@ -63,6 +62,7 @@ class GatewayHistoryStore:
         self,
         database: str | Path | None,
         *,
+        data_dir: str | Path | None = None,
         artifact_root: str | Path | None = None,
         max_events: int = DEFAULT_MAX_HISTORY_EVENTS,
         max_runs: int = DEFAULT_MAX_HISTORY_RUNS,
@@ -70,8 +70,13 @@ class GatewayHistoryStore:
         max_artifact_bytes: int = DEFAULT_MAX_HISTORY_ARTIFACT_BYTES,
         max_artifacts: int = DEFAULT_MAX_HISTORY_ARTIFACTS,
     ) -> None:
-        self.database = Path(database).expanduser() if database is not None else default_database_path()
-        self.artifact_root = Path(artifact_root).expanduser() if artifact_root is not None else self._default_artifact_root()
+        paths = resolve_storage_paths(
+            data_dir=data_dir,
+            database=database,
+            artifact_root=artifact_root,
+        )
+        self.database = paths.database
+        self.artifact_root = paths.run_artifacts
         self.max_events = max_events
         self.max_runs = max_runs
         self.retention_seconds = retention_seconds
@@ -82,10 +87,6 @@ class GatewayHistoryStore:
         self._initialize()
         self.artifact_root.mkdir(parents=True, exist_ok=True)
         self._restrict_permissions(self.artifact_root, 0o700)
-
-    def _default_artifact_root(self) -> Path:
-        configured = os.environ.get("CHARTAGENT_DATA_DIR")
-        return (Path(configured).expanduser() if configured else Path.home() / ".chartagent") / "run-artifacts"
 
     def _connect(self):
         import sqlite3

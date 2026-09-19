@@ -4,6 +4,7 @@ import { pathToFileURL } from 'node:url'
 import process from 'node:process'
 
 const DEFAULT_ENV_FILE = resolve(import.meta.dirname, '../../.env')
+const PROJECT_ROOT = resolve(import.meta.dirname, '../..')
 
 export function gatewayTauriEnvironment(environment = process.env) {
   return {
@@ -11,6 +12,7 @@ export function gatewayTauriEnvironment(environment = process.env) {
     CHARTAGENT_MODE: 'gateway',
     VITE_CHARTAGENT_MODE: 'gateway',
     CHARTAGENT_ENV_FILE: environment.CHARTAGENT_ENV_FILE || DEFAULT_ENV_FILE,
+    CHARTAGENT_PROJECT_ROOT: environment.CHARTAGENT_PROJECT_ROOT || PROJECT_ROOT,
   }
 }
 

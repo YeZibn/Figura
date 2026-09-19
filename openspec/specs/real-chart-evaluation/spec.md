@@ -50,7 +50,7 @@
 
 ### Requirement: 诊断报告必须指出第一个可确认的失败阶段
 
-系统 SHALL 从阶段时间线生成有界的 JSON 事实结果和 Markdown 摘要。报告必须展示样本、run、provider/model、各阶段状态、关键事件引用、最终产物引用以及第一个可由现有证据确认的失败阶段。诊断归因至少支持 `decomposition`、`panel_routing`、`measurement`、`repair`、`assembly_render`、`transport_runtime` 和 `unknown`。
+系统 SHALL 从阶段时间线生成有界的 JSON 事实结果和 Markdown 摘要，并在未指定其他输出目录时将它们保存到 canonical data root 下的 `diagnostics/`。报告必须展示样本、run、provider/model、各阶段状态、关键事件引用、最终产物引用以及第一个可由现有证据确认的失败阶段。诊断归因至少支持 `decomposition`、`panel_routing`、`measurement`、`repair`、`assembly_render`、`transport_runtime` 和 `unknown`。
 
 报告 MUST 对 API key、Authorization 头、绝对本地路径和未经授权的原始图片内容进行脱敏或只保留受控引用。本阶段报告不计算通用 IoU、数值准确率或跨模型回归分数；缺少证据时必须标记为 `unknown`，不能根据最终图片主观猜测根因。
 
@@ -68,3 +68,9 @@
 
 - **WHEN** 运行在事件不完整、历史缺失或 provider 异常处结束，无法确认更早阶段的责任
 - **THEN** 报告标记 `unknown` 或 `transport_runtime`，说明缺少的证据，不输出伪造的准确率结论
+
+#### Scenario: Default diagnostics location is project-local
+
+- **WHEN** 用户运行真实图表诊断且没有显式指定输出目录
+- **THEN** JSON 事实结果和 Markdown 摘要保存在 canonical data root 下的 `diagnostics/`
+- **AND** 不会默认写入项目外的临时报告目录或用户 home 目录

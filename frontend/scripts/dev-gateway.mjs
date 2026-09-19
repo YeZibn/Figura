@@ -9,6 +9,8 @@ const DEFAULT_FRONTEND_HOST = '127.0.0.1'
 const DEFAULT_FRONTEND_PORT = 1420
 const DEFAULT_STARTUP_TIMEOUT_MS = 15000
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 2000
+const PROJECT_ROOT = resolve(import.meta.dirname, '../..')
+const FRONTEND_ROOT = resolve(import.meta.dirname, '..')
 const DEFAULT_ENV_FILE = resolve(import.meta.dirname, '../../.env')
 
 const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds))
@@ -28,11 +30,25 @@ export function readConfig(environment = process.env) {
   const condaEnvironment = environment.CHARTAGENT_CONDA_ENV || 'agent'
   const condaExecutable = environment.CHARTAGENT_CONDA_EXECUTABLE || 'conda'
   const environmentFile = environment.CHARTAGENT_ENV_FILE || DEFAULT_ENV_FILE
-  return { gatewayHost, gatewayPort, frontendHost, frontendPort, startupTimeout, shutdownTimeout, condaEnvironment, condaExecutable, environmentFile }
+  const dataDir = environment.CHARTAGENT_DATA_DIR || null
+  return {
+    gatewayHost,
+    gatewayPort,
+    frontendHost,
+    frontendPort,
+    startupTimeout,
+    shutdownTimeout,
+    condaEnvironment,
+    condaExecutable,
+    environmentFile,
+    dataDir,
+    projectRoot: PROJECT_ROOT,
+    frontendRoot: FRONTEND_ROOT,
+  }
 }
 
 export function buildGatewayArgs(config) {
-  return [
+  const args = [
     'run',
     '-n',
     config.condaEnvironment,
@@ -44,6 +60,8 @@ export function buildGatewayArgs(config) {
     '--port',
     String(config.gatewayPort),
   ]
+  if (config.dataDir) args.push('--data-dir', config.dataDir)
+  return args
 }
 
 export function gatewayBaseUrl(config) {
@@ -65,12 +83,14 @@ export function buildGatewayEnvironment(environment, config) {
     ...environment,
     CHARTAGENT_GATEWAY_ORIGINS: origins.join(','),
     CHARTAGENT_ENV_FILE: environment.CHARTAGENT_ENV_FILE || config.environmentFile,
+    CHARTAGENT_PROJECT_ROOT: environment.CHARTAGENT_PROJECT_ROOT || config.projectRoot,
   }
 }
 
-function spawnOptions(environment) {
+function spawnOptions(environment, cwd) {
   return {
     env: environment,
+    cwd,
     stdio: 'inherit',
     detached: process.platform !== 'win32',
   }
@@ -184,7 +204,11 @@ export async function run(environment = process.env) {
   process.on('SIGTERM', handleSignal)
 
   try {
-    gatewayProcess = spawn(config.condaExecutable, buildGatewayArgs(config), spawnOptions(gatewayEnvironment))
+    gatewayProcess = spawn(
+      config.condaExecutable,
+      buildGatewayArgs(config),
+      spawnOptions(gatewayEnvironment, config.projectRoot),
+    )
     gatewayProcess.once('error', (error) => { gatewayProcess.spawnError = error })
     await waitForHealth(config, gatewayProcess)
     console.log(`Gateway ready at ${gatewayBaseUrl(config)}`)
@@ -192,7 +216,7 @@ export async function run(environment = process.env) {
     clientProcess = spawn(
       npmExecutable(),
       ['run', 'dev', '--', '--host', config.frontendHost, '--port', String(config.frontendPort)],
-      spawnOptions(clientEnvironment),
+      spawnOptions(clientEnvironment, config.frontendRoot),
     )
     clientProcess.once('error', () => {})
     const firstExit = await Promise.race([

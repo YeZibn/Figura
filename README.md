@@ -46,10 +46,10 @@ The desktop panel can select PNG, JPEG, GIF, and WebP images, preview them,
 upload them to the active session, delete registered attachments, and select
 valid IDs for the next message. The Gateway keeps uploaded bytes in a
 persistent application-owned directory and SQLite stores only safe attachment
-metadata and references. By default, attachments are stored beside the
-configured session database under `attachments/` (or under
-`~/.chartagent/attachments/` when no data directory is configured);
-`CHARTAGENT_ATTACHMENT_DIR` can override the location. A valid source remains
+metadata and references. By default, attachments are stored in the canonical
+data root's `attachments/` directory; without a data-root override this is
+the project-local `.chartagent/attachments/`. `CHARTAGENT_ATTACHMENT_DIR` can
+override the location. A valid source remains
 available after a Gateway restart. If a source is missing or its hash changes,
 the workspace marks it unavailable and offers re-upload recovery. Registration
 does not send image bytes to the model. The Agent decides whether to call
@@ -141,13 +141,34 @@ GET    /api/v1/sessions/{session_id}/runs/{run_id}/events?after={sequence}
 
 ## Agent sessions
 
-Without `--session`, Agent history and attachment references are process-local. Named sessions are opt-in and stored in SQLite at `$CHARTAGENT_DATA_DIR/sessions.db`, or at `~/.chartagent/sessions.db` when the variable is unset.
+Without `--session`, Agent history and attachment references are process-local.
+Named sessions are opt-in. All durable local data uses one canonical root with
+the following precedence:
+
+```text
+explicit --data-dir
+    > CHARTAGENT_DATA_DIR
+    > project-root/.chartagent
+```
+
+The default layout is `.chartagent/sessions.db`, `.chartagent/attachments/`,
+`.chartagent/run-artifacts/`, and `.chartagent/diagnostics/`. Relative data
+paths are resolved from the repository root rather than the process current
+directory. The same `--data-dir` option is available on the Gateway; the
+environment variable is also accepted by the frontend launchers.
+
+If an old `~/.chartagent` store is detected while the project-local default is
+being selected, Figura does not merge or dual-write it silently. Choose a
+store explicitly with `CHARTAGENT_DATA_DIR` or `--data-dir`, or move the data
+while the application is stopped.
 
 ```bash
 conda run -n agent python -m chartagent --agent --new-session demo
 conda run -n agent python -m chartagent --agent --session demo
 conda run -n agent python -m chartagent --agent --list-sessions
 conda run -n agent python -m chartagent --agent --delete-session demo
+# Optional explicit root:
+conda run -n agent python -m chartagent --agent --data-dir .chartagent --session demo
 ```
 
 `--delete-session` asks for confirmation and removes only local session state. It never deletes source image files. `--new-session` refuses to overwrite an existing session.
