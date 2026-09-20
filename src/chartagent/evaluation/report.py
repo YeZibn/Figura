@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from ..trace import sanitize_payload, truncate_text
+from .bundle import safe_case_stem
 from .manifest import DiagnosticSample
 from .timeline import DiagnosticTimeline, build_timeline
 
@@ -141,8 +142,7 @@ def write_report(report: DiagnosticReport, output_dir: str | Path) -> tuple[Path
     output_root = Path(output_dir).expanduser()
     output_root.mkdir(parents=True, exist_ok=True)
     case_id = str(report.sample.get("case_id") or "diagnostic")
-    safe_case_id = "".join(character if character.isalnum() or character in "-_" else "_" for character in case_id)
-    safe_case_id = safe_case_id[:96] or "diagnostic"
+    safe_case_id = safe_case_stem(case_id)
     json_path = output_root / f"{safe_case_id}.json"
     markdown_path = output_root / f"{safe_case_id}.md"
     json_path.write_text(report.to_json(), encoding="utf-8")

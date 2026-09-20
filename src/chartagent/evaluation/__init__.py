@@ -13,6 +13,8 @@ from .manifest import (
     load_manifest,
 )
 from .gateway import DiagnosticGatewayError, DiagnosticRun, GatewayDiagnosticClient
+from .gateway_process import ManagedGateway, ManagedGatewayError
+from .bundle import EvaluationBundle, EvaluationBundleError
 from .report import DiagnosticReport, build_report, write_report
 from .timeline import DiagnosticTimeline, StageEvidence, build_timeline
 
@@ -25,6 +27,10 @@ __all__ = [
     "DiagnosticGatewayError",
     "DiagnosticRun",
     "GatewayDiagnosticClient",
+    "ManagedGateway",
+    "ManagedGatewayError",
+    "EvaluationBundle",
+    "EvaluationBundleError",
     "DiagnosticReport",
     "build_report",
     "write_report",

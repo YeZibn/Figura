@@ -38,6 +38,8 @@ class DiagnosticGatewayError(RuntimeError):
         self.code = code
         self.message = message[:500]
         self.status = status
+        self.session_id: str | None = None
+        self.run_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -203,14 +205,21 @@ class GatewayDiagnosticClient:
         session_id = self.create_session(
             session_name or f"diagnostic-{sample.case_id}-{uuid.uuid4().hex[:8]}"
         )
-        attachment_id = self.upload_attachment(session_id, sample)
-        accepted = self.start_run(
-            session_id,
-            attachment_id=attachment_id,
-            provider=provider,
-            text=text,
-        )
-        return self.wait_for_run(session_id, accepted, timeout=timeout)
+        try:
+            attachment_id = self.upload_attachment(session_id, sample)
+            accepted = self.start_run(
+                session_id,
+                attachment_id=attachment_id,
+                provider=provider,
+                text=text,
+            )
+            result = self.wait_for_run(session_id, accepted, timeout=timeout)
+            return result
+        except DiagnosticGatewayError as exc:
+            exc.session_id = session_id
+            if "accepted" in locals():
+                exc.run_id = str(accepted.get("runId")) if accepted.get("runId") else None
+            raise
 
     def _make_run(
         self,

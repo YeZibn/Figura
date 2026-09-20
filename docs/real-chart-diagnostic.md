@@ -15,10 +15,6 @@
 
 Python 命令统一使用 `agent` Conda 环境：
 
-```bash
-conda run -n agent python -m chartagent.gateway --port 8765
-```
-
 先只校验清单，不会触发模型调用：
 
 ```bash
@@ -38,17 +34,63 @@ conda run -n agent python -m chartagent.evaluation \
   --execute
 ```
 
-也可以使用 `CHARTAGENT_EVAL_PROVIDER` 和 `CHARTAGENT_GATEWAY_URL`，但 provider 仍然必须明确存在。provider 不可用、Gateway 不可达或返回了不同 provider 时，命令会记录错误并退出，不会静默切换模型。
+执行真实评测时，命令默认会在评测包内自动启动一个 loopback Gateway，并在结束、失败或中断时回收它；不需要先手动启动 Gateway。每次执行都会创建新的
+`.chartagent/evaluations/<evaluation_id>/`。如果需要指定根目录，可以使用：
 
-## 输出
+```bash
+conda run -n agent python -m chartagent.evaluation \
+  --manifest tests/fixtures/real_chart_diagnostic_manifest.json \
+  --asset-root . \
+  --provider qwen \
+  --data-dir .chartagent \
+  --evaluation-root .chartagent/evaluations/manual-batch \
+  --execute
+```
 
-默认输出到 `.chartagent/diagnostics/`，每个样本生成同名 `.json` 和 `.md`：
+显式指定的 `--evaluation-root` 必须尚不存在，避免覆盖旧评测。也可以只传
+`--data-dir`，系统会在其 `evaluations/` 下自动生成唯一目录。
 
-该目录是 canonical data root 下的 `diagnostics/`。如果设置了
-`CHARTAGENT_DATA_DIR`，或执行命令时传入 `--output-dir`，输出会分别遵循
-对应的显式配置；相对路径以项目根目录为基准。
+也可以使用 `CHARTAGENT_EVAL_PROVIDER`。如果传入 `--base-url`、设置
+`CHARTAGENT_GATEWAY_URL` 或显式加入 `--external-gateway`，则进入旧的外部 Gateway
+兼容模式：命令不会托管 Gateway，也不会把 Gateway 的数据库和附件纳入同一个评测包，
+只写入诊断报告。该模式适合已有 Gateway 的快速检查；要获得完整、隔离的评测材料，
+应使用默认托管模式。provider 不可用、Gateway 不可达或返回了不同 provider 时，命令
+会记录错误并退出，不会静默切换模型。
 
-- JSON 是机器可读事实：样本指纹、run/provider/model、八阶段状态、事件序号、panel/attempt/artifact 引用、异常和第一个可确认失败。
-- Markdown 是人工阅读视图：阶段表、未观察到的阶段、异常面板和最终引用。
+## 评测包布局
 
-报告只保留有界引用和错误摘要，不写入原图、模型原始提示词、API key、绝对本地路径或完整事件 payload。真实诊断输出不纳入默认 CI；固定事件样例覆盖应纳入 CI 的诊断规则。
+一次完整评测的所有持久化材料位于同一个目录：
+
+```text
+.chartagent/evaluations/<evaluation_id>/
+├── evaluation.json       # 批次索引与生命周期状态
+├── manifest.json         # 本次选择的安全清单快照
+├── summary.json
+├── summary.md
+├── sessions.db           # Gateway 原始历史，仅供本地诊断
+├── attachments/          # 上传附件，仅供本地诊断
+├── run-artifacts/        # 运行产物，仅供本地诊断
+└── diagnostics/
+    ├── <case_id>.json
+    └── <case_id>.md
+```
+
+`evaluation.json` 和 `summary.*` 会在创建批次、每个 case 结束以及批次终止时更新。
+状态含义如下：
+
+- `running`：批次已创建，仍有 case 在执行。
+- `completed`：所有选中的 case 都正常完成。
+- `partial`：至少有 case 失败、超时或进程中断，但现场被保留。
+- `blocked`：Gateway/provider 未能让 case 提交运行，或批次在启动阶段被阻塞。
+
+JSON 是机器可读事实：样本指纹、run/provider/model、阶段状态、事件序号、panel/attempt/artifact
+引用、异常和第一个可确认失败。Markdown 是人工阅读视图：阶段表、未观察到的阶段、异常
+面板和最终引用。
+
+报告与清单快照只保留有界、脱敏内容，不写入原图、模型原始提示词、API key、Authorization
+头、`.env` 或绝对本地路径。`sessions.db`、`attachments/` 和 `run-artifacts/` 是本地取证材料，
+不应直接上传或当作可分享报告。
+
+旧的 `.chartagent/diagnostics/` 报告和共享数据不会自动迁移；新评测使用新的批次布局。
+如果只需要旧式报告输出，可显式传入 `--base-url` 并配合 `--output-dir`。真实诊断输出
+不纳入默认 CI；固定事件样例覆盖应纳入 CI 的诊断规则。

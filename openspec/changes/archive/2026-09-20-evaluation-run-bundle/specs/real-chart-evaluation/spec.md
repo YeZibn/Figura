@@ -1,10 +1,4 @@
-# real-chart-evaluation Specification
-
-## Purpose
-
-为少量真实授权图表图片提供一条轻量、可追溯的端到端诊断链，帮助确认分区、面板交接、测量、修复和最终装配究竟在哪个阶段出现问题，而不是立即建立完整的准确率评测平台。
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: 真实样本必须通过现有运行边界执行
 
@@ -25,28 +19,7 @@
 #### Scenario: provider 不可用
 
 - **WHEN** provider 缺少配置、请求失败或运行被阻塞
-- **THEN** 系统将诊断标记为 `not_run` 或 `blocked`，说明原因，并不使用替代模型或合成结果填充运行结果
-
-### Requirement: 诊断必须整理已有事件为阶段时间线
-
-诊断结果 SHALL 复用现有 run/history/event、panel、measurement、repair 和 artifact 引用，整理出输入、分区、面板交接、测量、审核、修复、assemble 和 render 阶段。每个阶段至少必须有 `completed`、`failed`、`not_reached` 或 `not_observed` 状态，并保留相关事件 sequence、面板/attempt/artifact 引用和有限错误摘要。
-
-诊断不得新增一套与 Gateway 冲突的运行状态或持久化协议。运行中断或中途失败时，已经收到的阶段必须保留，未到达阶段必须明确标记为 `not_reached`，不能生成看似完整的成功时间线。
-
-#### Scenario: 链路完整结束
-
-- **WHEN** 真实运行完成最终 assemble 或渲染
-- **THEN** 时间线能够展示从输入到最终产物的阶段顺序，并关联每个已完成阶段的稳定证据引用
-
-#### Scenario: 运行在审核或修复阶段结束
-
-- **WHEN** 质量审核失败、修复预算耗尽或运行在后续阶段中断
-- **THEN** 时间线保留已有测量和审核事件，将修复或后续阶段标记为失败/未到达，并显示其错误摘要
-
-#### Scenario: 运行重复拆分或整图测量
-
-- **WHEN** 事件中出现多次分区，或多面板图片的测量事件没有绑定 `panel_id`
-- **THEN** 时间线明确展示重复分区或未作用域测量，并将其作为可诊断问题，而不是隐藏在最终结果中
+- **THEN** 系统将该 case 诊断标记为 `not_run` 或 `blocked`，说明原因，并不使用替代模型或合成结果填充运行结果
 
 ### Requirement: 诊断报告必须指出第一个可确认的失败阶段
 
