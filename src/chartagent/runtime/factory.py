@@ -36,6 +36,7 @@ def create_agent_runtime(
     operation_begin: Optional[Callable[..., dict[str, Any]]] = None,
     operation_complete: Optional[Callable[..., dict[str, Any] | None]] = None,
     operation_uncertain: Optional[Callable[..., dict[str, Any] | None]] = None,
+    execution_gate_sink: Optional[Callable[[dict[str, Any]], Any]] = None,
     session_name: str | None = None,
     database: str | Path | None = None,
     client: Any = None,
@@ -86,6 +87,7 @@ def create_agent_runtime(
         "operation_begin": operation_begin,
         "operation_complete": operation_complete,
         "operation_uncertain": operation_uncertain,
+        "execution_gate_sink": execution_gate_sink,
     }.items():
         if value is not None:
             agent_kwargs[key] = value

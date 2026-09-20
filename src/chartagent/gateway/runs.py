@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Mapping
 from dataclasses import dataclass
 from contextlib import contextmanager
 from threading import Condition, Event, RLock
@@ -17,7 +18,7 @@ from ..tools.core.result import (
     GeneratedImage,
     SUPPORTED_GENERATED_IMAGE_MIME_TYPES,
 )
-from ..trace import TraceEvent
+from ..trace import TraceEvent, sanitize_payload
 from .history import GatewayHistoryStore, HistoryStoreError
 from .protocol import (
     CheckpointPhase,
@@ -168,6 +169,7 @@ class ManagedRun:
         parent_run_id: str | None = None,
         root_run_id: str | None = None,
         continuation_kind: ContinuationKind | str | None = None,
+        execution_gate: Mapping[str, object] | None = None,
     ) -> None:
         self.run_id = run_id or f"run_{uuid4().hex}"
         self.session_id = session_id
@@ -178,6 +180,16 @@ class ManagedRun:
         self.root_run_id = root_run_id or self.run_id
         self.continuation_kind = ContinuationKind(continuation_kind) if continuation_kind is not None else None
         self.recovery = RunRecovery()
+        default_gate: dict[str, object] = {
+            "state": "open",
+            "blocking": False,
+            "issues": [],
+        }
+        self.execution_gate: dict[str, object] = (
+            sanitize_payload(dict(list(execution_gate.items())[:32]))
+            if isinstance(execution_gate, Mapping)
+            else default_gate
+        )
         self.status = RunStatus.RUNNING
         self.answer: str | None = None
         self.error_code: str | None = None
@@ -218,6 +230,7 @@ class ManagedRun:
             root_run_id=self.root_run_id,
             continuation_kind=self.continuation_kind,
             recovery=recovery,
+            execution_gate=self.execution_gate,
         )
 
     @property
@@ -265,6 +278,19 @@ class ManagedRun:
             payload.setdefault("turn", event.turn)
         payload["traceSequence"] = event.sequence
         self.publish(event.kind, payload)
+
+    def update_execution_gate(self, gate: Mapping[str, object]) -> dict[str, object]:
+        """Persist and project the current shared review gate."""
+        clean = sanitize_payload(dict(list(gate.items())[:32]))
+        with self._condition:
+            if clean == self.execution_gate:
+                return dict(self.execution_gate)
+            self.execution_gate = clean
+            if not self.terminal:
+                self._publish_locked("review_gate_updated", {"execution_gate": clean})
+            self._condition.notify_all()
+        self._update_history(self.status, execution_gate=clean)
+        return dict(clean)
 
     def create_checkpoint(
         self,
@@ -568,6 +594,12 @@ class HistoricalRun:
         except ValueError:
             self.continuation_kind = None
         self.recovery = _recovery_from_dict(summary.get("recovery"))
+        raw_gate = summary.get("executionGate")
+        self.execution_gate = (
+            sanitize_payload(dict(list(raw_gate.items())[:32]))
+            if isinstance(raw_gate, Mapping)
+            else {"state": "open", "blocking": False, "issues": []}
+        )
         self.history_store = history_store
 
     @property
@@ -585,6 +617,7 @@ class HistoricalRun:
             root_run_id=self.root_run_id,
             continuation_kind=self.continuation_kind,
             recovery=self.recovery,
+            execution_gate=self.execution_gate,
         )
 
     @property
@@ -650,6 +683,7 @@ class RunManager:
         idempotency_operation_kind: str | None = None,
         idempotency_parent_run_id: str | None = None,
         idempotency_checkpoint_id: str | None = None,
+        execution_gate: Mapping[str, object] | None = None,
     ) -> ManagedRun:
         with self._lock:
             self.cleanup()
@@ -667,6 +701,7 @@ class RunManager:
                 parent_run_id=parent_run_id,
                 root_run_id=root_run_id,
                 continuation_kind=continuation_kind,
+                execution_gate=execution_gate,
             )
             self._runs[run.run_id] = run
             if self.history_store is not None:
@@ -688,6 +723,8 @@ class RunManager:
                     )
                 except Exception:  # noqa: BLE001 - keep the live run usable
                     run._mark_history_warning()
+            if isinstance(execution_gate, Mapping):
+                run.update_execution_gate(execution_gate)
             payload = {"status": RunStatus.RUNNING.value}
             if provider:
                 payload["provider"] = provider
@@ -726,6 +763,7 @@ class RunManager:
         idempotency_operation_kind: str | None = None,
         idempotency_parent_run_id: str | None = None,
         idempotency_checkpoint_id: str | None = None,
+        execution_gate: Mapping[str, object] | None = None,
     ) -> ManagedRun:
         run = self.create(
             session_id,
@@ -740,6 +778,7 @@ class RunManager:
             idempotency_operation_kind=idempotency_operation_kind,
             idempotency_parent_run_id=idempotency_parent_run_id,
             idempotency_checkpoint_id=idempotency_checkpoint_id,
+            execution_gate=execution_gate,
         )
         try:
             self._executor.submit(worker, run)

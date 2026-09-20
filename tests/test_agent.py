@@ -167,7 +167,22 @@ def test_layout_preflight_context_is_cached_and_injected_into_sensor():
 
     def sensor(attachment_id: str, layout_context: dict[str, Any] | None = None):
         seen.append(layout_context)
-        return {"attachment_id": attachment_id, "has_layout": layout_context is not None}
+        return ToolResult(
+            {
+                "image_size": [320, 240],
+                "scope": {"panel_id": "panel_line"},
+                "plot_frame": {
+                    "x_axis": {"points_px": [[40, 200], [280, 200]]},
+                    "y_axis": {"points_px": [[40, 20], [40, 200]]},
+                },
+                "series": [{
+                    "id": "series_1",
+                    "trace": {"polyline_px": [[40, 180], [160, 120], [280, 80]]},
+                }],
+                "warnings": [],
+            },
+            [GeneratedImage(b"overlay", "image/png", "line overlay")],
+        )
 
     registry.register(
         Tool(
@@ -427,7 +442,7 @@ def test_multiple_tools_append_all_tool_messages_before_visual_observation():
     assert "Tool call ID: call-2" in evidence[3]["text"]
 
 
-def test_multiple_measurement_repairs_are_appended_after_the_complete_tool_batch():
+def test_measurement_gate_stops_the_tool_batch_after_the_first_blocking_result():
     registry = ToolRegistry()
     registry.register(
         Tool(
@@ -467,6 +482,7 @@ def test_multiple_measurement_repairs_are_appended_after_the_complete_tool_batch
             ),
         )
     )
+    events = []
     client = ScriptedClient(
         [
             NormalizedResult(
@@ -480,15 +496,17 @@ def test_multiple_measurement_repairs_are_appended_after_the_complete_tool_batch
         ]
     )
 
-    assert Agent(client, registry).run("检查两个 panel") == "done"
+    answer = Agent(client, registry, max_steps=2, trace=events.append).run("检查两个 panel")
+    assert answer == "*stopped: generated chart review failed; no artifact published*"
 
     messages = client.calls[1]["messages"]
     assert [message["role"] for message in messages] == ["user", "assistant", "tool", "tool", "user"]
     assert [message["tool_call_id"] for message in messages[2:4]] == ["bars-1", "line-1"]
-    repair = messages[-1]["content"]
+    repair = next(message["content"] for message in messages if message["role"] == "user" and "measurement_repairs" in str(message["content"]))
     assert "panel_bars" in repair
-    assert "panel_line" in repair
-    assert repair.index("panel_bars") < repair.index("panel_line")
+    assert "panel_line" not in repair
+    skipped = [event for event in events if event.kind == "tool_skipped"]
+    assert [event.payload["call_id"] for event in skipped] == ["line-1"]
 
 
 def test_invalid_generated_image_does_not_add_multimodal_turn():

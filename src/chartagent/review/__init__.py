@@ -25,6 +25,18 @@ from .vlm import (
     parse_vlm_review,
     review_candidate_with_vlm,
 )
+from .gates import (
+    ExecutionGate,
+    GateState,
+    ReviewCoordinator,
+    ReviewDecision,
+    ReviewGateBlocked,
+    ReviewState,
+    ReviewType,
+    normalize_review_event,
+    review_idempotency_key,
+)
+from .adapters import GeneratedChartReviewAdapter, MeasurementReviewAdapter
 
 __all__ = [
     "CandidateStatus",
@@ -48,4 +60,15 @@ __all__ = [
     "build_vlm_review_messages",
     "parse_vlm_review",
     "review_candidate_with_vlm",
+    "ExecutionGate",
+    "GateState",
+    "ReviewCoordinator",
+    "ReviewDecision",
+    "ReviewGateBlocked",
+    "ReviewState",
+    "ReviewType",
+    "normalize_review_event",
+    "review_idempotency_key",
+    "MeasurementReviewAdapter",
+    "GeneratedChartReviewAdapter",
 ]

@@ -320,7 +320,17 @@ def test_recorded_trajectory_covers_ocr_bar_retry_and_both_renderers():
         if region == "full":
             raise ValueError("plot region is ambiguous")
         return ToolResult(
-            {"bars": [8, 16, 24]},
+            {
+                "image_size": [320, 240],
+                "plot_area": {"bbox": [40, 20, 240, 180]},
+                "baseline": {"slope": 0.0, "intercept": 200.0},
+                "bars": [
+                    {"id": 1, "measure": {"ratio": 1.0}},
+                    {"id": 2, "measure": {"ratio": 2.0}},
+                    {"id": 3, "measure": {"ratio": 3.0}},
+                ],
+                "warnings": [],
+            },
             [GeneratedImage(b"bar-overlay", "image/png", "Bar measurements")],
         )
 

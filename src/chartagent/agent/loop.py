@@ -45,7 +45,16 @@ from ..measurement import (
     sessions_from_state,
     sessions_to_state,
 )
-from ..review import ChartReviewManager, ReviewIssue, ReviewResult, ReviewStatus, review_candidate_with_vlm
+from ..review import (
+    ChartReviewManager,
+    GeneratedChartReviewAdapter,
+    MeasurementReviewAdapter,
+    ReviewCoordinator,
+    ReviewIssue,
+    ReviewResult,
+    ReviewStatus,
+    review_candidate_with_vlm,
+)
 from ..tools.core.result import DispatchedObservation, GeneratedImage
 from .tool_schema import registry_tools, tool_to_openai_schema
 from .messages import assistant_entry, tool_entry
@@ -555,12 +564,14 @@ class Agent:
         attachments: Any = None,
         context_budget: int = 24000,
         review_manager: Optional[ChartReviewManager] = None,
+        review_coordinator: Optional[ReviewCoordinator] = None,
         interruption_event: Any = None,
         recovery_context: Optional[dict[str, Any]] = None,
         checkpoint_sink: Optional[Callable[..., bool]] = None,
         operation_begin: Optional[Callable[..., dict[str, Any]]] = None,
         operation_complete: Optional[Callable[..., dict[str, Any] | None]] = None,
         operation_uncertain: Optional[Callable[..., dict[str, Any] | None]] = None,
+        execution_gate_sink: Optional[Callable[[Mapping[str, Any]], Any]] = None,
         **chat_kwargs: Any,
     ) -> None:
         self.client = client
@@ -578,12 +589,16 @@ class Agent:
         self.memory = memory or InMemoryAgentMemory(context_budget=context_budget)
         self.attachments = attachments
         self._review_manager = review_manager or ChartReviewManager(attachments=attachments)
+        self._review_coordinator = review_coordinator or ReviewCoordinator()
+        self._measurement_review_adapter = MeasurementReviewAdapter()
+        self._generated_chart_review_adapter = GeneratedChartReviewAdapter()
         self._interruption_event = interruption_event
         self._recovery_context = recovery_context
         self._checkpoint_sink = checkpoint_sink
         self._operation_begin = operation_begin
         self._operation_complete = operation_complete
         self._operation_uncertain = operation_uncertain
+        self._execution_gate_sink = execution_gate_sink
         self.context_budget = context_budget
         self._messages: List[ChatCompletionMessageParam] = []
         self._current_messages: List[ChatCompletionMessageParam] = []
@@ -645,6 +660,12 @@ class Agent:
                     item for item in raw_artifacts[:48] if isinstance(item, dict)
                 ]
             measurement_sessions = sessions_from_state(recovery.get("measurementSessions"))
+            review_state = recovery.get("reviewState") if isinstance(recovery.get("reviewState"), Mapping) else {}
+            self._review_coordinator.restore(review_state.get("records", []))
+            if isinstance(review_state.get("executionGate"), Mapping):
+                self._review_coordinator.restore_gate(run.id, review_state["executionGate"])
+            elif isinstance(recovery.get("executionGate"), Mapping):
+                self._review_coordinator.restore_gate(run.id, recovery["executionGate"])
             pending_measurement_repairs = _measurement_repair_contexts_from_sessions(measurement_sessions)
             raw_repairs = recovery.get("pendingMeasurementRepairs")
             if isinstance(raw_repairs, list):
@@ -719,6 +740,7 @@ class Agent:
                         ),
                         "retry_budget": self.max_steps,
                         "publication_status": "published" if review_gate.get("published") else "not_published",
+                        "execution_gate": self._review_coordinator.gate(run.id).to_dict(),
                     },
                     panel_inventory=panel_inventory,
                     review_gate=review_gate,
@@ -836,8 +858,52 @@ class Agent:
                     if emitter is not None:
                         emitter.emit("generated_chart_rejected", turn=turn, state=gate, reason="review_failed")
                     self.memory.append(run, "terminal", {"answer": _REVIEW_FAILED_MSG, "review_gate": gate})
-                    self.memory.finish(run, RunStatus.COMPLETED, "review_failed")
+                    self.memory.finish(run, RunStatus.FAILED, "review_failed")
                     return _REVIEW_FAILED_MSG
+                shared_gate = self._review_coordinator.gate(run.id)
+                if shared_gate.blocking:
+                    self._current_messages.append(assistant_message)
+                    self._messages.append(assistant_message)
+                    self.memory.append(run, "assistant", {"message": assistant_message})
+                    gate_message = {
+                        "role": "user",
+                        "content": json.dumps(
+                            {"type": "execution_review_gate", "execution_gate": shared_gate.to_dict()},
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        ),
+                    }
+                    self._current_messages.append(gate_message)  # type: ignore[arg-type]
+                    self._messages.append(gate_message)  # type: ignore[arg-type]
+                    self.memory.append(run, "review_gate", {"state": shared_gate.to_dict()})
+                    if emitter is not None:
+                        emitter.emit("review_gate_required", turn=turn, execution_gate=shared_gate.to_dict())
+                    if shared_gate.state.value in {"failed", "exhausted"} or turn >= self.max_steps:
+                        self.memory.append(
+                            run,
+                            "terminal",
+                            {"answer": _REVIEW_FAILED_MSG, "execution_gate": shared_gate.to_dict()},
+                        )
+                        self.memory.finish(run, RunStatus.FAILED, "review_failed")
+                        return _REVIEW_FAILED_MSG
+                    self._checkpoint(
+                        run,
+                        phase="review",
+                        next_action=shared_gate.next_action or "repair_review_gate",
+                        state=self._checkpoint_state(
+                            user_input,
+                            self._current_messages,
+                            layout_contexts,
+                            run_attachment_ids,
+                            turn,
+                            pending_tool_calls=(),
+                            visual_references=checkpoint_references,
+                            artifact_records=artifact_records,
+                            measurement_sessions=measurement_sessions,
+                            pending_measurement_repairs=pending_measurement_repairs,
+                        ),
+                    )
+                    continue
                 self._current_messages.append(assistant_message)
                 self._messages.append(assistant_message)
                 self.memory.append(run, "assistant", {"message": assistant_message})
@@ -917,6 +983,42 @@ class Agent:
                     call_arguments = json.loads(call.arguments) if call.arguments.strip() else {}
                 except (TypeError, json.JSONDecodeError):
                     call_arguments = {}
+                if not self._review_gate_allows_call(
+                    run.id,
+                    call.name,
+                    call_arguments if isinstance(call_arguments, Mapping) else {},
+                ):
+                    active_gate = self._review_coordinator.gate(run.id)
+                    self._skip_tool_calls(
+                        run,
+                        result.tool_calls[call_index:],
+                        gate=active_gate,
+                        emitter=emitter,
+                        turn=turn,
+                    )
+                    if isinstance(active_gate.repair_action, Mapping):
+                        batch_repair_contexts = _merge_measurement_repair_contexts(
+                            batch_repair_contexts,
+                            [active_gate.repair_action],
+                        )
+                    self._checkpoint(
+                        run,
+                        phase="review",
+                        next_action="model",
+                        state=self._checkpoint_state(
+                            user_input,
+                            self._current_messages,
+                            layout_contexts,
+                            run_attachment_ids,
+                            turn,
+                            pending_tool_calls=(),
+                            visual_references=checkpoint_references,
+                            artifact_records=artifact_records,
+                            measurement_sessions=measurement_sessions,
+                            pending_measurement_repairs=pending_measurement_repairs,
+                        ),
+                    )
+                    break
                 if isinstance(call_arguments, dict) and isinstance(call_arguments.get("panel_id"), str):
                     selected_panel_id = call_arguments["panel_id"]
                 operation_kind = "render" if call.name in _RENDER_TOOL_NAMES else "tool"
@@ -1016,6 +1118,7 @@ class Agent:
                     self._begin_work_unit(review_operation_id, "review")
                 observation = self._apply_generation_review(
                     observation,
+                    run=run,
                     run_id=run.id,
                     call_id=call.id,
                     arguments=call.arguments,
@@ -1044,7 +1147,23 @@ class Agent:
                         measurement_payload = json.loads(observation.content)
                         measurement_data = measurement_payload.get("data") if isinstance(measurement_payload, dict) else None
                         if isinstance(measurement_data, dict):
-                            register_measurement(measurement_sessions, measurement_data)
+                            measurement_session = register_measurement(measurement_sessions, measurement_data)
+                            measurement_review = self._measurement_review_adapter.submit(
+                                self._review_coordinator,
+                                run_id=run.id,
+                                tool_name=call.name,
+                                payload=measurement_payload,
+                                session=measurement_session,
+                            )
+                            if measurement_review is not None:
+                                self._record_shared_review(
+                                    run,
+                                    measurement_review,
+                                    emitter=emitter,
+                                    turn=turn,
+                                    tool_name=call.name,
+                                    call_id=call.id,
+                                )
                             pending_measurement_repairs = _measurement_repair_contexts_from_sessions(
                                 measurement_sessions
                             )
@@ -1118,6 +1237,17 @@ class Agent:
                     {"observations": list(observation_refs)},
                 )
                 remaining_calls = result.tool_calls[call_index + 1:]
+                shared_gate = self._review_coordinator.gate(run.id)
+                stop_batch = shared_gate.blocking
+                if stop_batch and remaining_calls:
+                    self._skip_tool_calls(
+                        run,
+                        remaining_calls,
+                        gate=shared_gate,
+                        emitter=emitter,
+                        turn=turn,
+                    )
+                    remaining_calls = ()
                 self._checkpoint(
                     run,
                     phase="tool",
@@ -1226,6 +1356,8 @@ class Agent:
                     ToolVisualEvidence(call.name, call.id, generated)
                     for generated in observation.images
                 )
+                if stop_batch:
+                    break
             if visual_evidence:
                 self._raise_if_interrupted(run)
                 visual_message = {
@@ -1273,7 +1405,10 @@ class Agent:
         self._raise_if_interrupted(run)
         terminal_answer = _BUDGET_MSG
         terminal_gate = self._review_manager.gate(run.id)
-        if terminal_gate["pending"] or terminal_gate["failed"]:
+        shared_terminal_gate = self._review_coordinator.gate(run.id)
+        if shared_terminal_gate.blocking:
+            terminal_answer = _REVIEW_FAILED_MSG if shared_terminal_gate.state.value in {"failed", "exhausted"} else _REVIEW_REQUIRED_MSG
+        elif terminal_gate["pending"] or terminal_gate["failed"]:
             terminal_answer = _REVIEW_REQUIRED_MSG if terminal_gate["pending"] else _REVIEW_FAILED_MSG
         if emitter is not None:
             emitter.emit(
@@ -1282,10 +1417,138 @@ class Agent:
                 max_steps=self.max_steps,
                 answer=terminal_answer,
                 review_gate=terminal_gate,
+                execution_gate=shared_terminal_gate.to_dict(),
             )
-        self.memory.append(run, "terminal", {"answer": terminal_answer, "max_steps": self.max_steps, "review_gate": terminal_gate})
-        self.memory.finish(run, RunStatus.COMPLETED, "budget")
+        review_blocked = shared_terminal_gate.blocking or terminal_gate["pending"] or terminal_gate["failed"]
+        self.memory.append(run, "terminal", {"answer": terminal_answer, "max_steps": self.max_steps, "review_gate": terminal_gate, "execution_gate": shared_terminal_gate.to_dict()})
+        self.memory.finish(run, RunStatus.FAILED if review_blocked else RunStatus.COMPLETED, "review_failed" if review_blocked else "budget")
         return terminal_answer
+
+    def _review_gate_allows_call(self, run_id: str, call_name: str, arguments: Mapping[str, Any]) -> bool:
+        """Allow only the repair action that owns an active shared gate."""
+        gate = self._review_coordinator.gate(run_id)
+        if not gate.blocking:
+            return True
+        if gate.review_type is None:
+            return False
+        if gate.state.value in {"failed", "exhausted"}:
+            return False
+        if gate.review_type.value == "measurement":
+            if call_name not in MEASUREMENT_TOOLS:
+                return False
+            target = arguments.get("measurement_target")
+            if not isinstance(target, Mapping):
+                return False
+            parent_attempt_id = target.get("parent_attempt_id")
+            return isinstance(parent_attempt_id, str) and parent_attempt_id == gate.subject_id
+        if gate.review_type.value == "generated_chart":
+            return call_name in _RENDER_TOOL_NAMES or call_name == "assemble_spec"
+        return False
+
+    def _record_shared_review(
+        self,
+        run: Any,
+        record: Any,
+        *,
+        emitter: TraceEmitter | None,
+        turn: int,
+        tool_name: str,
+        call_id: str,
+        emit_start: bool = True,
+    ) -> None:
+        """Persist and expose one normalized review transition."""
+        payload = record.to_dict()
+        payload["execution_gate"] = self._review_coordinator.gate(record.run_id).to_dict()
+        payload.update({"tool_name": tool_name, "call_id": call_id})
+        self.memory.append(run, "review", {"state": payload})
+        if self._execution_gate_sink is not None:
+            try:
+                self._execution_gate_sink(payload["execution_gate"])
+            except Exception:  # noqa: BLE001 - gate projection cannot stop the Agent
+                pass
+        if emitter is None:
+            return
+        if record.state.value == "reviewing":
+            emitter.emit(
+                "review_started",
+                turn=turn,
+                review_id=record.review_id,
+                review_type=record.review_type.value,
+                subject_id=record.subject_id,
+                attempt=record.attempt,
+                blocking=True,
+                tool_name=tool_name,
+                call_id=call_id,
+            )
+            return
+        if emit_start:
+            emitter.emit(
+                "review_started",
+                turn=turn,
+                review_id=record.review_id,
+                review_type=record.review_type.value,
+                subject_id=record.subject_id,
+                attempt=record.attempt,
+                blocking=True,
+                tool_name=tool_name,
+                call_id=call_id,
+            )
+        if record.state.value in {"passed", "passed_with_warning"}:
+            emitter.emit("review_completed", turn=turn, **payload)
+        elif record.state.value == "repair_required":
+            emitter.emit("review_repair_required", turn=turn, **payload)
+        else:
+            emitter.emit("review_failed", turn=turn, **payload)
+
+    def _skip_tool_calls(
+        self,
+        run: Any,
+        calls: Sequence[ToolCall],
+        *,
+        gate: Any,
+        emitter: TraceEmitter | None,
+        turn: int,
+    ) -> None:
+        """Append protocol-safe not-started results for calls blocked by a gate."""
+        if not calls:
+            return
+        content = json.dumps(
+            {
+                "error": "review gate blocked",
+                "status": "not_started",
+                "review_gate": gate.to_dict(),
+                "next_action": gate.next_action or "等待审核门禁释放",
+            },
+            ensure_ascii=False,
+        )
+        for call in calls:
+            message = tool_entry(call, content)
+            self._current_messages.append(message)
+            self._messages.append(message)
+            self.memory.append(
+                run,
+                "tool",
+                {
+                    "message": message,
+                    "tool_name": call.name,
+                    "status": "not_started",
+                    "reason": "review_gate_blocked",
+                    "review_gate": gate.to_dict(),
+                },
+            )
+            if emitter is not None:
+                presentation = get_tool_presentation(call.name, tool=self.registry.get(call.name))
+                emitter.emit(
+                    "tool_skipped",
+                    turn=turn,
+                    tool_name=call.name,
+                    tool_display_name=presentation.display_name,
+                    tool_label=presentation.label,
+                    call_id=call.id,
+                    status="not_started",
+                    reason="review_gate_blocked",
+                    review_gate=gate.to_dict(),
+                )
 
     def _begin_work_unit(self, operation_id: str, operation_kind: str) -> dict[str, Any]:
         if self._operation_begin is None:
@@ -1332,6 +1595,14 @@ class Agent:
             checkpoint_state = dict(state)
             checkpoint_state.setdefault("phase", phase)
             checkpoint_state["nextAction"] = next_action
+            # The review coordinator is the single source of truth for the
+            # run-level gate.  Persist both its bounded record history and
+            # the current projection at every durable boundary so a resume
+            # cannot silently continue past an active review.
+            if hasattr(run, "id"):
+                review_state = self._review_coordinator.to_state(run.id)
+                checkpoint_state["reviewState"] = review_state
+                checkpoint_state["executionGate"] = review_state.get("executionGate", {})
             self._checkpoint_sink(checkpoint_state, phase=phase, next_action=next_action)
         except Exception:  # noqa: BLE001 - checkpoint failure is surfaced as unavailable metadata
             return
@@ -1606,6 +1877,7 @@ class Agent:
         self,
         observation: Any,
         *,
+        run: Any | None = None,
         run_id: str,
         call_id: str,
         arguments: str,
@@ -1664,6 +1936,22 @@ class Agent:
                 review_spec,
                 source_attachment_ids=source_attachment_ids,
             )
+            # Open the shared gate before any VLM/provider review work.  The
+            # generated artifact is therefore never visible as publishable
+            # while the semantic review is still in flight.
+            initial_shared_review = self._generated_chart_review_adapter.submit(
+                self._review_coordinator,
+                candidate=candidate,
+            )
+            if run is not None:
+                self._record_shared_review(
+                    run,
+                    initial_shared_review,
+                    emitter=emitter,
+                    turn=turn or 0,
+                    tool_name="generated_chart_review",
+                    call_id=call_id,
+                )
             if candidate.review_status is ReviewStatus.PENDING:
                 semantic_result: ReviewResult | None = None
                 if candidate.policy.semantic_required:
@@ -1712,6 +2000,20 @@ class Agent:
                             ),
                         )
                 candidate = self._review_manager.process(candidate, semantic_result=semantic_result)
+            shared_review = self._generated_chart_review_adapter.submit(
+                self._review_coordinator,
+                candidate=candidate,
+            )
+            if run is not None:
+                self._record_shared_review(
+                    run,
+                    shared_review,
+                    emitter=emitter,
+                    turn=turn or 0,
+                    tool_name="generated_chart_review",
+                    call_id=call_id,
+                    emit_start=False,
+                )
             generated.append(self._review_manager.decorate_image(image, candidate))
             review_payloads.append(candidate.safe_metadata())
             changed = True

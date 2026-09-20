@@ -550,8 +550,77 @@ function GeneratedChartView({ artifact, loader, onPreview }: { artifact: Generat
 }
 
 function eventLabel(event: AgentRunEvent): string {
-  const labels: Record<string, string> = { run_started: '运行已开始', resume_started: '继续执行已开始', model_started: '模型轮次开始', model_completed: '模型轮次完成', operation_completed: '操作结果已保存', recovery_blocked: '继续执行被阻止', progress: '处理中', generated_chart: '图表状态已更新', chart_review_started: '图表审核已开始', chart_review_required: '等待图表审核', chart_review_repair_required: '正在修复并重新审核', generated_chart_published: '图表已发布', generated_chart_rejected: '图表未发布', chart_review_completed: '图表审核完成', measurement_repair_required: '需要定向重测', measurement_repair_rejected: '定向重测被拒绝', measurement_repair_exhausted: '定向重测次数已用尽', final_answer: '最终回答已生成', budget_exhausted: '达到预算上限', run_failed: '运行失败', run_interrupted: '运行已中断', history_gap: '历史记录不完整', tool_result: '工具结果（历史记录不完整）' }
+  const labels: Record<string, string> = { run_started: '运行已开始', resume_started: '继续执行已开始', model_started: '模型轮次开始', model_completed: '模型轮次完成', operation_completed: '操作结果已保存', recovery_blocked: '继续执行被阻止', progress: '处理中', generated_chart: '图表状态已更新', chart_review_started: '图表审核已开始', chart_review_required: '等待图表审核', chart_review_repair_required: '正在修复并重新审核', generated_chart_published: '图表已发布', generated_chart_rejected: '图表未发布', chart_review_completed: '图表审核完成', measurement_repair_required: '需要定向重测', measurement_repair_rejected: '定向重测被拒绝', measurement_repair_exhausted: '定向重测次数已用尽', review_started: '审核已开始', review_completed: '审核已通过', review_repair_required: '审核要求修复', review_failed: '审核未通过', review_gate_required: '主链路已暂停', review_gate_updated: '审核门禁状态已更新', tool_skipped: '工具未开始执行', final_answer: '最终回答已生成', budget_exhausted: '达到预算上限', run_failed: '运行失败', run_interrupted: '运行已中断', history_gap: '历史记录不完整', tool_result: '工具结果（历史记录不完整）' }
   return labels[event.kind] || event.kind
+}
+
+const reviewEventKinds = new Set(['review_started', 'review_completed', 'review_repair_required', 'review_failed', 'review_gate_required', 'review_gate_updated', 'chart_review_started', 'chart_review_required', 'chart_review_repair_required', 'chart_review_completed', 'generated_chart_published', 'generated_chart_rejected', 'measurement_repair_required', 'measurement_repair_rejected', 'measurement_repair_exhausted'])
+
+function isReviewEvent(event: AgentRunEvent): boolean {
+  return reviewEventKinds.has(event.kind)
+}
+
+function reviewTypeLabel(value: unknown): string {
+  if (value === 'measurement') return '测量审核'
+  if (value === 'generated_chart') return '生成图审核'
+  if (typeof value === 'string' && value) return value
+  return '审核'
+}
+
+function reviewStateLabel(value: unknown, blocking: boolean): string {
+  if (value === 'reviewing') return '审核中'
+  if (value === 'passed') return '已通过'
+  if (value === 'passed_with_warning') return '已通过·有警告'
+  if (value === 'repair_required') return '需要修复'
+  if (value === 'exhausted') return '修复次数已耗尽'
+  if (value === 'failed') return '未通过'
+  if (value === 'uncertain') return '结果不确定'
+  return blocking ? '主链路已暂停' : '审核状态已更新'
+}
+
+function reviewGateFromPayload(payload: Record<string, unknown>): Record<string, unknown> | null {
+  return recordValue(payload.execution_gate) || recordValue(payload.executionGate) || recordValue(payload.gate)
+}
+
+function reviewIssues(payload: Record<string, unknown>, gate: Record<string, unknown> | null): Record<string, unknown>[] {
+  const values = Array.isArray(payload.issues) ? payload.issues : gate && Array.isArray(gate.issues) ? gate.issues : []
+  return values.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object')).slice(0, 4)
+}
+
+function ReviewTimelineItem({ event }: { event: AgentRunEvent }) {
+  const payload = eventPayload(event)
+  const domain = recordValue(payload.repair) || payload
+  const gate = reviewGateFromPayload(payload)
+  const state = payload.state || gate?.state || (event.kind === 'review_started' || event.kind === 'chart_review_started' ? 'reviewing' : undefined)
+  const blocking = typeof gate?.blocking === 'boolean' ? gate.blocking : typeof payload.blocking === 'boolean' ? payload.blocking : !['passed', 'passed_with_warning'].includes(String(state || ''))
+  const subject = domain.subjectId || domain.subject_id || domain.candidateId || domain.candidate_id || domain.attemptId || domain.attempt_id || gate?.subjectId || gate?.subject_id
+  const attempt = domain.attempt || gate?.attempt
+  const maxAttempts = domain.maxAttempts || domain.max_attempts || gate?.maxAttempts || gate?.max_attempts
+  const nextAction = domain.nextAction || domain.next_action || gate?.nextAction || gate?.next_action
+  const issues = reviewIssues(domain, gate)
+  const type = payload.reviewType || payload.review_type || gate?.reviewType || gate?.review_type || (event.kind.startsWith('measurement_') ? 'measurement' : event.kind.startsWith('chart_') || event.kind.startsWith('generated_') ? 'generated_chart' : undefined)
+  const subjectText = subject === undefined || subject === null ? '' : String(subject)
+  const nextActionText = nextAction === undefined || nextAction === null ? '' : String(nextAction)
+  const details = { event: event.kind, payload, executionGate: gate }
+  return <div className={'review-timeline-item ' + (blocking ? 'blocking' : 'released')}>
+    <span className="trace-event-dot" />
+    <div className="review-timeline-card">
+      <div className="review-timeline-heading"><div><strong>{reviewTypeLabel(type)}</strong><small>{timestampLabel(event.timestamp)} · {reviewStateLabel(state, blocking)}</small></div>{blocking && <span className="review-blocking-badge">主链路已暂停</span>}</div>
+      {(subjectText || attempt !== undefined) && <div className="review-timeline-meta">{subjectText && <span>对象：<code>{subjectText}</code></span>}{attempt !== undefined && <span>第 {String(attempt)} / {maxAttempts !== undefined ? String(maxAttempts) : '—'} 次</span>}</div>}
+      {issues.length > 0 && <div className="review-timeline-issues">{issues.map((issue, index) => <span key={`${String(issue.code || 'issue')}-${index}`}>{String(issue.message || issue.code || '审核问题')}</span>)}</div>}
+      {nextActionText && <div className="review-timeline-next">下一步：{nextActionText}</div>}
+      <details className="review-timeline-details"><summary>查看审核详情</summary><CopyDetailButton value={details} /><pre>{textDetail(details)}</pre></details>
+    </div>
+  </div>
+}
+
+function latestExecutionGate(timeline: RunTimeline): Record<string, unknown> | null {
+  for (const event of [...timeline.events].sort((left, right) => right.sequence - left.sequence)) {
+    const gate = reviewGateFromPayload(eventPayload(event))
+    if (gate) return gate
+  }
+  if (timeline.summary.executionGate) return timeline.summary.executionGate as unknown as Record<string, unknown>
+  return null
 }
 
 function RunTimeline({ timeline, expanded, onToggle, previewLoader, onPreview, onInterrupt, onRetry, onResume, showSummary = true, evaluationId, caseId }: { timeline: RunTimeline; expanded: boolean; onToggle: () => void; previewLoader: PreviewResourceLoader | null; onPreview?: PreviewOpener; onInterrupt?: () => void; onRetry?: () => void; onResume?: () => void; showSummary?: boolean; evaluationId?: string; caseId?: string }) {
@@ -560,6 +629,8 @@ function RunTimeline({ timeline, expanded, onToggle, previewLoader, onPreview, o
   const summary = timeline.summary
   const status = summary.status
   const statusText = status === 'completed' ? '已完成' : status === 'failed' ? '失败' : status === 'interrupted' ? '已中断' : summary.cancelRequested ? '正在中断' : '运行中'
+  const executionGate = latestExecutionGate(timeline)
+  const gateBlocking = executionGate?.blocking === true
   return <section className={'run-timeline ' + status + (expanded ? ' expanded' : '')}>
     {showSummary && <button className="run-summary" onClick={onToggle} aria-expanded={expanded} aria-controls={`trace-${summary.runId}`}><span className="run-arrow">{expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}</span><span className="run-summary-icon"><Terminal size={14} /></span><span className="run-summary-copy"><strong>执行过程</strong><small>{timestampLabel(summary.createdAt)} · {summary.eventCount || timeline.events.length} 个事件{summary.provider ? ` · ${providerLabel(summary.provider)}${summary.model ? ` · ${summary.model}` : ''}` : ''}{summary.retryOf ? ` · 重试自 ${summary.retryOf}` : ''}</small></span><span className={'run-status ' + status}>{statusText}</span></button>}
     {(status === 'running' && onInterrupt) || ((status === 'failed' || status === 'interrupted') && (onRetry || onResume)) ? <div className="run-actions">
@@ -572,8 +643,11 @@ function RunTimeline({ timeline, expanded, onToggle, previewLoader, onPreview, o
       {summary.historyWarning && <div className="trace-warning" role="status">部分执行记录未能持久化，当前显示的过程可能不完整。</div>}
       {timeline.historyGap && <div className="trace-warning" role="status">历史记录存在缺口，未显示缺失的执行步骤。</div>}
       {timeline.integrity && timeline.integrity.status !== 'complete' && <div className="trace-warning" role="status">{timeline.integrity.status === 'unavailable' ? '部分大结果只有摘要，旧 bundle 没有可恢复的完整安全资源。' : timeline.integrity.status === 'redacted' ? '部分字段已按安全边界隐藏；可见内容仍来自脱敏事件。' : '部分事件达到展示上限；可用时可加载完整安全结果。'}</div>}
+      {gateBlocking && <div className="trace-warning review-gate-banner" role="status"><strong>主链路已暂停</strong><span>{reviewTypeLabel(executionGate?.reviewType)} · {reviewStateLabel(executionGate?.state, true)}{executionGate?.nextAction ? ` · 下一步：${String(executionGate.nextAction)}` : ''}</span></div>}
       {rows.length === 0 && <div className="trace-empty">没有可恢复的执行事件。</div>}
-      {rows.map((row) => row.kind === 'event' ? <div className={'trace-event ' + (isMeasurementRepairEventKind(row.event.kind) ? `repair ${row.event.kind === 'measurement_repair_required' ? 'pending' : 'error'}` : '') + (row.event.kind === 'run_failed' || row.event.kind === 'run_interrupted' || row.event.kind === 'history_gap' ? ' error' : '')} key={`${row.event.runId}-${row.event.sequence}`}><span className="trace-event-dot" /><span className="trace-event-copy"><strong>{eventLabel(row.event)}</strong><small>{timestampLabel(row.event.timestamp)}{isMeasurementRepairEventKind(row.event.kind) ? ` · ${row.event.kind}` : ''}</small><span>{traceEventDetail(row.event)}</span></span></div> : <div className="trace-tool" key={row.step.id}><button className="trace-tool-header" onClick={() => setExpandedSteps((current) => { const next = new Set(current); next.has(row.step.id) ? next.delete(row.step.id) : next.add(row.step.id); return next })} aria-expanded={expandedSteps.has(row.step.id)}><span className="trace-event-dot" /><span className="trace-tool-name"><strong>{row.step.toolLabel || row.step.toolName}</strong><small>{row.step.toolName} · {row.step.callId}</small></span><span className={'run-status ' + row.step.status}>{row.step.status === 'running' ? '运行中' : row.step.status === 'success' ? '完成' : '失败'}</span>{expandedSteps.has(row.step.id) ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</button>{expandedSteps.has(row.step.id) && <div className="trace-tool-detail">{row.step.call && <div><div className="trace-detail-heading"><label>调用参数</label><CopyDetailButton value={eventPayload(row.step.call).arguments} /></div><pre>{textDetail(eventPayload(row.step.call).arguments)}</pre></div>}{row.step.result && <div><div className="trace-detail-heading"><label>工具结果</label><CopyDetailButton value={eventPayload(row.step.result).result || eventPayload(row.step.result).message} /></div>{row.step.resultTruncated && <small className="trace-warning">{toolResultIntegrityDetail(eventPayload(row.step.result))}</small>}<pre>{textDetail(eventPayload(row.step.result).result || eventPayload(row.step.result).message)}</pre>{Boolean(eventPayload(row.step.result).detailResource) && <EvaluationDetailResourceView resource={eventPayload(row.step.result).detailResource as Record<string, unknown>} evaluationId={evaluationId} caseId={caseId} />}</div>}{row.step.observations.map((observation, index) => <ObservationView key={index} observation={observation} loader={previewLoader} onPreview={onPreview} />)}</div>}</div>)}
+      {rows.map((row) => row.kind === 'event' ? (
+        isReviewEvent(row.event) ? <ReviewTimelineItem key={`${row.event.runId}-${row.event.sequence}`} event={row.event} /> : <div className={'trace-event ' + (isMeasurementRepairEventKind(row.event.kind) ? `repair ${row.event.kind === 'measurement_repair_required' ? 'pending' : 'error'}` : '') + (row.event.kind === 'run_failed' || row.event.kind === 'run_interrupted' || row.event.kind === 'history_gap' ? ' error' : '')} key={`${row.event.runId}-${row.event.sequence}`}><span className="trace-event-dot" /><span className="trace-event-copy"><strong>{eventLabel(row.event)}</strong><small>{timestampLabel(row.event.timestamp)}{isMeasurementRepairEventKind(row.event.kind) ? ` · ${row.event.kind}` : ''}</small><span>{traceEventDetail(row.event)}</span></span></div>
+      ) : <div className="trace-tool" key={row.step.id}><button className="trace-tool-header" onClick={() => setExpandedSteps((current) => { const next = new Set(current); next.has(row.step.id) ? next.delete(row.step.id) : next.add(row.step.id); return next })} aria-expanded={expandedSteps.has(row.step.id)}><span className="trace-event-dot" /><span className="trace-tool-name"><strong>{row.step.toolLabel || row.step.toolName}</strong><small>{row.step.toolName} · {row.step.callId}</small></span><span className={'run-status ' + row.step.status}>{row.step.status === 'running' ? '运行中' : row.step.status === 'success' ? '完成' : '失败'}</span>{expandedSteps.has(row.step.id) ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</button>{expandedSteps.has(row.step.id) && <div className="trace-tool-detail">{row.step.call && <div><div className="trace-detail-heading"><label>调用参数</label><CopyDetailButton value={eventPayload(row.step.call).arguments} /></div><pre>{textDetail(eventPayload(row.step.call).arguments)}</pre></div>}{row.step.result && <div><div className="trace-detail-heading"><label>工具结果</label><CopyDetailButton value={eventPayload(row.step.result).result || eventPayload(row.step.result).message} /></div>{row.step.resultTruncated && <small className="trace-warning">{toolResultIntegrityDetail(eventPayload(row.step.result))}</small>}<pre>{textDetail(eventPayload(row.step.result).result || eventPayload(row.step.result).message)}</pre>{Boolean(eventPayload(row.step.result).detailResource) && <EvaluationDetailResourceView resource={eventPayload(row.step.result).detailResource as Record<string, unknown>} evaluationId={evaluationId} caseId={caseId} />}</div>}{row.step.observations.map((observation, index) => <ObservationView key={index} observation={observation} loader={previewLoader} onPreview={onPreview} />)}</div>}</div>)}
     </div>}
   </section>
 }
@@ -615,6 +689,7 @@ function evaluationDetailEntryLabel(entry: EvaluationDetailEntry): string {
   if (entry.kind === 'tool_call') return entry.toolLabel || entry.toolName || '工具调用'
   if (entry.kind === 'tool_result') return (entry.toolLabel || entry.toolName || '工具') + ' · 工具结果'
   if (entry.kind === 'repair' || entry.kind.startsWith('measurement_repair')) return '测量修复信息'
+  if (entry.kind.startsWith('review') || entry.kind.startsWith('chart_review')) return '审核门禁信息'
   if (entry.kind === 'visual_observation') return '视觉观察'
   if (entry.kind === 'generated_chart') return '生成结果'
   return entry.kind || '运行记录'
@@ -655,7 +730,7 @@ function EvaluationDetailEntryView(props: { entry: EvaluationDetailEntry; loader
 function EvaluationHistoryView(props: { history: EvaluationHistory | null; details: EvaluationHistoryDetails | null; loader: PreviewResourceLoader | null; onPreview?: PreviewOpener; evaluationId: string; caseId: string; loading: boolean; detailsLoading: boolean; detailsError: string | null; onLoadDetails: () => void }) {
   if (props.loading) return <div className="evaluation-loading"><LoaderCircle className="spin-icon" size={17} />正在加载运行历史</div>
   if (!props.history) return <div className="evaluation-muted">该 case 暂无可读取的运行历史。</div>
-  const supplementalEntries = (props.details?.entries || []).filter((entry) => entry.kind === 'conversation' || entry.kind === 'repair' || (entry.kind === 'tool_message' && !entry.callId) || entry.kind === 'record')
+  const supplementalEntries = (props.details?.entries || []).filter((entry) => entry.kind === 'conversation' || entry.kind === 'repair' || entry.kind.startsWith('review') || entry.kind.startsWith('chart_review') || (entry.kind === 'tool_message' && !entry.callId) || entry.kind === 'record')
   const artifacts = generatedArtifacts(props.history.events)
   return <div className="evaluation-history">
     <div className="evaluation-section-heading"><div><span className="eyebrow">只读运行记录</span><h3>完整执行时间线</h3></div><div className="evaluation-history-heading-actions"><code>{props.history.run.runId}</code><button type="button" className="small-action" onClick={props.onLoadDetails} disabled={props.detailsLoading}>{props.detailsLoading ? '正在加载对话记录' : props.details ? '刷新对话记录' : '加载对话与补充记录'}</button></div></div>

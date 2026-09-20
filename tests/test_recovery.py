@@ -15,6 +15,7 @@ from chartagent.agent import AgentRecoveryBlocked
 from chartagent.client.models import NormalizedResult, ToolCall
 from chartagent.memory.models import RunStatus as MemoryRunStatus
 from chartagent.memory.sqlite import SQLiteAgentMemory
+from chartagent.tools.core import GeneratedImage, ToolResult
 
 
 def _store(tmp_path: Path) -> tuple[GatewayHistoryStore, str, str]:
@@ -189,7 +190,13 @@ def test_agent_continuation_restores_checkpointed_panel_scope():
         assert attachment_id == "att_dashboard"
         assert layout_context is not None
         seen.append(layout_context)
-        return {"ok": True}
+        return ToolResult(
+            {
+                "bars": [{"measure": {"ratio": 1.0}}],
+                "baseline": {"slope": 0.0, "intercept": 200.0},
+            },
+            [GeneratedImage(b"overlay", "image/png", "bar overlay")],
+        )
 
     registry.register(Tool(
         "measure_bars",

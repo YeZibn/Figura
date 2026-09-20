@@ -14,7 +14,7 @@ from typing import Any
 from uuid import uuid4
 
 from ..storage import resolve_storage_paths
-from ..trace import truncate_text
+from ..trace import sanitize_payload, truncate_text
 from .protocol import (
     CHECKPOINT_SCHEMA_VERSION,
     CheckpointPhase,
@@ -134,7 +134,8 @@ class GatewayHistoryStore:
                   recovery_next_action TEXT,
                   recovery_reason TEXT,
                   recovery_version INTEGER,
-                  recovery_updated_at TEXT
+                  recovery_updated_at TEXT,
+                  execution_gate_json TEXT
                 );
                 CREATE TABLE IF NOT EXISTS gateway_run_idempotency (
                   idempotency_key TEXT PRIMARY KEY,
@@ -246,6 +247,7 @@ class GatewayHistoryStore:
                 ("recovery_reason", "TEXT"),
                 ("recovery_version", "INTEGER"),
                 ("recovery_updated_at", "TEXT"),
+                ("execution_gate_json", "TEXT"),
                 ("artifact_kind", "TEXT NOT NULL DEFAULT 'visual_observation'"),
                 ("chart_type", "TEXT"),
                 ("title", "TEXT"),
@@ -280,6 +282,7 @@ class GatewayHistoryStore:
                     "recovery_reason",
                     "recovery_version",
                     "recovery_updated_at",
+                    "execution_gate_json",
                 } else "gateway_run_artifacts"
                 table_columns = columns if table == "gateway_runs" else {
                     row["name"] for row in connection.execute("PRAGMA table_info(gateway_run_artifacts)")
@@ -890,6 +893,7 @@ class GatewayHistoryStore:
         history_warning: str | None = None,
         cancel_requested: bool | None = None,
         retry_of: str | None = None,
+        execution_gate: Mapping[str, Any] | None = None,
     ) -> None:
         with self._lock, self._connect() as connection:
             self._cleanup_connection(connection)
@@ -917,6 +921,10 @@ class GatewayHistoryStore:
             if retry_of is not None:
                 assignments.append("retry_of = ?")
                 values.append(truncate_text(retry_of, MAX_RUN_ID))
+            if execution_gate is not None:
+                assignments.append("execution_gate_json = ?")
+                safe_gate = sanitize_payload(dict(list(execution_gate.items())[:32]))
+                values.append(json.dumps(safe_gate, ensure_ascii=False, separators=(",", ":")))
             values.append(run_id)
             connection.execute(
                 f"""UPDATE gateway_runs SET {', '.join(assignments)}
@@ -989,7 +997,7 @@ class GatewayHistoryStore:
                           terminal_code, terminal_message, answer_source, history_warning, provider, model,
                           cancel_requested, retry_of, parent_run_id, root_run_id, continuation_kind,
                           recovery_status, checkpoint_id, recovery_phase, recovery_next_action,
-                          recovery_reason, recovery_version, recovery_updated_at,
+                          recovery_reason, recovery_version, recovery_updated_at, execution_gate_json,
                           (SELECT COUNT(*) FROM gateway_run_events e WHERE e.run_id = r.run_id) AS event_count
                      FROM gateway_runs r WHERE session_id = ? ORDER BY created_at""",
                 (session_id,),
@@ -1000,14 +1008,23 @@ class GatewayHistoryStore:
         with self._lock, self._connect() as connection:
             self._cleanup_connection(connection)
             row = connection.execute(
-                "SELECT run_id, session_id, status, created_at, updated_at, expires_at, terminal_code, terminal_message, answer_source, history_warning, provider, model, cancel_requested, retry_of, parent_run_id, root_run_id, continuation_kind, recovery_status, checkpoint_id, recovery_phase, recovery_next_action, recovery_reason, recovery_version, recovery_updated_at, (SELECT COUNT(*) FROM gateway_run_events e WHERE e.run_id = r.run_id) AS event_count FROM gateway_runs r WHERE run_id = ? AND session_id = ?",
+                "SELECT run_id, session_id, status, created_at, updated_at, expires_at, terminal_code, terminal_message, answer_source, history_warning, provider, model, cancel_requested, retry_of, parent_run_id, root_run_id, continuation_kind, recovery_status, checkpoint_id, recovery_phase, recovery_next_action, recovery_reason, recovery_version, recovery_updated_at, execution_gate_json, (SELECT COUNT(*) FROM gateway_run_events e WHERE e.run_id = r.run_id) AS event_count FROM gateway_runs r WHERE run_id = ? AND session_id = ?",
                 (run_id, session_id),
             ).fetchone()
         return self._run_summary(row) if row else None
 
     @staticmethod
     def _run_summary(row) -> dict[str, Any]:
-        return {
+        execution_gate: dict[str, Any] | None = None
+        raw_gate = row["execution_gate_json"] if "execution_gate_json" in row.keys() else None
+        if raw_gate:
+            try:
+                parsed_gate = json.loads(raw_gate)
+                if isinstance(parsed_gate, dict):
+                    execution_gate = parsed_gate
+            except (TypeError, ValueError, json.JSONDecodeError):
+                execution_gate = {"state": "uncertain", "blocking": True, "reason": "invalid_projection"}
+        result = {
             "runId": row["run_id"],
             "sessionId": row["session_id"],
             "status": row["status"],
@@ -1036,6 +1053,9 @@ class GatewayHistoryStore:
                 **({"updatedAt": row["recovery_updated_at"]} if row["recovery_updated_at"] else {}),
             },
         }
+        if execution_gate is not None:
+            result["executionGate"] = execution_gate
+        return result
 
     def list_events(self, session_id: str, run_id: str, after_sequence: int = 0) -> list[RunEvent]:
         with self._lock, self._connect() as connection:

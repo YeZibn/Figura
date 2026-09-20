@@ -61,6 +61,24 @@ export type RunRecovery = {
   expiresAt?: number | null
 }
 
+export type ReviewState = 'reviewing' | 'passed' | 'passed_with_warning' | 'repair_required' | 'failed' | 'exhausted' | 'uncertain' | string
+export type ReviewType = 'measurement' | 'generated_chart' | string
+export type ReviewIssue = { code?: string; location?: string; message?: string; severity?: string }
+export type ExecutionGate = {
+  state: 'open' | 'reviewing' | 'repair_required' | 'failed' | 'exhausted' | string
+  blocking: boolean
+  reviewType?: ReviewType
+  reviewId?: string | null
+  subjectId?: string | null
+  attempt?: number | null
+  maxAttempts?: number | null
+  remainingAttempts?: number | null
+  nextAction?: string | null
+  issues?: ReviewIssue[]
+  repairAction?: Record<string, unknown> | null
+  updatedAt?: string | null
+}
+
 export type RunSummary = {
   runId: string
   sessionId: string
@@ -81,6 +99,7 @@ export type RunSummary = {
   rootRunId?: string | null
   continuationKind?: ContinuationKind | null
   recovery?: RunRecovery | null
+  executionGate?: ExecutionGate | null
 }
 
 export type RunHandle = {
@@ -96,6 +115,7 @@ export type RunHandle = {
   rootRunId?: string | null
   continuationKind?: ContinuationKind | null
   recovery?: RunRecovery | null
+  executionGate?: ExecutionGate | null
 }
 
 export type ObservationReference = {
@@ -135,7 +155,7 @@ export type GeneratedChartReference = {
   review?: {
     decision?: string
     confidence?: number
-    issues?: Array<{ code?: string; location?: string; severity?: string; message?: string }>
+    issues?: ReviewIssue[]
     checks?: Record<string, string>
   }
   reason?: string

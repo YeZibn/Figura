@@ -8,7 +8,10 @@ import pytest
 
 from chartagent import Agent, ToolRegistry, build_user_content
 from chartagent.client.models import NormalizedResult, ToolCall
+from chartagent.tools.core import ToolResult
 from chartagent.tools.chart import register_chart_tools
+from chartagent.tools.chart.observation import line as line_observation
+from chartagent.tools.chart.observation import scatter as scatter_observation
 from tests.chart_fixtures import annotated_bar_chart, line_chart, pie_chart, scatter_chart
 
 
@@ -18,6 +21,34 @@ def _call(call_id: str, name: str, arguments: dict) -> NormalizedResult:
             ToolCall(id=call_id, name=name, arguments=json.dumps(arguments))
         ]
     )
+
+
+def _augment_axis_ocr(original, *, y_values: list[int]):
+    """Keep fixture OCR deterministic while supplying calibration anchors."""
+
+    def read(path: str):
+        result = original(path)
+        snippets = list(result.data) if isinstance(result, ToolResult) and isinstance(result.data, list) else []
+        snippets.extend(
+            {
+                "text": str(value),
+                "bbox": [center_x - 4, 429, 8, 8],
+                "confidence": 1.0,
+            }
+            for center_x, value in zip([104, 235, 366, 497, 628], [0, 1, 2, 3, 4])
+        )
+        y_centers = [428, 335, 242, 149, 57] if len(y_values) == 5 else [428, 322, 216, 110]
+        snippets.extend(
+            {
+                "text": str(value),
+                "bbox": [80, center_y - 4, 8, 8],
+                "confidence": 1.0,
+            }
+            for center_y, value in zip(y_centers, y_values)
+        )
+        return ToolResult(snippets)
+
+    return read
 
 
 class _UnderstandingClient:
@@ -176,14 +207,18 @@ class _MultiSeriesUnderstandingClient:
 
 
 def test_agent_restores_multi_series_line_without_fixed_tool_sequence(tmp_path, monkeypatch):
-    png_bytes, ground_truth = line_chart()
+    png_bytes, ground_truth = line_chart(
+        values_by_series={"North": (1, 2, 3, 4, 5), "South": (5, 6, 7, 8, 9)},
+        markers=False,
+    )
     image_path = tmp_path / "lines.png"
     image_path.write_bytes(png_bytes)
     # The deterministic sensor test focuses on series separation. The scripted
     # model supplies semantic values from the same fixture after observing it.
     monkeypatch.setattr(
-        "chartagent.tools.chart.observation.line.extract_text",
-        lambda _path: __import__("chartagent.tools", fromlist=["ToolResult"]).ToolResult([]),
+        line_observation,
+        "extract_text",
+        _augment_axis_ocr(line_observation.extract_text, y_values=[0, 2, 4, 6]),
     )
     registry = ToolRegistry()
     register_chart_tools(registry)
@@ -310,9 +345,20 @@ def test_agent_restores_scatter_without_fixed_tool_sequence(tmp_path, monkeypatc
     image_path = tmp_path / "scatter.png"
     image_path.write_bytes(png_bytes)
     monkeypatch.setattr(
-        "chartagent.tools.chart.observation.scatter.extract_text",
-        lambda _path: __import__("chartagent.tools", fromlist=["ToolResult"]).ToolResult([]),
+        scatter_observation,
+        "extract_text",
+        _augment_axis_ocr(scatter_observation.extract_text, y_values=[0, 2, 4, 6, 8]),
     )
+    original_legend_entries = scatter_observation._legend_entries
+
+    def labelled_legend(*args, **kwargs):
+        entries = original_legend_entries(*args, **kwargs)
+        return [
+            {**entry, "label": entry.get("label") or label}
+            for entry, label in zip(entries, ["North", "South"])
+        ]
+
+    monkeypatch.setattr(scatter_observation, "_legend_entries", labelled_legend)
 
     registry = ToolRegistry()
     register_chart_tools(registry)

@@ -232,9 +232,15 @@ def _event_stages(kind: str, payload: Mapping[str, Any]) -> list[str]:
         "chart_review_started",
         "chart_review_completed",
         "generated_chart_rejected",
+        "review_started",
+        "review_completed",
+        "review_repair_required",
+        "review_failed",
+        "review_gate_required",
+        "review_gate_updated",
     }:
         stages.append("quality_review")
-    if kind.startswith("measurement_repair_") or kind == "chart_review_repair_required":
+    if kind.startswith("measurement_repair_") or kind in {"chart_review_repair_required", "review_repair_required"}:
         stages.append("repair")
     if kind in {"generated_chart", "generated_chart_published"}:
         stages.append("render")
@@ -409,10 +415,10 @@ def _detect_review_without_repair(
     review_failures = [
         (_sequence(event), _kind(event))
         for event in events
-        if _kind(event) in {"generated_chart_rejected", "chart_review_completed"}
+        if _kind(event) in {"generated_chart_rejected", "chart_review_completed", "review_failed"}
         and _event_is_failure(_kind(event), _payload(event))
     ]
-    repairs = [event for event in events if _kind(event).startswith("measurement_repair_") or _kind(event) == "chart_review_repair_required"]
+    repairs = [event for event in events if _kind(event).startswith("measurement_repair_") or _kind(event) in {"chart_review_repair_required", "review_repair_required"}]
     if review_failures and not repairs:
         sequence, kind = review_failures[0]
         anomalies.append(
@@ -733,9 +739,9 @@ def _tool_name(payload: Mapping[str, Any]) -> str | None:
 
 
 def _event_is_failure(kind: str, payload: Mapping[str, Any]) -> bool:
-    if kind in {"run_failed", "run_interrupted", "generated_chart_rejected", "measurement_repair_exhausted", "measurement_repair_rejected"}:
+    if kind in {"run_failed", "run_interrupted", "generated_chart_rejected", "measurement_repair_exhausted", "measurement_repair_rejected", "review_failed"}:
         return True
-    if kind in {"chart_review_repair_required", "recovery_blocked"}:
+    if kind in {"chart_review_repair_required", "review_repair_required", "review_gate_required", "recovery_blocked"}:
         return True
     statuses = _statuses(payload)
     return any(status in FAILURE_STATUSES for status in statuses)
@@ -743,14 +749,14 @@ def _event_is_failure(kind: str, payload: Mapping[str, Any]) -> bool:
 
 def _event_needs_repair(kind: str, payload: Mapping[str, Any]) -> bool:
     """Identify quality-gate states distinct from tool execution failure."""
-    if kind in {"measurement_repair_required", "chart_review_repair_required"}:
+    if kind in {"measurement_repair_required", "chart_review_repair_required", "review_repair_required"}:
         return True
     statuses = _statuses(payload)
     return bool(statuses & {"remeasure_required", "partial"})
 
 
 def _event_is_success(kind: str, payload: Mapping[str, Any]) -> bool:
-    if kind in {"run_started", "resume_started", "generated_chart", "generated_chart_published", "operation_completed", "chart_review_completed"}:
+    if kind in {"run_started", "resume_started", "generated_chart", "generated_chart_published", "operation_completed", "chart_review_completed", "review_completed"}:
         return not _event_is_failure(kind, payload)
     if kind == "tool_result":
         statuses = _statuses(payload)
@@ -761,7 +767,7 @@ def _event_is_success(kind: str, payload: Mapping[str, Any]) -> bool:
 def _statuses(payload: Mapping[str, Any]) -> set[str]:
     values: set[str] = set()
     for candidate in _mapping_candidates(payload):
-        for key in ("status", "tool_status", "review_status", "candidate_status", "publication_status"):
+        for key in ("status", "state", "tool_status", "review_status", "candidate_status", "publication_status"):
             value = candidate.get(key)
             if isinstance(value, str):
                 values.add(value.strip().lower())
@@ -783,6 +789,13 @@ def _event_error(kind: str, payload: Mapping[str, Any]) -> str:
         value = payload.get(key)
         if isinstance(value, str) and value:
             return truncate_text(value, 240)
+    issues = payload.get("issues")
+    if isinstance(issues, list):
+        for issue in issues:
+            if isinstance(issue, Mapping):
+                message = issue.get("message")
+                if isinstance(message, str) and message:
+                    return truncate_text(message, 240)
     statuses = sorted(_statuses(payload) & FAILURE_STATUSES)
     return f"{kind}: {', '.join(statuses) if statuses else 'failed'}"
 

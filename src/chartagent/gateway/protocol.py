@@ -75,6 +75,7 @@ class RunTerminalReason(str, Enum):
     AGENT_FAILED = "agent_failed"
     AGENT_UNAVAILABLE = "agent_unavailable"
     REVIEW_FAILED = "review_failed"
+    REVIEW_RETRY_EXHAUSTED = "review_retry_exhausted"
     REVIEW_INCOMPLETE = "review_incomplete"
     HISTORY_EXPIRED = "history_expired"
 
@@ -199,6 +200,7 @@ class RunAccepted:
     root_run_id: str | None = None
     continuation_kind: ContinuationKind | None = None
     recovery: RunRecovery | None = None
+    execution_gate: Mapping[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         result = {
@@ -220,6 +222,8 @@ class RunAccepted:
         result.update(lineage.to_dict())
         if self.recovery is not None:
             result["recovery"] = self.recovery.to_dict()
+        if isinstance(self.execution_gate, Mapping):
+            result["executionGate"] = sanitize_payload(self.execution_gate)
         return result
 
 

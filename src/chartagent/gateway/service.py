@@ -494,6 +494,15 @@ class GatewayService:
                     idempotency_operation_kind="resume",
                     idempotency_parent_run_id=parent.run_id,
                     idempotency_checkpoint_id=checkpoint.checkpoint_id,
+                    execution_gate=(
+                        checkpoint.state.get("executionGate")
+                        if isinstance(checkpoint.state.get("executionGate"), Mapping)
+                        else (
+                            checkpoint.state.get("reviewState", {}).get("executionGate")
+                            if isinstance(checkpoint.state.get("reviewState"), Mapping)
+                            else None
+                        )
+                    ),
                 )
             except RuntimeError as exc:
                 raise GatewayFault("run_limit", 429, "Too many Agent runs are active") from exc
@@ -898,17 +907,18 @@ class GatewayService:
         if run.interruption_requested() or run.terminal:
             return
         if str(answer) in {REVIEW_INCOMPLETE_MESSAGE, _REVIEW_FAILED_MSG}:
+            gate = getattr(run, "execution_gate", {})
+            exhausted = isinstance(gate, Mapping) and gate.get("state") == "exhausted"
+            failure_code = "review_retry_exhausted" if exhausted else "review_incomplete" if str(answer) == REVIEW_INCOMPLETE_MESSAGE else "review_failed"
+            failure_message = "审核修复次数已耗尽，未发布任何候选结果" if exhausted else "Generated chart review did not complete within the bounded run" if str(answer) == REVIEW_INCOMPLETE_MESSAGE else "Generated chart review failed; no artifact was published"
             run.publish(
                 "run_failed",
                 {
-                    "code": "review_incomplete" if str(answer) == REVIEW_INCOMPLETE_MESSAGE else "review_failed",
-                    "message": "Generated chart review did not complete within the bounded run" if str(answer) == REVIEW_INCOMPLETE_MESSAGE else "Generated chart review failed; no artifact was published",
+                    "code": failure_code,
+                    "message": failure_message,
                 },
             )
-            if str(answer) == REVIEW_INCOMPLETE_MESSAGE:
-                run.fail("review_incomplete", 422, "Generated chart review did not complete", "review_incomplete")
-            else:
-                run.fail("review_failed", 422, "Generated chart review failed", "review_failed")
+            run.fail(failure_code, 422, failure_message, failure_code)
             return
         if not run.has_event("final_answer"):
             run.publish("final_answer", {"answer": str(answer)})
@@ -960,6 +970,7 @@ class GatewayService:
             "operation_begin": run.begin_operation,
             "operation_complete": run.complete_operation,
             "operation_uncertain": run.mark_operation_uncertain,
+            "execution_gate_sink": run.update_execution_gate,
         }
         try:
             parameters = inspect.signature(factory).parameters.values()

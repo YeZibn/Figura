@@ -1568,6 +1568,27 @@ button:disabled { cursor: not-allowed; }
 .trace-event.repair.pending .trace-event-copy strong { color: #8b642d; }
 .trace-event.repair.error .trace-event-dot { border-color: var(--danger); }
 .trace-event.error .trace-event-dot { border-color: var(--danger); }
+.review-gate-banner { display: grid; gap: 3px; margin: 8px 0; padding: 9px 11px; border: 1px solid #efcfcc; border-radius: 6px; background: #fff8f7; color: #80514c; }
+.review-gate-banner strong { color: var(--danger); font-size: 11px; }
+.review-gate-banner span { font-size: 10px; line-height: 1.45; }
+.review-timeline-item { display: flex; gap: 9px; padding: 8px 0; }
+.review-timeline-item > .trace-event-dot { margin-top: 13px; border-color: var(--brand); }
+.review-timeline-item.blocking > .trace-event-dot { border-color: var(--danger); }
+.review-timeline-card { display: grid; flex: 1; gap: 6px; min-width: 0; padding: 9px 10px; border: 1px solid #c8ddd7; border-radius: 7px; background: #f7fbf9; }
+.review-timeline-item.blocking .review-timeline-card { border-color: #efcfcc; background: #fff9f8; }
+.review-timeline-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.review-timeline-heading > div { display: grid; gap: 3px; min-width: 0; }
+.review-timeline-heading strong { color: #405b55; font-size: 11px; }
+.review-timeline-heading small { color: var(--subtle); font-size: 10px; }
+.review-blocking-badge { flex: none; color: var(--danger); font-size: 10px; font-weight: 700; }
+.review-timeline-meta { display: flex; flex-wrap: wrap; gap: 8px; color: var(--muted); font-size: 10px; }
+.review-timeline-meta code { color: #496863; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.review-timeline-issues { display: grid; gap: 3px; color: #8b514a; font-size: 10px; line-height: 1.4; }
+.review-timeline-next { color: #6d6a43; font-size: 10px; line-height: 1.45; }
+.review-timeline-details { color: var(--muted); font-size: 10px; }
+.review-timeline-details summary { cursor: pointer; color: var(--brand); }
+.review-timeline-details .detail-copy-button { margin: 6px 0 3px; }
+.review-timeline-details pre { max-height: 220px; margin: 0; overflow: auto; }
 .trace-tool-header { gap: 9px; padding: 9px 0; }
 .trace-tool-name { display: grid; min-width: 0; flex: 1; gap: 3px; }
 .trace-tool-name strong { overflow: hidden; color: #4b5e59; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
