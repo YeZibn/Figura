@@ -81,6 +81,39 @@ class GatewayRequestHandler(BaseHTTPRequestHandler):
                 payload = self.gateway.health()
             elif path == f"{API_PREFIX}/sessions":
                 payload = self.gateway.list_sessions()
+            elif path == f"{API_PREFIX}/evaluations":
+                payload = self.gateway.list_evaluations()
+            elif (evaluation_id := self._evaluation_detail_id(path)) is not None:
+                payload = self.gateway.get_evaluation(evaluation_id)
+            elif (parts := self._evaluation_case_history_details_parts(path)) is not None:
+                evaluation_id, case_id = parts
+                payload = self.gateway.get_evaluation_history_details(
+                    evaluation_id,
+                    case_id,
+                    self._query_record_sequence(),
+                )
+            elif (parts := self._evaluation_case_history_parts(path)) is not None:
+                evaluation_id, case_id = parts
+                payload = self.gateway.get_evaluation_history(
+                    evaluation_id,
+                    case_id,
+                    self._query_sequence(),
+                )
+            elif (parts := self._evaluation_case_parts(path)) is not None:
+                evaluation_id, case_id = parts
+                payload = self.gateway.get_evaluation_case(evaluation_id, case_id)
+            elif (parts := self._evaluation_resource_parts(path)) is not None:
+                evaluation_id, resource_id = parts
+                query = parse_qs(urlsplit(self.path).query, keep_blank_values=True)
+                case_values = query.get("case_id", [])
+                case_id = case_values[0] if len(case_values) == 1 and case_values[0] else None
+                content, media_type = self.gateway.get_evaluation_resource(
+                    evaluation_id,
+                    resource_id,
+                    case_id=unquote(case_id) if case_id is not None else None,
+                )
+                self._send_binary(HTTPStatus.OK, content, media_type)
+                return
             elif (session_id := self._run_collection_session_id(path)) is not None:
                 payload = self.gateway.list_runs(session_id)
             elif (parts := self._run_observation_parts(path)) is not None:
@@ -238,6 +271,56 @@ class GatewayRequestHandler(BaseHTTPRequestHandler):
 
     def _path(self) -> str:
         return urlsplit(self.path).path.rstrip("/") or "/"
+
+    @staticmethod
+    def _evaluation_detail_id(path: str) -> str | None:
+        prefix = f"{API_PREFIX}/evaluations/"
+        if not path.startswith(prefix):
+            return None
+        remainder = path[len(prefix):]
+        if remainder and "/" not in remainder:
+            return unquote(remainder)
+        return None
+
+    @staticmethod
+    def _evaluation_case_parts(path: str) -> tuple[str, str] | None:
+        prefix = f"{API_PREFIX}/evaluations/"
+        if not path.startswith(prefix):
+            return None
+        parts = path[len(prefix):].split("/")
+        if len(parts) == 3 and parts[1] == "cases":
+            return unquote(parts[0]), unquote(parts[2])
+        return None
+
+    @staticmethod
+    def _evaluation_case_history_parts(path: str) -> tuple[str, str] | None:
+        prefix = f"{API_PREFIX}/evaluations/"
+        if not path.startswith(prefix):
+            return None
+        parts = path[len(prefix):].split("/")
+        if len(parts) == 4 and parts[1] == "cases" and parts[3] == "history":
+            return unquote(parts[0]), unquote(parts[2])
+        return None
+
+    @staticmethod
+    def _evaluation_case_history_details_parts(path: str) -> tuple[str, str] | None:
+        prefix = f"{API_PREFIX}/evaluations/"
+        if not path.startswith(prefix):
+            return None
+        parts = path[len(prefix):].split("/")
+        if len(parts) == 5 and parts[1] == "cases" and parts[3] == "history" and parts[4] == "details":
+            return unquote(parts[0]), unquote(parts[2])
+        return None
+
+    @staticmethod
+    def _evaluation_resource_parts(path: str) -> tuple[str, str] | None:
+        prefix = f"{API_PREFIX}/evaluations/"
+        if not path.startswith(prefix):
+            return None
+        parts = path[len(prefix):].split("/")
+        if len(parts) == 3 and parts[1] == "resources":
+            return unquote(parts[0]), unquote(parts[2])
+        return None
 
     @staticmethod
     def _session_id(path: str) -> str | None:
@@ -473,6 +556,13 @@ class GatewayRequestHandler(BaseHTTPRequestHandler):
 
     def _query_sequence(self) -> int:
         raw = parse_qs(urlsplit(self.path).query, keep_blank_values=True).get("after", ["0"])[0]
+        try:
+            return max(0, int(raw))
+        except ValueError:
+            return 0
+
+    def _query_record_sequence(self) -> int:
+        raw = parse_qs(urlsplit(self.path).query, keep_blank_values=True).get("after_record", ["0"])[0]
         try:
             return max(0, int(raw))
         except ValueError:

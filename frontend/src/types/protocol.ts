@@ -25,6 +25,7 @@ export type PreviewResource =
   | { kind: 'observation'; sessionId: string; runId: string; observationId: string }
   | { kind: 'candidate'; sessionId: string; runId: string; candidateId: string }
   | { kind: 'artifact'; sessionId: string; runId: string; artifactId: string }
+  | { kind: 'evaluation'; evaluationId: string; caseId: string; resourceId: string }
 
 export type PreviewLoadResult = {
   url: string
@@ -180,6 +181,148 @@ export type RunHistory = {
   events: AgentRunEvent[]
   historyGap: boolean
   firstSequence?: number | null
+}
+
+export type EvaluationHistory = RunHistory
+
+export type EvaluationDetailEntry = {
+  entryId: string
+  source: 'record' | 'event' | string
+  recordSequence?: number | null
+  eventSequence?: number | null
+  timestamp: string
+  kind: string
+  recordKind?: string
+  role?: 'user' | 'assistant' | 'tool' | 'system' | string
+  content?: unknown
+  details?: unknown
+  toolCalls?: unknown
+  toolName?: string
+  toolDisplayName?: string
+  toolLabel?: string
+  callId?: string
+  status?: string
+  code?: string
+  reason?: string
+  arguments?: unknown
+  result?: unknown
+  observations?: ObservationReference[]
+  artifacts?: GeneratedChartReference[]
+  truncated?: boolean
+  redacted?: boolean
+}
+
+export type EvaluationHistoryDetails = {
+  run: RunSummary
+  entries: EvaluationDetailEntry[]
+  recordsAvailable: boolean
+  eventsAvailable: boolean
+  sourceAvailability: { records: boolean; gatewayEvents: boolean }
+  recordCount: number
+  eventCount: number
+  historyGap: boolean
+  firstRecordSequence?: number | null
+  firstEventSequence?: number | null
+  truncated: boolean
+  redacted: boolean
+  notice?: string | null
+}
+
+export type EvaluationStatus = 'running' | 'completed' | 'partial' | 'blocked'
+export type EvaluationCaseStatus = 'pending' | 'running' | 'completed' | 'failed' | 'interrupted' | 'blocked' | 'not_run' | 'unknown'
+
+export type EvaluationFailure = {
+  code?: string
+  category?: string
+  stage?: string
+  sequence?: number
+  message?: string
+}
+
+export type EvaluationSummary = {
+  evaluationId: string
+  status: EvaluationStatus
+  provider?: string | null
+  model?: string | null
+  startedAt?: string | null
+  endedAt?: string | null
+  updatedAt?: string | null
+  caseCount: number
+  caseCounts: Record<string, number>
+  firstFailure?: EvaluationFailure | null
+}
+
+export type EvaluationCaseSummary = {
+  evaluationId: string
+  caseId: string
+  status: EvaluationCaseStatus
+  sessionId?: string | null
+  runId?: string | null
+  sha256?: string | null
+  firstFailure?: EvaluationFailure | null
+  error?: { code?: string; message?: string } | null
+}
+
+export type EvaluationResource = {
+  resourceId: string
+  caseId: string
+  kind: string
+  label: string
+  mediaType: string
+  byteCount: number
+  previewResource?: PreviewResource
+}
+
+export type EvaluationStage = {
+  name: string
+  status: string
+  sequences: number[]
+  panelIds: string[]
+  attemptIds: string[]
+  artifactIds: string[]
+  observationIds: string[]
+  errors: string[]
+  notes: string[]
+}
+
+export type EvaluationTimeline = {
+  stages: EvaluationStage[]
+  anomalies: Array<{ code?: string; category?: string; stage?: string; sequence?: number; message?: string }>
+  historyGap: boolean
+  firstFailure?: EvaluationFailure | null
+}
+
+export type EvaluationReport = {
+  available: boolean
+  source: string
+  text: string
+  truncated: boolean
+}
+
+export type EvaluationPanelHint = {
+  name: string
+  chartType?: string
+  role?: string
+  bboxNorm?: number[]
+}
+
+export type EvaluationCase = EvaluationCaseSummary & {
+  asset?: string | null
+  expectedPanels: EvaluationPanelHint[]
+  timeline: EvaluationTimeline
+  report: EvaluationReport
+  resources: EvaluationResource[]
+}
+
+export type EvaluationDetail = {
+  evaluation: EvaluationSummary
+  cases: EvaluationCaseSummary[]
+  report: { available: boolean; source: string; truncated: boolean }
+}
+
+export type EvaluationCaseData = {
+  evaluationId: string
+  case: EvaluationCase
 }
 
 export type GatewayAgentStatus = {

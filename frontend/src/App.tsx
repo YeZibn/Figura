@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode, type RefObject } from 'react'
-import { BarChart3, Check, ChevronDown, ChevronRight, Download, FileImage, LoaderCircle, Maximize2, MessageSquare, Minus, Paperclip, Plus, RefreshCw, Send, Sparkles, Terminal, Trash2, X } from 'lucide-react'
+import { AlertTriangle, BarChart3, Check, CheckCircle2, ChevronDown, ChevronRight, ClipboardList, Download, FileImage, LoaderCircle, Maximize2, MessageSquare, Minus, Paperclip, Plus, RefreshCw, Send, Sparkles, Terminal, Trash2, X } from 'lucide-react'
 import { GatewayClientError, configureGatewayBaseUrl, currentGatewayBaseUrl, gatewayClient } from './api/gatewayClient'
 import type { ChartAgentClient, RunSubscription } from './api/client'
 import { mockClient } from './api/mockClient'
@@ -7,7 +7,7 @@ import { formatBytes, mediaTypeForFile, validateImageFile } from './attachments'
 import { getGatewayRuntimeStatus, type GatewayRuntimeStatus } from './runtime'
 import { createGatewayPreviewLoader, releasePreview, usePreviewResource, type PreviewResourceLoader } from './previewResources'
 import { isMeasurementRepairEventKind } from './types/protocol'
-import type { AgentRunEvent, Attachment, AttachmentStatus, ConversationItem, GatewayHealth, GeneratedChartReference, MeasurementRepairSummary, Provider, RunState, RunSummary, Session, SessionData } from './types/protocol'
+import type { AgentRunEvent, Attachment, AttachmentStatus, ConversationItem, EvaluationCaseData, EvaluationDetail, EvaluationDetailEntry, EvaluationHistory, EvaluationHistoryDetails, EvaluationResource, EvaluationStatus, EvaluationSummary, GatewayHealth, GeneratedChartReference, MeasurementRepairSummary, Provider, RunState, RunSummary, Session, SessionData } from './types/protocol'
 import './styles/global.css'
 import './styles/error.css'
 
@@ -546,12 +546,160 @@ function gatewayStatusText(mode: 'mock' | 'gateway', runtimeStatus: GatewayRunti
   return '本地服务连接中'
 }
 
-function SessionSidebar(props: { sessions: Session[]; activeId: string; onSelect: (id: string) => void; onCreate: () => void; onDelete: (id: string) => void; mode: 'mock' | 'gateway'; runtimeStatus: GatewayRuntimeStatus | null; health: GatewayHealth | null }) {
+function evaluationStatusLabel(status: EvaluationStatus): string {
+  if (status === 'running') return '运行中'
+  if (status === 'completed') return '已完成'
+  if (status === 'blocked') return '已阻塞'
+  return '部分完成'
+}
+
+function evaluationStatusClass(status: EvaluationStatus): string {
+  return status === 'completed' ? 'completed' : status === 'running' ? 'running' : status === 'blocked' ? 'failed' : 'partial'
+}
+
+function evaluationResourceLabel(resource: EvaluationResource): string {
+  if (resource.kind === 'input') return '输入图'
+  if (resource.kind === 'report_image') return '报告图片'
+  if (resource.kind === 'observation') return '视觉观察'
+  if (resource.kind === 'candidate') return '候选图表'
+  if (resource.kind === 'artifact') return '生成结果'
+  return resource.label || '评测证据'
+}
+
+function evaluationDetailEntryLabel(entry: EvaluationDetailEntry): string {
+  if (entry.kind === 'conversation') return entry.role === 'user' ? '用户消息' : entry.role === 'assistant' ? '模型消息' : '系统消息'
+  if (entry.kind === 'tool_message') return '模型可见工具消息'
+  if (entry.kind === 'tool_call') return entry.toolLabel || entry.toolName || '工具调用'
+  if (entry.kind === 'tool_result') return (entry.toolLabel || entry.toolName || '工具') + ' · 工具结果'
+  if (entry.kind === 'repair' || entry.kind.startsWith('measurement_repair')) return '测量修复信息'
+  if (entry.kind === 'visual_observation') return '视觉观察'
+  if (entry.kind === 'generated_chart') return '生成结果'
+  return entry.kind || '运行记录'
+}
+
+function evaluationDetailSequenceLabel(entry: EvaluationDetailEntry): string {
+  if (typeof entry.recordSequence === 'number') return 'record #' + entry.recordSequence
+  if (typeof entry.eventSequence === 'number') return 'event #' + entry.eventSequence
+  return '未编号'
+}
+
+function EvaluationDetailEntryView(props: { entry: EvaluationDetailEntry; loader: PreviewResourceLoader | null; onPreview?: PreviewOpener }) {
+  const entry = props.entry
+  const hasContent = entry.content !== undefined && entry.content !== null && entry.content !== ''
+  const hasArguments = entry.arguments !== undefined
+  const hasResult = entry.result !== undefined
+  const hasDetails = entry.details !== undefined
+  return <details className={'evaluation-detail-entry ' + (entry.kind === 'tool_result' ? 'tool-result' : '')} open={entry.kind === 'conversation' || entry.kind === 'tool_call' || entry.kind === 'tool_result'}>
+    <summary><span className="evaluation-detail-entry-title"><strong>{evaluationDetailEntryLabel(entry)}</strong><small>{entry.timestamp ? timestampLabel(entry.timestamp) : '未知时间'} · {evaluationDetailSequenceLabel(entry)}{entry.callId ? ' · ' + entry.callId : ''}</small></span><span className="evaluation-detail-entry-state">{entry.status || (entry.source === 'record' ? '可见记录' : '事件')}</span></summary>
+    <div className="evaluation-detail-entry-body">
+      {entry.toolName && <div className="evaluation-detail-meta"><span>工具</span><code>{entry.toolName}</code></div>}
+      {entry.role && <div className="evaluation-detail-meta"><span>角色</span><code>{entry.role}</code></div>}
+      {hasContent && <div className="evaluation-detail-block"><label>可见内容</label><pre>{textDetail(entry.content)}</pre></div>}
+      {hasArguments && <div className="evaluation-detail-block"><label>调用参数</label><pre>{textDetail(entry.arguments)}</pre></div>}
+      {hasResult && <div className="evaluation-detail-block"><label>工具结果</label><pre>{textDetail(entry.result)}</pre></div>}
+      {hasDetails && <div className="evaluation-detail-block"><label>{entry.kind === 'repair' ? '修复详情' : '事件详情'}</label><pre>{textDetail(entry.details)}</pre></div>}
+      {entry.toolCalls !== undefined && <div className="evaluation-detail-block"><label>工具调用声明</label><pre>{textDetail(entry.toolCalls)}</pre></div>}
+      {entry.code && <div className="evaluation-detail-meta"><span>代码</span><code>{entry.code}</code></div>}
+      {entry.reason && <div className="evaluation-detail-note">{entry.reason}</div>}
+      {entry.truncated && <div className="evaluation-detail-note">该条记录已按安全上限截断，未展示完整原始内容。</div>}
+      {entry.redacted && <div className="evaluation-detail-note">该条记录包含已隐藏的敏感字段或二进制内容。</div>}
+      {entry.observations?.map((observation, index) => <ObservationView key={entry.entryId + '-observation-' + index} observation={observation as unknown as Record<string, unknown>} loader={props.loader} onPreview={props.onPreview} />)}
+      {entry.artifacts?.map((artifact, index) => <GeneratedChartView key={entry.entryId + '-artifact-' + index} artifact={artifact} loader={props.loader} onPreview={props.onPreview} />)}
+    </div>
+  </details>
+}
+
+function EvaluationHistoryView(props: { history: EvaluationHistory | null; details: EvaluationHistoryDetails | null; loader: PreviewResourceLoader | null; onPreview?: PreviewOpener; loading: boolean; detailsLoading: boolean; detailsError: string | null; onLoadDetails: () => void }) {
+  if (props.loading) return <div className="evaluation-loading"><LoaderCircle className="spin-icon" size={17} />正在加载运行历史</div>
+  if (!props.history) return <div className="evaluation-muted">该 case 暂无可读取的运行历史。</div>
+  return <div className="evaluation-history">
+    <div className="evaluation-section-heading"><div><span className="eyebrow">只读运行记录</span><h3>执行时间线</h3></div><div className="evaluation-history-heading-actions"><code>{props.history.run.runId}</code><button type="button" className="small-action" onClick={props.onLoadDetails} disabled={props.detailsLoading}>{props.detailsLoading ? '正在加载详细记录' : props.details ? '刷新详细记录' : '展开对话与工具详情'}</button></div></div>
+    {props.history.historyGap && <div className="evaluation-warning"><AlertTriangle size={14} />历史记录存在缺口，以下仅展示已保留事件。</div>}
+    {props.history.events.length === 0 && <div className="evaluation-muted">没有可展示的事件。</div>}
+    {props.history.events.map((event) => {
+      const payload = event.payload || {}
+      const observations = Array.isArray(payload.observations) ? payload.observations.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object')) : []
+      return <article className={'evaluation-event ' + (event.kind === 'run_failed' ? 'error' : '')} key={`${event.runId}-${event.sequence}`}>
+        <span className="evaluation-event-dot" />
+        <div className="evaluation-event-copy"><strong>{eventLabel(event)}</strong><small>{timestampLabel(event.timestamp)} · #{event.sequence}{typeof payload.tool_name === 'string' ? ` · ${payload.tool_name}` : ''}</small>{typeof payload.message === 'string' && <span>{payload.message}</span>}
+          {event.kind === 'tool_call' && <span className="evaluation-event-note">详细参数可按需展开，当前时间线只保留安全摘要。</span>}
+          {event.kind === 'tool_result' && <span className="evaluation-event-note">详细结果可按需展开，当前时间线只保留安全摘要。</span>}
+          {observations.map((observation, index) => <ObservationView key={index} observation={observation} loader={props.loader} onPreview={props.onPreview} />)}
+        </div>
+      </article>
+    })}
+    {props.detailsError && <div className="evaluation-warning" role="status"><AlertTriangle size={14} />{props.detailsError}<button type="button" className="small-action" onClick={props.onLoadDetails}>重试</button></div>}
+    {props.details && <section className="evaluation-detail-records"><div className="evaluation-section-heading"><div><span className="eyebrow">按需加载</span><h3>对话、工具与证据详情</h3></div><span className="detail-count">{props.details.entries.length} 条</span></div>{props.details.notice && <div className="evaluation-detail-notice">{props.details.notice}</div>}{props.details.historyGap && <div className="evaluation-warning"><AlertTriangle size={14} />详细记录存在缺口，序号较早的内容可能已被清理。</div>}{props.details.entries.length ? <div className="evaluation-detail-list">{props.details.entries.map((entry) => <EvaluationDetailEntryView key={entry.entryId} entry={entry} loader={props.loader} onPreview={props.onPreview} />)}</div> : <div className="evaluation-muted">没有可展开的详细记录。</div>}{props.details.truncated && <div className="evaluation-detail-note">本次详细记录受大小上限保护，部分内容已截断。</div>}</section>}
+  </div>
+}
+
+function EvaluationPanel(props: {
+  evaluations: EvaluationSummary[]
+  detail: EvaluationDetail | null
+  caseData: EvaluationCaseData | null
+  history: EvaluationHistory | null
+  historyDetails: EvaluationHistoryDetails | null
+  selectedEvaluationId: string
+  selectedCaseId: string
+  loading: boolean
+  caseLoading: boolean
+  historyLoading: boolean
+  historyDetailsLoading: boolean
+  historyDetailsError: string | null
+  error: string | null
+  stale: boolean
+  onRefresh: () => void
+  onSelectCase: (id: string) => void
+  onLoadHistoryDetails: () => void
+  previewLoader: PreviewResourceLoader | null
+  onPreview?: PreviewOpener
+}) {
+  const summary = props.detail?.evaluation || props.evaluations.find((item) => item.evaluationId === props.selectedEvaluationId)
+  const currentCase = props.caseData?.case
+  const imageResources = (currentCase?.resources || []).filter((resource) => resource.mediaType.startsWith('image/'))
+  const failure = currentCase?.firstFailure || currentCase?.timeline.firstFailure || summary?.firstFailure
+  return <>
+    <main className="conversation panel evaluation-main">
+      <header className="conversation-header evaluation-header">
+        <div className="conversation-title"><span className="eyebrow">评测工作台 · 只读</span><h1>{summary?.evaluationId || '评测记录'}</h1>{summary && <span className="conversation-meta">{summary.provider || '未知来源'} · {summary.model || '未知模型'} · {summary.caseCount} 个 case</span>}</div>
+        <div className="conversation-header-actions"><span className={'run-chip ' + (summary ? evaluationStatusClass(summary.status) : '')}><span className="status-dot" />{summary ? evaluationStatusLabel(summary.status) : '未选择评测'}</span><button type="button" className="icon-button" onClick={props.onRefresh} title="刷新评测" aria-label="刷新评测"><RefreshCw size={15} /></button></div>
+      </header>
+      <div className="evaluation-scroll">
+        {props.stale && <div className="evaluation-warning" role="status"><AlertTriangle size={14} />评测数据暂时不可刷新，当前显示最近一次成功快照。<button type="button" className="small-action" onClick={props.onRefresh}>重试</button></div>}
+        {props.loading && !props.detail && <div className="evaluation-loading"><LoaderCircle className="spin-icon" size={18} />正在加载评测详情</div>}
+        {!props.loading && !summary && <div className="empty-conversation"><div className="empty-icon"><ClipboardList size={22} /></div><h2>还没有评测记录</h2><p>完成一次真实评测后，批次会出现在这里。</p><button type="button" className="dialog-primary" onClick={props.onRefresh}>刷新评测</button></div>}
+        {props.error && !props.detail && <div className="error-state"><div className="empty-icon"><ClipboardList size={22} /></div><h2>评测记录不可用</h2><p>{props.error}</p><button type="button" className="dialog-primary" onClick={props.onRefresh}>重试</button></div>}
+        {summary && <>
+          <section className="evaluation-overview">
+            <div className="evaluation-overview-card"><span>开始时间</span><strong>{summary.startedAt || '—'}</strong></div>
+            <div className="evaluation-overview-card"><span>结束时间</span><strong>{summary.endedAt || '尚未结束'}</strong></div>
+            <div className="evaluation-overview-card"><span>Case 状态</span><strong>{Object.entries(summary.caseCounts).map(([key, value]) => `${key}: ${value}`).join(' · ') || '—'}</strong></div>
+          </section>
+          {props.caseLoading && <div className="evaluation-loading"><LoaderCircle className="spin-icon" size={16} />正在加载 case 诊断</div>}
+          {currentCase && <>
+            <section className="evaluation-case-heading"><div><span className="eyebrow">当前 case</span><h2>{currentCase.caseId}</h2></div><span className={'run-status ' + evaluationStatusClass(currentCase.status as EvaluationStatus)}>{currentCase.status}</span></section>
+            <div className="evaluation-reference-row"><span>输入：{currentCase.asset || '未记录'}</span>{currentCase.runId && <code>run: {currentCase.runId}</code>}{currentCase.sha256 && <code>sha256: {currentCase.sha256.slice(0, 16)}…</code>}</div>
+            {failure && <div className="evaluation-failure"><AlertTriangle size={15} /><div><strong>第一个可确认失败</strong><span>{failure.category || '未知类别'} / {failure.stage || '未知阶段'} · {failure.message || '未提供原因'}</span></div></div>}
+            {currentCase.error && <div className="evaluation-failure"><AlertTriangle size={15} /><div><strong>{currentCase.error.code || 'case 错误'}</strong><span>{currentCase.error.message || '评测 case 不可用'}</span></div></div>}
+            <section className="evaluation-section"><div className="evaluation-section-heading"><div><span className="eyebrow">阶段诊断</span><h3>链路状态</h3></div>{currentCase.timeline.historyGap && <span className="run-status interrupted">历史不完整</span>}</div><div className="evaluation-stage-list">{currentCase.timeline.stages.length ? currentCase.timeline.stages.map((stage) => <div className="evaluation-stage" key={stage.name}><span className={'evaluation-stage-dot ' + (stage.status === 'completed' ? 'success' : stage.status === 'failed' ? 'error' : '')}>{stage.status === 'completed' ? <CheckCircle2 size={13} /> : <span />}</span><div><strong>{stage.name}</strong><small>{stage.status}{stage.sequences.length ? ` · 事件 ${stage.sequences.join(', ')}` : ''}{stage.errors.length ? ` · ${stage.errors.join('；')}` : ''}</small></div></div>) : <div className="evaluation-muted">暂无阶段诊断。</div>}</div></section>
+            <section className="evaluation-section"><div className="evaluation-section-heading"><div><span className="eyebrow">报告</span><h3>{currentCase.report.available ? '评测报告' : '标准诊断摘要'}</h3></div>{currentCase.report.truncated && <span className="run-status interrupted">已截断</span>}</div>{currentCase.report.text ? <SafeMarkdown source={currentCase.report.text} /> : <div className="evaluation-muted">没有自定义 Markdown 报告，当前展示上方的标准摘要与阶段证据。</div>}</section>
+            <section className="evaluation-section"><div className="evaluation-section-heading"><div><span className="eyebrow">证据画廊</span><h3>图片证据</h3></div><span className="detail-count">{imageResources.length} 张</span></div>{imageResources.length ? <div className="evaluation-evidence-grid">{imageResources.map((resource) => <div className="evaluation-evidence-card" key={resource.resourceId}><PreviewImage loader={props.previewLoader} resource={resource.previewResource} alt={resource.label} title={resource.label} sourceLabel={evaluationResourceLabel(resource)} onPreview={props.onPreview} /><strong>{evaluationResourceLabel(resource)}</strong><small>{resource.label} · {formatBytes(resource.byteCount)}</small></div>)}</div> : <div className="evaluation-muted">当前 case 没有可预览的图片证据。</div>}</section>
+            <EvaluationHistoryView history={props.history} details={props.historyDetails} loader={props.previewLoader} onPreview={props.onPreview} loading={props.historyLoading} detailsLoading={props.historyDetailsLoading} detailsError={props.historyDetailsError} onLoadDetails={props.onLoadHistoryDetails} />
+          </>}
+        </>}
+        {props.error && props.detail && <div className="evaluation-warning" role="status"><AlertTriangle size={14} />{props.error}</div>}
+      </div>
+    </main>
+    <aside className="right-panel panel evaluation-case-panel"><div className="panel-heading"><div><span className="eyebrow">评测批次</span><h2>Cases</h2></div><span className="detail-count">{props.detail?.cases.length || 0}</span></div>{props.detail?.cases.length ? <div className="evaluation-case-list">{props.detail.cases.map((item) => <button type="button" className={'evaluation-case-item ' + (item.caseId === props.selectedCaseId ? 'selected' : '')} key={item.caseId} onClick={() => props.onSelectCase(item.caseId)}><span className={'status-dot ' + evaluationStatusClass(item.status as EvaluationStatus)} /><span><strong>{item.caseId}</strong><small>{item.status}{item.firstFailure?.stage ? ` · ${item.firstFailure.stage}` : ''}</small></span><ChevronRight size={14} /></button>)}</div> : <div className="empty-attachments"><ClipboardList size={19} /><span>暂无可读 case</span><small>评测批次尚未写入完整索引。</small></div>}<div className="details-divider" /><div className="panel-heading compact"><h2>数据边界</h2></div><p className="details-note">此处只读评测 bundle，不会改变普通会话、运行或附件。</p></aside>
+  </>
+}
+
+function SessionSidebar(props: { sessions: Session[]; activeId: string; onSelect: (id: string) => void; onCreate: () => void; onDelete: (id: string) => void; workspace: 'sessions' | 'evaluations'; onWorkspaceChange: (workspace: 'sessions' | 'evaluations') => void; evaluations: EvaluationSummary[]; activeEvaluationId: string; onSelectEvaluation: (id: string) => void; mode: 'mock' | 'gateway'; runtimeStatus: GatewayRuntimeStatus | null; health: GatewayHealth | null }) {
   const statusUnavailable = props.runtimeStatus?.state === 'unavailable' || props.runtimeStatus?.agentState === 'unavailable' || props.health?.agent?.status === 'unavailable'
   return <aside className="sidebar panel">
     <div className="brand"><div className="brand-mark"><BarChart3 size={19} /></div><div><strong>Figura</strong><span>图表分析工作台</span></div></div>
-    <div className="section-heading"><div><span className="eyebrow">工作区</span><strong>会话</strong></div><button className="icon-button" onClick={props.onCreate} title="新建会话" aria-label="新建会话"><Plus size={16} /></button></div>
-    <div className="session-list">{props.sessions.length ? props.sessions.map((session) => <div key={session.id} className={'session-item ' + (session.id === props.activeId ? 'selected' : '')}><button className="session-select" onClick={() => props.onSelect(session.id)} aria-current={session.id === props.activeId ? 'page' : undefined}><span className="session-dot" /><span className="session-copy"><strong>{session.name}</strong><small>{session.updatedAt}</small></span><span className="session-count">{session.runCount}</span></button><button className="session-more" onClick={() => props.onDelete(session.id)} title={`删除会话：${session.name}`} aria-label={`删除会话：${session.name}`}><Trash2 size={14} /></button></div>) : <div className="session-empty"><MessageSquare size={16} /><span>还没有会话</span><small>新建一个会话开始分析。</small></div>}</div>
+    <div className="workspace-switcher" role="tablist" aria-label="选择工作区"><button type="button" className={props.workspace === 'sessions' ? 'active' : ''} onClick={() => props.onWorkspaceChange('sessions')} role="tab" aria-selected={props.workspace === 'sessions'}><MessageSquare size={14} />会话</button><button type="button" className={props.workspace === 'evaluations' ? 'active' : ''} onClick={() => props.onWorkspaceChange('evaluations')} role="tab" aria-selected={props.workspace === 'evaluations'}><ClipboardList size={14} />评测</button></div>
+    {props.workspace === 'sessions' ? <><div className="section-heading"><div><span className="eyebrow">工作区</span><strong>会话</strong></div><button className="icon-button" onClick={props.onCreate} title="新建会话" aria-label="新建会话"><Plus size={16} /></button></div><div className="session-list">{props.sessions.length ? props.sessions.map((session) => <div key={session.id} className={'session-item ' + (session.id === props.activeId ? 'selected' : '')}><button className="session-select" onClick={() => props.onSelect(session.id)} aria-current={session.id === props.activeId ? 'page' : undefined}><span className="session-dot" /><span className="session-copy"><strong>{session.name}</strong><small>{session.updatedAt}</small></span><span className="session-count">{session.runCount}</span></button><button className="session-more" onClick={() => props.onDelete(session.id)} title={`删除会话：${session.name}`} aria-label={`删除会话：${session.name}`}><Trash2 size={14} /></button></div>) : <div className="session-empty"><MessageSquare size={16} /><span>还没有会话</span><small>新建一个会话开始分析。</small></div>}</div></> : <><div className="section-heading"><div><span className="eyebrow">工作区</span><strong>评测记录</strong></div></div><div className="session-list">{props.evaluations.length ? props.evaluations.map((evaluation) => <button type="button" key={evaluation.evaluationId} className={'evaluation-nav-item ' + (evaluation.evaluationId === props.activeEvaluationId ? 'selected' : '')} onClick={() => props.onSelectEvaluation(evaluation.evaluationId)}><span className={'status-dot ' + evaluationStatusClass(evaluation.status)} /><span className="session-copy"><strong>{evaluation.evaluationId}</strong><small>{evaluationStatusLabel(evaluation.status)} · {evaluation.caseCount} 个 case</small></span><ChevronRight size={14} /></button>) : <div className="session-empty"><ClipboardList size={16} /><span>还没有评测记录</span><small>完成一次真实评测后可在这里查看。</small></div>}</div></>}
     <div className="sidebar-footer"><span className={'status-dot ' + (statusUnavailable ? 'status-error' : '')} />{props.mode === 'gateway' ? 'Gateway 模式' : '模拟模式'} <span className="muted">·</span> {gatewayStatusText(props.mode, props.runtimeStatus, props.health)}</div>
   </aside>
 }
@@ -639,6 +787,7 @@ function AttachmentPanel(props: { attachments: Attachment[]; pending: PendingAtt
 export default function App() {
   const mode = import.meta.env.VITE_CHARTAGENT_MODE === 'gateway' ? 'gateway' : 'mock'
   const client: ChartAgentClient = useMemo(() => mode === 'gateway' ? gatewayClient : mockClient, [mode])
+  const [workspace, setWorkspace] = useState<'sessions' | 'evaluations'>('sessions')
   const [runtimeStatus, setRuntimeStatus] = useState<GatewayRuntimeStatus | null>(null)
   const [gatewayHealth, setGatewayHealth] = useState<GatewayHealth | null>(null)
   const [sessions, setSessions] = useState<Session[]>([])
@@ -663,6 +812,20 @@ export default function App() {
   const [gatewayReady, setGatewayReady] = useState(mode !== 'gateway')
   const [provider, setProvider] = useState<Provider>('openai')
   const [activePreview, setActivePreview] = useState<PreviewDescriptor | null>(null)
+  const [evaluations, setEvaluations] = useState<EvaluationSummary[]>([])
+  const [activeEvaluationId, setActiveEvaluationId] = useState('')
+  const [evaluationDetail, setEvaluationDetail] = useState<EvaluationDetail | null>(null)
+  const [evaluationCaseId, setEvaluationCaseId] = useState('')
+  const [evaluationCase, setEvaluationCase] = useState<EvaluationCaseData | null>(null)
+  const [evaluationHistory, setEvaluationHistory] = useState<EvaluationHistory | null>(null)
+  const [evaluationHistoryDetails, setEvaluationHistoryDetails] = useState<EvaluationHistoryDetails | null>(null)
+  const [evaluationLoading, setEvaluationLoading] = useState(false)
+  const [evaluationCaseLoading, setEvaluationCaseLoading] = useState(false)
+  const [evaluationHistoryLoading, setEvaluationHistoryLoading] = useState(false)
+  const [evaluationHistoryDetailsLoading, setEvaluationHistoryDetailsLoading] = useState(false)
+  const [evaluationHistoryDetailsError, setEvaluationHistoryDetailsError] = useState<string | null>(null)
+  const [evaluationError, setEvaluationError] = useState<string | null>(null)
+  const [evaluationStale, setEvaluationStale] = useState(false)
   const activeIdRef = useRef(activeId)
   const localPreviews = useRef(new Map<string, string>())
   const subscriptionRef = useRef<RunSubscription | null>(null)
@@ -719,6 +882,107 @@ export default function App() {
     setLoadingSession(true)
     client.listSessions().then((items) => { setSessions(items); setActiveId(items[0]?.id ?? '') }).catch((reason) => setError(toUserMessage(reason))).finally(() => setLoadingSession(false))
   }, [client, gatewayReady])
+
+  const loadEvaluationCatalog = async (preserve = true) => {
+    try {
+      const items = await client.listEvaluations()
+      setEvaluations(items)
+      setEvaluationStale(false)
+      setEvaluationError(null)
+      setActiveEvaluationId((current) => items.some((item) => item.evaluationId === current) ? current : items[0]?.evaluationId || '')
+    } catch (reason) {
+      setEvaluationStale(preserve)
+      setEvaluationError(toUserMessage(reason))
+    }
+  }
+
+  useEffect(() => {
+    if (!gatewayReady) return
+    void loadEvaluationCatalog()
+  }, [client, gatewayReady])
+
+  useEffect(() => {
+    if (!gatewayReady || workspace !== 'evaluations' || !activeEvaluationId) {
+      setEvaluationDetail(null)
+      setEvaluationCase(null)
+      setEvaluationHistory(null)
+      setEvaluationHistoryDetails(null)
+      setEvaluationHistoryDetailsError(null)
+      return
+    }
+    let current = true
+    setEvaluationLoading(true)
+    setEvaluationError(null)
+    void client.getEvaluation(activeEvaluationId).then((detail) => {
+      if (!current) return
+      setEvaluationDetail(detail)
+      setEvaluationCaseId((caseId) => detail.cases.some((item) => item.caseId === caseId) ? caseId : detail.cases[0]?.caseId || '')
+    }).catch((reason) => { if (current) setEvaluationError(toUserMessage(reason)) }).finally(() => { if (current) setEvaluationLoading(false) })
+    return () => { current = false }
+  }, [activeEvaluationId, client, gatewayReady, workspace])
+
+  useEffect(() => {
+    if (!gatewayReady || workspace !== 'evaluations' || !activeEvaluationId || !evaluationCaseId) {
+      setEvaluationCase(null)
+      setEvaluationHistory(null)
+      setEvaluationHistoryDetails(null)
+      setEvaluationHistoryDetailsError(null)
+      return
+    }
+    let current = true
+    setEvaluationCaseLoading(true)
+    setEvaluationHistoryLoading(true)
+    setEvaluationHistoryDetails(null)
+    setEvaluationHistoryDetailsError(null)
+    setEvaluationError(null)
+    void client.getEvaluationCase(activeEvaluationId, evaluationCaseId).then((value) => {
+      if (current) setEvaluationCase(value)
+    }).catch((reason) => { if (current) setEvaluationError(toUserMessage(reason)) }).finally(() => { if (current) setEvaluationCaseLoading(false) })
+    void client.getEvaluationHistory(activeEvaluationId, evaluationCaseId).then((value) => {
+      if (current) setEvaluationHistory(value)
+    }).catch(() => {
+      if (current) setEvaluationHistory(null)
+    }).finally(() => { if (current) setEvaluationHistoryLoading(false) })
+    return () => { current = false }
+  }, [activeEvaluationId, client, evaluationCaseId, gatewayReady, workspace])
+
+  const loadEvaluationHistoryDetails = async () => {
+    if (!activeEvaluationId || !evaluationCaseId || workspace !== 'evaluations') return
+    setEvaluationHistoryDetailsLoading(true)
+    setEvaluationHistoryDetailsError(null)
+    try {
+      const details = await client.getEvaluationHistoryDetails(activeEvaluationId, evaluationCaseId)
+      setEvaluationHistoryDetails(details)
+    } catch (reason) {
+      setEvaluationHistoryDetailsError(toUserMessage(reason))
+    } finally {
+      setEvaluationHistoryDetailsLoading(false)
+    }
+  }
+
+  const refreshEvaluation = async () => {
+    await loadEvaluationCatalog()
+    if (!activeEvaluationId || workspace !== 'evaluations') return
+    try {
+      const detail = await client.getEvaluation(activeEvaluationId)
+      setEvaluationDetail(detail)
+      const caseId = evaluationCaseId || detail.cases[0]?.caseId || ''
+      if (caseId) setEvaluationCaseId(caseId)
+      setEvaluationStale(false)
+    } catch (reason) {
+      setEvaluationStale(true)
+      setEvaluationError(toUserMessage(reason))
+    }
+  }
+
+  const selectedEvaluation = evaluations.find((item) => item.evaluationId === activeEvaluationId)
+  useEffect(() => {
+    if (workspace !== 'evaluations' || !activeEvaluationId || selectedEvaluation?.status !== 'running') return
+    const timer = window.setInterval(() => {
+      void refreshEvaluation()
+    }, 5000)
+    return () => window.clearInterval(timer)
+  }, [activeEvaluationId, selectedEvaluation?.status, workspace])
   useEffect(() => {
     if (!activeId) { setData(null); setTimelines([]); return }
     setData(null)
@@ -1105,7 +1369,13 @@ export default function App() {
 
   const toggleRun = (runId: string, status: RunSummary['status']) => setExpandedRuns((current) => { const next = new Set(current); if (status === 'running') { next.has(runId) ? next.delete(runId) : next.add(runId) } else { next.has(runId) ? next.delete(runId) : next.add(runId) } return next })
   const changeProvider = (next: Provider) => { setProvider(next); if (activeId) window.localStorage.setItem(`figura.provider.${activeId}`, next); if (loading) setError('当前运行不会切换来源，新选择将应用于下一次运行。') }
-  return <><div className="app-shell"><SessionSidebar sessions={sessions} activeId={activeId} onSelect={selectSession} onCreate={create} onDelete={requestDeleteSession} mode={mode} runtimeStatus={runtimeStatus} health={gatewayHealth} /><ConversationPanel data={data} timelines={timelines} pendingUser={pendingUser} runState={runState} selectedAttachmentIds={selectedIds} activeSourceIds={activeSourceIds} provider={provider} health={gatewayHealth} mode={mode} onProviderChange={changeProvider} onSubmit={submit} onInterrupt={(runId) => void interruptRun(runId)} onRetry={(runId) => void retryRun(runId)} onResume={(runId) => void resumeRun(runId)} loading={loading} loadingSession={loadingSession} error={error} onToggleRun={toggleRun} expandedRuns={expandedRuns} previewLoader={previewLoader} onPreview={setActivePreview} /><AttachmentPanel attachments={data?.attachments ?? []} pending={pending} selectedIds={selectedIds} activeSourceIds={activeSourceIds} error={attachmentError} onAdd={addFiles} onToggle={toggleAttachment} onRemovePending={removePending} onRetryPending={(item) => void uploadPending(item)} onRemove={requestDeleteAttachment} previewLoader={previewLoader} onPreview={setActivePreview} /></div>{activePreview && <InteractivePreview preview={activePreview} loader={previewLoader} onClose={() => setActivePreview(null)} />}{creatingSession && <div className="dialog-backdrop"><form className="session-dialog" onSubmit={(event) => void confirmCreate(event)}><h2>新建会话</h2><label htmlFor="session-name">会话名称</label><input id="session-name" value={newSessionName} onChange={(event) => setNewSessionName(event.target.value)} placeholder="例如：季度销售分析" autoFocus /><div className="dialog-actions"><button type="button" className="dialog-secondary" onClick={() => setCreatingSession(false)}>取消</button><button type="submit" className="dialog-primary" disabled={!newSessionName.trim()}>创建会话</button></div></form></div>}{confirmAction && <div className="dialog-backdrop"><div className="session-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-dialog-title"><h2 id="delete-dialog-title">{confirmAction.kind === 'session' ? '删除会话？' : '删除附件？'}</h2><p className="dialog-message">{confirmAction.kind === 'session' ? `将永久删除“${confirmAction.session.name}”及其运行记录和附件。` : `将删除“${confirmAction.attachment.filename}”及其源文件。`}</p><div className="dialog-actions"><button type="button" className="dialog-secondary" onClick={() => setConfirmAction(null)} disabled={deleting}>取消</button><button type="button" className="dialog-danger" onClick={() => void confirmDelete()} disabled={deleting}><Trash2 size={13} />{deleting ? '正在删除' : '确认删除'}</button></div></div></div>}</>
+  const selectEvaluation = (id: string) => { setWorkspace('evaluations'); setActiveEvaluationId(id); setEvaluationCaseId(''); setActivePreview(null); setEvaluationError(null) }
+  const changeWorkspace = (next: 'sessions' | 'evaluations') => {
+    setWorkspace(next)
+    setActivePreview(null)
+    if (next === 'evaluations' && !activeEvaluationId && evaluations[0]) setActiveEvaluationId(evaluations[0].evaluationId)
+  }
+  return <><div className="app-shell"><SessionSidebar sessions={sessions} activeId={activeId} onSelect={selectSession} onCreate={create} onDelete={requestDeleteSession} workspace={workspace} onWorkspaceChange={changeWorkspace} evaluations={evaluations} activeEvaluationId={activeEvaluationId} onSelectEvaluation={selectEvaluation} mode={mode} runtimeStatus={runtimeStatus} health={gatewayHealth} />{workspace === 'evaluations' ? <EvaluationPanel evaluations={evaluations} detail={evaluationDetail} caseData={evaluationCase} history={evaluationHistory} historyDetails={evaluationHistoryDetails} selectedEvaluationId={activeEvaluationId} selectedCaseId={evaluationCaseId} loading={evaluationLoading} caseLoading={evaluationCaseLoading} historyLoading={evaluationHistoryLoading} historyDetailsLoading={evaluationHistoryDetailsLoading} historyDetailsError={evaluationHistoryDetailsError} error={evaluationError} stale={evaluationStale} onRefresh={() => void refreshEvaluation()} onSelectCase={(id) => { setEvaluationCaseId(id); setEvaluationError(null) }} onLoadHistoryDetails={() => void loadEvaluationHistoryDetails()} previewLoader={previewLoader} onPreview={setActivePreview} /> : <><ConversationPanel data={data} timelines={timelines} pendingUser={pendingUser} runState={runState} selectedAttachmentIds={selectedIds} activeSourceIds={activeSourceIds} provider={provider} health={gatewayHealth} mode={mode} onProviderChange={changeProvider} onSubmit={submit} onInterrupt={(runId) => void interruptRun(runId)} onRetry={(runId) => void retryRun(runId)} onResume={(runId) => void resumeRun(runId)} loading={loading} loadingSession={loadingSession} error={error} onToggleRun={toggleRun} expandedRuns={expandedRuns} previewLoader={previewLoader} onPreview={setActivePreview} /><AttachmentPanel attachments={data?.attachments ?? []} pending={pending} selectedIds={selectedIds} activeSourceIds={activeSourceIds} error={attachmentError} onAdd={addFiles} onToggle={toggleAttachment} onRemovePending={removePending} onRetryPending={(item) => void uploadPending(item)} onRemove={requestDeleteAttachment} previewLoader={previewLoader} onPreview={setActivePreview} /></>}</div>{activePreview && <InteractivePreview preview={activePreview} loader={previewLoader} onClose={() => setActivePreview(null)} />}{creatingSession && <div className="dialog-backdrop"><form className="session-dialog" onSubmit={(event) => void confirmCreate(event)}><h2>新建会话</h2><label htmlFor="session-name">会话名称</label><input id="session-name" value={newSessionName} onChange={(event) => setNewSessionName(event.target.value)} placeholder="例如：季度销售分析" autoFocus /><div className="dialog-actions"><button type="button" className="dialog-secondary" onClick={() => setCreatingSession(false)}>取消</button><button type="submit" className="dialog-primary" disabled={!newSessionName.trim()}>创建会话</button></div></form></div>}{confirmAction && <div className="dialog-backdrop"><div className="session-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-dialog-title"><h2 id="delete-dialog-title">{confirmAction.kind === 'session' ? '删除会话？' : '删除附件？'}</h2><p className="dialog-message">{confirmAction.kind === 'session' ? `将永久删除“${confirmAction.session.name}”及其运行记录和附件。` : `将删除“${confirmAction.attachment.filename}”及其源文件。`}</p><div className="dialog-actions"><button type="button" className="dialog-secondary" onClick={() => setConfirmAction(null)} disabled={deleting}>取消</button><button type="button" className="dialog-danger" onClick={() => void confirmDelete()} disabled={deleting}><Trash2 size={13} />{deleting ? '正在删除' : '确认删除'}</button></div></div></div>}</>
 }
 
 function toUserMessage(error: unknown): string {
@@ -1125,6 +1395,12 @@ function toUserMessage(error: unknown): string {
     if (error.code === 'session_exists') return '会话名称已存在，请换一个名称。'
     if (error.code === 'session_busy') return '会话正在运行 Agent，请等待本次运行结束后再删除。'
     if (error.code === 'run_unavailable' || error.code === 'event_history_unavailable') return '这条执行记录已不可用，当前只保留可恢复的会话内容。'
+    if (error.code === 'evaluation_not_found') return '评测批次不存在，可能已经被移除。'
+    if (error.code === 'evaluation_case_not_found') return '评测 case 不存在或尚未写入索引。'
+    if (error.code === 'evaluation_history_unavailable') return '该 case 的运行历史暂时不可读，但阶段摘要仍可查看。'
+    if (error.code === 'evaluation_resource_not_found' || error.code === 'evaluation_resource_unavailable') return '评测证据不存在、已过期或暂时不可用。'
+    if (error.code === 'evaluation_not_ready') return '评测批次仍在写入，请稍后刷新。'
+    if (error.code === 'evaluation_schema_invalid' || error.code === 'evaluation_schema_unsupported') return '评测批次格式不受支持，已保留其它可用记录。'
     if (error.code === 'source_binding_required') return '当前会话有多个活动源，请在右侧勾选要使用的附件后重试。'
     if (error.code === 'attachment_not_found') return '附件不存在或不属于当前会话。'
     if (error.code === 'attachment_unavailable') return '附件源文件不可用，请重新上传。'

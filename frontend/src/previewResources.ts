@@ -25,6 +25,9 @@ export function normalizeGatewayBaseUrl(value?: string): string {
 }
 
 export function previewResourcePath(resource: PreviewResource): string {
+  if (resource.kind === 'evaluation') {
+    return `/evaluations/${encodeURIComponent(resource.evaluationId)}/resources/${encodeURIComponent(resource.resourceId)}?case_id=${encodeURIComponent(resource.caseId)}`
+  }
   const session = encodeURIComponent(resource.sessionId)
   const run = 'runId' in resource ? `/runs/${encodeURIComponent(resource.runId)}` : ''
   if (resource.kind === 'attachment') return `/sessions/${session}/attachments/${encodeURIComponent(resource.attachmentId)}/content`

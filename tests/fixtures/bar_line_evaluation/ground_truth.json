@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "case_id": "bar_line_dashboard",
+  "image": {
+    "path": "tests/fixtures/bar_line_evaluation/bar_line_dashboard.png",
+    "width": 1600,
+    "height": 900,
+    "panel_bboxes_norm": {
+      "Quarterly Sales": [0.03, 0.10, 0.48, 0.90],
+      "Monthly Orders": [0.52, 0.10, 0.97, 0.90]
+    }
+  },
+  "charts": [
+    {
+      "name": "Quarterly Sales",
+      "chart_type": "bar",
+      "categories": ["Q1", "Q2", "Q3", "Q4"],
+      "series": {
+        "Target": [40, 55, 48, 62],
+        "Actual": [36, 51, 45, 59]
+      },
+      "y_axis": {
+        "min": 0,
+        "max": 70,
+        "tick_step": 10,
+        "title": "Revenue (million USD)"
+      }
+    },
+    {
+      "name": "Monthly Orders",
+      "chart_type": "line",
+      "categories": ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul"],
+      "series": {
+        "Orders": [22, 28, 25, 36, 44, 41, 53]
+      },
+      "y_axis": {
+        "min": 0,
+        "max": 60,
+        "tick_step": 10,
+        "title": "Number of Orders"
+      }
+    }
+  ]
+}

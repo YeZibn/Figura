@@ -94,3 +94,40 @@ JSON 是机器可读事实：样本指纹、run/provider/model、阶段状态、
 旧的 `.chartagent/diagnostics/` 报告和共享数据不会自动迁移；新评测使用新的批次布局。
 如果只需要旧式报告输出，可显式传入 `--base-url` 并配合 `--output-dir`。真实诊断输出
 不纳入默认 CI；固定事件样例覆盖应纳入 CI 的诊断规则。
+
+## 前端评测工作台
+
+启动默认 Gateway 后，桌面端左侧的“评测”工作区会只读发现当前 canonical data root
+下的 `.chartagent/evaluations/` 批次。它不会把评测 session 复制进普通会话列表，也不会
+在评测页提供发送消息、继续、重试或删除操作。
+
+工作台使用以下只读接口：
+
+```text
+GET /api/v1/evaluations
+GET /api/v1/evaluations/{evaluation_id}
+GET /api/v1/evaluations/{evaluation_id}/cases/{case_id}
+GET /api/v1/evaluations/{evaluation_id}/cases/{case_id}/history?after={sequence}
+GET /api/v1/evaluations/{evaluation_id}/cases/{case_id}/history/details?after_record={record_sequence}
+GET /api/v1/evaluations/{evaluation_id}/resources/{resource_id}?case_id={case_id}
+```
+
+接口只返回有界的批次、case、阶段和失败摘要。图片必须使用返回的评测 resource reference
+加载；`sessions.db`、绝对路径、`.env`、凭据和原始 provider payload 不会通过评测 API
+暴露。`report.md` 与 `report-assets/` 是可选扩展：缺少它们时，工作台仍展示标准
+`summary`/`diagnostics` 内容。
+
+`history` 是首屏使用的轻量事件时间线；用户点击“展开对话与工具详情”后，前端才请求
+`history/details`。详细响应在一个只读 DTO 中组合 `records` 与 `gateway_run_events`，但始终
+分别保留 `recordSequence` 和 `eventSequence`，并保留时间戳、`callId`、模型可见消息、工具
+参数、工具结果、测量修复信息和视觉证据引用。`after_record` 只推进 `records` 游标，不把两种
+序号混用。若 `records` 表不存在或该 run 没有对应记录，接口会退化为 Gateway 事件并返回
+`sourceAvailability`/`notice`，不会让整个 case 失败。
+
+详细内容仍执行递归字段投影、大小上限、持久化截断标记和敏感字段隐藏；私有推理、凭据、绝对
+路径、data URL 与二进制内容不会下发。评测页沿用现有只读运行记录区域，以原生折叠卡片展示
+对话、工具调用/结果、修复信息和视觉证据，不新增独立 transcript 工作区，也不影响普通会话
+工作区的运行记录。
+
+`running` 批次在评测工作区打开时会以固定间隔有限刷新；批次进入 `completed`、`partial`
+或 `blocked` 后停止轮询。刷新失败会保留最近一次成功快照，并提供显式重试入口。

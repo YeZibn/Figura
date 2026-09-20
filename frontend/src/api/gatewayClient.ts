@@ -1,6 +1,6 @@
 import type { ChartAgentClient, RunEventCallbacks, RunResumeOptions, RunStartOptions, RunSubscription } from './client'
 import { measurementRepairEventKinds } from '../types/protocol'
-import type { AgentRunEvent, Attachment, GatewayHealth, GeneratedChartReference, ObservationReference, PreviewResource, Provider, RunHandle, RunHistory, RunSummary, Session, SessionData } from '../types/protocol'
+import type { AgentRunEvent, Attachment, EvaluationCase, EvaluationCaseData, EvaluationDetail, EvaluationDetailEntry, EvaluationHistory, EvaluationHistoryDetails, EvaluationResource, EvaluationSummary, GatewayHealth, GeneratedChartReference, ObservationReference, PreviewResource, Provider, RunHandle, RunHistory, RunSummary, Session, SessionData } from '../types/protocol'
 import { mediaTypeForFile } from '../attachments'
 
 type GatewaySessionList = { sessions: Session[] }
@@ -18,6 +18,10 @@ type GatewayRunResponse = { run: RunHandle }
 type GatewayRunEvent = { runId: string; sequence: number; kind: string; timestamp: string; payload?: Record<string, unknown> }
 type GatewayRunHistory = { run: RunSummary; events: GatewayRunEvent[]; historyGap: boolean; historyGapCode?: string | null; firstSequence?: number | null }
 type GatewayHealthResponse = GatewayHealth
+type GatewayEvaluationList = { evaluations: EvaluationSummary[] }
+type GatewayEvaluationDetail = { evaluation: EvaluationSummary; cases: EvaluationDetail['cases']; report: EvaluationDetail['report'] }
+type GatewayEvaluationCase = { evaluationId: string; case: EvaluationCase }
+type GatewayEvaluationHistoryDetails = EvaluationHistoryDetails
 
 export class GatewayClientError extends Error {
   readonly code: string
@@ -92,6 +96,70 @@ function chartPreviewResource(sessionId: string, runId: string, reference: Gener
   if (reference.artifactId) return { kind: 'artifact', sessionId, runId, artifactId: reference.artifactId }
   if (reference.candidateId) return { kind: 'candidate', sessionId, runId, candidateId: reference.candidateId }
   return undefined
+}
+
+function evaluationPreviewResource(evaluationId: string, caseId: string, value: Partial<EvaluationResource>): PreviewResource | undefined {
+  if (!value.resourceId || !value.caseId) return undefined
+  return { kind: 'evaluation', evaluationId, caseId: value.caseId || caseId, resourceId: value.resourceId }
+}
+
+function mapEvaluationResource(evaluationId: string, caseId: string, value: EvaluationResource): EvaluationResource {
+  const previewResource = value.mediaType.startsWith('image/')
+    ? evaluationPreviewResource(evaluationId, caseId, value)
+    : undefined
+  return { ...value, previewResource }
+}
+
+function mapEvaluationCase(evaluationId: string, value: EvaluationCase): EvaluationCase {
+  return {
+    ...value,
+    resources: (value.resources || []).map((resource) => mapEvaluationResource(evaluationId, value.caseId, resource)),
+  }
+}
+
+function mapEvaluationDetailEntry(entry: EvaluationDetailEntry, evaluationId: string, caseId: string): EvaluationDetailEntry {
+  const observations = Array.isArray(entry.observations)
+    ? entry.observations.map((observation) => {
+      const resource = observation.previewResource
+        if (!resource || typeof resource !== 'object') return observation
+        const mapped = evaluationPreviewResource(evaluationId, caseId, resource as Partial<EvaluationResource>)
+        return mapped ? { ...observation, previewResource: mapped } : observation
+      })
+    : entry.observations
+  const artifacts = Array.isArray(entry.artifacts)
+    ? entry.artifacts.map((artifact) => {
+      const resource = artifact.previewResource
+        if (!resource || typeof resource !== 'object') return artifact
+        const mapped = evaluationPreviewResource(evaluationId, caseId, resource as Partial<EvaluationResource>)
+        return mapped ? { ...artifact, previewResource: mapped } : artifact
+      })
+    : entry.artifacts
+  return { ...entry, observations, artifacts }
+}
+
+function mapEvaluationEvent(event: GatewayRunEvent, evaluationId: string, caseId: string): AgentRunEvent {
+  const payload = { ...(event.payload || {}) }
+  if (event.kind === 'visual_observation' && Array.isArray(payload.observations)) {
+    payload.observations = payload.observations.map((item) => {
+      if (!item || typeof item !== 'object') return item
+      const observation = item as Record<string, unknown>
+      const resource = observation.previewResource
+      if (!resource || typeof resource !== 'object') return item
+      const mapped = evaluationPreviewResource(evaluationId, caseId, resource as Partial<EvaluationResource>)
+      return mapped ? { ...observation, previewResource: mapped } : item
+    })
+  }
+  if (event.kind === 'generated_chart' && Array.isArray(payload.artifacts)) {
+    payload.artifacts = payload.artifacts.map((item) => {
+      if (!item || typeof item !== 'object') return item
+      const artifact = item as Record<string, unknown>
+      const resource = artifact.previewResource
+      if (!resource || typeof resource !== 'object') return item
+      const mapped = evaluationPreviewResource(evaluationId, caseId, resource as Partial<EvaluationResource>)
+      return mapped ? { ...artifact, previewResource: mapped } : item
+    })
+  }
+  return { runId: event.runId, sequence: event.sequence, kind: event.kind, timestamp: event.timestamp, payload }
 }
 
 function mapAttachment(item: GatewayAttachment, sessionId?: string): Attachment {
@@ -181,6 +249,43 @@ export const gatewayClient: ChartAgentClient = {
   async listSessions() {
     const payload = await request<GatewaySessionList>('/sessions')
     return payload.sessions
+  },
+
+  async listEvaluations() {
+    const payload = await request<GatewayEvaluationList>('/evaluations')
+    return payload.evaluations
+  },
+
+  async getEvaluation(id) {
+    const payload = await request<GatewayEvaluationDetail>(`/evaluations/${encodeURIComponent(id)}`)
+    return payload
+  },
+
+  async getEvaluationCase(evaluationId, caseId) {
+    const payload = await request<GatewayEvaluationCase>(`/evaluations/${encodeURIComponent(evaluationId)}/cases/${encodeURIComponent(caseId)}`)
+    return { ...payload, case: mapEvaluationCase(evaluationId, payload.case) }
+  },
+
+  async getEvaluationHistory(evaluationId, caseId, afterSequence = 0) {
+    const payload = await request<{ run: RunSummary; events: GatewayRunEvent[]; historyGap: boolean; firstSequence?: number | null }>(
+      `/evaluations/${encodeURIComponent(evaluationId)}/cases/${encodeURIComponent(caseId)}/history?after=${Math.max(0, afterSequence)}`,
+    )
+    return {
+      run: payload.run,
+      events: payload.events.map((event) => mapEvaluationEvent(event, evaluationId, caseId)),
+      historyGap: payload.historyGap,
+      firstSequence: payload.firstSequence,
+    }
+  },
+
+  async getEvaluationHistoryDetails(evaluationId, caseId, afterRecordSequence = 0) {
+    const payload = await request<GatewayEvaluationHistoryDetails>(
+      `/evaluations/${encodeURIComponent(evaluationId)}/cases/${encodeURIComponent(caseId)}/history/details?after_record=${Math.max(0, afterRecordSequence)}`,
+    )
+    return {
+      ...payload,
+      entries: payload.entries.map((entry) => mapEvaluationDetailEntry(entry, evaluationId, caseId)),
+    }
   },
 
   async getSession(id) {

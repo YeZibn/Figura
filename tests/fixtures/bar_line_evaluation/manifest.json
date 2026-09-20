@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "samples": [
+    {
+      "case_id": "bar_line_dashboard",
+      "asset": "tests/fixtures/bar_line_evaluation/bar_line_dashboard.png",
+      "sha256": "b6b6105d739d1a0399295fd75286f27ac8965644423a0533de814f8aaecb9e00",
+      "expected_panels": {
+        "count": 2,
+        "items": [
+          {
+            "name": "Quarterly Sales",
+            "role": "chart_panel",
+            "chart_type": "bar",
+            "bbox_norm": [0.03, 0.10, 0.48, 0.90]
+          },
+          {
+            "name": "Monthly Orders",
+            "role": "chart_panel",
+            "chart_type": "line",
+            "bbox_norm": [0.52, 0.10, 0.97, 0.90]
+          }
+        ]
+      }
+    }
+  ]
+}

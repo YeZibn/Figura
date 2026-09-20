@@ -54,6 +54,11 @@ export const mockClient: ChartAgentClient = {
   },
 
   async listSessions() { await wait(120); return Object.values(data).map((entry) => clone(entry.session)) },
+  async listEvaluations() { await wait(80); return [] },
+  async getEvaluation(_id) { await wait(80); throw new Error('模拟模式没有评测记录') },
+  async getEvaluationCase(_evaluationId, _caseId) { await wait(80); throw new Error('模拟模式没有评测记录') },
+  async getEvaluationHistory(_evaluationId, _caseId, _afterSequence = 0) { await wait(80); throw new Error('模拟模式没有评测记录') },
+  async getEvaluationHistoryDetails(_evaluationId, _caseId, _afterRecordSequence = 0) { await wait(80); throw new Error('模拟模式没有评测记录') },
   async getSession(id) { await wait(160); return clone(data[id]) },
   async createSession(name) { await wait(160); const id = 'session-' + Date.now(); const session: Session = { id, name, updatedAt: '刚刚', runCount: 0 }; data[id] = { session, messages: [], attachments: [], runs: [] }; return clone(data[id]) },
   async deleteSession(id) { await wait(140); if (!data[id]) throw new Error('会话不存在'); delete data[id] },
