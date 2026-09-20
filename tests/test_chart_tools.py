@@ -31,6 +31,7 @@ from chartagent.tools.chart.observation.scatter import extract_scatter_points
 from chartagent.tools.chart.specification import (
     ASSEMBLE_SPEC,
     CHART_SPEC_SCHEMA,
+    FIGURE_CHILD_INPUT_SCHEMA,
     POINT_SCHEMA,
     assemble_spec,
     validate_spec,
@@ -1499,6 +1500,74 @@ def test_assemble_spec_preserves_series_and_confidence():
     assert validate_spec(result) == {"ok": True, "issues": []}
 
 
+def test_assemble_spec_preserves_line_category_evidence():
+    result = assemble_spec(
+        "line",
+        [
+            {"x": 1, "y": 420, "series": "Orders"},
+            {"x": 2, "y": 480, "series": "Orders"},
+            {"x": 3, "y": 520, "series": "Orders"},
+        ],
+        x_label="Month",
+        y_label="Orders",
+        x_categories=["Jan", "Feb", "Mar"],
+    )
+
+    assert "error" not in result
+    assert result["axes"]["x"]["label"] == "Month"
+    assert result["axes"]["x"]["categories"] == ["Jan", "Feb", "Mar"]
+    assert validate_spec(result) == {"ok": True, "issues": []}
+
+
+def test_assemble_spec_keeps_figure_child_category_domains_isolated():
+    figure = {
+        "figure_id": "dashboard",
+        "source": {"attachment_id": "att_dashboard", "panel_id": "panel_dashboard"},
+        "layout": {"type": "grid", "columns": 2},
+        "coverage": {
+            "source_series": ["Orders", "Revenue"],
+            "represented_series": ["Orders", "Revenue"],
+            "omitted_series": [],
+            "status": "complete",
+        },
+        "charts": [
+            {
+                "chart_id": "orders",
+                "chart_type": "line",
+                "x_label": "Month",
+                "y_label": "Orders",
+                "x_categories": ["Jan", "Feb"],
+                "points": [{"x": 1, "y": 10}, {"x": 2, "y": 12}],
+            },
+            {
+                "chart_id": "revenue",
+                "chart_type": "line",
+                "x_label": "Quarter",
+                "y_label": "Revenue",
+                "x_categories": ["Q1", "Q2"],
+                "points": [{"x": 1, "y": 20}, {"x": 2, "y": 25}],
+            },
+        ],
+    }
+
+    result = assemble_spec(figure=figure)
+
+    assert result["charts"][0]["spec"]["axes"]["x"]["categories"] == ["Jan", "Feb"]
+    assert result["charts"][1]["spec"]["axes"]["x"]["categories"] == ["Q1", "Q2"]
+
+
+def test_assemble_spec_without_line_categories_keeps_numeric_axis():
+    result = assemble_spec(
+        "line",
+        [{"x": 1, "y": 10}, {"x": 2, "y": 12}],
+        x_label="Index",
+        y_label="Value",
+    )
+
+    assert "error" not in result
+    assert result["axes"]["x"]["categories"] is None
+
+
 def test_assemble_spec_deduplicates_multi_series_bar_categories():
     result = assemble_spec(
         "bar",
@@ -1641,6 +1710,8 @@ def test_chart_spec_schema_is_shared_by_assembly_and_rendering():
     assert render_point_schema["properties"] == POINT_SCHEMA["properties"]
     assert render_point_schema["oneOf"] == POINT_SCHEMA["oneOf"]
     assert render_spec_schema["properties"]["metadata"]["properties"]["chart_type"] == CHART_SPEC_SCHEMA["properties"]["metadata"]["properties"]["chart_type"]
+    assert "x_categories" in ASSEMBLE_SPEC.parameters["properties"]
+    assert "x_categories" in FIGURE_CHILD_INPUT_SCHEMA["properties"]
 
 
 def test_validate_spec_rejects_scatter_without_axes():

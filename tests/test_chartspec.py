@@ -56,6 +56,53 @@ def test_round_trip_line_chart_xy_points():
     assert ChartSpec.from_dict(spec.to_dict()) == spec
 
 
+def test_line_category_axis_round_trip_preserves_order():
+    spec = ChartSpec(
+        metadata=ChartMetadata(chart_type=ChartType.LINE, title="orders"),
+        axes=Axes(
+            x=Axis(label="Month", categories=["Jan", "Feb", "Mar"]),
+            y=Axis(label="Orders"),
+        ),
+        dataset=[
+            DataPoint(x=1, y=420),
+            DataPoint(x=2, y=480),
+            DataPoint(x=3, y=520),
+        ],
+    )
+
+    rebuilt = ChartSpec.from_dict(spec.to_dict())
+
+    assert rebuilt.axes is not None
+    assert rebuilt.axes.x.categories == ["Jan", "Feb", "Mar"]
+    assert rebuilt.validate() == []
+
+
+def test_line_category_axis_rejects_unmapped_positions():
+    spec = ChartSpec(
+        metadata=ChartMetadata(chart_type=ChartType.LINE),
+        axes=Axes(
+            x=Axis(label="Month", categories=["Jan", "Feb", "Mar"]),
+            y=Axis(label="Orders"),
+        ),
+        dataset=[DataPoint(x=1, y=420), DataPoint(x=2, y=480)],
+    )
+
+    issues = spec.validate()
+
+    assert any(issue.location == "axes.x.categories" for issue in issues)
+    assert any("distinct numeric x positions" in issue.message for issue in issues)
+
+
+def test_numeric_line_without_categories_remains_compatible():
+    spec = ChartSpec(
+        metadata=ChartMetadata(chart_type=ChartType.LINE),
+        axes=Axes(x=Axis(label="Time"), y=Axis(label="Value")),
+        dataset=[DataPoint(x=0, y=1), DataPoint(x=1, y=2)],
+    )
+
+    assert spec.validate() == []
+
+
 def test_to_dict_is_plain_data():
     payload = bar_spec().to_dict()
     assert payload["metadata"]["chart_type"] == "bar"

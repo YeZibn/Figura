@@ -152,6 +152,102 @@ def test_render_chart_preserves_multi_series_metadata():
     assert result.data["point_count"] == 4
 
 
+def _categorical_line_spec() -> ChartSpec:
+    return ChartSpec(
+        metadata=ChartMetadata(chart_type=ChartType.LINE, title="Monthly Orders"),
+        axes=Axes(
+            x=Axis(label="Month", categories=["Jan", "Feb", "Mar", "Apr"]),
+            y=Axis(label="Orders"),
+        ),
+        dataset=[
+            DataPoint(x=1, y=420, series="Orders"),
+            DataPoint(x=2, y=480, series="Orders"),
+            DataPoint(x=3, y=520, series="Orders"),
+            DataPoint(x=4, y=560, series="Orders"),
+        ],
+    )
+
+
+def test_render_line_uses_declared_category_tick_labels(monkeypatch):
+    observed: dict[str, object] = {}
+
+    def capture(_fig, ax, _spec):
+        observed["positions"] = [float(value) for value in ax.get_xticks()]
+        observed["labels"] = [label.get_text() for label in ax.get_xticklabels()]
+        observed["line_x"] = [float(value) for value in ax.lines[0].get_xdata()]
+        return []
+
+    monkeypatch.setattr(rendering, "_audit_figure", capture)
+
+    result = render_chart(_categorical_line_spec().to_dict())
+
+    assert isinstance(result, ToolResult)
+    assert observed["positions"] == [1.0, 2.0, 3.0, 4.0]
+    assert observed["labels"] == ["Jan", "Feb", "Mar", "Apr"]
+    assert observed["line_x"] == [1.0, 2.0, 3.0, 4.0]
+
+
+def test_render_line_category_positions_are_shared_by_multiple_series(monkeypatch):
+    spec = _categorical_line_spec()
+    spec.dataset.extend(
+        [
+            DataPoint(x=1, y=410, series="Target"),
+            DataPoint(x=2, y=470, series="Target"),
+            DataPoint(x=3, y=510, series="Target"),
+            DataPoint(x=4, y=550, series="Target"),
+        ]
+    )
+    observed: dict[str, object] = {}
+
+    def capture(_fig, ax, _spec):
+        observed["lines"] = [
+            [float(value) for value in line.get_xdata()]
+            for line in ax.lines
+        ]
+        return []
+
+    monkeypatch.setattr(rendering, "_audit_figure", capture)
+
+    result = render_chart(spec.to_dict())
+
+    assert isinstance(result, ToolResult)
+    assert observed["lines"] == [[1.0, 2.0, 3.0, 4.0], [1.0, 2.0, 3.0, 4.0]]
+
+
+def test_line_category_audit_rejects_numeric_ticks(monkeypatch):
+    def render_without_categories(ax, spec, _font):
+        points = spec.dataset
+        ax.plot(
+            [float(point.x) for point in points],
+            [float(point.y) for point in points],
+            marker="o",
+            label="Orders",
+        )
+
+    monkeypatch.setattr(rendering, "_render_line", render_without_categories)
+
+    result = render_chart(_categorical_line_spec().to_dict())
+
+    assert isinstance(result, dict)
+    assert result["validation"]["checks"]["fidelity"] == "failed"
+    assert any(issue["code"] == "category_mismatch" for issue in result["validation"]["issues"])
+
+
+def test_dense_line_categories_return_explicit_layout_warning():
+    categories = [f"Month {index}" for index in range(13)]
+    spec = ChartSpec(
+        metadata=ChartMetadata(chart_type=ChartType.LINE, title="Dense line"),
+        axes=Axes(x=Axis(label="Month", categories=categories), y=Axis(label="Value")),
+        dataset=[DataPoint(x=index, y=index + 1) for index in range(13)],
+    )
+
+    result = render_chart(spec.to_dict())
+
+    assert isinstance(result, ToolResult)
+    assert result.data["validation"]["checks"]["layout"] == "warning"
+    assert any(issue["code"] == "label_density" for issue in result.data["validation"]["issues"])
+
+
 def test_configured_font_is_used_without_exposing_path(monkeypatch):
     font_path = font_manager.findfont(FontProperties(family="DejaVu Sans"))
     monkeypatch.setenv(rendering.FONT_PATH_ENV, font_path)

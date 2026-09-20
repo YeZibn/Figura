@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+import math
 from typing import Any, Dict, List, Mapping, Optional
 
 
@@ -220,6 +221,9 @@ class ChartSpec:
                     issues.append(
                         ValidationIssue(f"axes.{name}.label", "axis label must not be empty")
                     )
+
+        if self.axes is not None and isinstance(chart_type, ChartType):
+            issues.extend(_validate_x_categories(self.axes.x.categories, chart_type, self.dataset))
 
         if self.provenance is not None:
             if not isinstance(self.provenance, Mapping):
@@ -522,3 +526,64 @@ def _validate_point(point: DataPoint, loc: str) -> List[ValidationIssue]:
             ValidationIssue(f"{loc}.confidence", "confidence must be within [0, 1]")
         )
     return issues
+
+
+def _validate_x_categories(
+    categories: object,
+    chart_type: ChartType,
+    dataset: List[DataPoint],
+) -> List[ValidationIssue]:
+    """Validate the ordered x-axis category domain and line positions."""
+    if categories is None:
+        return []
+    if not isinstance(categories, list):
+        return [ValidationIssue("axes.x.categories", "categories must be a list")]
+
+    issues: List[ValidationIssue] = []
+    normalized: List[str] = []
+    seen: set[str] = set()
+    for index, category in enumerate(categories):
+        if not isinstance(category, str) or not category.strip():
+            issues.append(
+                ValidationIssue(
+                    f"axes.x.categories[{index}]",
+                    "category must be a non-empty string",
+                )
+            )
+            continue
+        normalized_category = category.strip()
+        if normalized_category in seen:
+            issues.append(
+                ValidationIssue(
+                    f"axes.x.categories[{index}]",
+                    "category must be unique",
+                )
+            )
+        seen.add(normalized_category)
+        normalized.append(normalized_category)
+
+    if not categories:
+        issues.append(ValidationIssue("axes.x.categories", "categories must not be empty when provided"))
+
+    if chart_type in {ChartType.LINE, ChartType.SCATTER} and normalized:
+        positions = {
+            float(point.x)
+            for point in dataset
+            if _finite_number(point.x)
+        }
+        if len(positions) != len(normalized):
+            issues.append(
+                ValidationIssue(
+                    "axes.x.categories",
+                    "category count must match the distinct numeric x positions",
+                )
+            )
+    return issues
+
+
+def _finite_number(value: object) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(float(value))
+    )

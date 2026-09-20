@@ -63,6 +63,7 @@ def _assemble_single_spec(
     x_label: str = "",
     y_label: str = "",
     source: str | None = None,
+    x_categories: list[str] | None = None,
     measurement_ref: Mapping[str, Any] | None = None,
     measurement_context: Mapping[str, Any] | None = None,
     expected_source: FigureSource | None = None,
@@ -98,6 +99,13 @@ def _assemble_single_spec(
             f"{kind.value} charts require non-empty x_label and y_label",
             "axes",
         )
+    if x_categories is not None:
+        if kind not in _CARTESIAN_TYPES:
+            return _assembly_error("x_categories is only supported for cartesian charts", "x_categories")
+        if not isinstance(x_categories, list):
+            return _assembly_error("x_categories must be an array", "x_categories")
+        if len(x_categories) > MAX_GENERATION_POINTS:
+            return _assembly_error("x_categories exceeds the configured size limit", "x_categories")
 
     data_points: list[DataPoint] = []
     for index, raw in enumerate(points):
@@ -114,8 +122,8 @@ def _assemble_single_spec(
                 for point in data_points
                 if isinstance(point.category, str)
             ))
-            if kind is ChartType.BAR
-            else None
+            if kind is ChartType.BAR and x_categories is None
+            else list(x_categories) if x_categories is not None else None
         )
         axes = Axes(
             x=Axis(label=x_label, categories=categories),
@@ -158,6 +166,7 @@ def _figure_child_input(child: Mapping[str, Any]) -> dict[str, Any]:
         "title": child.get("title", ""),
         "x_label": child.get("x_label", ""),
         "y_label": child.get("y_label", ""),
+        "x_categories": child.get("x_categories"),
         "source": child.get("source"),
         "measurement_ref": child.get("measurement_ref"),
     }
@@ -258,6 +267,7 @@ def assemble_spec(
     x_label: str = "",
     y_label: str = "",
     source: str | None = None,
+    x_categories: list[str] | None = None,
     measurement_ref: dict[str, Any] | None = None,
     *,
     figure: dict[str, Any] | None = None,
@@ -305,6 +315,7 @@ def assemble_spec(
         x_label,
         y_label,
         source,
+        x_categories=x_categories,
         measurement_ref=measurement_ref,
         measurement_context=_measurement_context,
     )
@@ -450,6 +461,7 @@ FIGURE_CHILD_INPUT_SCHEMA = {
         "display_title": {"type": "string", "maxLength": MAX_GENERATION_LABEL_LENGTH, "description": "Optional title shown by the composite layout."},
         "x_label": {"type": "string", "maxLength": MAX_GENERATION_LABEL_LENGTH, "description": "Cartesian child x-axis label."},
         "y_label": {"type": "string", "maxLength": MAX_GENERATION_LABEL_LENGTH, "description": "Cartesian child y-axis label."},
+        "x_categories": {"type": "array", "items": {"type": "string"}, "maxItems": MAX_GENERATION_POINTS, "description": "Optional ordered x-axis category labels; preserve labels from the source panel for line/scatter charts."},
         "points": {"type": "array", "items": POINT_SCHEMA, "minItems": 1, "maxItems": MAX_GENERATION_POINTS, "description": "Child chart data points."},
         "source": {"type": ["string", "null"], "maxLength": MAX_GENERATION_LABEL_LENGTH, "description": "Optional child provenance label."},
         "measurement_ref": {**MEASUREMENT_REF_SCHEMA, "description": "Optional server-issued accepted measurement reference for this child chart."},
@@ -499,6 +511,7 @@ ASSEMBLE_SPEC = Tool(
             "y_label": {"type": "string", "maxLength": MAX_GENERATION_LABEL_LENGTH, "description": "Required non-empty y-axis label for bar, line, and scatter charts."},
             "points": {"type": "array", "items": POINT_SCHEMA, "minItems": 1, "maxItems": MAX_GENERATION_POINTS, "description": "单图数据点；bar/pie 使用 category/value，line/scatter 使用 x/y。figure 模式填写到 charts 子项。"},
             "source": {"type": ["string", "null"], "maxLength": MAX_GENERATION_LABEL_LENGTH, "description": "单图可选来源标签；不授权访问本地路径。"},
+            "x_categories": {"type": "array", "items": {"type": "string"}, "maxItems": MAX_GENERATION_POINTS, "description": "可选的有序横轴类别标签；line/scatter 必须保留源 panel 中已确认的类别文本，例如 Jan、Feb、Mar。"},
             "measurement_ref": {**MEASUREMENT_REF_SCHEMA, "description": "可选的服务端测量引用；只有当前 run 中已接受的 measurement reference 才能通过门禁。"},
             "figure": {**FIGURE_INPUT_SCHEMA, "description": "同一 attachment_id + panel_id 下的多个独立子图及其 coverage。"},
             "figures": {"type": "array", "items": FIGURE_INPUT_SCHEMA, "minItems": 1, "maxItems": MAX_COLLECTION_FIGURES, "description": "来自多个 panel 的有序 figure 列表；不同来源不会自动合并。"},

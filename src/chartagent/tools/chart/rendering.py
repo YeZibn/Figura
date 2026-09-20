@@ -276,8 +276,36 @@ def _render_line(ax: Any, spec: ChartSpec, font: _ResolvedFont) -> None:
             label=series,
             color=colors(index % 10),
         )
+    category_axis = _line_category_axis(spec)
+    if category_axis is not None:
+        positions, labels = category_axis
+        ax.set_xticks(positions, labels)
     if explicit_series:
         _set_legend_fonts(ax.legend(), font)
+    _set_tick_fonts(ax, font)
+
+
+def _line_category_axis(spec: ChartSpec) -> tuple[list[float], list[str]] | None:
+    """Return explicit line tick positions and labels when a category domain exists."""
+    categories = spec.axes.x.categories if spec.axes is not None else None
+    if categories is None:
+        return None
+    if not isinstance(categories, list) or not categories:
+        raise ValueError("line x-axis categories must be a non-empty list")
+
+    labels = [_canonical_category(category) for category in categories]
+    if any(not label for label in labels):
+        raise ValueError("line x-axis categories must contain non-empty labels")
+    positions = sorted(
+        {
+            float(point.x)
+            for point in spec.dataset
+            if point.x is not None and math.isfinite(float(point.x))
+        }
+    )
+    if len(positions) != len(labels):
+        raise ValueError("line x-axis category count does not match numeric x positions")
+    return positions, labels
 
 
 def _render_scatter(ax: Any, spec: ChartSpec, font: _ResolvedFont) -> None:
@@ -362,6 +390,16 @@ def _audit_artist_fidelity(ax: Any, spec: ChartSpec) -> list[GenerationIssue]:
                 if not _close_enough(line.get_xdata(), [float(point.x) for point in points]) or not _close_enough(line.get_ydata(), [float(point.y) for point in points]):
                     issues.append(_audit_issue("artist_value_mismatch", "figure.lines", "rendered line points do not match the dataset"))
                     break
+        if spec.axes is not None and spec.axes.x.categories is not None:
+            try:
+                expected_positions, expected_labels = _line_category_axis(spec)
+            except (TypeError, ValueError, OverflowError):
+                issues.append(_audit_issue("category_mismatch", "figure.x_ticks", "line category positions do not match the declared categories"))
+            else:
+                actual_positions = [float(position) for position in ax.get_xticks()]
+                actual_labels = [label.get_text() for label in ax.get_xticklabels()]
+                if not _close_enough(actual_positions, expected_positions) or actual_labels != expected_labels:
+                    issues.append(_audit_issue("category_mismatch", "figure.x_ticks", "rendered line categories do not match the declared order"))
 
     elif chart_type is ChartType.SCATTER:
         collections = [collection for collection in ax.collections if isinstance(collection, PathCollection)]
