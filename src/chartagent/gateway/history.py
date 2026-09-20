@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import shutil
 import time
 from collections.abc import Mapping
@@ -48,6 +49,7 @@ DEFAULT_HISTORY_RETENTION_SECONDS = 30 * 24 * 60 * 60.0
 DEFAULT_MAX_HISTORY_ARTIFACT_BYTES = 8 * 1024 * 1024
 DEFAULT_MAX_HISTORY_ARTIFACTS = 32
 DEFAULT_RECOVERY_RETENTION_SECONDS = DEFAULT_HISTORY_RETENTION_SECONDS
+MAX_EVENT_DETAIL_BYTES = 4 * 1024 * 1024
 _SUPPORTED_ARTIFACT_TYPES = frozenset({"image/png", "image/jpeg", "image/gif", "image/webp"})
 
 
@@ -786,6 +788,9 @@ class GatewayHistoryStore:
 
     def append_event(self, event: RunEvent) -> None:
         payload = dict(event.payload)
+        detail_reference = self._persist_evaluation_event_detail(event)
+        if detail_reference is not None:
+            payload["detail_resource"] = detail_reference
         encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
         if len(encoded) > MAX_EVENT_PAYLOAD:
             if event.kind == "tool_result":
@@ -830,6 +835,49 @@ class GatewayHistoryStore:
                 "UPDATE gateway_runs SET updated_at = ? WHERE run_id = ?",
                 (event.timestamp, event.run_id),
             )
+
+    def _persist_evaluation_event_detail(self, event: RunEvent) -> dict[str, Any] | None:
+        """Persist a safe large-event sidecar for managed evaluation bundles."""
+        if not (self.artifact_root.parent / "evaluation.json").is_file():
+            return None
+        detail_payload = event.detail_payload
+        if not isinstance(detail_payload, Mapping):
+            return None
+        encoded_payload = json.dumps(detail_payload, ensure_ascii=False, separators=(",", ":"))
+        if len(encoded_payload.encode("utf-8")) <= MAX_EVENT_PAYLOAD:
+            return None
+        envelope = {
+            "schemaVersion": 1,
+            "runId": event.run_id,
+            "sequence": event.sequence,
+            "kind": event.kind,
+            "payload": detail_payload,
+        }
+        encoded = json.dumps(envelope, ensure_ascii=False, separators=(",", ":"))
+        encoded_bytes = encoded.encode("utf-8")
+        if len(encoded_bytes) > MAX_EVENT_DETAIL_BYTES:
+            return None
+        safe_run = re.sub(r"[^A-Za-z0-9_.-]", "_", event.run_id)[:128] or "run"
+        relative = Path("history-details") / safe_run / f"{event.sequence}.json"
+        destination = self.artifact_root / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        temporary = destination.with_name(f".{destination.name}.{uuid4().hex}.tmp")
+        try:
+            temporary.write_bytes(encoded_bytes)
+            temporary.replace(destination)
+            self._restrict_permissions(destination, 0o600)
+        except OSError:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
+            return None
+        return {
+            "kind": "history_detail",
+            "token": relative.relative_to("history-details").as_posix(),
+            "mediaType": "application/json",
+            "byteCount": len(encoded_bytes),
+        }
 
     def update_run(
         self,

@@ -44,7 +44,10 @@ MAX_ARTIFACT_RESOURCE_BYTES = 8 * 1024 * 1024
 MAX_RESOURCES_PER_CASE = 128
 MAX_DETAIL_ENTRIES = 256
 MAX_DETAIL_ITEMS = 64
-MAX_DETAIL_DEPTH = 6
+# This is a hard safety ceiling, not a normal projection rule.  Chart data
+# commonly nests geometry below result/data/panels/proposal; scalar and
+# numeric-array values must not disappear merely because of that shape.
+MAX_DETAIL_DEPTH = 32
 MAX_DETAIL_VALUE_BYTES = 48 * 1024
 _EVALUATION_ID = re.compile(r"^eval_[A-Za-z0-9_-]{1,96}$")
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9_.:-]{1,192}$")
@@ -91,6 +94,7 @@ class _Resource:
     media_type: str
     path: Path
     byte_count: int
+    sha256: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -100,6 +104,7 @@ class _Resource:
             "label": self.label,
             "mediaType": self.media_type,
             "byteCount": self.byte_count,
+            **({"sha256": self.sha256} if self.sha256 else {}),
         }
 
 
@@ -209,12 +214,12 @@ class EvaluationReader:
         *,
         after_record_sequence: int = 0,
     ) -> dict[str, Any]:
-        """Return a bounded, read-only projection of messages and tool details.
+        """Return bounded, read-only supplemental records for a run.
 
-        The lightweight ``get_history`` endpoint intentionally exposes only
-        event metadata.  This endpoint is loaded on demand and combines the
-        model-visible ``records`` table with Gateway events while keeping the
-        two sequence spaces separate.
+        Gateway events are the primary transcript returned by ``get_history``.
+        This endpoint adds model-visible ``records`` and any event context that
+        has no corresponding Gateway event while keeping the two sequence
+        spaces separate.
         """
         root = self._bundle_root(evaluation_id)
         index = self._read_index(root)
@@ -274,7 +279,28 @@ class EvaluationReader:
                 if resource.resource_id != resource_id:
                     continue
                 try:
-                    if resource.media_type == "application/json":
+                    if resource.kind == "history_detail":
+                        raw = resource.path.read_bytes()
+                        if len(raw) > MAX_ARTIFACT_RESOURCE_BYTES:
+                            raise EvaluationReaderError("evaluation_resource_unavailable", 503, "评测资源超过读取限制")
+                        envelope = json.loads(raw.decode("utf-8"))
+                        payload = envelope.get("payload") if isinstance(envelope, Mapping) else {}
+                        projected, truncated, redacted = self._safe_projection(payload)
+                        content = json.dumps(
+                            {
+                                "runId": self._bounded_id(envelope.get("runId")) if isinstance(envelope, Mapping) else None,
+                                "sequence": self._bounded_int(envelope.get("sequence")) if isinstance(envelope, Mapping) else None,
+                                "kind": self._bounded_text(envelope.get("kind"), 64) if isinstance(envelope, Mapping) else "unknown",
+                                "payload": projected,
+                                "integrity": {
+                                    "status": "truncated" if truncated else "redacted" if redacted else "complete",
+                                    "source": "evaluation_history_detail",
+                                },
+                            },
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        ).encode("utf-8")
+                    elif resource.media_type == "application/json":
                         # Diagnostic JSON is served as the same bounded
                         # timeline projection used by the detail endpoint;
                         # the original file may contain fields not meant for
@@ -291,7 +317,9 @@ class EvaluationReader:
                         content = (self._read_text(resource.path) or "").encode("utf-8")
                     else:
                         content = resource.path.read_bytes()
-                except OSError as exc:
+                except EvaluationReaderError:
+                    raise
+                except (OSError, UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as exc:
                     raise EvaluationReaderError("evaluation_resource_unavailable", 503, "评测资源暂时不可用") from exc
                 if not content or len(content) > MAX_RESOURCE_BYTES:
                     raise EvaluationReaderError("evaluation_resource_unavailable", 503, "评测资源超过读取限制")
@@ -548,7 +576,13 @@ class EvaluationReader:
             seen_paths.add(safe_path)
             identifier = token or safe_path.relative_to(root).as_posix()
             resource_id = self._resource_id(evaluation_id, case_id, kind, identifier)
-            resources.append(_Resource(resource_id, evaluation_id, case_id, kind, self._safe_text(label, 240) or kind, detected, safe_path, byte_count))
+            digest = None
+            if kind == "history_detail":
+                try:
+                    digest = hashlib.sha256(safe_path.read_bytes()).hexdigest()
+                except OSError:
+                    return
+            resources.append(_Resource(resource_id, evaluation_id, case_id, kind, self._safe_text(label, 240) or kind, detected, safe_path, byte_count, digest))
 
         report_assets = root / "report-assets"
         if report_assets.is_dir():
@@ -582,6 +616,22 @@ class EvaluationReader:
                     limit=MAX_ARTIFACT_RESOURCE_BYTES,
                 )
 
+            history_detail_root = root / "run-artifacts" / "history-details" / run_id
+            if history_detail_root.is_dir():
+                try:
+                    detail_paths = sorted(path for path in history_detail_root.rglob("*.json") if path.is_file())
+                except OSError:
+                    detail_paths = []
+                for path in detail_paths:
+                    add(
+                        path,
+                        kind="history_detail",
+                        label=f"事件 {path.stem} 的完整安全结果",
+                        media_type="application/json",
+                        token=path.relative_to(root / "run-artifacts" / "history-details").as_posix(),
+                        limit=MAX_ARTIFACT_RESOURCE_BYTES,
+                    )
+
             attachment_root = root / "attachments" / session_id
             if attachment_root.is_dir() and not any(item.kind == "input" for item in resources):
                 try:
@@ -604,6 +654,31 @@ class EvaluationReader:
         if not any(item.kind == "report_text" for item in resources) and (root / "report.md").is_file():
             add(root / "report.md", kind="report_text", label="评测报告", media_type="text/markdown", limit=MAX_TEXT_BYTES)
         return resources
+
+    def _history_detail_resource(
+        self,
+        root: Path,
+        evaluation_id: str,
+        case_id: str,
+        run_id: str,
+        value: Any,
+    ) -> dict[str, Any] | None:
+        if not isinstance(value, Mapping):
+            return None
+        token = value.get("token")
+        if not isinstance(token, str) or not token or ".." in Path(token).parts:
+            return None
+        token_path = Path(token)
+        if token_path.parts[:1] == ("history-details",):
+            token = token_path.relative_to("history-details").as_posix()
+        safe_run = re.sub(r"[^A-Za-z0-9_.-]", "_", run_id)[:128] or "run"
+        if Path(token).parts[:1] != (safe_run,):
+            return None
+        raw_case = self._case_from_root(root, case_id)
+        for resource in self._resources(root, evaluation_id, case_id, raw_case):
+            if resource.kind == "history_detail" and resource.path.relative_to(root / "run-artifacts" / "history-details").as_posix() == token:
+                return resource.to_dict()
+        return None
 
     def _artifact_rows(self, root: Path, session_id: str, run_id: str) -> list[_ArtifactRow]:
         database = root / "sessions.db"
@@ -674,6 +749,7 @@ class EvaluationReader:
             "historyGap": first_sequence is not None and after < first_sequence - 1,
             "historyGapCode": "history_gap" if first_sequence is not None and after < first_sequence - 1 else None,
             "firstSequence": first_sequence,
+            "integrity": self._history_integrity(events),
         }
 
     def _read_history_details(
@@ -747,13 +823,27 @@ class EvaluationReader:
         event_rows_truncated = len(event_rows) > MAX_DETAIL_ENTRIES
         record_rows = records[:MAX_DETAIL_ENTRIES]
         event_rows = event_rows[:MAX_DETAIL_ENTRIES]
-        entries = [
+        record_entries = [
             self._safe_record_entry(row)
             for row in record_rows
-        ] + [
+        ]
+        event_entries = [
             self._safe_detail_event(root, evaluation_id, case_id, run_id, row)
             for row in event_rows
         ]
+        event_call_ids = {
+            entry.get("callId")
+            for entry in event_entries
+            if entry.get("kind") in {"tool_call", "tool_result"} and entry.get("callId")
+        }
+        # Gateway events are authoritative for tool lifecycle and correlation.
+        # Records remain useful for conversation/repair context, but the same
+        # tool message must not be rendered a second time.
+        record_entries = [
+            entry for entry in record_entries
+            if not (entry.get("kind") == "tool_message" and entry.get("callId") in event_call_ids)
+        ]
+        entries = record_entries + event_entries
         entries.sort(key=self._detail_entry_sort_key)
         redacted = any(bool(entry.get("redacted")) for entry in entries)
         truncated = records_truncated or event_rows_truncated or any(bool(entry.get("truncated")) for entry in entries)
@@ -783,6 +873,66 @@ class EvaluationReader:
             "truncated": truncated,
             "redacted": redacted,
             "notice": notice,
+            "integrity": self._history_integrity(event_entries, entries=entries, records_available=records_table_available),
+        }
+
+    @staticmethod
+    def _history_integrity(
+        events: list[Mapping[str, Any]],
+        *,
+        entries: list[Mapping[str, Any]] | None = None,
+        records_available: bool = False,
+    ) -> dict[str, Any]:
+        visible = list(entries or events)
+        def flag(item: Mapping[str, Any], key: str) -> bool:
+            if item.get(key):
+                return True
+            payload = item.get("payload")
+            return isinstance(payload, Mapping) and bool(payload.get(key))
+
+        def resource(item: Mapping[str, Any]) -> bool:
+            if item.get("detailResource"):
+                return True
+            payload = item.get("payload")
+            return isinstance(payload, Mapping) and bool(payload.get("detailResource"))
+
+        def integrity(item: Mapping[str, Any]) -> Mapping[str, Any]:
+            direct = item.get("integrity")
+            if isinstance(direct, Mapping):
+                return direct
+            payload = item.get("payload")
+            nested = payload.get("integrity") if isinstance(payload, Mapping) else None
+            return nested if isinstance(nested, Mapping) else {}
+
+        unavailable = sum(1 for item in visible if flag(item, "detailUnavailable"))
+        recoverable = sum(1 for item in visible if resource(item))
+        redacted = sum(1 for item in visible if flag(item, "redacted"))
+        persisted_truncated = sum(
+            1 for item in visible
+            if integrity(item).get("persistedTruncated")
+        )
+        projection_truncated = sum(
+            1 for item in visible
+            if integrity(item).get("projectionTruncated")
+        )
+        if unavailable:
+            status = "unavailable"
+        elif redacted:
+            status = "redacted"
+        elif persisted_truncated or projection_truncated:
+            status = "truncated"
+        else:
+            status = "complete"
+        return {
+            "status": status,
+            "source": "gateway_events" if events else "records",
+            "recordsAvailable": records_available,
+            "eventCount": len(events),
+            "detailResourceCount": recoverable,
+            "unavailableCount": unavailable,
+            "redactedCount": redacted,
+            "persistedTruncatedCount": persisted_truncated,
+            "projectionTruncatedCount": projection_truncated,
         }
 
     @classmethod
@@ -851,7 +1001,9 @@ class EvaluationReader:
                 truncated |= calls_truncated
                 redacted |= calls_redacted
         elif "text" in payload:
-            entry["content"] = cls._safe_text(payload.get("text"), MAX_TEXT_CHARS) or ""
+            text = payload.get("text")
+            entry["content"] = cls._safe_text(text, MAX_TEXT_CHARS) or ""
+            truncated |= isinstance(text, str) and len(text) > MAX_TEXT_CHARS
         if kind in {"record", "repair"}:
             projected, detail_truncated, detail_redacted = cls._safe_projection(payload)
             entry["details"] = projected
@@ -895,12 +1047,19 @@ class EvaluationReader:
             safe = self._safe_text(value, limit) if isinstance(value, str) else value if isinstance(value, (int, float, bool)) else None
             if safe not in (None, ""):
                 entry[target] = safe
-        truncated = bool(payload.get("truncated"))
+        raw_result = payload.get("result")
+        persisted_truncated = bool(payload.get("truncated")) or (
+            isinstance(raw_result, Mapping) and bool(raw_result.get("truncated"))
+        )
+        truncated = persisted_truncated
+        projection_truncated = False
         redacted = False
+        detail_resource = self._history_detail_resource(root, evaluation_id, case_id, run_id, payload.get("detail_resource"))
         if kind == "tool_call" and "arguments" in payload:
             projected, value_truncated, value_redacted = self._safe_projection(payload.get("arguments"))
             entry["arguments"] = projected
             truncated |= value_truncated
+            projection_truncated |= value_truncated
             redacted |= value_redacted
         if kind == "tool_result":
             result = payload.get("result")
@@ -910,27 +1069,45 @@ class EvaluationReader:
                 projected, value_truncated, value_redacted = self._safe_projection(result)
                 entry["result"] = projected
                 truncated |= value_truncated
+                projection_truncated |= value_truncated
                 redacted |= value_redacted
                 truncated |= isinstance(result, Mapping) and bool(result.get("truncated"))
         if kind == "visual_observation":
             entry["observations"] = self._safe_observations(root, evaluation_id, case_id, payload.get("observations"))
         if kind == "generated_chart":
             entry["artifacts"] = self._safe_generated_artifacts(evaluation_id, case_id, payload.get("artifacts"))
+        if detail_resource is not None:
+            entry["detailResource"] = detail_resource
+        elif persisted_truncated:
+            entry["detailUnavailable"] = True
+            entry["detailUnavailableReason"] = "legacy_bundle_no_detail_resource"
         if kind.startswith("measurement_repair") or kind in {"measurement_repair_required", "measurement_repair_rejected", "measurement_repair_exhausted"}:
             projected, value_truncated, value_redacted = self._safe_projection(payload)
             entry["details"] = projected
             truncated |= value_truncated
+            projection_truncated |= value_truncated
             redacted |= value_redacted
         if truncated:
             entry["truncated"] = True
         if redacted:
             entry["redacted"] = True
+        entry["integrity"] = {
+            "status": "unavailable" if entry.get("detailUnavailable") else "truncated" if truncated else "redacted" if redacted else "complete",
+            "source": "gateway_event",
+            "persistedTruncated": persisted_truncated,
+            "projectionTruncated": projection_truncated,
+            "detailUnavailable": bool(entry.get("detailUnavailable")),
+            "reason": "legacy_persisted_truncation" if entry.get("detailUnavailable") else "persisted_event_limit" if persisted_truncated else "safe_projection_limit" if projection_truncated else "sensitive_field_hidden" if redacted else None,
+        }
         return entry
 
     @classmethod
     def _safe_projection(cls, value: Any, *, depth: int = 0) -> tuple[Any, bool, bool]:
+        numeric_tree = cls._numeric_tree(value)
+        if numeric_tree is not None:
+            return numeric_tree
         if depth >= MAX_DETAIL_DEPTH:
-            return {"truncated": True}, True, False
+            return {"truncated": True, "reason": "depth_limit"}, True, False
         if isinstance(value, Mapping):
             result: dict[str, Any] = {}
             truncated = False
@@ -973,6 +1150,25 @@ class EvaluationReader:
         safe = cls._safe_text(value, MAX_TEXT_CHARS) or ""
         return safe, True, False
 
+    @classmethod
+    def _numeric_tree(cls, value: Any) -> tuple[Any, bool, bool] | None:
+        """Keep bounded numeric geometry intact at any normal nesting depth."""
+        if isinstance(value, bool) or value is None:
+            return None
+        if isinstance(value, (int, float)):
+            return value, False, False
+        if not isinstance(value, (list, tuple)):
+            return None
+        projected: list[Any] = []
+        truncated = len(value) > MAX_DETAIL_ITEMS
+        for item in list(value)[:MAX_DETAIL_ITEMS]:
+            nested = cls._numeric_tree(item)
+            if nested is None:
+                return None
+            projected.append(nested[0])
+            truncated |= nested[1]
+        return projected, truncated, False
+
     @staticmethod
     def _is_sensitive_detail_key(value: str) -> bool:
         lower = value.lower().replace("-", "_")
@@ -988,19 +1184,53 @@ class EvaluationReader:
             raw_payload = {}
         payload = raw_payload if isinstance(raw_payload, Mapping) else {}
         safe: dict[str, Any] = {}
-        for key in ("status", "code", "reason", "message", "tool_name", "tool_label", "call_id", "turn", "phase", "operationKind", "traceSequence"):
-            value = payload.get(key)
-            if isinstance(value, (str, int, float, bool)):
-                safe[key] = self._safe_text(value, 240) if isinstance(value, str) else value
-        if row[2] == "tool_call" and "arguments" in payload:
-            safe["arguments"] = {"notice": "原始工具参数未通过评测工作台接口暴露"}
-        if row[2] == "tool_result":
-            safe["result"] = {"notice": "原始工具结果未通过评测工作台接口暴露"}
-            safe["truncated"] = True
+        raw_result = payload.get("result")
+        persisted_truncated = bool(payload.get("truncated")) or (
+            isinstance(raw_result, Mapping) and bool(raw_result.get("truncated"))
+        )
+        truncated = persisted_truncated
+        projection_truncated = False
+        redacted = False
+        detail_resource = self._history_detail_resource(root, evaluation_id, case_id, run_id, payload.get("detail_resource"))
+        for raw_key, value in payload.items():
+            key = self._bounded_text(raw_key, 96) or "field"
+            if key in {"detail_resource", "detailResource"}:
+                continue
+            if self._is_sensitive_detail_key(key):
+                redacted = True
+                continue
+            if key == "observations":
+                safe[key] = self._safe_observations(root, evaluation_id, case_id, value)
+                continue
+            if key == "artifacts":
+                safe[key] = self._safe_generated_artifacts(evaluation_id, case_id, value)
+                continue
+            projected, value_truncated, value_redacted = self._safe_projection(value)
+            safe[key] = projected
+            truncated |= value_truncated
+            projection_truncated |= value_truncated
+            redacted |= value_redacted
+        if detail_resource is not None:
+            safe["detailResource"] = detail_resource
+        elif persisted_truncated:
+            safe["detailUnavailable"] = True
+            safe["detailUnavailableReason"] = "legacy_bundle_no_detail_resource"
         if row[2] == "visual_observation":
             safe["observations"] = self._safe_observations(root, evaluation_id, case_id, payload.get("observations"))
         if row[2] == "generated_chart":
             safe["artifacts"] = self._safe_generated_artifacts(evaluation_id, case_id, payload.get("artifacts"))
+        if truncated:
+            safe["truncated"] = True
+        if redacted:
+            safe["redacted"] = True
+        safe["integrity"] = {
+            "status": "unavailable" if safe.get("detailUnavailable") else "truncated" if truncated else "redacted" if redacted else "complete",
+            "source": "gateway_event",
+            "persistedTruncated": persisted_truncated,
+            "projectionTruncated": projection_truncated,
+            "detailUnavailable": bool(safe.get("detailUnavailable")),
+            "reason": "legacy_persisted_truncation" if safe.get("detailUnavailable") else "persisted_event_limit" if persisted_truncated else "safe_projection_limit" if projection_truncated else "sensitive_field_hidden" if redacted else None,
+        }
         return {
             "runId": run_id,
             "sequence": max(0, int(row[1])),

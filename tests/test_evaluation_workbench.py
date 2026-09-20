@@ -12,7 +12,7 @@ from urllib.parse import quote
 from PIL import Image
 import pytest
 
-from chartagent.evaluation.reader import MAX_RESOURCE_BYTES, EvaluationReader
+from chartagent.evaluation.reader import EvaluationReader, EvaluationReaderError, MAX_RESOURCE_BYTES
 from chartagent.gateway.history import GatewayHistoryStore
 from chartagent.gateway.protocol import RunEvent, RunStatus
 from chartagent.gateway.server import GatewayHTTPServer
@@ -81,7 +81,7 @@ def _write_bundle(data_root: Path, *, evaluation_id: str = "eval_20260920T000000
     return root
 
 
-def _write_history(root: Path, *, include_records: bool = True) -> None:
+def _write_history(root: Path, *, include_records: bool = True, large_result: bool = False) -> None:
     database = root / "sessions.db"
     store = GatewayHistoryStore(database, artifact_root=root / "run-artifacts")
     with sqlite3.connect(database) as connection:
@@ -99,6 +99,19 @@ def _write_history(root: Path, *, include_records: bool = True) -> None:
     store.append_event(RunEvent(
         "run_fixture", 3, "tool_result", {"tool_name": "measure_bars", "call_id": "call_1", "status": "success", "result": {"data": {"bars": 2, "api_key": "secret"}, "warnings": []}}, "2026-09-20T00:00:03Z"
     ))
+    if large_result:
+        store.append_event(RunEvent(
+            "run_fixture",
+            4,
+            "tool_result",
+            {
+                "tool_name": "measure_bars",
+                "call_id": "call_large",
+                "status": "success",
+                "result": {"data": {"points": [{"bbox_px": [1, 2, 3, 4], "note": "safe measurement detail " + ("x" * 180)} for _ in range(100)]}},
+            },
+            "2026-09-20T00:00:04Z",
+        ))
     store.update_run("run_fixture", RunStatus.FAILED, terminal_code="agent_failed", terminal_message="Agent run failed")
     store.close()
     if include_records:
@@ -118,7 +131,7 @@ def _write_history(root: Path, *, include_records: bool = True) -> None:
             )
 
 
-def test_reader_lists_valid_bundle_and_projects_history_without_raw_payload(tmp_path):
+def test_reader_lists_valid_bundle_and_projects_complete_safe_history(tmp_path):
     root = _write_bundle(tmp_path)
     _write_history(root)
     reader = EvaluationReader(tmp_path)
@@ -136,7 +149,9 @@ def test_reader_lists_valid_bundle_and_projects_history_without_raw_payload(tmp_
     encoded = json.dumps(history, ensure_ascii=False)
     assert "authorization" not in encoded
     assert "/Users/private" not in encoded
-    assert "原始工具参数未通过评测工作台接口暴露" in encoded
+    assert history["events"][1]["payload"]["arguments"]["path"] == "[已隐藏路径]"
+    assert history["events"][2]["payload"]["result"]["data"]["bars"] == 2
+    assert history["integrity"]["status"] == "redacted"
 
 
 def test_reader_rejects_cross_case_and_sensitive_resources(tmp_path):
@@ -169,6 +184,8 @@ def test_reader_details_combine_visible_records_and_gateway_events_safely(tmp_pa
     assert tool_call["eventSequence"] == 2
     assert tool_call["arguments"]["path"] == "[已隐藏路径]"
     assert tool_result["result"]["data"]["bars"] == 2
+    assert sum(item["kind"] == "tool_result" for item in details["entries"]) == 1
+    assert not any(item["kind"] == "tool_message" and item.get("callId") == "call_1" for item in details["entries"])
     encoded = json.dumps(details, ensure_ascii=False)
     assert "authorization" not in encoded
     assert "reasoning_content" not in encoded
@@ -188,6 +205,105 @@ def test_reader_details_falls_back_when_records_are_missing(tmp_path):
     assert "records 不可用" in details["notice"]
 
 
+def test_reader_exposes_large_safe_event_result_as_scoped_resource(tmp_path):
+    root = _write_bundle(tmp_path)
+    _write_history(root, include_records=False, large_result=True)
+    reader = EvaluationReader(tmp_path)
+
+    history = reader.get_history(root.name, "bar_line_dashboard")
+    large_event = next(event for event in history["events"] if event["sequence"] == 4)
+    resource = large_event["payload"].get("detailResource")
+    assert resource and resource["kind"] == "history_detail"
+    assert len(resource["sha256"]) == 64
+    assert history["integrity"]["detailResourceCount"] == 1
+
+    content, media_type = reader.get_resource(root.name, resource["resourceId"], case_id="bar_line_dashboard")
+    assert media_type == "application/json"
+    payload = json.loads(content)
+    assert payload["payload"]["result"]["data"]["points"][0]["bbox_px"] == [1, 2, 3, 4]
+    assert "safe measurement detail" in json.dumps(payload, ensure_ascii=False)
+
+    with pytest.raises(EvaluationReaderError) as error:
+        reader.get_resource(root.name, resource["resourceId"], case_id="other_case")
+    assert error.value.code == "evaluation_case_not_found"
+
+    detail_file = next((root / "run-artifacts" / "history-details" / "run_fixture").glob("*.json"))
+    detail_file.unlink()
+    with pytest.raises(EvaluationReaderError) as error:
+        reader.get_resource(root.name, resource["resourceId"], case_id="bar_line_dashboard")
+    assert error.value.code == "evaluation_resource_not_found"
+
+    detail_file.write_text("{", encoding="utf-8")
+    with pytest.raises(EvaluationReaderError) as error:
+        reader.get_resource(root.name, resource["resourceId"], case_id="bar_line_dashboard")
+    assert error.value.code == "evaluation_resource_unavailable"
+
+
+def test_reader_preserves_deep_chart_geometry_without_depth_only_truncation(tmp_path):
+    reader = EvaluationReader(tmp_path)
+    projected, truncated, redacted = reader._safe_projection({
+        "result": {
+            "data": {
+                "panels": [{
+                    "proposal": {
+                        "bbox_px": [12, 24, 480, 320],
+                        "polygon_px": [[12, 24], [480, 24], [480, 320], [12, 320]],
+                    },
+                    "axes": {"x": {"ticks": [0, 10, 20]}, "y": {"ticks": [0, 100]}},
+                    "baseline": {"points_px": [[12, 320], [480, 320]]},
+                    "bars": [{"measure": {"top_px": 100, "bottom_px": 320}}],
+                    "series": [{"points_px": [[1, 2], [3, 4]]}],
+                }],
+            },
+        },
+    })
+    assert truncated is False
+    assert redacted is False
+    panel = projected["result"]["data"]["panels"][0]
+    assert panel["proposal"]["bbox_px"] == [12, 24, 480, 320]
+    assert panel["proposal"]["polygon_px"][2] == [480, 320]
+    assert panel["baseline"]["points_px"] == [[12, 320], [480, 320]]
+
+
+def test_reader_marks_sensitive_and_legacy_truncation_boundaries(tmp_path):
+    reader = EvaluationReader(tmp_path)
+    projected, truncated, redacted = reader._safe_projection({
+        "api_key": "secret",
+        "image": "data:image/png;base64,AAAA",
+        "nested": {"path": "/Users/private/chart.png"},
+    })
+    encoded = json.dumps(projected, ensure_ascii=False)
+    assert "secret" not in encoded
+    assert "/Users/private" not in encoded
+    assert redacted is True
+    assert truncated is False
+
+
+def test_reader_reports_projection_limits_and_legacy_unrecoverable_results(tmp_path):
+    reader = EvaluationReader(tmp_path)
+    projected, truncated, _ = reader._safe_projection({
+        "text": "x" * 20_000,
+        "items": list(range(100)),
+        "nested": {str(index): index for index in range(100)},
+    })
+    assert truncated is True
+    assert len(projected["items"]) == 64
+    assert len(projected["text"]) == 12_000
+
+    root = _write_bundle(tmp_path / "legacy")
+    _write_history(root, include_records=False)
+    database = root / "sessions.db"
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "UPDATE gateway_run_events SET payload_json = ? WHERE run_id = ? AND sequence = ?",
+            (json.dumps({"tool_name": "measure_bars", "call_id": "call_1", "result": {"truncated": True, "preview": "old"}}), "run_fixture", 3),
+        )
+    history = EvaluationReader(tmp_path / "legacy").get_history(root.name, "bar_line_dashboard")
+    event = next(item for item in history["events"] if item["sequence"] == 3)
+    assert event["payload"]["detailUnavailable"] is True
+    assert history["integrity"]["status"] == "unavailable"
+
+
 def test_reader_projects_current_bar_line_dashboard_bundle_when_present():
     data_root = Path(__file__).resolve().parents[1] / ".chartagent"
     evaluation_root = data_root / "evaluations" / "eval_20260920T024408Z_d4962355"
@@ -202,6 +318,21 @@ def test_reader_projects_current_bar_line_dashboard_bundle_when_present():
     assert history_details["eventCount"] > 0
     assert any(item["kind"] == "tool_call" for item in history_details["entries"])
     assert any(item["kind"] == "tool_result" for item in history_details["entries"])
+    history = reader.get_history(evaluation_root.name, case_id)
+    bar_data = next(
+        event["payload"]["result"]["data"]
+        for event in history["events"]
+        if event["kind"] == "tool_result" and event["payload"].get("tool_name") == "measure_bars"
+    )
+    line_data = next(
+        event["payload"]["result"]["data"]
+        for event in history["events"]
+        if event["kind"] == "tool_result" and event["payload"].get("tool_name") == "extract_line_series"
+    )
+    assert isinstance(bar_data.get("bars"), list)
+    assert isinstance(bar_data.get("baseline"), dict)
+    assert isinstance(line_data.get("series"), list)
+    assert isinstance(line_data.get("axes"), dict)
     encoded = json.dumps(history_details, ensure_ascii=False)
     assert "/Users/yezibin" not in encoded
     with pytest.raises(Exception) as error:

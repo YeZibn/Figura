@@ -181,9 +181,26 @@ export type RunHistory = {
   events: AgentRunEvent[]
   historyGap: boolean
   firstSequence?: number | null
+  integrity?: HistoryIntegrity
 }
 
 export type EvaluationHistory = RunHistory
+
+export type HistoryIntegrity = {
+  status: 'complete' | 'redacted' | 'truncated' | 'unavailable' | string
+  source?: string
+  recordsAvailable?: boolean
+  eventCount?: number
+  detailResourceCount?: number
+  unavailableCount?: number
+  redactedCount?: number
+  persistedTruncatedCount?: number
+  projectionTruncatedCount?: number
+  persistedTruncated?: boolean
+  projectionTruncated?: boolean
+  detailUnavailable?: boolean
+  reason?: string | null
+}
 
 export type EvaluationDetailEntry = {
   entryId: string
@@ -208,6 +225,10 @@ export type EvaluationDetailEntry = {
   result?: unknown
   observations?: ObservationReference[]
   artifacts?: GeneratedChartReference[]
+  detailResource?: EvaluationResource
+  detailUnavailable?: boolean
+  detailUnavailableReason?: string
+  integrity?: HistoryIntegrity
   truncated?: boolean
   redacted?: boolean
 }
@@ -226,6 +247,7 @@ export type EvaluationHistoryDetails = {
   truncated: boolean
   redacted: boolean
   notice?: string | null
+  integrity?: HistoryIntegrity
 }
 
 export type EvaluationStatus = 'running' | 'completed' | 'partial' | 'blocked'
@@ -270,6 +292,7 @@ export type EvaluationResource = {
   label: string
   mediaType: string
   byteCount: number
+  sha256?: string
   previewResource?: PreviewResource
 }
 

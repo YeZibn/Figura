@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import json
 import hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Mapping
 
-from ..trace import sanitize_payload, truncate_text
+from ..trace import DETAIL_TRACE_LIMITS, sanitize_payload, truncate_text
 
 GATEWAY_VERSION = "v1"
 MAX_SESSION_NAME = 128
@@ -326,10 +326,19 @@ class RunEvent:
     kind: str
     payload: Mapping[str, Any] = None  # type: ignore[assignment]
     timestamp: str = ""
+    # The event envelope is intentionally bounded for SSE/JSON transport.
+    # Evaluation bundles may persist a larger, already-sanitized sidecar for
+    # read-only inspection.  This field never crosses the public protocol.
+    detail_payload: Mapping[str, Any] | None = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "kind", truncate_text(self.kind, MAX_EVENT_KIND))
-        payload = sanitize_payload(self.payload or {})
+        detail_payload = sanitize_payload(
+            self.detail_payload if self.detail_payload is not None else self.payload or {},
+            limits=DETAIL_TRACE_LIMITS,
+        )
+        object.__setattr__(self, "detail_payload", detail_payload)
+        payload = detail_payload
         encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
         if len(encoded) > MAX_EVENT_PAYLOAD:
             if self.kind == "tool_result":

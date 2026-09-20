@@ -117,17 +117,23 @@ GET /api/v1/evaluations/{evaluation_id}/resources/{resource_id}?case_id={case_id
 暴露。`report.md` 与 `report-assets/` 是可选扩展：缺少它们时，工作台仍展示标准
 `summary`/`diagnostics` 内容。
 
-`history` 是首屏使用的轻量事件时间线；用户点击“展开对话与工具详情”后，前端才请求
-`history/details`。详细响应在一个只读 DTO 中组合 `records` 与 `gateway_run_events`，但始终
-分别保留 `recordSequence` 和 `eventSequence`，并保留时间戳、`callId`、模型可见消息、工具
-参数、工具结果、测量修复信息和视觉证据引用。`after_record` 只推进 `records` 游标，不把两种
-序号混用。若 `records` 表不存在或该 run 没有对应记录，接口会退化为 Gateway 事件并返回
-`sourceAvailability`/`notice`，不会让整个 case 失败。
+`history` 现在直接返回与普通会话 `RunHistory` 兼容的安全事件 payload。评测页复用普通会话的
+只读 `RunTimeline`：工具调用和结果按 `call_id` 合并，参数/结果可展开、复制 JSON，视觉观察会
+挂载到对应工具步骤，审核、测量修复、失败、恢复和终态事件按相同顺序展示。`history/details` 只
+补充用户/模型可见消息和没有对应 Gateway 事件的记录，不再是查看工具结果的前置条件；同一
+`call_id` 的 `records` 工具消息不会再次渲染。
 
-详细内容仍执行递归字段投影、大小上限、持久化截断标记和敏感字段隐藏；私有推理、凭据、绝对
-路径、data URL 与二进制内容不会下发。评测页沿用现有只读运行记录区域，以原生折叠卡片展示
-对话、工具调用/结果、修复信息和视觉证据，不新增独立 transcript 工作区，也不影响普通会话
-工作区的运行记录。
+每个 history 响应还返回 `integrity`。`complete` 表示当前安全事件可完整读取，`redacted` 表示
+敏感字段被隐藏，`unavailable` 表示旧 bundle 已经在持久化阶段截断且没有旁路资源。结构化图表
+数据使用语义化有界投影，保留 bbox、polygon、axes、baseline、bars、series 和 points 的数值，
+不会因为嵌套层数本身被替换成摘要；集合、文本和总大小仍有明确上限。
+
+新评测中超过普通事件 envelope 的安全 payload 会写入
+`run-artifacts/history-details/<run_id>/<sequence>.json`，事件只保留工具身份、`call_id`、状态和
+opaque `detailResource`。前端在工具结果卡片内按需加载该 evaluation/case-scoped JSON；资源读取
+仍校验归属、白名单、字节上限和媒体类型。旧 bundle 没有该资源时继续显示已有安全结果，并明确
+提示“不可恢复”，不会伪造完整内容。私有推理、凭据、绝对路径、data URL 与二进制内容不会下发，
+普通会话的运行记录和评测的只读边界不受影响。
 
 `running` 批次在评测工作区打开时会以固定间隔有限刷新；批次进入 `completed`、`partial`
 或 `blocked` 后停止轮询。刷新失败会保留最近一次成功快照，并提供显式重试入口。

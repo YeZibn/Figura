@@ -29,7 +29,6 @@ from .protocol import (
     RunAccepted,
     RunEvent,
     RunStatus,
-    sanitize_payload,
     utc_timestamp,
 )
 
@@ -245,7 +244,7 @@ class ManagedRun:
             run_id=self.run_id,
             sequence=self._next_sequence,
             kind=kind,
-            payload=sanitize_payload(payload or {}),
+            payload=payload or {},
         )
         if self.history_store is not None:
             try:
@@ -261,7 +260,7 @@ class ManagedRun:
         # explicit reasoning flag remains the only surface that can display it.
         if event.kind == "reasoning":
             return
-        payload = dict(event.payload)
+        payload = dict(event.detail_payload or event.payload)
         if event.turn is not None:
             payload.setdefault("turn", event.turn)
         payload["traceSequence"] = event.sequence

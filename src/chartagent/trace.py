@@ -30,6 +30,15 @@ class TraceLimits:
 
 
 DEFAULT_TRACE_LIMITS = TraceLimits()
+DETAIL_TRACE_LIMITS = TraceLimits(
+    max_text=12000,
+    max_reasoning=48000,
+    max_arguments=12000,
+    max_result=48000,
+    max_caption=1000,
+    max_items=256,
+    max_depth=32,
+)
 TRUNCATION_MARKER = "... [truncated]"
 REDACTED_MARKER = "[REDACTED]"
 
@@ -175,8 +184,11 @@ class TraceEvent:
     turn: Optional[int] = None
     payload: Mapping[str, Any] = field(default_factory=dict)
     sequence: int = 0
+    detail_payload: Mapping[str, Any] | None = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
+        source = self.detail_payload if self.detail_payload is not None else self.payload
+        object.__setattr__(self, "detail_payload", sanitize_payload(source, limits=DETAIL_TRACE_LIMITS))
         object.__setattr__(self, "payload", sanitize_payload(self.payload))
 
     @property

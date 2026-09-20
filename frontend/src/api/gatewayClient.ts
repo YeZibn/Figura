@@ -16,7 +16,7 @@ type GatewayAttachment = {
 type GatewaySessionData = Omit<SessionData, 'attachments'> & { attachments: GatewayAttachment[] }
 type GatewayRunResponse = { run: RunHandle }
 type GatewayRunEvent = { runId: string; sequence: number; kind: string; timestamp: string; payload?: Record<string, unknown> }
-type GatewayRunHistory = { run: RunSummary; events: GatewayRunEvent[]; historyGap: boolean; historyGapCode?: string | null; firstSequence?: number | null }
+type GatewayRunHistory = { run: RunSummary; events: GatewayRunEvent[]; historyGap: boolean; historyGapCode?: string | null; firstSequence?: number | null; integrity?: RunHistory['integrity'] }
 type GatewayHealthResponse = GatewayHealth
 type GatewayEvaluationList = { evaluations: EvaluationSummary[] }
 type GatewayEvaluationDetail = { evaluation: EvaluationSummary; cases: EvaluationDetail['cases']; report: EvaluationDetail['report'] }
@@ -159,6 +159,11 @@ function mapEvaluationEvent(event: GatewayRunEvent, evaluationId: string, caseId
       return mapped ? { ...artifact, previewResource: mapped } : item
     })
   }
+  const detailResource = payload.detailResource
+  if (detailResource && typeof detailResource === 'object') {
+    const mapped = evaluationPreviewResource(evaluationId, caseId, detailResource as Partial<EvaluationResource>)
+    if (mapped) payload.detailResource = { ...(detailResource as Record<string, unknown>), previewResource: mapped }
+  }
   return { runId: event.runId, sequence: event.sequence, kind: event.kind, timestamp: event.timestamp, payload }
 }
 
@@ -267,7 +272,7 @@ export const gatewayClient: ChartAgentClient = {
   },
 
   async getEvaluationHistory(evaluationId, caseId, afterSequence = 0) {
-    const payload = await request<{ run: RunSummary; events: GatewayRunEvent[]; historyGap: boolean; firstSequence?: number | null }>(
+    const payload = await request<GatewayRunHistory>(
       `/evaluations/${encodeURIComponent(evaluationId)}/cases/${encodeURIComponent(caseId)}/history?after=${Math.max(0, afterSequence)}`,
     )
     return {
@@ -275,6 +280,7 @@ export const gatewayClient: ChartAgentClient = {
       events: payload.events.map((event) => mapEvaluationEvent(event, evaluationId, caseId)),
       historyGap: payload.historyGap,
       firstSequence: payload.firstSequence,
+      integrity: payload.integrity,
     }
   },
 

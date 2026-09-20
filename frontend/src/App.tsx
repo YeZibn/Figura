@@ -103,6 +103,41 @@ function textDetail(value: unknown): string {
   try { return JSON.stringify(value, null, 2) } catch { return '事件内容不可显示' }
 }
 
+function CopyDetailButton({ value }: { value: unknown }) {
+  const [copied, setCopied] = useState(false)
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(textDetail(value))
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1200)
+    } catch {
+      setCopied(false)
+    }
+  }
+  return <button type="button" className="detail-copy-button" onClick={() => void copy()}>{copied ? '已复制' : '复制 JSON'}</button>
+}
+
+function EvaluationDetailResourceView({ resource, evaluationId, caseId }: { resource: Record<string, unknown>; evaluationId?: string; caseId?: string }) {
+  const [state, setState] = useState<'idle' | 'loading' | 'loaded' | 'error'>('idle')
+  const [value, setValue] = useState<unknown>(null)
+  const resourceId = typeof resource.resourceId === 'string' ? resource.resourceId : ''
+  const resourceCaseId = typeof resource.caseId === 'string' ? resource.caseId : caseId || ''
+  if (!resourceId || !evaluationId || !resourceCaseId) return null
+  const load = async () => {
+    if (state === 'loading' || state === 'loaded') return
+    setState('loading')
+    try {
+      const response = await fetch(`${currentGatewayBaseUrl()}/evaluations/${encodeURIComponent(evaluationId)}/resources/${encodeURIComponent(resourceId)}?case_id=${encodeURIComponent(resourceCaseId)}`)
+      if (!response.ok) throw new Error('detail resource unavailable')
+      setValue(await response.json())
+      setState('loaded')
+    } catch {
+      setState('error')
+    }
+  }
+  return <div className="trace-detail-resource"><div className="trace-detail-resource-heading"><span>完整安全结果</span><button type="button" className="detail-copy-button" onClick={() => void load()} disabled={state === 'loading' || state === 'loaded'}>{state === 'loading' ? '正在加载' : state === 'loaded' ? '已加载' : '加载完整结果'}</button></div>{state === 'error' && <small className="trace-warning">完整结果资源暂时不可用；当前事件只保留了安全摘要。</small>}{state === 'loaded' && <><CopyDetailButton value={value} /><pre>{textDetail(value)}</pre></>}</div>
+}
+
 function recordValue(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null
 }
@@ -178,10 +213,17 @@ function traceEventDetail(event: AgentRunEvent): string {
   return textDetail(payload.message || payload.status || payload.publication_status || payload.reason || (event.kind === 'generated_chart' ? '生成图表结果已移至最终结果区域' : ''))
 }
 
+function toolResultIntegrityDetail(payload: Record<string, unknown>): string {
+  if (payload.detailUnavailable) return '工具结果在持久化阶段已截断，当前 bundle 没有可恢复的完整资源。'
+  if (payload.detailResource) return '工具结果超过普通事件容量，可按需加载完整安全结果。'
+  return '工具结果已按安全上限截断。'
+}
+
 type RunTimeline = {
   summary: RunSummary
   events: AgentRunEvent[]
   historyGap: boolean
+  integrity?: import('./types/protocol').HistoryIntegrity
 }
 
 type ToolStep = {
@@ -512,14 +554,14 @@ function eventLabel(event: AgentRunEvent): string {
   return labels[event.kind] || event.kind
 }
 
-function RunTimeline({ timeline, expanded, onToggle, previewLoader, onPreview, onInterrupt, onRetry, onResume }: { timeline: RunTimeline; expanded: boolean; onToggle: () => void; previewLoader: PreviewResourceLoader | null; onPreview?: PreviewOpener; onInterrupt?: () => void; onRetry?: () => void; onResume?: () => void }) {
+function RunTimeline({ timeline, expanded, onToggle, previewLoader, onPreview, onInterrupt, onRetry, onResume, showSummary = true, evaluationId, caseId }: { timeline: RunTimeline; expanded: boolean; onToggle: () => void; previewLoader: PreviewResourceLoader | null; onPreview?: PreviewOpener; onInterrupt?: () => void; onRetry?: () => void; onResume?: () => void; showSummary?: boolean; evaluationId?: string; caseId?: string }) {
   const [expandedSteps, setExpandedSteps] = useState<Set<string>>(new Set())
   const rows = normalizeTimeline(timeline.events)
   const summary = timeline.summary
   const status = summary.status
   const statusText = status === 'completed' ? '已完成' : status === 'failed' ? '失败' : status === 'interrupted' ? '已中断' : summary.cancelRequested ? '正在中断' : '运行中'
   return <section className={'run-timeline ' + status + (expanded ? ' expanded' : '')}>
-    <button className="run-summary" onClick={onToggle} aria-expanded={expanded} aria-controls={`trace-${summary.runId}`}><span className="run-arrow">{expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}</span><span className="run-summary-icon"><Terminal size={14} /></span><span className="run-summary-copy"><strong>执行过程</strong><small>{timestampLabel(summary.createdAt)} · {summary.eventCount || timeline.events.length} 个事件{summary.provider ? ` · ${providerLabel(summary.provider)}${summary.model ? ` · ${summary.model}` : ''}` : ''}{summary.retryOf ? ` · 重试自 ${summary.retryOf}` : ''}</small></span><span className={'run-status ' + status}>{statusText}</span></button>
+    {showSummary && <button className="run-summary" onClick={onToggle} aria-expanded={expanded} aria-controls={`trace-${summary.runId}`}><span className="run-arrow">{expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}</span><span className="run-summary-icon"><Terminal size={14} /></span><span className="run-summary-copy"><strong>执行过程</strong><small>{timestampLabel(summary.createdAt)} · {summary.eventCount || timeline.events.length} 个事件{summary.provider ? ` · ${providerLabel(summary.provider)}${summary.model ? ` · ${summary.model}` : ''}` : ''}{summary.retryOf ? ` · 重试自 ${summary.retryOf}` : ''}</small></span><span className={'run-status ' + status}>{statusText}</span></button>}
     {(status === 'running' && onInterrupt) || ((status === 'failed' || status === 'interrupted') && (onRetry || onResume)) ? <div className="run-actions">
       {status === 'running' && onInterrupt && <button type="button" className="small-action" onClick={onInterrupt} disabled={summary.cancelRequested}>{summary.cancelRequested ? '正在中断' : '中断运行'}</button>}
       {status !== 'running' && onResume && summary.recovery?.status === 'available' && <button type="button" className="small-action" onClick={onResume}>继续执行</button>}
@@ -529,8 +571,9 @@ function RunTimeline({ timeline, expanded, onToggle, previewLoader, onPreview, o
       {summary.recovery && summary.recovery.status !== 'unavailable' && <div className={'trace-warning recovery-' + summary.recovery.status} role="status">{summary.recovery.status === 'available' ? `可继续执行：${summary.recovery.phase || '已保存'} · 下一步 ${summary.recovery.nextAction || '继续处理'}` : `暂时无法继续执行：${summary.recovery.blockedReason || '恢复状态受限'}，可使用“重试本次运行”。`}</div>}
       {summary.historyWarning && <div className="trace-warning" role="status">部分执行记录未能持久化，当前显示的过程可能不完整。</div>}
       {timeline.historyGap && <div className="trace-warning" role="status">历史记录存在缺口，未显示缺失的执行步骤。</div>}
+      {timeline.integrity && timeline.integrity.status !== 'complete' && <div className="trace-warning" role="status">{timeline.integrity.status === 'unavailable' ? '部分大结果只有摘要，旧 bundle 没有可恢复的完整安全资源。' : timeline.integrity.status === 'redacted' ? '部分字段已按安全边界隐藏；可见内容仍来自脱敏事件。' : '部分事件达到展示上限；可用时可加载完整安全结果。'}</div>}
       {rows.length === 0 && <div className="trace-empty">没有可恢复的执行事件。</div>}
-      {rows.map((row) => row.kind === 'event' ? <div className={'trace-event ' + (isMeasurementRepairEventKind(row.event.kind) ? `repair ${row.event.kind === 'measurement_repair_required' ? 'pending' : 'error'}` : '') + (row.event.kind === 'run_failed' || row.event.kind === 'run_interrupted' || row.event.kind === 'history_gap' ? ' error' : '')} key={`${row.event.runId}-${row.event.sequence}`}><span className="trace-event-dot" /><span className="trace-event-copy"><strong>{eventLabel(row.event)}</strong><small>{timestampLabel(row.event.timestamp)}{isMeasurementRepairEventKind(row.event.kind) ? ` · ${row.event.kind}` : ''}</small><span>{traceEventDetail(row.event)}</span></span></div> : <div className="trace-tool" key={row.step.id}><button className="trace-tool-header" onClick={() => setExpandedSteps((current) => { const next = new Set(current); next.has(row.step.id) ? next.delete(row.step.id) : next.add(row.step.id); return next })} aria-expanded={expandedSteps.has(row.step.id)}><span className="trace-event-dot" /><span className="trace-tool-name"><strong>{row.step.toolLabel || row.step.toolName}</strong><small>{row.step.toolName} · {row.step.callId}</small></span><span className={'run-status ' + row.step.status}>{row.step.status === 'running' ? '运行中' : row.step.status === 'success' ? '完成' : '失败'}</span>{expandedSteps.has(row.step.id) ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</button>{expandedSteps.has(row.step.id) && <div className="trace-tool-detail">{row.step.call && <div><label>调用参数</label><pre>{textDetail(eventPayload(row.step.call).arguments)}</pre></div>}{row.step.result && <div><label>工具结果</label>{row.step.resultTruncated && <small className="trace-warning">工具结果已截断，仅保留有限诊断内容。</small>}<pre>{textDetail(eventPayload(row.step.result).result || eventPayload(row.step.result).message)}</pre></div>}{row.step.observations.map((observation, index) => <ObservationView key={index} observation={observation} loader={previewLoader} onPreview={onPreview} />)}</div>}</div>)}
+      {rows.map((row) => row.kind === 'event' ? <div className={'trace-event ' + (isMeasurementRepairEventKind(row.event.kind) ? `repair ${row.event.kind === 'measurement_repair_required' ? 'pending' : 'error'}` : '') + (row.event.kind === 'run_failed' || row.event.kind === 'run_interrupted' || row.event.kind === 'history_gap' ? ' error' : '')} key={`${row.event.runId}-${row.event.sequence}`}><span className="trace-event-dot" /><span className="trace-event-copy"><strong>{eventLabel(row.event)}</strong><small>{timestampLabel(row.event.timestamp)}{isMeasurementRepairEventKind(row.event.kind) ? ` · ${row.event.kind}` : ''}</small><span>{traceEventDetail(row.event)}</span></span></div> : <div className="trace-tool" key={row.step.id}><button className="trace-tool-header" onClick={() => setExpandedSteps((current) => { const next = new Set(current); next.has(row.step.id) ? next.delete(row.step.id) : next.add(row.step.id); return next })} aria-expanded={expandedSteps.has(row.step.id)}><span className="trace-event-dot" /><span className="trace-tool-name"><strong>{row.step.toolLabel || row.step.toolName}</strong><small>{row.step.toolName} · {row.step.callId}</small></span><span className={'run-status ' + row.step.status}>{row.step.status === 'running' ? '运行中' : row.step.status === 'success' ? '完成' : '失败'}</span>{expandedSteps.has(row.step.id) ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</button>{expandedSteps.has(row.step.id) && <div className="trace-tool-detail">{row.step.call && <div><div className="trace-detail-heading"><label>调用参数</label><CopyDetailButton value={eventPayload(row.step.call).arguments} /></div><pre>{textDetail(eventPayload(row.step.call).arguments)}</pre></div>}{row.step.result && <div><div className="trace-detail-heading"><label>工具结果</label><CopyDetailButton value={eventPayload(row.step.result).result || eventPayload(row.step.result).message} /></div>{row.step.resultTruncated && <small className="trace-warning">{toolResultIntegrityDetail(eventPayload(row.step.result))}</small>}<pre>{textDetail(eventPayload(row.step.result).result || eventPayload(row.step.result).message)}</pre>{Boolean(eventPayload(row.step.result).detailResource) && <EvaluationDetailResourceView resource={eventPayload(row.step.result).detailResource as Record<string, unknown>} evaluationId={evaluationId} caseId={caseId} />}</div>}{row.step.observations.map((observation, index) => <ObservationView key={index} observation={observation} loader={previewLoader} onPreview={onPreview} />)}</div>}</div>)}
     </div>}
   </section>
 }
@@ -594,11 +637,11 @@ function EvaluationDetailEntryView(props: { entry: EvaluationDetailEntry; loader
     <div className="evaluation-detail-entry-body">
       {entry.toolName && <div className="evaluation-detail-meta"><span>工具</span><code>{entry.toolName}</code></div>}
       {entry.role && <div className="evaluation-detail-meta"><span>角色</span><code>{entry.role}</code></div>}
-      {hasContent && <div className="evaluation-detail-block"><label>可见内容</label><pre>{textDetail(entry.content)}</pre></div>}
-      {hasArguments && <div className="evaluation-detail-block"><label>调用参数</label><pre>{textDetail(entry.arguments)}</pre></div>}
-      {hasResult && <div className="evaluation-detail-block"><label>工具结果</label><pre>{textDetail(entry.result)}</pre></div>}
-      {hasDetails && <div className="evaluation-detail-block"><label>{entry.kind === 'repair' ? '修复详情' : '事件详情'}</label><pre>{textDetail(entry.details)}</pre></div>}
-      {entry.toolCalls !== undefined && <div className="evaluation-detail-block"><label>工具调用声明</label><pre>{textDetail(entry.toolCalls)}</pre></div>}
+      {hasContent && <div className="evaluation-detail-block"><div className="trace-detail-heading"><label>可见内容</label><CopyDetailButton value={entry.content} /></div><pre>{textDetail(entry.content)}</pre></div>}
+      {hasArguments && <div className="evaluation-detail-block"><div className="trace-detail-heading"><label>调用参数</label><CopyDetailButton value={entry.arguments} /></div><pre>{textDetail(entry.arguments)}</pre></div>}
+      {hasResult && <div className="evaluation-detail-block"><div className="trace-detail-heading"><label>工具结果</label><CopyDetailButton value={entry.result} /></div><pre>{textDetail(entry.result)}</pre></div>}
+      {hasDetails && <div className="evaluation-detail-block"><div className="trace-detail-heading"><label>{entry.kind === 'repair' ? '修复详情' : '事件详情'}</label><CopyDetailButton value={entry.details} /></div><pre>{textDetail(entry.details)}</pre></div>}
+      {entry.toolCalls !== undefined && <div className="evaluation-detail-block"><div className="trace-detail-heading"><label>工具调用声明</label><CopyDetailButton value={entry.toolCalls} /></div><pre>{textDetail(entry.toolCalls)}</pre></div>}
       {entry.code && <div className="evaluation-detail-meta"><span>代码</span><code>{entry.code}</code></div>}
       {entry.reason && <div className="evaluation-detail-note">{entry.reason}</div>}
       {entry.truncated && <div className="evaluation-detail-note">该条记录已按安全上限截断，未展示完整原始内容。</div>}
@@ -609,27 +652,18 @@ function EvaluationDetailEntryView(props: { entry: EvaluationDetailEntry; loader
   </details>
 }
 
-function EvaluationHistoryView(props: { history: EvaluationHistory | null; details: EvaluationHistoryDetails | null; loader: PreviewResourceLoader | null; onPreview?: PreviewOpener; loading: boolean; detailsLoading: boolean; detailsError: string | null; onLoadDetails: () => void }) {
+function EvaluationHistoryView(props: { history: EvaluationHistory | null; details: EvaluationHistoryDetails | null; loader: PreviewResourceLoader | null; onPreview?: PreviewOpener; evaluationId: string; caseId: string; loading: boolean; detailsLoading: boolean; detailsError: string | null; onLoadDetails: () => void }) {
   if (props.loading) return <div className="evaluation-loading"><LoaderCircle className="spin-icon" size={17} />正在加载运行历史</div>
   if (!props.history) return <div className="evaluation-muted">该 case 暂无可读取的运行历史。</div>
+  const supplementalEntries = (props.details?.entries || []).filter((entry) => entry.kind === 'conversation' || entry.kind === 'repair' || (entry.kind === 'tool_message' && !entry.callId) || entry.kind === 'record')
+  const artifacts = generatedArtifacts(props.history.events)
   return <div className="evaluation-history">
-    <div className="evaluation-section-heading"><div><span className="eyebrow">只读运行记录</span><h3>执行时间线</h3></div><div className="evaluation-history-heading-actions"><code>{props.history.run.runId}</code><button type="button" className="small-action" onClick={props.onLoadDetails} disabled={props.detailsLoading}>{props.detailsLoading ? '正在加载详细记录' : props.details ? '刷新详细记录' : '展开对话与工具详情'}</button></div></div>
+    <div className="evaluation-section-heading"><div><span className="eyebrow">只读运行记录</span><h3>完整执行时间线</h3></div><div className="evaluation-history-heading-actions"><code>{props.history.run.runId}</code><button type="button" className="small-action" onClick={props.onLoadDetails} disabled={props.detailsLoading}>{props.detailsLoading ? '正在加载对话记录' : props.details ? '刷新对话记录' : '加载对话与补充记录'}</button></div></div>
     {props.history.historyGap && <div className="evaluation-warning"><AlertTriangle size={14} />历史记录存在缺口，以下仅展示已保留事件。</div>}
-    {props.history.events.length === 0 && <div className="evaluation-muted">没有可展示的事件。</div>}
-    {props.history.events.map((event) => {
-      const payload = event.payload || {}
-      const observations = Array.isArray(payload.observations) ? payload.observations.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object')) : []
-      return <article className={'evaluation-event ' + (event.kind === 'run_failed' ? 'error' : '')} key={`${event.runId}-${event.sequence}`}>
-        <span className="evaluation-event-dot" />
-        <div className="evaluation-event-copy"><strong>{eventLabel(event)}</strong><small>{timestampLabel(event.timestamp)} · #{event.sequence}{typeof payload.tool_name === 'string' ? ` · ${payload.tool_name}` : ''}</small>{typeof payload.message === 'string' && <span>{payload.message}</span>}
-          {event.kind === 'tool_call' && <span className="evaluation-event-note">详细参数可按需展开，当前时间线只保留安全摘要。</span>}
-          {event.kind === 'tool_result' && <span className="evaluation-event-note">详细结果可按需展开，当前时间线只保留安全摘要。</span>}
-          {observations.map((observation, index) => <ObservationView key={index} observation={observation} loader={props.loader} onPreview={props.onPreview} />)}
-        </div>
-      </article>
-    })}
+    <RunTimeline timeline={{ summary: props.history.run, events: props.history.events, historyGap: props.history.historyGap, integrity: props.history.integrity }} expanded={true} onToggle={() => undefined} previewLoader={props.loader} onPreview={props.onPreview} showSummary={false} evaluationId={props.evaluationId} caseId={props.caseId} />
+    {artifacts.length > 0 && <section className="evaluation-detail-records"><div className="evaluation-section-heading"><div><span className="eyebrow">生成结果</span><h3>图表输出</h3></div><span className="detail-count">{artifacts.length} 个</span></div><div className="run-result-artifacts">{artifacts.map((artifact, index) => <GeneratedChartView key={`${props.history?.run.runId}-evaluation-artifact-${artifact.artifactId || index}`} artifact={artifact} loader={props.loader} onPreview={props.onPreview} />)}</div></section>}
     {props.detailsError && <div className="evaluation-warning" role="status"><AlertTriangle size={14} />{props.detailsError}<button type="button" className="small-action" onClick={props.onLoadDetails}>重试</button></div>}
-    {props.details && <section className="evaluation-detail-records"><div className="evaluation-section-heading"><div><span className="eyebrow">按需加载</span><h3>对话、工具与证据详情</h3></div><span className="detail-count">{props.details.entries.length} 条</span></div>{props.details.notice && <div className="evaluation-detail-notice">{props.details.notice}</div>}{props.details.historyGap && <div className="evaluation-warning"><AlertTriangle size={14} />详细记录存在缺口，序号较早的内容可能已被清理。</div>}{props.details.entries.length ? <div className="evaluation-detail-list">{props.details.entries.map((entry) => <EvaluationDetailEntryView key={entry.entryId} entry={entry} loader={props.loader} onPreview={props.onPreview} />)}</div> : <div className="evaluation-muted">没有可展开的详细记录。</div>}{props.details.truncated && <div className="evaluation-detail-note">本次详细记录受大小上限保护，部分内容已截断。</div>}</section>}
+    {props.details && <section className="evaluation-detail-records"><div className="evaluation-section-heading"><div><span className="eyebrow">按需加载</span><h3>对话与补充记录</h3></div><span className="detail-count">{supplementalEntries.length} 条</span></div>{props.details.notice && <div className="evaluation-detail-notice">{props.details.notice}</div>}{props.details.historyGap && <div className="evaluation-warning"><AlertTriangle size={14} />详细记录存在缺口，序号较早的内容可能已被清理。</div>}{supplementalEntries.length ? <div className="evaluation-detail-list">{supplementalEntries.map((entry) => <EvaluationDetailEntryView key={entry.entryId} entry={entry} loader={props.loader} onPreview={props.onPreview} />)}</div> : <div className="evaluation-muted">没有额外对话或补充记录；工具调用和结果已在上方统一时间线中展示。</div>}{props.details.truncated && <div className="evaluation-detail-note">本次补充记录受大小上限保护，部分内容已截断。</div>}</section>}
   </div>
 }
 
@@ -684,7 +718,7 @@ function EvaluationPanel(props: {
             <section className="evaluation-section"><div className="evaluation-section-heading"><div><span className="eyebrow">阶段诊断</span><h3>链路状态</h3></div>{currentCase.timeline.historyGap && <span className="run-status interrupted">历史不完整</span>}</div><div className="evaluation-stage-list">{currentCase.timeline.stages.length ? currentCase.timeline.stages.map((stage) => <div className="evaluation-stage" key={stage.name}><span className={'evaluation-stage-dot ' + (stage.status === 'completed' ? 'success' : stage.status === 'failed' ? 'error' : '')}>{stage.status === 'completed' ? <CheckCircle2 size={13} /> : <span />}</span><div><strong>{stage.name}</strong><small>{stage.status}{stage.sequences.length ? ` · 事件 ${stage.sequences.join(', ')}` : ''}{stage.errors.length ? ` · ${stage.errors.join('；')}` : ''}</small></div></div>) : <div className="evaluation-muted">暂无阶段诊断。</div>}</div></section>
             <section className="evaluation-section"><div className="evaluation-section-heading"><div><span className="eyebrow">报告</span><h3>{currentCase.report.available ? '评测报告' : '标准诊断摘要'}</h3></div>{currentCase.report.truncated && <span className="run-status interrupted">已截断</span>}</div>{currentCase.report.text ? <SafeMarkdown source={currentCase.report.text} /> : <div className="evaluation-muted">没有自定义 Markdown 报告，当前展示上方的标准摘要与阶段证据。</div>}</section>
             <section className="evaluation-section"><div className="evaluation-section-heading"><div><span className="eyebrow">证据画廊</span><h3>图片证据</h3></div><span className="detail-count">{imageResources.length} 张</span></div>{imageResources.length ? <div className="evaluation-evidence-grid">{imageResources.map((resource) => <div className="evaluation-evidence-card" key={resource.resourceId}><PreviewImage loader={props.previewLoader} resource={resource.previewResource} alt={resource.label} title={resource.label} sourceLabel={evaluationResourceLabel(resource)} onPreview={props.onPreview} /><strong>{evaluationResourceLabel(resource)}</strong><small>{resource.label} · {formatBytes(resource.byteCount)}</small></div>)}</div> : <div className="evaluation-muted">当前 case 没有可预览的图片证据。</div>}</section>
-            <EvaluationHistoryView history={props.history} details={props.historyDetails} loader={props.previewLoader} onPreview={props.onPreview} loading={props.historyLoading} detailsLoading={props.historyDetailsLoading} detailsError={props.historyDetailsError} onLoadDetails={props.onLoadHistoryDetails} />
+            <EvaluationHistoryView history={props.history} details={props.historyDetails} loader={props.previewLoader} onPreview={props.onPreview} evaluationId={props.selectedEvaluationId} caseId={currentCase.caseId} loading={props.historyLoading} detailsLoading={props.historyDetailsLoading} detailsError={props.historyDetailsError} onLoadDetails={props.onLoadHistoryDetails} />
           </>}
         </>}
         {props.error && props.detail && <div className="evaluation-warning" role="status"><AlertTriangle size={14} />{props.error}</div>}
