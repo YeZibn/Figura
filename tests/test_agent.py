@@ -427,6 +427,70 @@ def test_multiple_tools_append_all_tool_messages_before_visual_observation():
     assert "Tool call ID: call-2" in evidence[3]["text"]
 
 
+def test_multiple_measurement_repairs_are_appended_after_the_complete_tool_batch():
+    registry = ToolRegistry()
+    registry.register(
+        Tool(
+            "measure_bars",
+            "measure bars",
+            {"type": "object"},
+            lambda attachment_id: ToolResult(
+                {
+                    "image_size": [320, 240],
+                    "scope": {"panel_id": "panel_bars"},
+                    "plot_area": {"bbox": [40, 20, 240, 180]},
+                    "baseline": {"slope": 0.0, "intercept": 200.0},
+                    "bars": [{"id": 1, "measure": {"ratio": 1.0}}],
+                    "confidence": {"overall": 0.9},
+                    "warnings": [],
+                },
+                warnings=("baseline fit is uncertain; measurements may be partial",),
+            ),
+        )
+    )
+    registry.register(
+        Tool(
+            "extract_line_series",
+            "extract line",
+            {"type": "object"},
+            lambda attachment_id: ToolResult(
+                {
+                    "image_size": [320, 240],
+                    "scope": {"panel_id": "panel_line"},
+                    "plot_area": {"bbox": [40, 20, 240, 180]},
+                    "baseline": {"slope": 0.0, "intercept": 200.0},
+                    "series": [{"id": "line-1", "points": [[40, 200], [80, 160]]}],
+                    "confidence": {"overall": 0.9},
+                    "warnings": [],
+                },
+                warnings=("baseline fit is uncertain; measurements may be partial",),
+            ),
+        )
+    )
+    client = ScriptedClient(
+        [
+            NormalizedResult(
+                tool_calls=[
+                    ToolCall("bars-1", "measure_bars", '{"attachment_id":"att_chart"}'),
+                    ToolCall("line-1", "extract_line_series", '{"attachment_id":"att_chart"}'),
+                ],
+                finish_reason="tool_calls",
+            ),
+            _final("done"),
+        ]
+    )
+
+    assert Agent(client, registry).run("检查两个 panel") == "done"
+
+    messages = client.calls[1]["messages"]
+    assert [message["role"] for message in messages] == ["user", "assistant", "tool", "tool", "user"]
+    assert [message["tool_call_id"] for message in messages[2:4]] == ["bars-1", "line-1"]
+    repair = messages[-1]["content"]
+    assert "panel_bars" in repair
+    assert "panel_line" in repair
+    assert repair.index("panel_bars") < repair.index("panel_line")
+
+
 def test_invalid_generated_image_does_not_add_multimodal_turn():
     client = ScriptedClient([_call("visual", "{}"), _final("used JSON")])
     agent = Agent(client, _visual_registry(invalid=True))

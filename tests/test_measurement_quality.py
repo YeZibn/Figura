@@ -640,3 +640,36 @@ def test_checkpoint_marks_exhausted_measurement_repair_as_terminal():
         measurement_sessions=sessions,
     )
     assert state["pendingMeasurementRepair"]["status"] == "exhausted"
+
+
+def test_checkpoint_keeps_pending_repairs_for_multiple_panels_without_overwrite():
+    sessions: dict[str, MeasurementSession] = {}
+    for panel_id in ("panel_bars", "panel_line"):
+        register_measurement(
+            sessions,
+            attach_measurement_quality(
+                _bar_data(),
+                source_tool="measure_bars",
+                warnings=["baseline fit is uncertain; measurements may be partial"],
+                image_count=1,
+                source_attachment_id="att_chart",
+                source_panel_id=panel_id,
+                source_run_id="run_multi",
+            ),
+        )
+
+    state = Agent._checkpoint_state(
+        "检查多个 panel",
+        [],
+        {},
+        ["att_chart"],
+        1,
+        pending_tool_calls=(),
+        measurement_sessions=sessions,
+    )
+
+    assert [item["panel_id"] for item in state["pendingMeasurementRepairs"]] == [
+        "panel_bars",
+        "panel_line",
+    ]
+    assert state["pendingMeasurementRepair"] is None

@@ -62,6 +62,7 @@ VisualObservationSink = Callable[[str, str, Sequence[GeneratedImage]], Sequence[
 _LAYOUT_TOOL_NAME = "inspect_chart_layout"
 _DECOMPOSE_TOOL_NAME = "decompose_chart_image"
 _MAX_LAYOUT_CONTEXTS = 32
+_MAX_PENDING_MEASUREMENT_REPAIRS = 16
 _GEOMETRY_TOOL_NAMES = frozenset(
     {"measure_bars", "extract_line_series", "extract_scatter_points", "extract_pie_slices"}
 )
@@ -99,10 +100,53 @@ def _measurement_repair_context_from_content(content: str) -> dict[str, Any] | N
     return result
 
 
-def _measurement_repair_context_from_sessions(
+def _repair_context_key(context: Mapping[str, Any]) -> tuple[str, ...]:
+    """Return a stable identity for one bounded repair action."""
+    target = context.get("target")
+    target_id = target.get("target_id") if isinstance(target, Mapping) else None
+    identity = tuple(
+        str(context.get(key) or "")
+        for key in (
+            "attachment_id",
+            "panel_id",
+            "session_id",
+            "attempt_id",
+            "parent_attempt_id",
+            "action",
+        )
+    ) + (str(target_id or ""),)
+    if any(identity):
+        return identity
+    return (json.dumps(dict(context), ensure_ascii=False, sort_keys=True, default=str)[:512],)
+
+
+def _merge_measurement_repair_contexts(
+    *groups: Sequence[Mapping[str, Any] | None],
+) -> list[dict[str, Any]]:
+    """Merge repair actions without letting a later action overwrite one."""
+    result: list[dict[str, Any]] = []
+    seen: set[tuple[str, ...]] = set()
+    for group in groups:
+        for item in group or ():
+            if not isinstance(item, Mapping):
+                continue
+            context = {str(key): value for key, value in list(item.items())[:24]}
+            key = _repair_context_key(context)
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append(context)
+            if len(result) >= _MAX_PENDING_MEASUREMENT_REPAIRS:
+                return result
+    return result
+
+
+def _measurement_repair_contexts_from_sessions(
     sessions: Mapping[str, MeasurementSession],
-) -> dict[str, Any] | None:
-    for session in reversed(list(sessions.values())):
+) -> list[dict[str, Any]]:
+    """Project every session's current repair action in stable order."""
+    contexts: list[dict[str, Any]] = []
+    for session in sessions.values():
         action = session.pending_repair_action()
         if not isinstance(action, Mapping):
             continue
@@ -110,9 +154,31 @@ def _measurement_repair_context_from_sessions(
         result.setdefault("session_id", session.session_id)
         result.setdefault("attachment_id", session.attachment_id)
         result.setdefault("panel_id", session.panel_id)
+        result.setdefault("attempt_id", session.current_attempt_id)
         result.setdefault("budget_remaining", session.repair_budget_remaining)
-        return result
-    return None
+        contexts.append(result)
+    return _merge_measurement_repair_contexts(contexts)
+
+
+def _measurement_repair_context_from_sessions(
+    sessions: Mapping[str, MeasurementSession],
+) -> dict[str, Any] | None:
+    """Backward-compatible singular projection for callers outside the loop."""
+    contexts = _measurement_repair_contexts_from_sessions(sessions)
+    return contexts[0] if contexts else None
+
+
+def _measurement_repair_message(contexts: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """Build one continuation message after a complete tool-call batch."""
+    payload = {"measurement_repairs": [dict(item) for item in contexts[:_MAX_PENDING_MEASUREMENT_REPAIRS]]}
+    return {
+        "role": "user",
+        "content": (
+            "代码质量门禁返回了测量修复上下文。只能在同一 attachment/panel/session 内逐项处理，"
+            "不要猜测缺失数值，也不要使用未接受 attempt：\n"
+            + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        ),
+    }
 
 
 def _repair_target_context(
@@ -561,7 +627,7 @@ class Agent:
         artifact_records: list[dict[str, Any]] = []
         checkpoint_references: list[dict[str, Any]] = []
         measurement_sessions: dict[str, MeasurementSession] = {}
-        pending_measurement_repair: dict[str, Any] | None = None
+        pending_measurement_repairs: list[dict[str, Any]] = []
         if isinstance(recovery, dict):
             loader = getattr(self.memory, "recovery_context", None)
             hydrated = loader(recovery, budget=self.context_budget) if callable(loader) else []
@@ -579,9 +645,18 @@ class Agent:
                     item for item in raw_artifacts[:48] if isinstance(item, dict)
                 ]
             measurement_sessions = sessions_from_state(recovery.get("measurementSessions"))
-            pending_measurement_repair = _measurement_repair_context_from_sessions(measurement_sessions)
-            if isinstance(recovery.get("pendingMeasurementRepair"), dict):
-                pending_measurement_repair = dict(recovery["pendingMeasurementRepair"])
+            pending_measurement_repairs = _measurement_repair_contexts_from_sessions(measurement_sessions)
+            raw_repairs = recovery.get("pendingMeasurementRepairs")
+            if isinstance(raw_repairs, list):
+                pending_measurement_repairs = _merge_measurement_repair_contexts(
+                    pending_measurement_repairs,
+                    raw_repairs,
+                )
+            elif isinstance(recovery.get("pendingMeasurementRepair"), dict):
+                pending_measurement_repairs = _merge_measurement_repair_contexts(
+                    pending_measurement_repairs,
+                    [recovery["pendingMeasurementRepair"]],
+                )
         user_message = {"role": "user", "content": user_input}
         self.memory.append(run, "user", {"message": user_message, "text": user_input if isinstance(user_input, str) else "[image attachment turn]"})
         if isinstance(user_input, str):
@@ -632,7 +707,7 @@ class Agent:
                         "selected_panel": selected_panel,
                         "current_tool": current_tool_name,
                         "pending_action": pending_action,
-                        "measurement_repair": pending_measurement_repair,
+                        "measurement_repair": pending_measurement_repairs,
                         "recovery_status": "recovery_context_loaded" if recovery else "none",
                         "retry_count": max(
                             [
@@ -752,6 +827,7 @@ class Agent:
                                 visual_references=checkpoint_references,
                                 artifact_records=artifact_records,
                                 measurement_sessions=measurement_sessions,
+                                pending_measurement_repairs=pending_measurement_repairs,
                             ),
                         )
                         if emitter is not None:
@@ -780,6 +856,7 @@ class Agent:
                         visual_references=checkpoint_references,
                         artifact_records=artifact_records,
                         measurement_sessions=measurement_sessions,
+                        pending_measurement_repairs=pending_measurement_repairs,
                     ),
                 )
                 if isinstance(recovery, dict) and recovery.get("nextAction") == "final" and isinstance(recovery.get("pendingAnswer"), str):
@@ -827,9 +904,11 @@ class Agent:
                     visual_references=checkpoint_references,
                     artifact_records=artifact_records,
                     measurement_sessions=measurement_sessions,
+                    pending_measurement_repairs=pending_measurement_repairs,
                 ),
             )
             visual_evidence: list[ToolVisualEvidence] = []
+            batch_repair_contexts: list[dict[str, Any]] = []
             for call_index, call in enumerate(result.tool_calls):
                 self._raise_if_interrupted(run)
                 current_tool_name = call.name
@@ -966,26 +1045,26 @@ class Agent:
                         measurement_data = measurement_payload.get("data") if isinstance(measurement_payload, dict) else None
                         if isinstance(measurement_data, dict):
                             register_measurement(measurement_sessions, measurement_data)
+                            pending_measurement_repairs = _measurement_repair_contexts_from_sessions(
+                                measurement_sessions
+                            )
                     except (TypeError, json.JSONDecodeError):
                         pass
                 repair_context = _measurement_repair_context_from_content(observation.content)
                 if repair_context is not None:
-                    pending_measurement_repair = repair_context
+                    batch_repair_contexts = _merge_measurement_repair_contexts(
+                        batch_repair_contexts,
+                        [repair_context],
+                    )
+                    pending_measurement_repairs = _merge_measurement_repair_contexts(
+                        pending_measurement_repairs,
+                        [repair_context],
+                    )
                     repair_status = str(repair_context.get("status") or "available")
                     pending_action = str(
                         repair_context.get("next_action")
                         or "根据 measurement repair_action 在同一 panel 内定向重测"
                     )[:240]
-                    repair_message = {
-                        "role": "user",
-                        "content": (
-                            "代码质量门禁返回了测量修复上下文。只能在同一 attachment/panel/session 内处理，"
-                            "不要猜测缺失数值，也不要使用未接受 attempt：\n"
-                            + json.dumps(repair_context, ensure_ascii=False, separators=(",", ":"))
-                        ),
-                    }
-                    self._current_messages.append(repair_message)  # type: ignore[arg-type]
-                    self._messages.append(repair_message)  # type: ignore[arg-type]
                     self.memory.append(run, "measurement_repair", {"state": repair_context})
                     if emitter is not None:
                         repair_event = (
@@ -1003,14 +1082,9 @@ class Agent:
                             repair=repair_context,
                         )
                 elif call.name in MEASUREMENT_TOOLS:
-                    try:
-                        payload = json.loads(observation.content)
-                        data = payload.get("data") if isinstance(payload, dict) else None
-                        status = data.get("measurement", {}).get("status") if isinstance(data, dict) and isinstance(data.get("measurement"), dict) else None
-                        if status == "accepted":
-                            pending_measurement_repair = None
-                    except (TypeError, json.JSONDecodeError):
-                        pass
+                    pending_measurement_repairs = _measurement_repair_contexts_from_sessions(
+                        measurement_sessions
+                    )
                 artifact_records.extend(
                     _artifact_records_from_observation(
                         call.name,
@@ -1058,6 +1132,7 @@ class Agent:
                         visual_references=checkpoint_references,
                         artifact_records=artifact_records,
                         measurement_sessions=measurement_sessions,
+                        pending_measurement_repairs=pending_measurement_repairs,
                     ),
                 )
                 pending_action = "处理工具观察并决定下一步证据或 ChartSpec 操作"
@@ -1169,6 +1244,32 @@ class Agent:
                         "image_count": len(visual_evidence),
                     },
                 )
+            if batch_repair_contexts:
+                pending_measurement_repairs = _merge_measurement_repair_contexts(
+                    _measurement_repair_contexts_from_sessions(measurement_sessions),
+                    batch_repair_contexts,
+                )
+                if pending_measurement_repairs:
+                    repair_message = _measurement_repair_message(pending_measurement_repairs)
+                    self._current_messages.append(repair_message)  # type: ignore[arg-type]
+                    self._messages.append(repair_message)  # type: ignore[arg-type]
+            self._checkpoint(
+                run,
+                phase="tool",
+                next_action="model",
+                state=self._checkpoint_state(
+                    user_input,
+                    self._current_messages,
+                    layout_contexts,
+                    run_attachment_ids,
+                    turn,
+                    pending_tool_calls=(),
+                    visual_references=checkpoint_references,
+                    artifact_records=artifact_records,
+                    measurement_sessions=measurement_sessions,
+                    pending_measurement_repairs=pending_measurement_repairs,
+                ),
+            )
         self._raise_if_interrupted(run)
         terminal_answer = _BUDGET_MSG
         terminal_gate = self._review_manager.gate(run.id)
@@ -1248,7 +1349,13 @@ class Agent:
         visual_references: Sequence[dict[str, Any]] = (),
         artifact_records: Sequence[dict[str, Any]] = (),
         measurement_sessions: Mapping[str, MeasurementSession] | None = None,
+        pending_measurement_repairs: Sequence[Mapping[str, Any]] | None = None,
     ) -> dict[str, Any]:
+        repairs = (
+            _merge_measurement_repair_contexts(pending_measurement_repairs)
+            if pending_measurement_repairs is not None
+            else _measurement_repair_contexts_from_sessions(measurement_sessions or {})
+        )
         result = {
             "prompt": user_input if isinstance(user_input, str) else "[image attachment turn]",
             "messages": list(messages),
@@ -1262,7 +1369,11 @@ class Agent:
             "visualReferences": list(visual_references)[:32],
             "artifactIndex": list(artifact_records)[:48],
             "measurementSessions": sessions_to_state(measurement_sessions or {}),
-            "pendingMeasurementRepair": _measurement_repair_context_from_sessions(measurement_sessions or {}),
+            "pendingMeasurementRepairs": repairs,
+            # Keep the old field as a compatibility projection for older
+            # reconnect consumers. Never choose one action when there are
+            # multiple pending panels.
+            "pendingMeasurementRepair": repairs[0] if len(repairs) == 1 else None,
         }
         if pending_answer is not None:
             result["pendingAnswer"] = pending_answer

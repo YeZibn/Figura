@@ -13,6 +13,7 @@ from .manifest import DiagnosticSample
 
 STAGE_NAMES = (
     "input",
+    "model",
     "decomposition",
     "panel_handoff",
     "measurement",
@@ -21,7 +22,7 @@ STAGE_NAMES = (
     "assembly",
     "render",
 )
-STAGE_STATUSES = ("completed", "failed", "not_reached", "not_observed")
+STAGE_STATUSES = ("completed", "needs_repair", "failed", "not_reached", "not_observed")
 FAILURE_STATUSES = {
     "error",
     "failed",
@@ -68,6 +69,7 @@ class StageEvidence:
     observation_ids: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    failure_sequences: list[int] = field(default_factory=list, repr=False)
 
     def to_dict(self) -> dict[str, Any]:
         result: dict[str, Any] = {
@@ -117,7 +119,7 @@ def build_timeline(
     sample: DiagnosticSample | None = None,
     timed_out: bool = False,
 ) -> DiagnosticTimeline:
-    """Build a stable eight-stage projection from a Gateway history response."""
+    """Build a stable stage projection from a Gateway history response."""
 
     raw_events = history.get("events")
     events = [event for event in raw_events if isinstance(event, Mapping)] if isinstance(raw_events, list) else []
@@ -179,7 +181,7 @@ def build_timeline(
             {
                 "code": "run_timeout",
                 "category": "transport_runtime",
-                "stage": "render",
+                "stage": "transport_runtime",
                 "sequence": _last_sequence(events),
                 "message": "在诊断等待窗口内未观察到终态",
             }
@@ -212,6 +214,8 @@ def _event_stages(kind: str, payload: Mapping[str, Any]) -> list[str]:
     stages: list[str] = []
     if kind in {"run_started", "resume_started"}:
         stages.append("input")
+    if kind in {"model_started", "model_completed"}:
+        stages.append("model")
     if tool_name == "decompose_chart_image":
         stages.append("decomposition")
         if kind == "tool_result" and _contains_panels(payload):
@@ -288,15 +292,23 @@ def _apply_stage_statuses(
                 stage.status = "not_observed"
             continue
         has_failure = any(_event_is_failure(kind, payload) for _, kind, payload in bucket)
+        stage.failure_sequences = [
+            sequence
+            for sequence, kind, payload in bucket
+            if _event_is_failure(kind, payload)
+        ][:64]
         has_success = any(_event_is_success(kind, payload) for _, kind, payload in bucket)
+        needs_repair = any(_event_needs_repair(kind, payload) for _, kind, payload in bucket)
         pending_only = all(
             kind in {"tool_call", "chart_review_required", "chart_review_started", "measurement_repair_required"}
             for _, kind, _ in bucket
         )
-        if has_success:
-            stage.status = "completed"
-        elif has_failure:
+        if has_failure:
             stage.status = "failed"
+        elif needs_repair:
+            stage.status = "needs_repair"
+        elif has_success:
+            stage.status = "completed"
         elif pending_only:
             stage.status = "not_observed"
         else:
@@ -471,7 +483,7 @@ def _first_failure(
                 sequence,
                 {
                     "category": category,
-                    "stage": "render" if category == "transport_runtime" else category,
+                    "stage": "transport_runtime" if category == "transport_runtime" else category,
                     "sequence": sequence,
                     "code": code,
                     "message": "运行在该阶段终止或历史不完整",
@@ -481,13 +493,14 @@ def _first_failure(
     for stage_name, stage in stages.items():
         if stage.status == "failed" and stage.sequences:
             category = _category_for_stage(stage_name)
+            failure_sequence = min(stage.failure_sequences or stage.sequences)
             candidates.append(
                 (
-                    min(stage.sequences),
+                    failure_sequence,
                     {
                         "category": category,
                         "stage": stage_name,
-                        "sequence": min(stage.sequences),
+                        "sequence": failure_sequence,
                         "code": "stage_failed",
                         "message": stage.errors[0] if stage.errors else f"阶段 {stage_name} 失败",
                     },
@@ -506,6 +519,8 @@ def _category_for_stage(stage_name: str) -> str:
         return "panel_routing"
     if stage_name == "measurement":
         return "measurement"
+    if stage_name == "model":
+        return "transport_runtime"
     if stage_name in {"quality_review", "repair"}:
         return "repair"
     if stage_name in {"assembly", "render"}:
@@ -726,6 +741,14 @@ def _event_is_failure(kind: str, payload: Mapping[str, Any]) -> bool:
     return any(status in FAILURE_STATUSES for status in statuses)
 
 
+def _event_needs_repair(kind: str, payload: Mapping[str, Any]) -> bool:
+    """Identify quality-gate states distinct from tool execution failure."""
+    if kind in {"measurement_repair_required", "chart_review_repair_required"}:
+        return True
+    statuses = _statuses(payload)
+    return bool(statuses & {"remeasure_required", "partial"})
+
+
 def _event_is_success(kind: str, payload: Mapping[str, Any]) -> bool:
     if kind in {"run_started", "resume_started", "generated_chart", "generated_chart_published", "operation_completed", "chart_review_completed"}:
         return not _event_is_failure(kind, payload)
@@ -746,7 +769,17 @@ def _statuses(payload: Mapping[str, Any]) -> set[str]:
 
 
 def _event_error(kind: str, payload: Mapping[str, Any]) -> str:
-    for key in ("error", "message", "reason", "code", "terminal_code", "terminalCode"):
+    for key in (
+        "error",
+        "message",
+        "reason",
+        "provider_error_message",
+        "provider_error_code",
+        "error_code",
+        "code",
+        "terminal_code",
+        "terminalCode",
+    ):
         value = payload.get(key)
         if isinstance(value, str) and value:
             return truncate_text(value, 240)

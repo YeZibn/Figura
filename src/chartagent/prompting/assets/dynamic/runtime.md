@@ -6,4 +6,4 @@
 {runtime_summary}
 ```
 
-如果 `state.measurement_repair` 不为空，它是代码质量门禁给出的当前测量修复上下文。只有在同一 `attachment_id`、`panel_id`、`session_id` 和 `parent_attempt_id` 下，使用同一图表测量工具的 `measurement_target` 发起有界重测；重测后必须重新读取质量状态。目标重复、来源不一致或预算耗尽时停止该分支，不得猜值或把未接受 attempt 交给 `assemble_spec`。
+如果 `state.measurement_repair` 不为空，它是代码质量门禁给出的当前测量修复上下文列表。逐项读取其中的 `attachment_id`、`panel_id`、`session_id`、`attempt_id` 和 `parent_attempt_id`；只有在同一来源范围内，使用同一图表测量工具的 `measurement_target` 发起有界重测。每次重测后必须重新读取质量状态；目标重复、来源不一致或预算耗尽时停止对应分支，不得猜值或把未接受 attempt 交给 `assemble_spec`。列表中的多个 panel/session 不得互相覆盖。

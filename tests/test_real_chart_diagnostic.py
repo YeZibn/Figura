@@ -220,6 +220,75 @@ def test_timeline_preserves_insufficient_history_as_transport_failure():
     assert stages["render"].status == "not_reached"
 
 
+def test_timeline_attributes_provider_failure_to_model_before_assembly_or_render():
+    manifest = load_manifest(MANIFEST, asset_root=ROOT)
+    events = [
+        _event(1, "run_started"),
+        _tool_result(
+            2,
+            "decompose_chart_image",
+            result={"data": {"panels": [{"id": "panel_1"}]}},
+        ),
+        _tool_result(3, "measure_bars", panel_id="panel_1"),
+        _event(4, "model_started", {"provider": "deepseek", "model": "deepseek-flash"}),
+        _event(
+            5,
+            "model_completed",
+            {
+                "provider": "deepseek",
+                "model": "deepseek-flash",
+                "status": "error",
+                "error_code": "provider_request_failed",
+                "error_type": "BadRequestError",
+                "provider_status": 400,
+                "provider_error_code": "invalid_request_error",
+                "provider_error_message": "tool message order is invalid",
+            },
+        ),
+        _event(6, "run_failed", {"error_code": "agent_call_failed"}),
+    ]
+
+    timeline = build_timeline(
+        _history(events, status="failed"),
+        sample=replace(manifest.samples[0], expected_panel_count=1),
+    )
+    stages = {stage.name: stage for stage in timeline.stages}
+
+    assert stages["model"].status == "failed"
+    assert stages["quality_review"].status == "not_reached"
+    assert stages["assembly"].status == "not_reached"
+    assert stages["render"].status == "not_reached"
+    assert timeline.first_failure["category"] == "transport_runtime"
+    assert timeline.first_failure["stage"] == "model"
+    assert timeline.first_failure["sequence"] == 5
+
+
+def test_timeline_separates_measurement_quality_repair_from_tool_failure():
+    events = [
+        _event(1, "run_started"),
+        _tool_result(
+            2,
+            "measure_bars",
+            result={
+                "data": {
+                    "measurement": {
+                        "status": "remeasure_required",
+                        "quality": {"repair_action": {"action": "remeasure"}},
+                    }
+                }
+            },
+        ),
+        _event(3, "measurement_repair_required", {"status": "available", "panel_id": "panel_1"}),
+    ]
+
+    timeline = build_timeline(_history(events), sample=None)
+    stages = {stage.name: stage for stage in timeline.stages}
+
+    assert stages["measurement"].status == "needs_repair"
+    assert stages["repair"].status == "needs_repair"
+    assert timeline.first_failure is None
+
+
 def test_report_is_bounded_and_does_not_reemit_raw_event_secrets_or_paths():
     manifest = load_manifest(MANIFEST, asset_root=ROOT)
     history = _history(

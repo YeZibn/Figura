@@ -468,6 +468,34 @@ def test_provider_request_trace_does_not_copy_exception_details(backend_factory)
     assert traces[-1].payload["error_code"] == "provider_request_failed"
 
 
+def test_provider_request_trace_keeps_bounded_error_summary(backend_factory):
+    class ProviderError(RuntimeError):
+        status_code = 400
+        body = {
+            "error": {
+                "code": "invalid_request_error",
+                "message": "tool order invalid; api_key=sentinel-secret",
+            }
+        }
+
+    traces = []
+    client, _ = backend_factory(
+        [lambda _: (_ for _ in ()).throw(ProviderError("raw provider payload"))],
+        provider="deepseek",
+        trace_sink=traces.append,
+    )
+
+    with pytest.raises(ProviderError):
+        client.chat([{"role": "user", "content": "x"}], stream=False, model="deepseek-flash")
+
+    payload = traces[-1].payload
+    assert payload["error_type"] == "ProviderError"
+    assert payload["provider_status"] == 400
+    assert payload["provider_error_code"] == "invalid_request_error"
+    assert "sentinel-secret" not in json.dumps(payload)
+    assert len(payload["provider_error_message"]) <= 240
+
+
 def test_retry_and_timeout_passed_as_explicit_conn(backend_factory):
     client, backend = backend_factory([lambda _: non_streaming("ok")], max_retries=5, timeout=3.5)
     client.chat([{"role": "user", "content": "x"}], stream=False, model="m")

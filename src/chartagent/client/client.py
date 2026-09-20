@@ -11,6 +11,7 @@ Responsibilities (all provider quirk handling is owned here, never by callers):
 from __future__ import annotations
 
 import logging
+import re
 import time
 from typing import Any, Callable, List, Mapping, Optional, Sequence
 
@@ -19,7 +20,7 @@ from openai.types.chat import ChatCompletionMessageParam
 
 from .config import ClientConfig, resolve_config
 from .models import NormalizedResult, ToolCall
-from ..trace import TraceEmitter, TraceSink
+from ..trace import TraceEmitter, TraceSink, truncate_text
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,49 @@ _openai_factory: _CompletionFactory = OpenAI
 def _safe_exception_type(error: BaseException) -> str:
     """Return bounded exception metadata without copying provider details."""
     return (type(error).__name__ or "Exception")[:64]
+
+
+_PROVIDER_URL = re.compile(r"https?://[^\s]+", re.IGNORECASE)
+_PROVIDER_PATH = re.compile(r"(?:/(?:Users|private|tmp|var|home|opt|etc)/|[A-Za-z]:\\)")
+_PROVIDER_CREDENTIAL = re.compile(
+    r"(?i)\b(api[_-]?key|access[_-]?token|authorization|bearer|secret|password)\s*[:=]\s*[^\s,;]+"
+)
+
+
+def _safe_provider_text(value: object, limit: int = 240) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    text = _PROVIDER_URL.sub("[URL_OMITTED]", text)
+    text = _PROVIDER_CREDENTIAL.sub(lambda match: f"{match.group(1)}=[REDACTED]", text)
+    text = _PROVIDER_PATH.sub("[PATH_OMITTED]", text)
+    return truncate_text(text, limit)
+
+
+def _provider_error_summary(error: BaseException) -> dict[str, Any]:
+    """Extract bounded provider diagnostics without retaining the raw error."""
+    response = getattr(error, "response", None)
+    status = getattr(error, "status_code", None) or getattr(response, "status_code", None)
+    try:
+        status = int(status) if status is not None else None
+    except (TypeError, ValueError):
+        status = None
+    body = getattr(error, "body", None)
+    body_error = body.get("error") if isinstance(body, Mapping) else None
+    if not isinstance(body_error, Mapping):
+        body_error = body if isinstance(body, Mapping) else {}
+    provider_code = getattr(error, "code", None) or body_error.get("code")
+    provider_message = body_error.get("message") or getattr(error, "message", None)
+    if provider_message is None:
+        provider_message = str(error)
+    return {
+        "error_type": _safe_exception_type(error),
+        "provider_status": status,
+        "provider_error_code": _safe_provider_text(provider_code, 96),
+        "provider_error_message": _safe_provider_text(provider_message),
+    }
 
 
 def _default_observation_sink(entry: Mapping[str, Any]) -> None:
@@ -283,7 +327,7 @@ class LLMClient:
                     status="error",
                     elapsed_ms=int((time.monotonic() - started) * 1000),
                     error_code="provider_request_failed",
-                    error_type=_safe_exception_type(exc),
+                    **_provider_error_summary(exc),
                 )
             raise
         result = _collect_streaming_deltas(completion) if stream else normalize_non_streaming(completion)

@@ -123,7 +123,14 @@ def _bounded_list(value: object, limit: int = 16) -> list[object]:
         return []
 
 
-def _bounded_measurement_repair(value: object) -> dict[str, Any] | None:
+def _bounded_measurement_repair(value: object) -> dict[str, Any] | list[dict[str, Any]] | None:
+    if isinstance(value, (list, tuple)):
+        result = []
+        for item in list(value)[:16]:
+            bounded = _bounded_measurement_repair(item)
+            if isinstance(bounded, Mapping):
+                result.append(dict(bounded))
+        return result or None
     if not isinstance(value, Mapping):
         return None
     result: dict[str, Any] = {}
