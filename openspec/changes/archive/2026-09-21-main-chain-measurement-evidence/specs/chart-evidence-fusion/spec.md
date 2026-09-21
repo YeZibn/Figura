@@ -1,10 +1,4 @@
-# chart-evidence-fusion Specification
-
-## Purpose
-
-让多模态模型负责图表语义理解与最终装配，让 OCR、几何 CV 和布局观测按需提供可追溯证据，并在证据冲突时保留不确定性而不是静默猜测。
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Model-led evidence planning
 
@@ -50,39 +44,6 @@ OCR、图表几何传感器和布局观测 SHALL 向模型返回可区分的证�
 - **THEN** 模型可以将 overlay 与对应工具调用、候选引用和结构化结果关联起来
 - **AND** overlay 不改变源图像坐标约定或隐藏工具警告
 
-### Requirement: Evidence conflicts are explicit and recoverable
-
-当模型视觉判断、OCR、几何测量、布局提示或轴校准在同一语义字段上产生实质冲突时，系统 SHALL 保留冲突候选、来源和警告，且 SHALL NOT 静默以任一来源覆盖其他来源。模型 SHALL 能够基于冲突重新观测、降低置信度、保留像素证据或放弃无法可靠恢复的语义值。
-
-#### Scenario: Printed value conflicts with geometry
-
-- **WHEN** OCR 读取的柱值与柱高比例或基准线测量不一致
-- **THEN** 模型上下文包含两类候选及其证据和冲突警告
-- **AND** 系统不把任一候选自动声明为确定源值
-
-#### Scenario: Layout conflicts with independent pixels
-
-- **WHEN** 模型布局先验与独立检测到的坐标轴、绘图区或基准线不一致
-- **THEN** 系统报告布局冲突并保留独立像素检测结果
-- **AND** 布局先验不得阻止模型或传感器重新检查源图像
-
-### Requirement: Semantic assembly follows evidence fusion
-
-在图表恢复场景中，模型 SHALL 在融合可用视觉、OCR、几何和布局证据后请求 `assemble_spec`；`assemble_spec` 的成功 SHALL 只表示 ChartSpec 结构和字段合法，不得被解释为图像事实已经经过视觉验证。无法解决的关键值 SHALL 被明确标记为不确定、保留为像素证据，或不纳入确定性语义数据集。
-
-#### Scenario: Valid assembly is structurally but not visually overclaimed
-
-- **WHEN** 模型请求 `assemble_spec` 并得到合法 ChartSpec
-- **THEN** 系统可以继续执行生成流程，且生成与审核边界仍会进行代码侧
-  语义校验
-- **AND** 模型不能仅凭装配成功声称所有数值都已被源图像确认
-
-#### Scenario: Unresolved value blocks a certain claim
-
-- **WHEN** 关键数据值在视觉、OCR 和几何证据之间仍无法解决
-- **THEN** 模型不把该值作为确定事实写入最终解释
-- **AND** 最终结果保留警告、候选值或明确的未解析状态
-
 ### Requirement: Measurement evidence must pass an acceptance gate before assembly
 
 当 ChartSpec 数据来自图表测量工具时，证据融合流程 SHALL 在 `assemble_spec` 之前确认对应的 measurement session 存在可归属的 attempt，并确认主 Agent 已明确选择所引用的证据。provisional、remeasure_required、partial、unsupported 或 failed 的测量结果不得被静默当作确定性源值。该确认 SHALL 由主 Agent 的主链路决策和代码侧硬性校验共同完成，不要求额外的语义审核工具。
@@ -103,7 +64,7 @@ OCR、图表几何传感器和布局观测 SHALL 向模型返回可区分的证�
 
 测量门禁失败 SHALL 返回有界的原因、证据位置和可供主 Agent 选择的下一步动作。下一步动作可以是补充观测、通过原测量工具请求局部重测、保留不确定值或放弃无法解决的字段，但不得要求模型猜测缺失数据，也不得由门禁自动执行动作。
 
-#### Scenario: Baseline issue requests further observation
+#### Scenario: Baseline issue offers focused observation
 
 - **WHEN** 柱状图测量因基准线残差或基准线冲突未被接受
 - **THEN** 门禁结果指出 baseline issue、相关证据引用和可用的定向观察范围
@@ -114,16 +75,6 @@ OCR、图表几何传感器和布局观测 SHALL 向模型返回可区分的证�
 - **WHEN** 主 Agent 选择不再补充证据，或定向补充证据仍不能解决关键字段
 - **THEN** 融合结果保留未解析字段、问题和 attempt lineage
 - **AND** 系统不得用模型猜值替代 accepted measurement evidence
-
-### Requirement: Direct visual assembly remains compatible
-
-对于没有调用测量工具、且模型直接基于清晰源图视觉理解组装的请求，系统 SHALL 保持现有直接 `assemble_spec` 兼容路径。该兼容路径不得绕过已经存在的 ChartSpec 结构校验和后续生成审核。
-
-#### Scenario: No measurement session is required for direct visual input
-
-- **WHEN** 模型没有引用任何测量工具结果而提交一个合法的单 ChartSpec
-- **THEN** 系统按照现有路径完成结构装配
-- **AND** 不要求调用方伪造 measurement attempt
 
 ### Requirement: Measurement gate failures drive targeted evidence recovery
 
@@ -137,9 +88,11 @@ OCR、图表几何传感器和布局观测 SHALL 向模型返回可区分的证�
 
 #### Scenario: Unrecoverable evidence remains non-final
 
-- **WHEN** 定向补充证据仍不能解决关键字段，或 repair budget 已耗尽
+- **WHEN** 定向补充证据仍不能解决关键字段，或 target budget 已耗尽
 - **THEN** 融合结果保留未解析字段、问题和 attempt lineage
 - **AND** 系统不得用模型猜值替代 accepted measurement evidence
+
+## ADDED Requirements
 
 ### Requirement: Semantic labels remain separate from evidence references
 

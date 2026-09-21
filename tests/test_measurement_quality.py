@@ -202,6 +202,159 @@ def test_measurement_target_is_bounded_and_round_trips_with_repair_action():
     assert restored_attempt.target_fingerprint
 
 
+def test_measurement_target_refs_resolve_to_bounded_focus_regions_and_persist():
+    data = attach_measurement_quality(
+        {
+            "image_size": [320, 240],
+            "series": [{"id": "series_1", "label": "Q1", "color": "#2277cc"}],
+            "bars": [
+                {
+                    "id": 1,
+                    "series_id": "series_1",
+                    "geometry": {"bbox_px": [20, 40, 24, 120]},
+                    "measure": {"ratio": 1.0},
+                }
+            ],
+            "legend": [{"label": "Q1", "geometry": {"bbox_px": [8, 8, 30, 14]}}],
+            "baseline": {"slope": 0.0, "intercept": 200.0},
+            "confidence": {"overall": 0.9},
+            "warnings": [],
+        },
+        source_tool="measure_bars",
+        image_count=1,
+        source_attachment_id="att_chart",
+        source_panel_id="panel_bars",
+        source_run_id="run_1",
+    )
+    refs = data["measurement"]["evidence"]["refs"]
+    assert {item["ref"] for item in refs} >= {"S1", "B1", "L1"}
+
+    sessions: dict[str, MeasurementSession] = {}
+    session = register_measurement(sessions, data)
+    assert session is not None
+    normalized, error = session.validate_repair_target(
+        {
+            "refs": ["B1", "L1"],
+            "mode": "exclude",
+            "fields": ["bars.measure", "baseline"],
+            "reason": "排除疑似图例并复查柱体",
+        },
+        tool="measure_bars",
+        parent_attempt_id=session.current_attempt_id,
+    )
+    assert error is None
+    assert normalized is not None
+    assert normalized["mode"] == "exclude"
+    assert normalized["resolved_refs"] == ["B1", "L1"]
+    assert len(normalized["resolved_regions_px"]) == 2
+    assert normalized["bbox_px"] == [8.0, 8.0, 36.0, 152.0]
+
+    restored = sessions_from_state(sessions_to_state(sessions))
+    restored_session = restored[session.session_id]
+    assert restored_session.evidence_refs()[1]["ref"] == "B1"
+    assert restored_session.record_decision(
+        attempt_id=session.current_attempt_id,
+        selected_refs=["S1", "B1"],
+        discarded_refs=["L1"],
+    )
+    assert restored_session.selected_refs == ("S1", "B1")
+    assert restored_session.discarded_refs == ("L1",)
+
+
+def test_measurement_target_refs_reject_unknown_or_unbounded_candidates():
+    data = attach_measurement_quality(
+        {"series": [{"id": "series_1"}], "warnings": []},
+        source_tool="extract_line_series",
+        image_count=1,
+        source_attachment_id="att_chart",
+        source_panel_id="panel_line",
+        source_run_id="run_1",
+    )
+    sessions: dict[str, MeasurementSession] = {}
+    session = register_measurement(sessions, data)
+    assert session is not None
+    _, unknown = session.validate_repair_target(
+        {"refs": ["B1"], "mode": "include"},
+        tool="extract_line_series",
+        parent_attempt_id=session.current_attempt_id,
+    )
+    assert unknown is not None
+    assert unknown["code"] == "measurement_target_ref_unknown"
+
+    _, unbounded = session.validate_repair_target(
+        {"refs": ["S1"], "mode": "include"},
+        tool="extract_line_series",
+        parent_attempt_id=session.current_attempt_id,
+    )
+    assert unbounded is not None
+    assert unbounded["code"] == "measurement_target_ref_unbounded"
+
+
+def test_assemble_requires_and_records_explicit_measurement_decision():
+    from chartagent.tools.chart.specification import assemble_spec
+
+    data = attach_measurement_quality(
+        {
+            "image_size": [320, 240],
+            "series": [{"id": "series_1", "label": "Q1"}],
+            "bars": [
+                {
+                    "id": 1,
+                    "series_id": "series_1",
+                    "geometry": {"bbox_px": [20, 40, 24, 120]},
+                    "measure": {"ratio": 1.0},
+                }
+            ],
+            "baseline": {"slope": 0.0, "intercept": 200.0},
+            "confidence": {"overall": 0.9},
+            "warnings": [],
+        },
+        source_tool="measure_bars",
+        image_count=1,
+        source_attachment_id="att_chart",
+        source_panel_id="panel_bars",
+        source_run_id="run_1",
+    )
+    sessions: dict[str, MeasurementSession] = {}
+    session = register_measurement(sessions, data)
+    assert session is not None
+    reference = data["measurement"]["reference"]
+
+    blocked = assemble_spec(
+        chart_type="bar",
+        points=[{"category": "A", "value": 1}],
+        x_label="类别",
+        y_label="数值",
+        measurement_ref=reference,
+        _measurement_context=sessions,
+    )
+    assert blocked["measurement_gate"]["code"] == "measurement_decision_required"
+
+    assembled = assemble_spec(
+        chart_type="bar",
+        points=[{"category": "A", "value": 1, "series": "Q1"}],
+        x_label="类别",
+        y_label="数值",
+        measurement_ref=reference,
+        measurement_decision={
+            "selected_refs": ["B1"],
+            "discarded_refs": ["S1"],
+        },
+        _measurement_context=sessions,
+    )
+    assert "error" not in assembled
+    assert assembled["_measurement_decision"]["selected_refs"] == ["B1"]
+    assert assembled["provenance"]["selected_refs"] == ["B1"]
+
+    invalid_label = assemble_spec(
+        chart_type="bar",
+        points=[{"category": "A", "value": 1, "series": "series_1"}],
+        x_label="类别",
+        y_label="数值",
+    )
+    assert invalid_label["issues"][0]["location"] == "points[0].series"
+
+
 def test_measurement_target_rejects_cross_panel_duplicate_and_budget_exhaustion():
     base = attach_measurement_quality(
         _bar_data(),
@@ -447,7 +600,7 @@ def test_agent_passes_run_owned_measurement_session_to_assemble_gate():
     assert answer == "完成"
 
 
-def test_agent_reuses_repair_action_for_a_bounded_targeted_attempt():
+def test_agent_uses_main_decision_for_a_bounded_targeted_attempt_without_hidden_retry():
     calls: list[dict] = []
     events = []
 
@@ -457,7 +610,27 @@ def test_agent_reuses_repair_action_for_a_bounded_targeted_attempt():
             "panel_id": panel_id,
             "measurement_target": measurement_target,
         })
-        data = _bar_data()
+        data = {
+            "image_size": [320, 240],
+            "plot_area": {"bbox": [40, 20, 240, 180]},
+            "baseline": {"slope": 0.0, "intercept": 200.0},
+            "series": [
+                {"id": "series_1", "label": "Q1 2024", "color": "#2277cc"},
+                {"id": "series_2", "label": "Q2 2024", "color": "#22aa88"},
+            ],
+            "bars": [
+                {"id": 1, "series_id": "series_1", "geometry": {"bbox_px": [50, 80, 24, 120]}, "measure": {"ratio": 1.0}},
+                {"id": 2, "series_id": "series_2", "geometry": {"bbox_px": [78, 60, 24, 140]}, "measure": {"ratio": 1.2}},
+                {"id": 3, "series_id": "series_1", "geometry": {"bbox_px": [150, 100, 24, 100]}, "measure": {"ratio": 0.8}},
+                {"id": 4, "series_id": "series_2", "geometry": {"bbox_px": [178, 72, 24, 128]}, "measure": {"ratio": 1.1}},
+            ],
+            "legend": [
+                {"label": "Q1 2024", "geometry": {"bbox_px": [8, 8, 30, 14]}},
+                {"label": "Q2 2024", "geometry": {"bbox_px": [48, 8, 30, 14]}},
+            ],
+            "confidence": {"overall": 0.92, "geometry": 0.95},
+            "warnings": [],
+        }
         if len(calls) == 1:
             data = dict(data)
             data["warnings"] = ["baseline fit is uncertain; measurements may be partial"]
@@ -466,7 +639,8 @@ def test_agent_reuses_repair_action_for_a_bounded_targeted_attempt():
     class Client:
         def __init__(self):
             self.calls = 0
-            self.repair_context_seen = False
+            self.legacy_repair_message_seen = False
+            self.evidence_context_seen = False
 
         def chat(self, messages, **kwargs):
             self.calls += 1
@@ -485,14 +659,15 @@ def test_agent_reuses_repair_action_for_a_bounded_targeted_attempt():
                 tool_message = next(item for item in reversed(messages) if item.get("role") == "tool")
                 payload = json.loads(tool_message["content"])
                 measurement = payload["data"]["measurement"]
-                target = dict(measurement["quality"]["repair_action"]["target"])
-                target.update(
-                    {
-                        "target_id": "baseline-focus",
-                        "bbox_source_px": [20, 160, 280, 40],
-                        "source_image_size": [320, 240],
-                    }
-                )
+                evidence_refs = measurement["evidence"]["refs"]
+                legend_refs = [item["ref"] for item in evidence_refs if item.get("kind") == "legend"]
+                assert legend_refs
+                target = {
+                    "refs": [legend_refs[0]],
+                    "mode": "exclude",
+                    "fields": ["bars.measure"],
+                    "reason": "排除图例色块，只复核柱体证据",
+                }
                 return NormalizedResult(
                     tool_calls=[
                         ToolCall(
@@ -509,8 +684,42 @@ def test_agent_reuses_repair_action_for_a_bounded_targeted_attempt():
                     ],
                     finish_reason="tool_calls",
                 )
-            self.repair_context_seen = any(
+            if self.calls == 3:
+                tool_message = next(item for item in reversed(messages) if item.get("role") == "tool")
+                measurement = json.loads(tool_message["content"])["data"]["measurement"]
+                evidence_refs = measurement["evidence"]["refs"]
+                selected_refs = [item["ref"] for item in evidence_refs if item.get("ref") != "L1"]
+                return NormalizedResult(
+                    tool_calls=[
+                        ToolCall(
+                            "assemble-1",
+                            "assemble_spec",
+                            json.dumps(
+                                {
+                                    "chart_type": "bar",
+                                    "x_label": "类别",
+                                    "y_label": "数值",
+                                    "points": [{"category": "A", "value": 1}],
+                                    "measurement_ref": measurement["reference"],
+                                    "measurement_decision": {
+                                        "session_id": measurement["reference"]["session_id"],
+                                        "attempt_id": measurement["reference"]["attempt_id"],
+                                        "selected_refs": selected_refs,
+                                        "discarded_refs": ["L1"],
+                                    },
+                                },
+                                ensure_ascii=False,
+                            ),
+                        )
+                    ],
+                    finish_reason="tool_calls",
+                )
+            self.legacy_repair_message_seen = any(
                 item.get("role") == "user" and "质量门禁返回了测量修复上下文" in str(item.get("content"))
+                for item in messages
+            )
+            self.evidence_context_seen = any(
+                item.get("role") == "system" and "measurement_evidence" in str(item.get("content"))
                 for item in messages
             )
             return NormalizedResult(content="完成", finish_reason="stop")
@@ -531,6 +740,9 @@ def test_agent_reuses_repair_action_for_a_bounded_targeted_attempt():
             sensor,
         )
     )
+    from chartagent.tools.chart.specification import ASSEMBLE_SPEC
+
+    registry.register(ASSEMBLE_SPEC)
     client = Client()
     answer = Agent(
         client,
@@ -543,13 +755,13 @@ def test_agent_reuses_repair_action_for_a_bounded_targeted_attempt():
     assert answer == "完成"
     assert len(calls) == 2
     assert calls[1]["measurement_target"]["parent_attempt_id"]
-    assert client.repair_context_seen is True
-    repair_events = [event for event in events if event.kind == "measurement_repair_required"]
-    assert len(repair_events) == 1
-    repair = repair_events[0].payload["repair"]
-    assert repair["parent_attempt_id"]
-    assert repair["target"]["region_kind"] == "panel"
-    assert "baseline" in repair["fields"]
+    assert calls[1]["measurement_target"]["mode"] == "exclude"
+    assert calls[1]["measurement_target"]["resolved_refs"] == ["L1"]
+    assert client.legacy_repair_message_seen is False
+    assert client.evidence_context_seen is True
+    assert any(event.kind == "measurement_decision_required" for event in events)
+    assert any(event.kind == "measurement_focus_requested" for event in events)
+    assert any(event.kind == "measurement_evidence_selected" for event in events)
     assert all("/Users/" not in event.to_json() for event in events)
 
 

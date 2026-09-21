@@ -184,7 +184,8 @@ def test_measurement_review_skips_remaining_tool_batch_until_repair():
     assert len(skipped) == 1
     assert skipped[0].payload["call_id"] == "assemble-1"
     assert skipped[0].payload["status"] == "not_started"
-    assert any(event.kind == "review_repair_required" for event in events)
+    assert any(event.kind == "measurement_decision_required" for event in events)
+    assert not any(event.kind == "review_repair_required" for event in events)
     assert any(event.kind == "review_gate_required" for event in events)
 
 

@@ -96,7 +96,7 @@ def _points(chart_type: str) -> list[dict]:
         return [{"category": "A", "value": 1}, {"category": "B", "value": 2}]
     if chart_type == "pie":
         return [{"category": "A", "value": 0.6}, {"category": "B", "value": 0.4}]
-    return [{"x": 1, "y": 2, "series": "S1"}, {"x": 2, "y": 3, "series": "S1"}]
+    return [{"x": 1, "y": 2, "series": "Series 1"}, {"x": 2, "y": 3, "series": "Series 1"}]
 
 
 def test_measurement_repair_manifest_is_relative_and_complete():
@@ -245,10 +245,20 @@ def test_each_chart_family_completes_targeted_repair_and_assembly(sample: dict):
     assert accepted.parent_attempt_id == parent
     assert accepted.target["bbox_source_px"] == [80.0, 60.0, 480.0, 340.0]
 
+    selected_refs = [
+        str(item["ref"])
+        for item in accepted.evidence_refs
+        if isinstance(item, dict) and item.get("bbox_px")
+    ]
     gated, gate_error = measurement_gate(accepted.reference(), sessions)
-    assert gate_error is None
-    assert gated is not None and gated["attempt_id"] == accepted.attempt_id
-    assembly = assemble_spec(
+    if selected_refs:
+        assert gated is None
+        assert gate_error is not None
+        assert gate_error["code"] == "measurement_decision_required"
+    else:
+        assert gate_error is None
+        assert gated is not None and gated["attempt_id"] == accepted.attempt_id
+    assembly_kwargs = dict(
         chart_type=chart_type,
         points=_points(chart_type),
         title=sample["id"],
@@ -257,8 +267,18 @@ def test_each_chart_family_completes_targeted_repair_and_assembly(sample: dict):
         measurement_ref=accepted.reference(),
         _measurement_context=sessions,
     )
+    if selected_refs:
+        assembly_kwargs["measurement_decision"] = {
+            "session_id": accepted.session_id,
+            "attempt_id": accepted.attempt_id,
+            "selected_refs": selected_refs,
+            "discarded_refs": [],
+        }
+    assembly = assemble_spec(**assembly_kwargs)
     assert "error" not in assembly
     assert assembly["provenance"]["status"] == "accepted"
+    if selected_refs:
+        assert assembly["provenance"]["selected_refs"] == selected_refs
 
 
 def test_eval_metrics_compare_initial_and_targeted_repair_states():
@@ -482,7 +502,8 @@ def test_checkpoint_restores_pending_lineage_and_accepted_attempt():
     restored_session = restored[session.session_id]
     assert restored_session.accepted_attempt() is not None
     assert restored_session.accepted_attempt().parent_attempt_id == parent
-    assert state["pendingMeasurementRepair"] is None
+    assert state["pendingMeasurementRepair"]["decision_status"] == "pending"
+    assert state["pendingMeasurementRepair"]["attempt_id"] == restored_session.current_attempt_id
 
 
 def test_direct_assembly_without_measurement_session_keeps_legacy_path():

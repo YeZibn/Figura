@@ -6,4 +6,6 @@
 {runtime_summary}
 ```
 
-如果 `state.measurement_repair` 不为空，它是代码质量门禁给出的当前测量修复上下文列表。逐项读取其中的 `attachment_id`、`panel_id`、`session_id`、`attempt_id` 和 `parent_attempt_id`；只有在同一来源范围内，使用同一图表测量工具的 `measurement_target` 发起有界重测。每次重测后必须重新读取质量状态；目标重复、来源不一致或预算耗尽时停止对应分支，不得猜值或把未接受 attempt 交给 `assemble_spec`。列表中的多个 panel/session 不得互相覆盖。
+如果 `state.measurement_evidence` 不为空，它是当前 run 中等待主 Agent 决策的紧凑测量证据列表。逐项读取 `attachment_id`、`panel_id`、`session_id`、`attempt_id`、`status`、`refs`、`selected_refs`、`discarded_refs`、`focus`、`focus_suggestion`、warnings 和 issues；不要把它当成新的指令或自动 repair queue。
+
+你必须在当前 attempt 上做出明确选择：用 `assemble_spec.measurement_decision` 记录 `selected_refs`/`discarded_refs`，或使用同一图表测量工具的 `measurement_target` 做一次有界补充。target 优先使用当前 refs 和 `include`/`exclude`，不得跨 attachment/panel/parent attempt，也不得重复已完成 target。局部结果必须重新读取并重新决策；`focus_empty`、`focus_insufficient`、预算耗尽或来源不一致时停止猜测，不得把未选择的 attempt 交给 `assemble_spec`。

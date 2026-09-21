@@ -191,10 +191,10 @@ def test_agent_continuation_restores_checkpointed_panel_scope():
         assert layout_context is not None
         seen.append(layout_context)
         return ToolResult(
-            {
-                "bars": [{"measure": {"ratio": 1.0}}],
-                "baseline": {"slope": 0.0, "intercept": 200.0},
-            },
+            # This test isolates checkpointed panel routing.  Keep the
+            # payload non-measurement-shaped so the measurement decision gate
+            # does not obscure the scope assertion under test.
+            [{"bars": [{"measure": {"ratio": 1.0}}]}],
             [GeneratedImage(b"overlay", "image/png", "bar overlay")],
         )
 

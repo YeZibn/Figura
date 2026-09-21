@@ -397,6 +397,12 @@ def _truncate_tool_result_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
             "measurement_blocking",
             "measurement_repair_action",
             "measurement_repair_status",
+            "measurement_focus_suggestion",
+            "measurement_evidence_refs",
+            "measurement_selected_refs",
+            "measurement_discarded_refs",
+            "measurement_decision_status",
+            "measurement_focus",
             "measurement_target",
         )
         if field in payload
@@ -411,6 +417,7 @@ def _truncate_tool_result_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
             for key in (
                 "scope",
                 "focus",
+                "measurement",
                 "measurement_target",
                 "orientation",
                 "axis_orientation",

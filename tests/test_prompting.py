@@ -64,6 +64,10 @@ def test_four_layers_are_explicit_and_dynamic_values_do_not_enter_static_layer()
                 "measurement_status": "remeasure_required",
                 "measurement_reference": {"session_id": "ms_1", "attempt_id": "matt_1", "attachment_id": "att_1", "panel_id": "panel-1"},
                 "measurement_issues": [{"code": "baseline_uncertain", "location": "baseline", "severity": "blocking", "message": "基准线不确定", "next_action": "重新测量"}],
+                "measurement_evidence_refs": [{"ref": "B1", "kind": "bar", "bbox_px": [10, 20, 30, 80]}],
+                "measurement_selected_refs": [],
+                "measurement_discarded_refs": ["L1"],
+                "measurement_decision_status": "pending",
             }
         ],
         runtime_state={
@@ -71,6 +75,16 @@ def test_four_layers_are_explicit_and_dynamic_values_do_not_enter_static_layer()
             "phase": "model",
             "active_source": ["att-1"],
             "pending_action": "使用 panel-1 进行局部测量",
+            "measurement_evidence": [{
+                "session_id": "ms_1",
+                "attempt_id": "matt_1",
+                "attachment_id": "att_1",
+                "panel_id": "panel-1",
+                "status": "accepted",
+                "refs": [{"ref": "B1", "kind": "bar", "bbox_px": [10, 20, 30, 80]}],
+                "decision_status": "pending",
+                "focus_suggestion": {"tool": "measure_bars", "fields": ["baseline"], "mode": "include"},
+            }],
         },
         panel_inventory=[{"panel_id": "panel-1", "status": "accepted"}],
     )
@@ -82,6 +96,9 @@ def test_four_layers_are_explicit_and_dynamic_values_do_not_enter_static_layer()
     assert "observation:call-1" in context["artifacts"]
     assert "remeasure_required" in context["artifacts"]
     assert "baseline_uncertain" in context["artifacts"]
+    assert "measurement_evidence_refs" in context["artifacts"]
+    assert "B1" in context["runtime"]
+    assert "focus_suggestion" in context["runtime"]
     assert "inspect_fixture" in context["tools"]
     assert "当前没有可调用工具" in assemble_prompt_context()["tools"]
     assert "[]" in assemble_prompt_context()["artifacts"]

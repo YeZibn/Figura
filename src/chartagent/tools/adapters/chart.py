@@ -68,7 +68,7 @@ def authorized_chart_tool(tool: Tool, attachments: AttachmentRegistry) -> Tool:
                                 "status": "rejected",
                                 "code": "measurement_target_invalid",
                                 "panel_id": scope.panel.panel_id,
-                                "next_action": "重新读取当前 panel 的 repair_action 后再发起定向重测",
+                                "next_action": "重新读取当前 panel 的 evidence.refs 后再发起定向补充",
                             },
                         }
                     kwargs["measurement_target"] = resolved_target
@@ -114,15 +114,13 @@ def authorized_chart_tool(tool: Tool, attachments: AttachmentRegistry) -> Tool:
         if tool.name in {"measure_bars", "extract_line_series", "extract_pie_slices", "extract_scatter_points"}:
             schema["properties"]["measurement_target"] = {
                 "type": "object",
-                "description": "可选的当前 panel 内定向重测目标；必须使用 source image 坐标、当前 parent attempt 和受影响字段。",
+                "description": "可选的当前 panel 内定向补充测量目标。优先使用当前 measurement.evidence.refs 中的 B1、S1、P1、C1、L1 等引用；运行时负责补全来源和父 attempt。",
                 "properties": {
-                    "target_id": {"type": "string", "description": "模型为本次复查提出的稳定目标标识。"},
-                    "panel_id": {"type": "string", "description": "目标所属的当前 panel ID。"},
-                    "parent_attempt_id": {"type": "string", "description": "measurement.quality.repair_action 指定的父 attempt。"},
-                    "region_kind": {"type": "string", "description": "baseline、bars、axes、series、points、sectors、legend 或 panel。"},
+                    "refs": {"type": "array", "items": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9]{0,15}$"}, "minItems": 1, "maxItems": 16, "description": "当前 attempt 中需要包含或排除的证据引用。"},
+                    "mode": {"type": "string", "enum": ["include", "exclude"], "description": "include 只在引用区域内测量；exclude 排除引用区域后测量。"},
                     "fields": {"type": "array", "items": {"type": "string"}, "description": "本次重测需要解决的字段路径。"},
-                    "bbox_source_px": {"type": "array", "items": {"type": "number"}, "minItems": 4, "maxItems": 4, "description": "源图像像素坐标 [left, top, width, height]。"},
-                    "source_image_size": {"type": "array", "items": {"type": "integer"}, "minItems": 2, "maxItems": 2, "description": "提出 bbox 时所依据的源图尺寸。"},
+                    "bbox_source_px": {"type": "array", "items": {"type": "number"}, "minItems": 4, "maxItems": 4, "description": "没有可用 ref 时才使用的有界源图像像素区域 [left, top, width, height]。"},
+                    "polygon_source_px": {"type": "array", "items": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2}, "minItems": 3, "maxItems": 32, "description": "没有可用 ref 时才使用的有界源图像多边形。"},
                     "reason": {"type": "string", "description": "为什么要复查该区域。"},
                 },
                 "additionalProperties": False,

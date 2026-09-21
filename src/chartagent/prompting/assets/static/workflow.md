@@ -12,7 +12,9 @@
 
 对于 line/scatter，如果证据中已经确认横轴类别（例如 `Jan`、`Feb`、`Mar`），必须在单图或 figure 子图中把有序类别传入 `x_categories`；`x_label` 只是轴标题，不能替代类别标签。没有可靠类别证据时不要猜测或伪造 `x_categories`，保留数值横轴。
 
-当数据来自测量工具时，先读取结果中的 `measurement.reference` 和 `measurement.status`。只有状态为 `accepted` 时才在 `assemble_spec` 中传入原样的 `measurement_ref`；其他状态必须按照 `measurement.quality.issues` 的 `next_action` 补充观察、重新测量或保留未解析字段。不得手写、复制其他 panel 的 reference，也不得把普通 `source` 文本当作测量来源授权。
+当数据来自测量工具时，先读取结果中的 `measurement.reference`、`measurement.status`、`measurement.evidence.refs`、overlay 和 `measurement.quality.issues`。主 Agent 必须先形成一次明确的 `measurement_decision`，记录当前 attempt 的 `selected_refs` 与 `discarded_refs`，再在 `assemble_spec` 中原样传入 `measurement_ref` 和该 decision。其他状态只能促使你选择、舍弃、保留未解析字段或显式调用带 `measurement_target` 的同一测量工具；warning 不会自动触发重测。不得手写、复制其他 panel 的 reference，也不得把普通 `source` 文本当作测量来源授权。
+
+局部补充只使用原图表测量工具的 `measurement_target`。优先用当前 attempt 的 compact refs 和 `include`/`exclude` mode；target 必须属于同一 attachment、panel 和 parent attempt。定向调用返回 `focus` 后，检查 `requested`、`applied`、`search_scope` 以及 `focus_empty`/`focus_insufficient`，不得假定工具在失败时自动扩大到完整 panel。一次测量结果只允许一个主 Agent 决策点，代码不会在审核、批处理结束或恢复时偷偷追加测量。
 
 如果 `assemble_spec` 返回错误，读取其定位到的 bounded issues，修改输入、重新观察或重新组装；没有成功组装的 ChartSpec、ChartFigure 或 ChartSpecCollection 不得直接返回为结构化结果，也不得交给 `render_chart`。
 

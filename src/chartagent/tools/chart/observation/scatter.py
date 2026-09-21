@@ -32,7 +32,7 @@ from .coordinates import (
 from .ocr import extract_text
 from .overlays import render_scatter_overlay
 from .layout import context_for_evidence, context_scope, filter_snippets_to_scope
-from .scope import measurement_target_region
+from .scope import apply_measurement_focus, measurement_focus_context
 
 _COLOR_TOLERANCE = 34
 _MAX_MARKER_SIDE_RATIO = 0.12
@@ -367,7 +367,11 @@ def _empty_result(
         "confidence": confidence_map(overall=0.0, geometry=0.0, calibration=0.0, association=0.0),
         "warnings": [warning],
         "measurement_target": dict(measurement_target) if isinstance(measurement_target, dict) else None,
-        "focus": {"requested": bool(measurement_target), "region_px": None, "search_scope": "panel_or_chart"},
+        "focus": measurement_focus_context(
+            measurement_target,
+            width=image.width,
+            height=image.height,
+        ),
     }
     return ToolResult(
         data,
@@ -415,22 +419,21 @@ def extract_scatter_points(
 
     scope = context_scope(layout_context)
     base_search_area = scope.get("bbox_px") if scope else default_plot_area(rgb)
-    focus_region = measurement_target_region(
+    focus = measurement_focus_context(
         measurement_target,
         width=int(rgb.shape[1]),
         height=int(rgb.shape[0]),
+        base_region=base_search_area,
     )
-    focus_fallback = bool(
-        focus_region
-        and base_search_area
-        and focus_region[2] * focus_region[3] < max(1, base_search_area[2] * base_search_area[3] * 0.08)
-    )
-    search_area = base_search_area if focus_fallback else (focus_region or base_search_area)
-    palette = detect_color_palette(rgb, region=search_area, max_colors=8)
+    search_area = focus.get("search_area")
+    if focus["requested"] and not focus["applied"]:
+        return _empty_result(chart_image, "focus_empty: target did not resolve to a measurable region", layout_context, measurement_target)
+    working_rgb = apply_measurement_focus(rgb, focus)
+    palette = detect_color_palette(working_rgb, region=search_area, max_colors=8)
     snippets = _ocr_snippets(path, scope) if scope else _ocr_snippets(path)
     x_ticks, y_ticks = numeric_ticks(snippets, search_area)
     frame, orientation, detection_area = detect_cartesian_frame(
-        rgb,
+        working_rgb,
         search_area,
         palette,
         snippets,
@@ -445,7 +448,10 @@ def extract_scatter_points(
         return _empty_result(chart_image, "no reliable scatter point population detected", layout_context, measurement_target)
 
     series, overlaps, warnings, legend = _build_series(
-        rgb,
+        # Keep component extraction inside the same explicit focus mask used
+        # for palette and frame detection; never rescan the source image after
+        # a target has been applied.
+        working_rgb,
         palette,
         frame=frame,
         search_area=detection_area,
@@ -458,8 +464,8 @@ def extract_scatter_points(
         return _empty_result(chart_image, "no reliable scatter point population detected", layout_context, measurement_target)
 
     conflicts: list[dict[str, Any]] = []
-    if focus_fallback:
-        warnings.append("focus target was too narrow; panel context retained for point validation")
+    if focus["requested"] and not series:
+        warnings.append("focus_insufficient: no scatter series was detected in the requested scope")
     for axis_name, ticks, model in (("x", x_ticks, x_model), ("y", y_ticks, y_model)):
         if len(ticks) >= 2 and model is not None and not model.get("calibrated"):
             conflicts.append(
@@ -546,9 +552,8 @@ def extract_scatter_points(
         "warnings": warnings,
         "measurement_target": dict(measurement_target) if isinstance(measurement_target, dict) else None,
         "focus": {
-            "requested": bool(measurement_target),
-            "region_px": focus_region,
-            "search_scope": "target_with_panel_context" if focus_region else "panel_or_chart",
+            **focus,
+            "region_px": focus.get("region_px"),
         },
     }
     return ToolResult(

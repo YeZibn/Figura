@@ -176,6 +176,11 @@ export const measurementRepairEventKinds = [
   'measurement_repair_required',
   'measurement_repair_rejected',
   'measurement_repair_exhausted',
+  'measurement_decision_required',
+  'measurement_focus_requested',
+  'measurement_focus_applied',
+  'measurement_focus_failed',
+  'measurement_evidence_selected',
 ] as const
 
 export type MeasurementRepairEventKind = typeof measurementRepairEventKinds[number]

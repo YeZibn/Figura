@@ -29,7 +29,7 @@ from .foundation import (
 from .coordinates import axis_geometry, cartesian_frame, fit_dominant_axis_line
 from .layout import context_for_evidence, context_frame, context_scope
 from .overlays import render_bar_overlay
-from .scope import measurement_target_region
+from .scope import apply_measurement_focus, measurement_focus_context
 
 Orientation = Literal["vertical", "horizontal"]
 
@@ -42,6 +42,13 @@ def _empty_result(
 ) -> ToolResult:
     warning_list = warnings or ["no bar geometry or baseline detected"]
     rgb = np.asarray(chart_image)
+    focus = measurement_focus_context(
+        measurement_target,
+        width=int(rgb.shape[1]),
+        height=int(rgb.shape[0]),
+    )
+    if focus["requested"] and not focus["applied"]:
+        warning_list = [*warning_list, "focus_empty: target did not resolve to a measurable region"]
     confidence = confidence_map(
         overall=0.0,
         geometry=0.0,
@@ -67,7 +74,7 @@ def _empty_result(
         "confidence": confidence,
         "warnings": warning_list,
         "measurement_target": dict(measurement_target) if isinstance(measurement_target, dict) else None,
-        "focus": {"requested": bool(measurement_target), "region_px": None, "search_scope": "panel_or_chart"},
+        "focus": focus,
     }
     return ToolResult(
         data,
@@ -725,28 +732,33 @@ def _measure_chart(
     scope = context_scope(layout_context)
     measurement_area = layout.get("bbox_px") if layout else None
     base_search_area = measurement_area or (scope.get("bbox_px") if scope else None)
-    focus_region = measurement_target_region(
+    focus = measurement_focus_context(
         measurement_target,
         width=int(rgb.shape[1]),
         height=int(rgb.shape[0]),
+        base_region=base_search_area,
     )
-    search_area = focus_region or base_search_area
-    focus_fallback = bool(
-        focus_region
-        and base_search_area
-        and focus_region[2] * focus_region[3] < max(1, base_search_area[2] * base_search_area[3] * 0.08)
-    )
-    if focus_fallback:
-        # A thin baseline target cannot recover complete bar geometry on its
-        # own. Keep it in the envelope while retaining the frame needed for a
-        # valid re-audit.
-        search_area = base_search_area
-    palette = detect_color_palette(rgb, region=search_area, max_colors=8)
+    search_area = focus.get("search_area")
+    if focus["requested"] and not focus["applied"]:
+        return {
+            "candidates": [],
+            "orientation": "unknown",
+            "bar_mode": "unknown",
+            "baseline": None,
+            "plot_area": None,
+            "palette": [],
+            "warnings": ["focus_empty: target did not resolve to a measurable region"],
+            "layout_context": layout_context,
+            "focus_region": None,
+            "focus": focus,
+        }
+    working_rgb = apply_measurement_focus(rgb, focus)
+    palette = detect_color_palette(working_rgb, region=search_area, max_colors=8)
     vertical_candidates: list[dict[str, Any]] = []
     horizontal_candidates: list[dict[str, Any]] = []
     for series_index, color in enumerate(palette, start=1):
-        vertical_candidates.extend(_bar_candidates(rgb, color, series_index, search_area, orientation="vertical"))
-        horizontal_candidates.extend(_bar_candidates(rgb, color, series_index, search_area, orientation="horizontal"))
+        vertical_candidates.extend(_bar_candidates(working_rgb, color, series_index, search_area, orientation="vertical"))
+        horizontal_candidates.extend(_bar_candidates(working_rgb, color, series_index, search_area, orientation="horizontal"))
     vertical_score = _orientation_score(vertical_candidates, "vertical")
     horizontal_score = _orientation_score(horizontal_candidates, "horizontal")
     if not vertical_candidates and not horizontal_candidates:
@@ -757,10 +769,12 @@ def _measure_chart(
             "baseline": None,
             "plot_area": None,
             "palette": palette,
-            "warnings": ["no bar geometry or baseline detected"]
-            + (["focus target was too narrow; panel context retained"] if focus_fallback else []),
+            "warnings": ["focus_insufficient: no bar geometry was detected in the requested scope"]
+            if focus["requested"]
+            else ["no bar geometry or baseline detected"],
             "layout_context": layout_context,
-            "focus_region": focus_region,
+            "focus_region": focus.get("region_px"),
+            "focus": focus,
         }
     orientation: Orientation = "vertical" if vertical_score >= horizontal_score else "horizontal"
     candidates = vertical_candidates if orientation == "vertical" else horizontal_candidates
@@ -781,14 +795,12 @@ def _measure_chart(
     baseline = _fit_baseline(
         candidates,
         orientation,
-        _axis_hint(rgb, candidates, orientation),
+        _axis_hint(working_rgb, candidates, orientation),
         prefer_outer=stacked,
     )
     warnings: list[str] = []
-    if focus_fallback:
-        warnings.append("focus target was too narrow; panel context retained for geometry validation")
     visible_axis = _visible_axis_reference(
-        rgb,
+        working_rgb,
         candidates,
         orientation,
         search_area,
@@ -850,7 +862,8 @@ def _measure_chart(
         "palette": palette,
         "warnings": warnings,
         "layout_context": layout_context,
-        "focus_region": focus_region,
+        "focus_region": focus.get("region_px"),
+        "focus": focus,
     }
 
 
@@ -1011,9 +1024,8 @@ def measure_bars(
         "layout_context": context_for_evidence(layout_context),
         "measurement_target": dict(measurement_target) if isinstance(measurement_target, dict) else None,
         "focus": {
-            "requested": bool(measurement_target),
+            **(measured.get("focus") or {}),
             "region_px": measured.get("focus_region"),
-            "search_scope": "target_with_panel_context" if measured.get("focus_region") else "panel_or_chart",
         },
     }
     return ToolResult(

@@ -32,7 +32,7 @@ from .layout import (
     context_scope,
     filter_snippets_to_scope,
 )
-from .scope import measurement_target_region
+from .scope import apply_measurement_focus, measurement_focus_context
 
 _TRACE_TOLERANCE = 30
 
@@ -446,7 +446,11 @@ def _empty_result(
         "confidence": confidence,
         "warnings": [warning],
         "measurement_target": dict(measurement_target) if isinstance(measurement_target, dict) else None,
-        "focus": {"requested": bool(measurement_target), "region_px": None, "search_scope": "panel_or_chart"},
+        "focus": measurement_focus_context(
+            measurement_target,
+            width=image.width,
+            height=image.height,
+        ),
     }
     return ToolResult(
         data,
@@ -479,26 +483,27 @@ def extract_line_series(
 
     scope = context_scope(layout_context)
     base_search_area = scope.get("bbox_px") if scope else default_plot_area(rgb)
-    focus_region = measurement_target_region(
+    focus = measurement_focus_context(
         measurement_target,
         width=int(rgb.shape[1]),
         height=int(rgb.shape[0]),
+        base_region=base_search_area,
     )
-    focus_fallback = bool(
-        focus_region
-        and base_search_area
-        and focus_region[2] * focus_region[3] < max(1, base_search_area[2] * base_search_area[3] * 0.08)
-    )
-    search_area = base_search_area if focus_fallback else (focus_region or base_search_area)
-    preliminary_palette = _line_palette(rgb, search_area)
+    search_area = focus.get("search_area")
+    if focus["requested"] and not focus["applied"]:
+        return _empty_result(chart_image, "focus_empty: target did not resolve to a measurable region", layout_context, measurement_target)
+    working_rgb = apply_measurement_focus(rgb, focus)
+    preliminary_palette = _line_palette(working_rgb, search_area)
     frame, orientation, detection_area = detect_cartesian_frame(
-        rgb,
+        working_rgb,
         search_area,
         preliminary_palette,
         layout_context=layout_context,
         strict_search_area=scope is not None,
     )
     plot_area = list(frame.get("bbox") if frame else detection_area)
+    if focus["requested"] and focus["mode"] == "include" and focus.get("region_px"):
+        plot_area = list(focus["region_px"])
     if frame is None:
         frame = {
             "coordinate_system": "cartesian_2d",
@@ -510,7 +515,7 @@ def extract_line_series(
             "confidence": 0.0,
             "evidence": [],
         }
-    palette = _line_palette(rgb, plot_area)
+    palette = _line_palette(working_rgb, plot_area)
     snippets = _ocr_snippets(path, scope) if scope else _ocr_snippets(path)
     x_ticks, y_ticks = numeric_ticks(snippets, plot_area)
     x_tick_region = context_region(layout_context, "x_ticks")
@@ -526,7 +531,7 @@ def extract_line_series(
     x_model = fit_axis_transform(x_ticks, x_axis_points)
     y_model = fit_axis_transform(y_ticks, y_axis_points)
     legend = _legend_entries(
-        rgb,
+        working_rgb,
         palette,
         plot_area,
         snippets,
@@ -536,7 +541,10 @@ def extract_line_series(
     series: list[dict[str, Any]] = []
     filled_region_detected = False
     for index, color in enumerate(palette, start=1):
-        mask = color_mask(rgb, color, tolerance=_TRACE_TOLERANCE)
+        # Use the focused image for the actual trace mask as well as palette
+        # and frame detection.  Reusing the source image here would silently
+        # widen a targeted measurement back to the whole panel.
+        mask = color_mask(working_rgb, color, tolerance=_TRACE_TOLERANCE)
         if _is_filled_region(mask, plot_area):
             filled_region_detected = True
             continue
@@ -571,8 +579,8 @@ def extract_line_series(
         series.append(entry)
 
     warnings: list[str] = []
-    if focus_fallback:
-        warnings.append("focus target was too narrow; panel context retained for trace validation")
+    if focus["requested"] and not series:
+        warnings.append("focus_insufficient: no line series was detected in the requested scope")
     conflicts: list[dict[str, Any]] = []
     for axis_name, ticks, model in (("x", x_ticks, x_model), ("y", y_ticks, y_model)):
         if len(ticks) >= 2 and model is not None and not model.get("calibrated"):
@@ -669,9 +677,8 @@ def extract_line_series(
         "warnings": warnings,
         "measurement_target": dict(measurement_target) if isinstance(measurement_target, dict) else None,
         "focus": {
-            "requested": bool(measurement_target),
-            "region_px": focus_region,
-            "search_scope": "target_with_panel_context" if focus_region else "panel_or_chart",
+            **focus,
+            "region_px": focus.get("region_px"),
         },
     }
     return ToolResult(

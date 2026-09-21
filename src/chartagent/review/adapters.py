@@ -44,20 +44,22 @@ class MeasurementReviewAdapter:
         status = str(measurement.get("status") or "provisional")[:32]
         quality = measurement.get("quality") if isinstance(measurement.get("quality"), Mapping) else {}
         issues = _bounded_issues(quality.get("issues"))
-        repair_action = quality.get("repair_action") if isinstance(quality.get("repair_action"), Mapping) else None
         parent_id = str(attempt.get("parent_attempt_id") or "").strip() or None
         evidence = measurement.get("evidence") if isinstance(measurement.get("evidence"), Mapping) else {}
-        repair_status = str(repair_action.get("status") or "") if repair_action else ""
-        if status == "accepted" and not bool(quality.get("blocking")):
-            decision = "pass_with_warning" if any(item.severity == "warning" for item in issues) or bool(quality.get("warnings")) else "pass"
-        elif repair_status == "exhausted":
-            decision = "exhausted"
-        elif repair_action is not None and status in {"remeasure_required", "partial", "provisional"}:
-            decision = "repair_required"
-        else:
-            decision = "fail"
+        evidence = dict(evidence)
+        focus_suggestion = quality.get("focus_suggestion") or quality.get("repair_action")
+        if isinstance(focus_suggestion, Mapping):
+            evidence["focus_suggestion"] = dict(focus_suggestion)
+        evidence["decision"] = dict(measurement.get("decision") or {}) if isinstance(measurement.get("decision"), Mapping) else {"status": "pending"}
+        if issues:
+            evidence["issues"] = [issue.to_dict() for issue in issues[:8]]
         max_attempts = (session.max_repair_attempts + 1) if session is not None else 4
         attempt_number = len(session.attempts) if session is not None else 1
+        next_action = (
+            "根据当前 overlay 和 measurement.evidence.refs，明确选择、舍弃或调用同一测量工具做定向补充"
+            if status == "accepted"
+            else "根据当前 issues、warnings 和 evidence.refs，由主 Agent 决定舍弃或定向补充；系统不会自动重测"
+        )
         record = coordinator.begin(
             run_id,
             ReviewType.MEASUREMENT,
@@ -73,23 +75,9 @@ class MeasurementReviewAdapter:
                 "tool": tool_name,
             },
             evidence=(evidence,),
-            next_action=str(repair_action.get("next_action") or "")[:240] if repair_action else None,
+            next_action=next_action,
         )
-        return coordinator.apply(
-            record.review_id,
-            ReviewDecision(
-                decision=decision,
-                issues=issues,
-                next_action=str(repair_action.get("next_action") or "")[:240] if repair_action else None,
-                repair_action=repair_action,
-                evidence=(evidence,),
-                details={
-                    "measurement_status": status,
-                    "checks": quality.get("checks", []),
-                    "tool": tool_name,
-                },
-            ),
-        )
+        return record
 
 
 class GeneratedChartReviewAdapter:

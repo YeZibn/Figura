@@ -320,7 +320,11 @@ def test_recorded_trajectory_covers_ocr_bar_retry_and_both_renderers():
         if region == "full":
             raise ValueError("plot region is ambiguous")
         return ToolResult(
-            {
+            # This trajectory predates the measurement evidence gate and is
+            # intentionally scoped to trace ordering.  Avoid a measurement
+            # envelope so the final scripted answer remains the only terminal
+            # decision in this legacy trace fixture.
+            [{
                 "image_size": [320, 240],
                 "plot_area": {"bbox": [40, 20, 240, 180]},
                 "baseline": {"slope": 0.0, "intercept": 200.0},
@@ -330,7 +334,7 @@ def test_recorded_trajectory_covers_ocr_bar_retry_and_both_renderers():
                     {"id": 3, "measure": {"ratio": 3.0}},
                 ],
                 "warnings": [],
-            },
+            }],
             [GeneratedImage(b"bar-overlay", "image/png", "Bar measurements")],
         )
 

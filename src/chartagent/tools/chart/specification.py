@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+import re
 from typing import Any
 from uuid import uuid4
 
@@ -24,7 +25,7 @@ from ...spec import (
     MAX_FIGURE_COLUMNS,
     ValidationIssue,
 )
-from ...measurement import measurement_gate
+from ...measurement import MeasurementSession, measurement_gate, normalize_evidence_refs
 from ..core.definition import Tool
 from .validation import MAX_GENERATION_POINTS, MAX_GENERATION_LABEL_LENGTH, validate_generation
 
@@ -43,7 +44,17 @@ def _measurement_gate_error(gate: Mapping[str, Any], location: str) -> dict[str,
     bounded = {
         key: value
         for key, value in gate.items()
-        if key in {"status", "code", "location", "message", "next_action", "measurement_status", "issues", "repair_action"}
+        if key in {
+            "status",
+            "code",
+            "location",
+            "message",
+            "next_action",
+            "measurement_status",
+            "issues",
+            "repair_action",
+            "available_refs",
+        }
     }
     raw_location = str(bounded.get("location") or "measurement_ref")
     bounded["location"] = raw_location if raw_location.startswith(location) else f"{location}.{raw_location}"[:160]
@@ -56,6 +67,95 @@ def _measurement_gate_error(gate: Mapping[str, Any], location: str) -> dict[str,
     }
 
 
+def _record_measurement_decision(
+    decision: Mapping[str, Any] | None,
+    *,
+    measurement_ref: Mapping[str, Any] | None,
+    measurement_context: Mapping[str, Any] | None,
+    location: str,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """Record the main Agent's explicit ref selection before assembly."""
+    if not isinstance(decision, Mapping):
+        return None, None
+    session_id = str(decision.get("session_id") or (measurement_ref or {}).get("session_id") or "").strip()
+    attempt_id = str(decision.get("attempt_id") or (measurement_ref or {}).get("attempt_id") or "").strip()
+    if not session_id or not attempt_id or not isinstance(measurement_context, Mapping):
+        return None, {
+            "status": "blocked",
+            "code": "measurement_decision_invalid",
+            "location": f"{location}.measurement_decision",
+            "message": "measurement_decision must identify the current session and attempt",
+            "next_action": "使用当前 measurement.reference 和 evidence.refs 提交选择",
+        }
+    raw_session = measurement_context.get(session_id)
+    session = (
+        raw_session
+        if isinstance(raw_session, MeasurementSession)
+        else MeasurementSession.from_dict(raw_session)
+        if isinstance(raw_session, Mapping)
+        else None
+    )
+    if session is None:
+        return None, {
+            "status": "blocked",
+            "code": "measurement_session_not_found",
+            "location": f"{location}.measurement_decision",
+            "message": "measurement session is not registered for the current run",
+            "next_action": "重新读取当前测量观察后再选择 evidence.refs",
+        }
+    if session.current_attempt_id != attempt_id:
+        return None, {
+            "status": "blocked",
+            "code": "measurement_attempt_not_current",
+            "location": f"{location}.measurement_decision.attempt_id",
+            "message": "measurement decision must target the current attempt",
+            "next_action": "只选择当前 measurement.reference 对应 attempt 的证据",
+        }
+    selected = normalize_evidence_refs(decision.get("selected_refs") or decision.get("refs"))
+    discarded = normalize_evidence_refs(decision.get("discarded_refs"))
+    if not selected:
+        return None, {
+            "status": "blocked",
+            "code": "measurement_decision_required",
+            "location": f"{location}.measurement_decision.selected_refs",
+            "message": "measurement_decision 至少需要一个 selected_refs",
+            "next_action": "根据 overlay 选择要用于 ChartSpec 的证据引用",
+        }
+    if not session.record_decision(
+        attempt_id=attempt_id,
+        selected_refs=selected,
+        discarded_refs=discarded,
+        status="selected",
+    ):
+        return None, {
+            "status": "blocked",
+            "code": "measurement_decision_refs_invalid",
+            "location": f"{location}.measurement_decision.selected_refs",
+            "message": "selected_refs 或 discarded_refs 不属于当前 measurement attempt，或存在重叠",
+            "next_action": "重新读取当前 attempt 的 evidence.refs，不要手写内部 ID",
+        }
+    return {
+        "session_id": session.session_id,
+        "attempt_id": attempt_id,
+        "selected_refs": list(session.selected_refs),
+        "discarded_refs": list(session.discarded_refs),
+        "decision_status": session.decision_status,
+    }, None
+
+
+def _reject_internal_series_labels(points: list[dict], location: str) -> dict[str, Any] | None:
+    for index, point in enumerate(points):
+        if not isinstance(point, Mapping):
+            continue
+        series = point.get("series")
+        if isinstance(series, str) and re.fullmatch(r"(?:series_\d+|S\d+)", series.strip(), flags=re.IGNORECASE):
+            return _assembly_error(
+                "证据引用不能直接作为最终 series 标签；请使用图例文本或明确的业务名称",
+                f"{location}[{index}].series",
+            )
+    return None
+
+
 def _assemble_single_spec(
     chart_type: str,
     points: list[dict],
@@ -65,6 +165,7 @@ def _assemble_single_spec(
     source: str | None = None,
     x_categories: list[str] | None = None,
     measurement_ref: Mapping[str, Any] | None = None,
+    measurement_decision: Mapping[str, Any] | None = None,
     measurement_context: Mapping[str, Any] | None = None,
     expected_source: FigureSource | None = None,
     location: str = "measurement_ref",
@@ -79,6 +180,14 @@ def _assemble_single_spec(
         return _assembly_error("points must be a non-empty array", "points")
 
     provenance = None
+    decision_payload, decision_error = _record_measurement_decision(
+        measurement_decision,
+        measurement_ref=measurement_ref,
+        measurement_context=measurement_context,
+        location=location,
+    )
+    if decision_error is not None:
+        return _measurement_gate_error(decision_error, location)
     if measurement_ref is not None:
         provenance, gate_error = measurement_gate(
             measurement_ref,
@@ -108,6 +217,9 @@ def _assemble_single_spec(
             return _assembly_error("x_categories exceeds the configured size limit", "x_categories")
 
     data_points: list[DataPoint] = []
+    internal_label_error = _reject_internal_series_labels(points, "points")
+    if internal_label_error is not None:
+        return internal_label_error
     for index, raw in enumerate(points):
         if not isinstance(raw, Mapping):
             return _assembly_error(f"points[{index}] must be an object", f"points[{index}]")
@@ -136,6 +248,9 @@ def _assemble_single_spec(
         dataset=data_points,
         provenance=provenance,
     )
+    if decision_payload is not None and isinstance(chart_spec.provenance, dict):
+        chart_spec.provenance["selected_refs"] = decision_payload["selected_refs"]
+        chart_spec.provenance["discarded_refs"] = decision_payload["discarded_refs"]
     validation = validate_generation(chart_spec)
     if validation.blocking:
         issues = validation.legacy_issues()
@@ -144,7 +259,18 @@ def _assemble_single_spec(
             "issues": issues,
             "validation": validation.to_dict(),
         }
-    return chart_spec.to_dict()
+    assembled = chart_spec.to_dict()
+    if decision_payload is not None:
+        assembled["_measurement_decision"] = decision_payload
+    elif measurement_ref is not None and isinstance(provenance, Mapping):
+        assembled["_measurement_decision"] = {
+            "session_id": provenance.get("session_id"),
+            "attempt_id": provenance.get("attempt_id"),
+            "selected_refs": list(provenance.get("selected_refs") or []),
+            "discarded_refs": list(provenance.get("discarded_refs") or []),
+            "decision_status": "legacy_accepted",
+        }
+    return assembled
 
 
 def _collection_error(message: str, location: str, *, validation: dict | None = None) -> dict[str, Any]:
@@ -169,7 +295,54 @@ def _figure_child_input(child: Mapping[str, Any]) -> dict[str, Any]:
         "x_categories": child.get("x_categories"),
         "source": child.get("source"),
         "measurement_ref": child.get("measurement_ref"),
+        "measurement_decision": child.get("measurement_decision"),
     }
+
+
+def _figure_measurement_decisions(
+    figure: Mapping[str, Any],
+    measurement_context: Mapping[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """Project validated child decisions so the Agent can release one gate."""
+    charts = figure.get("charts")
+    if not isinstance(charts, list) or not isinstance(measurement_context, Mapping):
+        return []
+    decisions: list[dict[str, Any]] = []
+    for child in charts[:MAX_FIGURE_CHARTS]:
+        if not isinstance(child, Mapping):
+            continue
+        reference = child.get("measurement_ref")
+        if not isinstance(reference, Mapping):
+            continue
+        decision = child.get("measurement_decision")
+        session_id = str(reference.get("session_id") or "").strip()
+        attempt_id = str(reference.get("attempt_id") or "").strip()
+        if not session_id or not attempt_id:
+            continue
+        session = measurement_context.get(session_id)
+        if isinstance(session, Mapping):
+            session = MeasurementSession.from_dict(session)
+        if not isinstance(session, MeasurementSession):
+            continue
+        if session.current_attempt_id != attempt_id:
+            continue
+        selected = list(session.selected_refs)
+        discarded = list(session.discarded_refs)
+        decision_status = "legacy_accepted"
+        if isinstance(decision, Mapping):
+            selected = list(normalize_evidence_refs(decision.get("selected_refs") or decision.get("refs")))
+            discarded = list(normalize_evidence_refs(decision.get("discarded_refs")))
+            decision_status = str(session.decision_status or "selected")[:32]
+        decisions.append(
+            {
+                "session_id": session_id,
+                "attempt_id": attempt_id,
+                "selected_refs": selected[:64],
+                "discarded_refs": discarded[:64],
+                "decision_status": decision_status,
+            }
+        )
+    return decisions
 
 
 def _assemble_figure(
@@ -269,6 +442,7 @@ def assemble_spec(
     source: str | None = None,
     x_categories: list[str] | None = None,
     measurement_ref: dict[str, Any] | None = None,
+    measurement_decision: dict[str, Any] | None = None,
     *,
     figure: dict[str, Any] | None = None,
     figures: list[dict[str, Any]] | None = None,
@@ -302,10 +476,25 @@ def assemble_spec(
                 "issues": [{"location": issue.location, "message": issue.message} for issue in issues[:32]],
                 "validation": {"status": "failed", "checks": {"semantic": "failed"}},
             }
-        return collection.to_dict()
+        payload = collection.to_dict()
+        decisions = [
+            decision
+            for figure in figures
+            if isinstance(figure, Mapping)
+            for decision in _figure_measurement_decisions(figure, _measurement_context)
+        ]
+        if decisions:
+            payload["_measurement_decisions"] = decisions[:MAX_COLLECTION_FIGURES * MAX_FIGURE_CHARTS]
+        return payload
     if figure is not None:
         result = _assemble_figure(figure, measurement_context=_measurement_context)
-        return result.to_dict() if isinstance(result, ChartFigure) else result
+        if not isinstance(result, ChartFigure):
+            return result
+        payload = result.to_dict()
+        decisions = _figure_measurement_decisions(figure, _measurement_context)
+        if decisions:
+            payload["_measurement_decisions"] = decisions
+        return payload
     if chart_type is None:
         return _assembly_error("chart_type is required unless figure or figures is provided", "chart_type")
     return _assemble_single_spec(
@@ -317,6 +506,7 @@ def assemble_spec(
         source,
         x_categories=x_categories,
         measurement_ref=measurement_ref,
+        measurement_decision=measurement_decision,
         measurement_context=_measurement_context,
     )
 
@@ -393,6 +583,18 @@ MEASUREMENT_REF_SCHEMA = {
     "additionalProperties": False,
 }
 
+MEASUREMENT_DECISION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "session_id": {"type": "string", "description": "当前 measurement.reference 的 session_id；可省略并从 measurement_ref 继承。"},
+        "attempt_id": {"type": "string", "description": "当前 measurement.reference 的 attempt_id；可省略并从 measurement_ref 继承。"},
+        "selected_refs": {"type": "array", "items": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9]{0,15}$"}, "minItems": 1, "maxItems": 64, "description": "主 Agent 明确选择用于当前 ChartSpec 的证据引用。"},
+        "discarded_refs": {"type": "array", "items": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9]{0,15}$"}, "maxItems": 64, "description": "主 Agent 明确舍弃的当前 attempt 证据引用。"},
+    },
+    "required": ["selected_refs"],
+    "additionalProperties": False,
+}
+
 MEASUREMENT_PROVENANCE_SCHEMA = {
     "type": "object",
     "properties": {
@@ -465,6 +667,7 @@ FIGURE_CHILD_INPUT_SCHEMA = {
         "points": {"type": "array", "items": POINT_SCHEMA, "minItems": 1, "maxItems": MAX_GENERATION_POINTS, "description": "Child chart data points."},
         "source": {"type": ["string", "null"], "maxLength": MAX_GENERATION_LABEL_LENGTH, "description": "Optional child provenance label."},
         "measurement_ref": {**MEASUREMENT_REF_SCHEMA, "description": "Optional server-issued accepted measurement reference for this child chart."},
+        "measurement_decision": {**MEASUREMENT_DECISION_SCHEMA, "description": "主 Agent 对当前 child 的证据选择；有 measurement refs 时必须提供。"},
     },
     "required": ["chart_id", "chart_type", "points"],
     "additionalProperties": False,
@@ -496,7 +699,7 @@ ASSEMBLE_SPEC = Tool(
     description=(
         "根据已收集的证据原子地组装并校验 ChartSpec、同源 ChartFigure 或多来源 ChartSpecCollection。"
         "单图使用 chart_type 和 points；同源多子图使用 figure，必须提供 attachment_id、panel_id、coverage 和独立 charts；不同来源使用 figures。"
-        "若使用测量结果，必须原样传入当前观察返回的 measurement_ref，由服务端质量门禁校验；不要手写内部 IR、合并不同子图的 category/value，或把遗漏系列标记为 complete。失败会返回有界且带路径的 issues；成功结果才可交给 render_chart。"
+        "若使用测量结果，必须原样传入当前观察返回的 measurement_ref，并在有 evidence.refs 时提供 measurement_decision.selected_refs；服务端会校验来源、attempt 和引用选择。不要把 S1、series_1 等证据引用当成最终系列名称。"
     ),
     parameters={
         "type": "object",
@@ -513,6 +716,7 @@ ASSEMBLE_SPEC = Tool(
             "source": {"type": ["string", "null"], "maxLength": MAX_GENERATION_LABEL_LENGTH, "description": "单图可选来源标签；不授权访问本地路径。"},
             "x_categories": {"type": "array", "items": {"type": "string"}, "maxItems": MAX_GENERATION_POINTS, "description": "可选的有序横轴类别标签；line/scatter 必须保留源 panel 中已确认的类别文本，例如 Jan、Feb、Mar。"},
             "measurement_ref": {**MEASUREMENT_REF_SCHEMA, "description": "可选的服务端测量引用；只有当前 run 中已接受的 measurement reference 才能通过门禁。"},
+            "measurement_decision": {**MEASUREMENT_DECISION_SCHEMA, "description": "根据当前 attempt 的 overlay 与 evidence.refs 做出的选择；有 refs 的测量必须提供。"},
             "figure": {**FIGURE_INPUT_SCHEMA, "description": "同一 attachment_id + panel_id 下的多个独立子图及其 coverage。"},
             "figures": {"type": "array", "items": FIGURE_INPUT_SCHEMA, "minItems": 1, "maxItems": MAX_COLLECTION_FIGURES, "description": "来自多个 panel 的有序 figure 列表；不同来源不会自动合并。"},
             "collection_id": {"type": "string", "maxLength": 128, "description": "可选的稳定集合 ID。"},
@@ -532,6 +736,7 @@ __all__ = [
     "FIGURE_CHILD_INPUT_SCHEMA",
     "FIGURE_SOURCE_SCHEMA",
     "MEASUREMENT_REF_SCHEMA",
+    "MEASUREMENT_DECISION_SCHEMA",
     "MEASUREMENT_PROVENANCE_SCHEMA",
     "POINT_SCHEMA",
     "assemble_spec",

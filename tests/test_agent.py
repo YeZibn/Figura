@@ -199,11 +199,42 @@ def test_layout_preflight_context_is_cached_and_injected_into_sensor():
             sensor,
         )
     )
-    client = ScriptedClient([
-        _call("inspect_chart_layout", '{"attachment_id":"att_chart"}', "layout-1"),
-        _call("extract_line_series", '{"attachment_id":"att_chart"}', "line-1"),
-        _final("done"),
-    ])
+    registry.register(ASSEMBLE_SPEC)
+
+    class LayoutClient:
+        def __init__(self):
+            self.turn = 0
+            self.calls: list[dict[str, Any]] = []
+
+        def chat(self, messages, **kwargs):
+            self.turn += 1
+            self.calls.append({"messages": list(messages), "tools": kwargs.get("tools")})
+            if self.turn == 1:
+                return _call("inspect_chart_layout", '{"attachment_id":"att_chart"}', "layout-1")
+            if self.turn == 2:
+                return _call("extract_line_series", '{"attachment_id":"att_chart"}', "line-1")
+            if self.turn == 3:
+                tool_message = next(item for item in reversed(messages) if item.get("role") == "tool")
+                measurement = json.loads(tool_message["content"])["data"]["measurement"]
+                ref = measurement["evidence"]["refs"][0]["ref"]
+                return _call(
+                    "assemble_spec",
+                    json.dumps(
+                        {
+                            "chart_type": "line",
+                            "x_label": "月份",
+                            "y_label": "数值",
+                            "points": [{"x": 1, "y": 2}],
+                            "measurement_ref": measurement["reference"],
+                            "measurement_decision": {"selected_refs": [ref], "discarded_refs": []},
+                        },
+                        ensure_ascii=False,
+                    ),
+                    "assemble-1",
+                )
+            return _final("done")
+
+    client = LayoutClient()
 
     assert Agent(client, registry).run("analyze att_chart") == "done"
     assert seen[0]["context_id"] == context["context_id"]
@@ -500,11 +531,10 @@ def test_measurement_gate_stops_the_tool_batch_after_the_first_blocking_result()
     assert answer == "*stopped: generated chart review failed; no artifact published*"
 
     messages = client.calls[1]["messages"]
-    assert [message["role"] for message in messages] == ["user", "assistant", "tool", "tool", "user"]
+    assert [message["role"] for message in messages] == ["user", "assistant", "tool", "tool"]
     assert [message["tool_call_id"] for message in messages[2:4]] == ["bars-1", "line-1"]
-    repair = next(message["content"] for message in messages if message["role"] == "user" and "measurement_repairs" in str(message["content"]))
-    assert "panel_bars" in repair
-    assert "panel_line" not in repair
+    assert not any(message["role"] == "user" and "measurement_repairs" in str(message["content"]) for message in messages)
+    assert any(message["role"] == "tool" and "measurement" in str(message["content"]) for message in messages[2:3])
     skipped = [event for event in events if event.kind == "tool_skipped"]
     assert [event.payload["call_id"] for event in skipped] == ["line-1"]
 

@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from chartagent import Agent, ToolRegistry, build_user_content
+from chartagent import Agent, AttachmentRegistry, ToolRegistry, build_registered_attachment_turn
 from chartagent.client.models import NormalizedResult, ToolCall
 from chartagent.tools.core import ToolResult
 from chartagent.tools.chart import register_chart_tools
@@ -51,12 +51,37 @@ def _augment_axis_ocr(original, *, y_values: list[int]):
     return read
 
 
+def _measurement_assembly_fields(observed: dict) -> dict:
+    """Carry the model's explicit evidence decision into assembly."""
+    measurement = observed.get("measurement")
+    assert isinstance(measurement, dict)
+    reference = measurement.get("reference")
+    assert isinstance(reference, dict)
+    result = {"measurement_ref": reference}
+    evidence = measurement.get("evidence")
+    refs = evidence.get("refs") if isinstance(evidence, dict) else []
+    selected_refs = [
+        item.get("ref")
+        for item in refs or []
+        if isinstance(item, dict) and isinstance(item.get("ref"), str)
+    ]
+    if selected_refs:
+        result["measurement_decision"] = {
+            "session_id": reference.get("session_id"),
+            "attempt_id": reference.get("attempt_id"),
+            "selected_refs": selected_refs,
+            "discarded_refs": [],
+        }
+    return result
+
+
 class _UnderstandingClient:
     """Script the decisions while requiring every real tool observation."""
 
     def __init__(self, image_path: str, ground_truth: dict) -> None:
         self.image_path = image_path
         self.ground_truth = ground_truth
+        self.attachment_id = ""
         self.stage = 0
         self.assembled: dict | None = None
 
@@ -83,17 +108,14 @@ class _UnderstandingClient:
             return payload.get("data", payload)
 
         if self.stage == 0:
-            user_content = messages[-1]["content"]
-            assert isinstance(user_content, list)
-            assert user_content[1]["type"] == "image_url"
-            result = _call("ocr", "extract_text", {"image_path": self.image_path})
+            result = _call("ocr", "extract_text", {"attachment_id": self.attachment_id})
         elif self.stage == 1:
             snippets = last_tool_data()
             expected = {
                 f'{point["value"]:g}' for point in self.ground_truth["dataset"]
             }
             assert expected <= {snippet["text"] for snippet in snippets}
-            result = _call("geometry", "measure_bars", {"image_path": self.image_path})
+            result = _call("geometry", "measure_bars", {"attachment_id": self.attachment_id})
         elif self.stage == 2:
             geometry = last_tool_data()
             values = [point["value"] for point in self.ground_truth["dataset"]]
@@ -113,10 +135,16 @@ class _UnderstandingClient:
                         for point in self.ground_truth["dataset"]
                     ],
                     "source": self.ground_truth["metadata"]["source"],
+                    **_measurement_assembly_fields(geometry),
                 },
             )
         elif self.stage == 3:
             self.assembled = last_tool_data()
+            decision = self.assembled.pop("_measurement_decision", None)
+            assert isinstance(decision, dict)
+            assert decision["selected_refs"]
+            provenance = self.assembled.pop("provenance", None)
+            assert isinstance(provenance, dict)
             assert self.assembled == self.ground_truth
             result = NormalizedResult(content=json.dumps(self.assembled))
         else:
@@ -131,13 +159,16 @@ def test_agent_restores_annotated_bar_chart_through_full_tool_loop(tmp_path):
     image_path = tmp_path / "bars.png"
     image_path.write_bytes(png_bytes)
 
+    attachments = AttachmentRegistry()
+    attachment = attachments.register(str(image_path))
     registry = ToolRegistry()
-    register_chart_tools(registry)
+    register_chart_tools(registry, attachments=attachments)
     client = _UnderstandingClient(str(image_path), ground_truth)
-    agent = Agent(client, registry, system="Restore the chart to ChartSpec.")
+    client.attachment_id = attachment.id
+    agent = Agent(client, registry, system="Restore the chart to ChartSpec.", attachments=attachments)
 
     answer = agent.run(
-        build_user_content("Extract and validate this chart.", [str(image_path)])
+        build_registered_attachment_turn("Extract and validate this chart.", [attachment.metadata()])
     )
 
     assert json.loads(answer) == ground_truth
@@ -150,6 +181,7 @@ class _MultiSeriesUnderstandingClient:
     def __init__(self, image_path: str, ground_truth: dict) -> None:
         self.image_path = image_path
         self.ground_truth = ground_truth
+        self.attachment_id = ""
         self.stage = 0
         self.assembled: dict | None = None
 
@@ -167,7 +199,7 @@ class _MultiSeriesUnderstandingClient:
 
         if self.stage == 0:
             # The model is free to inspect the image before using a sensor.
-            result = _call("line", "extract_line_series", {"image_path": self.image_path})
+            result = _call("line", "extract_line_series", {"attachment_id": self.attachment_id})
         elif self.stage == 1:
             observed = last_tool_data()
             assert {entry["id"] for entry in observed["series"]} == {"series_1", "series_2"}
@@ -194,6 +226,7 @@ class _MultiSeriesUnderstandingClient:
                     "y_label": self.ground_truth["axes"]["y"]["label"],
                     "points": points,
                     "source": self.ground_truth["metadata"]["source"],
+                    **_measurement_assembly_fields(observed),
                 },
             )
         elif self.stage == 2:
@@ -213,6 +246,8 @@ def test_agent_restores_multi_series_line_without_fixed_tool_sequence(tmp_path, 
     )
     image_path = tmp_path / "lines.png"
     image_path.write_bytes(png_bytes)
+    attachments = AttachmentRegistry()
+    attachment = attachments.register(str(image_path))
     # The deterministic sensor test focuses on series separation. The scripted
     # model supplies semantic values from the same fixture after observing it.
     monkeypatch.setattr(
@@ -221,12 +256,13 @@ def test_agent_restores_multi_series_line_without_fixed_tool_sequence(tmp_path, 
         _augment_axis_ocr(line_observation.extract_text, y_values=[0, 2, 4, 6]),
     )
     registry = ToolRegistry()
-    register_chart_tools(registry)
+    register_chart_tools(registry, attachments=attachments)
     client = _MultiSeriesUnderstandingClient(str(image_path), ground_truth)
-    agent = Agent(client, registry, system="Restore the line chart to ChartSpec.")
+    client.attachment_id = attachment.id
+    agent = Agent(client, registry, system="Restore the line chart to ChartSpec.", attachments=attachments)
 
     answer = agent.run(
-        build_user_content("Extract and validate the multi-series data.", [str(image_path)])
+        build_registered_attachment_turn("Extract and validate the multi-series data.", [attachment.metadata()])
     )
 
     assert json.loads(answer) == client.assembled
@@ -236,6 +272,7 @@ def test_agent_restores_multi_series_line_without_fixed_tool_sequence(tmp_path, 
 class _PieUnderstandingClient:
     def __init__(self, image_path: str) -> None:
         self.image_path = image_path
+        self.attachment_id = ""
         self.stage = 0
         self.assembled: dict | None = None
 
@@ -246,7 +283,7 @@ class _PieUnderstandingClient:
             return payload.get("data", payload)
 
         if self.stage == 0:
-            result = _call("pie", "extract_pie_slices", {"image_path": self.image_path})
+            result = _call("pie", "extract_pie_slices", {"attachment_id": self.attachment_id})
         elif self.stage == 1:
             observed = last_tool_data()
             assert observed["totals"]["consistent"] is True
@@ -261,6 +298,7 @@ class _PieUnderstandingClient:
                         {"category": "Gamma", "value": 0.20},
                         {"category": "Delta", "value": 0.20},
                     ],
+                    **_measurement_assembly_fields(observed),
                 },
             )
         elif self.stage == 2:
@@ -277,14 +315,17 @@ def test_agent_restores_pie_without_cartesian_tool_sequence(tmp_path, monkeypatc
     png_bytes, _ = pie_chart(values=(35, 25, 20, 20))
     image_path = tmp_path / "pie.png"
     image_path.write_bytes(png_bytes)
+    attachments = AttachmentRegistry()
+    attachment = attachments.register(str(image_path))
     monkeypatch.setattr("chartagent.tools.chart.observation.pie.extract_text", lambda _path: __import__("chartagent.tools", fromlist=["ToolResult"]).ToolResult([]))
 
     registry = ToolRegistry()
-    register_chart_tools(registry)
+    register_chart_tools(registry, attachments=attachments)
     client = _PieUnderstandingClient(str(image_path))
-    agent = Agent(client, registry, system="Restore the pie chart to ChartSpec.")
+    client.attachment_id = attachment.id
+    agent = Agent(client, registry, system="Restore the pie chart to ChartSpec.", attachments=attachments)
 
-    answer = agent.run(build_user_content("Extract and validate this pie chart.", [str(image_path)]))
+    answer = agent.run(build_registered_attachment_turn("Extract and validate this pie chart.", [attachment.metadata()]))
 
     assert json.loads(answer) == client.assembled
     assert client.stage == 3
@@ -294,6 +335,7 @@ class _ScatterUnderstandingClient:
     def __init__(self, image_path: str, ground_truth: dict) -> None:
         self.image_path = image_path
         self.ground_truth = ground_truth
+        self.attachment_id = ""
         self.stage = 0
         self.assembled: dict | None = None
 
@@ -312,7 +354,7 @@ class _ScatterUnderstandingClient:
             result = _call(
                 "scatter",
                 "extract_scatter_points",
-                {"image_path": self.image_path},
+                {"attachment_id": self.attachment_id},
             )
         elif self.stage == 1:
             observed = last_tool_data()
@@ -327,6 +369,7 @@ class _ScatterUnderstandingClient:
                     "y_label": self.ground_truth["axes"]["y"]["label"],
                     "points": self.ground_truth["dataset"],
                     "source": self.ground_truth["metadata"]["source"],
+                    **_measurement_assembly_fields(observed),
                 },
             )
         elif self.stage == 2:
@@ -344,6 +387,8 @@ def test_agent_restores_scatter_without_fixed_tool_sequence(tmp_path, monkeypatc
     png_bytes, ground_truth = scatter_chart()
     image_path = tmp_path / "scatter.png"
     image_path.write_bytes(png_bytes)
+    attachments = AttachmentRegistry()
+    attachment = attachments.register(str(image_path))
     monkeypatch.setattr(
         scatter_observation,
         "extract_text",
@@ -361,12 +406,13 @@ def test_agent_restores_scatter_without_fixed_tool_sequence(tmp_path, monkeypatc
     monkeypatch.setattr(scatter_observation, "_legend_entries", labelled_legend)
 
     registry = ToolRegistry()
-    register_chart_tools(registry)
+    register_chart_tools(registry, attachments=attachments)
     client = _ScatterUnderstandingClient(str(image_path), ground_truth)
-    agent = Agent(client, registry, system="Restore the scatter chart to ChartSpec.")
+    client.attachment_id = attachment.id
+    agent = Agent(client, registry, system="Restore the scatter chart to ChartSpec.", attachments=attachments)
 
     answer = agent.run(
-        build_user_content("Extract and validate this scatter chart.", [str(image_path)])
+        build_registered_attachment_turn("Extract and validate this scatter chart.", [attachment.metadata()])
     )
 
     assert json.loads(answer) == client.assembled

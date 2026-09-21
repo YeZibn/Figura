@@ -466,7 +466,32 @@ def test_measure_bars_matches_true_ratios(annotated_chart_path, monkeypatch):
     ) as overlay:
         assert overlay.size == source.size
         assert ImageChops.difference(source.convert("RGB"), overlay.convert("RGB")).getbbox()
-    assert labels == ["BASELINE", *[str(bar["id"]) for bar in data["bars"]]]
+    assert labels == ["BASELINE", *[f"[B{index} | S1]" for index, _bar in enumerate(data["bars"], start=1)]]
+
+
+def test_measure_bars_focus_never_silently_falls_back_to_full_panel(annotated_chart_path):
+    result = measure_bars(
+        str(annotated_chart_path),
+        measurement_target={
+            "refs": ["B1"],
+            "mode": "include",
+            "bbox_px": [100, 420, 520, 10],
+            "reason": "仅复查基准线附近",
+        },
+    )
+
+    assert isinstance(result, ToolResult)
+    focus = result.data["focus"]
+    assert focus["requested"] is True
+    assert focus["applied"] is True
+    assert focus["mode"] == "include"
+    assert focus["search_scope"] == "target_region"
+    assert result.data["bars"]
+    assert all(
+        bar["geometry"]["bbox_px"][1] >= 420
+        and bar["geometry"]["bbox_px"][1] + bar["geometry"]["bbox_px"][3] <= 430
+        for bar in result.data["bars"]
+    )
 
 
 def test_measure_bars_scope_excludes_adjacent_panel(tmp_path):

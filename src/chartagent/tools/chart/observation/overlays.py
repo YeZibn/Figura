@@ -8,6 +8,16 @@ import math
 from PIL import Image, ImageDraw
 
 
+def _compact_ref(kind: str, index: int) -> str:
+    return {
+        "series": "S",
+        "bar": "B",
+        "point": "P",
+        "sector": "C",
+        "legend": "L",
+    }.get(kind, "E") + str(max(1, int(index)))
+
+
 def _png_bytes(image: Image.Image) -> bytes:
     output = BytesIO()
     image.save(output, format="PNG")
@@ -195,7 +205,6 @@ def render_bar_overlay(
     overlay = image.convert("RGB").copy()
     draw = ImageDraw.Draw(overlay)
     _draw_common_frame(draw, overlay, frame, label="BAR FRAME", draw_axes=False)
-    series_ids = {bar.get("series_id") for bar in bars if bar.get("series_id")}
     baseline_points = baseline.get("points_px") if isinstance(baseline, dict) else None
     if isinstance(baseline_points, list) and len(baseline_points) >= 2:
         points = [
@@ -210,7 +219,7 @@ def render_bar_overlay(
             draw.line(points, fill="#0066ff", width=3)
             _tag(draw, (points[0][0], max(0, points[0][1] - 18)), "BASELINE", image_size=overlay.size)
 
-    for bar in bars:
+    for bar_index, bar in enumerate(bars, start=1):
         geometry = bar.get("geometry") if isinstance(bar, dict) else None
         polygon = geometry.get("polygon_px") if isinstance(geometry, dict) else None
         if not isinstance(polygon, list) or len(polygon) < 3:
@@ -243,9 +252,12 @@ def render_bar_overlay(
         if len(points) < 3:
             continue
         draw.line([*points, points[0]], fill="#ff00aa", width=3, joint="curve")
-        label = str(bar["id"])
-        if len(series_ids) > 1 and bar.get("series_id"):
-            label = f'{label} {bar["series_id"]}'
+        label = _compact_ref("bar", bar_index)
+        if bar.get("series_id"):
+            series_number = str(bar["series_id"]).rsplit("_", 1)[-1]
+            label = f'[{label} | {_compact_ref("series", int(series_number) if series_number.isdigit() else 1)}]'
+        else:
+            label = f'[{label}]'
         label_x, label_y = points[0]
         _tag(draw, (label_x, max(0, label_y - 16)), label, image_size=overlay.size)
 
@@ -307,6 +319,7 @@ def render_line_overlay(
 
     fallback_colors = ["#e60000", "#008f5a", "#7a00cc", "#d66b00", "#0066cc"]
     has_trace = False
+    point_counter = 0
     for index, entry in enumerate(series):
         color = entry.get("color") or fallback_colors[index % len(fallback_colors)]
         trace = entry.get("trace") if isinstance(entry, dict) else None
@@ -336,14 +349,15 @@ def render_line_overlay(
             x = int(point["x_px"])
             y = int(point["y_px"])
             draw.ellipse((x - 4, y - 4, x + 4, y + 4), outline=color, width=2)
+            point_counter += 1
             source = str(point.get("source", "point"))
-            label = f'{point.get("id", "point")} {source}'
+            label = f'{_compact_ref("point", point_counter)} {source}'
             _tag(draw, (x + 5, y - 16), label, image_size=overlay.size)
         if points:
             _tag(
                 draw,
                 (int(points[0]["x_px"]), max(0, int(points[0]["y_px"]) - 18)),
-                str(entry.get("id", f"series_{index + 1}")),
+                _compact_ref("series", index + 1),
                 image_size=overlay.size,
             )
     if warnings:
@@ -427,6 +441,7 @@ def render_scatter_overlay(
 
     fallback_colors = ["#e60000", "#008f5a", "#7a00cc", "#d66b00", "#0066cc"]
     has_points = False
+    point_counter = 0
     for series_index, entry in enumerate(series):
         color = entry.get("color") or fallback_colors[series_index % len(fallback_colors)]
         for point in entry.get("points", []):
@@ -452,10 +467,11 @@ def render_scatter_overlay(
                     outline="#d66b00",
                     width=2,
                 )
+            point_counter += 1
             _tag(
                 draw,
                 (x + radius + 2, y - radius - 2),
-                str(point.get("id", "point")),
+                _compact_ref("point", point_counter),
                 image_size=overlay.size,
             )
     if warnings:
@@ -530,14 +546,14 @@ def render_pie_overlay(
         ratio_label = f"{float(ratio):.0%}" if isinstance(ratio, (int, float)) else "?"
         association = item.get("association") if isinstance(item, dict) else None
         status = association.get("status") if isinstance(association, dict) else None
-        label = f'{item.get("id", index + 1)} {ratio_label}'
+        label = f'{_compact_ref("sector", index + 1)} {ratio_label}'
         if status in {"ambiguous", "candidate"}:
             label += " ?"
         _tag(draw, label_point, label, image_size=overlay.size)
         if status == "resolved" and association.get("label"):
             _tag(draw, point(start + span / 2.0, radius * 0.86), str(association["label"]), image_size=overlay.size)
 
-    for entry in legend or []:
+    for legend_index, entry in enumerate(legend or [], start=1):
         geometry = entry.get("geometry") if isinstance(entry, dict) else None
         if not isinstance(geometry, dict):
             continue
@@ -546,7 +562,7 @@ def render_pie_overlay(
             continue
         left, top, width, height = map(int, bbox)
         draw.rectangle((left, top, left + width, top + height), outline="#ff7f00", width=2)
-        label = entry.get("label") or entry.get("id", "legend")
+        label = entry.get("label") or _compact_ref("legend", legend_index)
         if (entry.get("association") or {}).get("status") == "ambiguous":
             label = f"{label} ?"
         _tag(draw, (left + width + 2, top), str(label), image_size=overlay.size)

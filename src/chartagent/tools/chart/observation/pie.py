@@ -24,7 +24,7 @@ from .coordinates import polar_frame
 from .ocr import extract_text
 from .overlays import render_pie_overlay
 from .layout import context_for_evidence, context_frame, context_scope
-from .scope import measurement_target_region
+from .scope import apply_measurement_focus, measurement_focus_context
 
 _ANGLE_SAMPLES = 720
 _RADII = (0.58, 0.70, 0.82, 0.91, 0.97)
@@ -644,7 +644,11 @@ def _empty_result(
         "confidence": confidence,
         "warnings": [warning],
         "measurement_target": dict(measurement_target) if isinstance(measurement_target, dict) else None,
-        "focus": {"requested": bool(measurement_target), "region_px": None, "search_scope": "panel_or_chart"},
+        "focus": measurement_focus_context(
+            measurement_target,
+            width=image.width,
+            height=image.height,
+        ),
     }
     return ToolResult(
         data,
@@ -682,21 +686,26 @@ def extract_pie_slices(
     scope = context_scope(layout_context)
     layout = context_frame(layout_context) if isinstance(layout_context, dict) and layout_context.get("coordinate_system") == "polar_2d" else None
     base_search_region = layout.get("bbox_px") if layout else (scope.get("bbox_px") if scope else None)
-    focus_region = measurement_target_region(
+    focus = measurement_focus_context(
         measurement_target,
         width=int(rgb.shape[1]),
         height=int(rgb.shape[0]),
+        base_region=base_search_region,
     )
-    focus_fallback = bool(
-        focus_region
-        and base_search_region
-        and focus_region[2] * focus_region[3] < max(1, base_search_region[2] * base_search_region[3] * 0.12)
-    )
-    search_region = base_search_region if focus_fallback else (focus_region or base_search_region)
-    palette = _pie_palette(rgb, region=search_region)
-    plot_region = _circle_candidate(rgb, palette, region=search_region)
+    search_region = focus.get("search_area")
+    if focus["requested"] and not focus["applied"]:
+        return _empty_result(
+            chart_image,
+            "focus_empty: target did not resolve to a measurable region",
+            layout_context=layout_context,
+            measurement_target=measurement_target,
+        )
+    working_rgb = apply_measurement_focus(rgb, focus)
+    palette = _pie_palette(working_rgb, region=search_region)
+    plot_region = _circle_candidate(working_rgb, palette, region=search_region)
     if plot_region is None:
-        return _empty_result(chart_image, "no reliable pie region detected", layout_context=layout_context, measurement_target=measurement_target)
+        warning = "focus_insufficient: no pie geometry was detected in the requested scope" if focus["requested"] else "no reliable pie region detected"
+        return _empty_result(chart_image, warning, layout_context=layout_context, measurement_target=measurement_target)
     if plot_region.get("status") != "supported" or plot_region.get("shape") != "circle":
         reason = "unsupported pie geometry detected"
         if plot_region.get("shape") == "donut_or_exploded":
@@ -730,10 +739,7 @@ def extract_pie_slices(
             warnings = ["polar layout region has no usable center/radius evidence"]
     else:
         warnings = []
-    if focus_fallback:
-        warnings.append("focus target was too narrow; panel context retained for sector validation")
-
-    labels, coverage, support, radial_consistency = _sample_labels(rgb, plot_region, palette)
+    labels, coverage, support, radial_consistency = _sample_labels(working_rgb, plot_region, palette)
     labels = _fill_gaps(labels)
     sectors: list[dict[str, Any]] = []
     for index, (palette_index, start, end) in enumerate(_runs(labels), start=1):
@@ -781,7 +787,7 @@ def extract_pie_slices(
         warnings.append("one or more sector boundaries have insufficient support")
 
     snippets = _ocr_snippets(path, scope.get("bbox_px") if scope else None)
-    legend, legend_text = _legend(rgb, plot_region, palette, snippets, search_region)
+    legend, legend_text = _legend(working_rgb, plot_region, palette, snippets, search_region)
     ocr_warnings, ocr_text, ocr_conflicts = _attach_ocr(sectors, plot_region, snippets)
     warnings.extend(ocr_warnings)
     conflicts.extend(ocr_conflicts)
@@ -877,9 +883,8 @@ def extract_pie_slices(
         "warnings": warnings,
         "measurement_target": dict(measurement_target) if isinstance(measurement_target, dict) else None,
         "focus": {
-            "requested": bool(measurement_target),
-            "region_px": focus_region,
-            "search_scope": "target_with_panel_context" if focus_region else "panel_or_chart",
+            **focus,
+            "region_px": focus.get("region_px"),
         },
     }
     return ToolResult(

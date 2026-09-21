@@ -85,6 +85,9 @@ def resolve_measurement_target(
     target = MeasurementTarget.from_mapping(value)
     if target is None:
         return None, "measurement target is malformed"
+    requested_attachment = value.get("attachment_id") or value.get("source_attachment_id")
+    if requested_attachment is not None and str(requested_attachment) != scope.panel.attachment_id:
+        return None, "measurement target does not belong to the selected attachment"
     if target.panel_id and target.panel_id != scope.panel.panel_id:
         return None, "measurement target does not belong to the selected panel"
     if target.source_image_size and tuple(target.source_image_size) != tuple(scope.source_size):
@@ -100,8 +103,20 @@ def resolve_measurement_target(
             target.bbox_local_px[2],
             target.bbox_local_px[3],
         )
+    if source_bbox is not None:
+        source_left, source_top, source_width, source_height = (float(item) for item in source_bbox)
+        if (
+            source_left < 0
+            or source_top < 0
+            or source_left + source_width > scope.source_size[0]
+            or source_top + source_height > scope.source_size[1]
+        ):
+            return None, "measurement target bbox is outside the selected source image"
     result = target.to_dict()
     result["panel_id"] = scope.panel.panel_id
+    for key in ("attachment_id", "target_fingerprint", "resolved_refs"):
+        if value.get(key) is not None:
+            result[key] = value.get(key)
     result["source_image_size"] = list(scope.source_size)
     result["local_image_size"] = list(scope.local_size)
     result["local_to_source"] = {
@@ -109,6 +124,63 @@ def resolve_measurement_target(
         "scale": [1.0, 1.0],
         "equation": "x_source = x_local + origin_px[0]; y_source = y_local + origin_px[1]",
     }
+    if target.polygon_source_px is not None:
+        source_points = list(target.polygon_source_px[:32])
+        if any(
+            point[0] < 0
+            or point[1] < 0
+            or point[0] > scope.source_size[0]
+            or point[1] > scope.source_size[1]
+            for point in source_points
+        ):
+            return None, "measurement target polygon is outside the selected source image"
+        panel_left, panel_top, panel_width, panel_height = (float(item) for item in scope.bbox)
+        panel_right = panel_left + panel_width
+        panel_bottom = panel_top + panel_height
+        if (
+            max(point[0] for point in source_points) < panel_left
+            or min(point[0] for point in source_points) > panel_right
+            or max(point[1] for point in source_points) < panel_top
+            or min(point[1] for point in source_points) > panel_bottom
+        ):
+            return None, "measurement target polygon does not intersect the selected panel"
+        result["polygon_source_px"] = [
+            [
+                round(max(panel_left, min(panel_right, point[0])), 3),
+                round(max(panel_top, min(panel_bottom, point[1])), 3),
+            ]
+            for point in source_points
+        ]
+        result["polygon_px"] = [
+            [
+                round(max(0.0, min(float(scope.local_size[0]), point[0] - scope.origin[0])), 3),
+                round(max(0.0, min(float(scope.local_size[1]), point[1] - scope.origin[1])), 3),
+            ]
+            for point in source_points
+        ]
+    raw_regions = value.get("resolved_regions_px") or value.get("regions_px")
+    if isinstance(raw_regions, Sequence) and not isinstance(raw_regions, (str, bytes)):
+        bounded_regions: list[list[float]] = []
+        for raw_region in list(raw_regions)[:32]:
+            if not isinstance(raw_region, Sequence) or isinstance(raw_region, (str, bytes)) or len(raw_region) < 4:
+                continue
+            try:
+                local_left, local_top, local_width, local_height = (float(item) for item in raw_region[:4])
+            except (TypeError, ValueError):
+                continue
+            local_left = max(0.0, min(float(scope.local_size[0]), local_left))
+            local_top = max(0.0, min(float(scope.local_size[1]), local_top))
+            local_right = max(local_left, min(float(scope.local_size[0]), local_left + max(0.0, local_width)))
+            local_bottom = max(local_top, min(float(scope.local_size[1]), local_top + max(0.0, local_height)))
+            if local_right > local_left and local_bottom > local_top:
+                bounded_regions.append([
+                    round(local_left, 3),
+                    round(local_top, 3),
+                    round(local_right - local_left, 3),
+                    round(local_bottom - local_top, 3),
+                ])
+        if bounded_regions:
+            result["resolved_regions_px"] = bounded_regions
     if source_bbox is None:
         result["bbox_px"] = None
         return result, None
@@ -151,24 +223,193 @@ def measurement_target_region(
     height: int,
 ) -> list[int] | None:
     """Return a bounded local focus bbox for a sensor image."""
+    regions = measurement_target_regions(value, width=width, height=height)
+    if not regions:
+        return None
+    left = min(item[0] for item in regions)
+    top = min(item[1] for item in regions)
+    right = max(item[0] + item[2] for item in regions)
+    bottom = max(item[1] + item[3] for item in regions)
+    return [left, top, max(1, right - left), max(1, bottom - top)]
+
+
+def measurement_target_regions(
+    value: Mapping[str, Any] | None,
+    *,
+    width: int,
+    height: int,
+) -> list[list[int]]:
+    """Return all bounded local focus regions, preserving disjoint refs."""
     if not isinstance(value, Mapping):
-        return None
-    raw = value.get("bbox_px") or value.get("bbox_local_px") or value.get("bbox_source_px")
-    if not isinstance(raw, Sequence) or len(raw) < 4:
-        return None
-    try:
-        left, top, box_width, box_height = (float(item) for item in raw[:4])
-    except (TypeError, ValueError):
-        return None
-    if any(item != item or item in {float("inf"), float("-inf")} for item in (left, top, box_width, box_height)):
-        return None
-    right = min(float(width), left + box_width)
-    bottom = min(float(height), top + box_height)
-    left = max(0.0, left)
-    top = max(0.0, top)
-    if right <= left or bottom <= top:
-        return None
-    return [int(round(left)), int(round(top)), max(1, int(round(right - left))), max(1, int(round(bottom - top)))]
+        return []
+    raw_regions = value.get("resolved_regions_px") or value.get("regions_px")
+    if not isinstance(raw_regions, Sequence) or isinstance(raw_regions, (str, bytes)):
+        raw_regions = [value.get("bbox_px") or value.get("bbox_local_px") or value.get("bbox_source_px")]
+    regions: list[list[int]] = []
+    for raw in list(raw_regions)[:32]:
+        if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes)) or len(raw) < 4:
+            continue
+        try:
+            left, top, box_width, box_height = (float(item) for item in raw[:4])
+        except (TypeError, ValueError):
+            continue
+        if any(item != item or item in {float("inf"), float("-inf")} for item in (left, top, box_width, box_height)):
+            continue
+        right = min(float(width), left + box_width)
+        bottom = min(float(height), top + box_height)
+        left = max(0.0, left)
+        top = max(0.0, top)
+        if right <= left or bottom <= top:
+            continue
+        regions.append([
+            int(round(left)),
+            int(round(top)),
+            max(1, int(round(right - left))),
+            max(1, int(round(bottom - top))),
+        ])
+    if not regions:
+        raw_polygon = value.get("polygon_px") or value.get("polygon_source_px")
+        if isinstance(raw_polygon, Sequence) and not isinstance(raw_polygon, (str, bytes)):
+            points: list[tuple[float, float]] = []
+            for point in list(raw_polygon)[:32]:
+                if not isinstance(point, Sequence) or isinstance(point, (str, bytes)) or len(point) < 2:
+                    continue
+                try:
+                    x, y = float(point[0]), float(point[1])
+                except (TypeError, ValueError):
+                    continue
+                if x == x and y == y and x not in {float("inf"), float("-inf")} and y not in {float("inf"), float("-inf")}:
+                    points.append((x, y))
+            if len(points) >= 3:
+                left = max(0, min(int(round(x)) for x, _ in points))
+                top = max(0, min(int(round(y)) for _, y in points))
+                right = min(width, max(int(round(x)) for x, _ in points))
+                bottom = min(height, max(int(round(y)) for _, y in points))
+                if right > left and bottom > top:
+                    regions.append([left, top, max(1, right - left), max(1, bottom - top)])
+    return regions
+
+
+def measurement_focus_context(
+    value: Mapping[str, Any] | None,
+    *,
+    width: int,
+    height: int,
+    base_region: Sequence[int] | None = None,
+) -> dict[str, Any]:
+    """Describe an explicit include/exclude focus without widening it silently."""
+    requested = isinstance(value, Mapping)
+    mode = str(value.get("mode") or "include").strip().lower() if requested else "include"
+    if mode not in {"include", "exclude"}:
+        mode = "include"
+    regions = measurement_target_regions(value, width=width, height=height) if requested else []
+    base = list(base_region[:4]) if isinstance(base_region, Sequence) and len(base_region) >= 4 else [0, 0, width, height]
+    base = [max(0, int(base[0])), max(0, int(base[1])), max(1, int(base[2])), max(1, int(base[3]))]
+    target_refs: list[str] = []
+    polygons: list[list[list[float]]] = []
+    if requested:
+        from ....measurement import normalize_evidence_refs
+
+        target_refs = list(normalize_evidence_refs(value.get("resolved_refs") or value.get("refs")))
+        raw_polygon = value.get("polygon_px") or value.get("polygon_source_px")
+        if isinstance(raw_polygon, Sequence) and not isinstance(raw_polygon, (str, bytes)):
+            points = []
+            for point in list(raw_polygon)[:32]:
+                if isinstance(point, Sequence) and not isinstance(point, (str, bytes)) and len(point) >= 2:
+                    try:
+                        x, y = float(point[0]), float(point[1])
+                    except (TypeError, ValueError):
+                        continue
+                    if x == x and y == y and x not in {float("inf"), float("-inf")} and y not in {float("inf"), float("-inf")}:
+                        points.append([round(x, 3), round(y, 3)])
+            if len(points) >= 3:
+                polygons.append(points)
+    if not requested:
+        return {
+            "requested": False,
+            "applied": False,
+            "status": "none",
+            "mode": None,
+            "target_refs": [],
+            "regions_px": [],
+            "polygons_px": [],
+            "region_px": None,
+            "search_area": base,
+            "search_scope": "panel_or_chart",
+        }
+    if not regions:
+        return {
+            "requested": True,
+            "applied": False,
+            "status": "focus_empty",
+            "mode": mode,
+            "target_refs": target_refs,
+            "regions_px": [],
+            "polygons_px": polygons,
+            "region_px": None,
+            "search_area": None,
+            "search_scope": "target_region",
+        }
+    left = min(item[0] for item in regions)
+    top = min(item[1] for item in regions)
+    right = max(item[0] + item[2] for item in regions)
+    bottom = max(item[1] + item[3] for item in regions)
+    union = [left, top, max(1, right - left), max(1, bottom - top)]
+    return {
+        "requested": True,
+        "applied": True,
+        "status": "applied",
+        "mode": mode,
+        "target_refs": target_refs,
+        "regions_px": regions,
+        "polygons_px": polygons,
+        "region_px": union,
+        "search_area": union if mode == "include" else base,
+        "search_scope": "target_region" if mode == "include" else "panel_excluding_target",
+    }
+
+
+def apply_measurement_focus(rgb: Any, focus: Mapping[str, Any]) -> Any:
+    """Mask pixels outside/inside a focus so downstream sensors cannot rescan it."""
+    if not isinstance(focus, Mapping) or not focus.get("requested") or not focus.get("applied"):
+        return rgb
+    regions = focus.get("regions_px")
+    polygons = focus.get("polygons_px")
+    if (not isinstance(regions, list) or not regions) and (not isinstance(polygons, list) or not polygons):
+        return rgb
+    import numpy as np
+    from PIL import ImageDraw
+
+    result = np.asarray(rgb).copy()
+    height, width = result.shape[:2]
+    allowed = np.zeros((height, width), dtype=bool)
+    if isinstance(regions, list):
+        for raw in regions[:32]:
+            if not isinstance(raw, Sequence) or len(raw) < 4:
+                continue
+            left, top, box_width, box_height = (int(item) for item in raw[:4])
+            right = min(width, max(0, left) + max(0, box_width))
+            bottom = min(height, max(0, top) + max(0, box_height))
+            if right > max(0, left) and bottom > max(0, top):
+                allowed[max(0, top):bottom, max(0, left):right] = True
+    if isinstance(polygons, list):
+        mask = Image.new("1", (width, height), 0)
+        drawer = ImageDraw.Draw(mask)
+        for raw in polygons[:8]:
+            if isinstance(raw, Sequence) and len(raw) >= 3:
+                points = [
+                    (max(0, min(width - 1, int(round(point[0])))), max(0, min(height - 1, int(round(point[1])))))
+                    for point in raw
+                    if isinstance(point, Sequence) and len(point) >= 2
+                ]
+                if len(points) >= 3:
+                    drawer.polygon(points, fill=1)
+        allowed |= np.asarray(mask, dtype=bool)
+    if focus.get("mode") == "include":
+        result[~allowed] = 255
+    else:
+        result[allowed] = 255
+    return result
 
 
 @contextmanager
@@ -294,8 +535,11 @@ def add_scope_metadata(data: Any, scope: ResolvedPanelScope) -> Any:
 __all__ = [
     "ResolvedPanelScope",
     "add_scope_metadata",
+    "apply_measurement_focus",
     "localize_layout_context",
+    "measurement_focus_context",
     "measurement_target_region",
+    "measurement_target_regions",
     "resolve_measurement_target",
     "resolve_panel_scope",
     "scoped_image_path",

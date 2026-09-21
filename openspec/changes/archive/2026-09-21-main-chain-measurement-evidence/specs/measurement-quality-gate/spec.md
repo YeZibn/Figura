@@ -1,10 +1,4 @@
-# measurement-quality-gate Specification
-
-## Purpose
-
-为图表测量建立可追踪、可审计且不可被静默越过的证据生命周期，使初次测量结果在进入结构化图表数据前经过明确的质量判断，并为后续定向重测保留稳定的上下文和 lineage。
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Measurement evidence has an explicit lifecycle
 
@@ -18,7 +12,7 @@
 
 #### Scenario: Uncertainty does not trigger an automatic remeasurement
 
-- **WHEN** 测量发现基准线、坐标标定、系列关联、覆盖范围或几何支持存在阻断性问题
+- **WHEN** 测量发现基准线、坐标标定、系列关联、覆盖范围或几何支持存在不确定性
 - **THEN** 结果以 `remeasure_required`、`partial` 或其他适用的非接受状态报告具体证据问题
 - **AND** 系统只把局部目标建议提供给主 Agent，不得自动调用任何测量工具
 
@@ -66,23 +60,13 @@
 - **THEN** 该内容作为主 Agent 的动态证据上下文返回
 - **AND** 系统不得仅凭该字段自动创建下一次 measurement attempt
 
-### Requirement: Measurement quality state is bounded and serializable
-
-测量状态、质量检查、问题、范围和 attempt lineage SHALL 使用有界、可序列化的结果表达，并 SHALL 能够在 Agent observation、run artifact index、checkpoint 和恢复流程之间保持一致。结果不得暴露本地路径、图像字节或 provider 原始 payload。
-
-#### Scenario: Observation and recovery preserve the same quality state
-
-- **WHEN** 测量结果通过工具观察返回后被写入运行记录并在后续恢复
-- **THEN** 恢复后的状态、accepted attempt、未解决问题和来源身份与原结果一致
-- **AND** 恢复不会把 provisional 或 failed 结果升级为 accepted
-
 ### Requirement: Measurement issues expose machine-readable repair targets
 
 当测量质量审计发现需要补充证据的问题时，系统 SHALL 返回有界的 focus suggestion 或 measurement target。target 至少能够表达当前 panel、目标证据引用或区域、受影响字段、`include`/`exclude` 模式以及原因；target 是主 Agent 可主动提交的工具输入，不是代码审核器自动执行的命令。缺少可靠区域时 SHALL 明确表示需要主 Agent 重新选择观察范围，而不得伪造精确框选。
 
 #### Scenario: Baseline issue identifies a bounded target
 
-- **WHEN** 柱状图测量因零基线残差或基准线冲突进入 `remeasure_required`
+- **WHEN** 柱状图测量因零基线残差或基准线冲突进入非接受状态
 - **THEN** 质量结果包含指向当前 panel、baseline 字段和相关证据引用的 focus suggestion
 - **AND** 如果源图坐标足够可靠，target 可以包含有界的源图区域或可解析的候选引用
 
@@ -104,15 +88,15 @@
 
 #### Scenario: A corrected local attempt can become accepted
 
-- **WHEN** 当前 panel 的定向重测解决了父 attempt 的阻断 issue，且视觉证据、作用域和图表专属检查均通过
-- **THEN** 新 attempt 被标记为 `accepted`
-- **AND** `assemble_spec` 只能引用该新 attempt，而不能继续使用未接受的父 attempt
+- **WHEN** 主 Agent 使用有效 target 调用同一图表测量工具，且定向重测解决了父 attempt 的阻断 issue
+- **THEN** 新 attempt 返回新的证据和 overlay，并可以在主 Agent 再次选择后被标记为 `accepted`
+- **AND** `assemble_spec` 只能引用新 attempt 中被选择的证据，不能继续使用未接受的父 attempt
 
 #### Scenario: Repair budget is exhausted
 
-- **WHEN** 同一 panel 的重测次数达到配置上限，或同一 target 被重复拒绝
-- **THEN** session 返回 `failed`、`partial` 或 `remeasure_required` 中适用的终态
-- **AND** Agent 保留问题、attempt lineage 和可恢复上下文，不发布未经接受的 ChartSpec
+- **WHEN** 同一 panel 的主 Agent 定向重测次数达到配置上限，或同一 target 被重复提交
+- **THEN** session 返回 `failed`、`partial`、`remeasure_required` 或结构化重复错误中的适用结果
+- **AND** 系统保留问题、attempt lineage 和可恢复上下文，不发布未经接受的 ChartSpec
 
 #### Scenario: A failed target does not fall back to full-panel measurement
 
@@ -125,6 +109,7 @@
 测量证据 SHALL 在进入 `assemble_spec` 前经过主 Agent 的明确选择；系统 SHALL 提供硬性门禁阻止未选择、未归属、越界、重复或未通过必要结构校验的证据进入装配。该门禁 SHALL 不作为独立语义审核者，不得自动生成或执行重测。
 
 #### Scenario: Measurement decision blocks assembly
+
 - **WHEN** 一次测量返回 `provisional`、`remeasure_required`、`partial`、`unsupported` 或 `failed`
 - **THEN** 系统阻止依赖该测量的 assemble 和后续生成阶段
 - **AND** 主 Agent 可以在同一主链路中选择证据、舍弃候选或显式调用带 target 的原测量工具
@@ -136,14 +121,18 @@
 - **AND** 只有满足硬性校验且被主 Agent 选择的证据可以进入 ChartSpec
 
 #### Scenario: A failed measurement does not schedule an automatic repair
+
 - **WHEN** 测量门禁发现阻断问题
 - **THEN** 当前主链路收到结构化的 `measurement_decision_required` 或等价上下文
 - **AND** 系统不得自动追加测量修复消息、自动调用测量工具或切换到其他 panel
 
 #### Scenario: Measurement exhaustion prevents chart output
+
 - **WHEN** 主 Agent 的定向重测失败或达到预算上限
 - **THEN** 当前 run 保留 attempt lineage、问题和恢复信息
 - **AND** 系统不得组装或发布基于未接受测量的 ChartSpec
+
+## ADDED Requirements
 
 ### Requirement: Measurement evidence exposes compact stable references
 

@@ -19,6 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 import math
+import re
 from typing import Any, Dict, List, Mapping, Optional
 
 
@@ -41,7 +42,17 @@ MAX_FIGURE_ID_LENGTH = 128
 MAX_FIGURE_SOURCE_LENGTH = 160
 _FIGURE_LAYOUT_TYPES = frozenset({"grid"})
 _COVERAGE_STATUSES = frozenset({"complete", "incomplete", "unknown"})
-_PROVENANCE_FIELDS = ("status", "session_id", "attempt_id", "attachment_id", "panel_id", "tool", "quality")
+_PROVENANCE_FIELDS = (
+    "status",
+    "session_id",
+    "attempt_id",
+    "attachment_id",
+    "panel_id",
+    "tool",
+    "quality",
+    "selected_refs",
+    "discarded_refs",
+)
 
 
 @dataclass(frozen=True)
@@ -251,6 +262,8 @@ def _bounded_provenance(value: object) -> Optional[Dict[str, Any]]:
                 "confidence": dict(item.get("confidence") or {}) if isinstance(item.get("confidence"), Mapping) else {},
                 "blocking": bool(item.get("blocking", False)),
             }
+        elif key in {"selected_refs", "discarded_refs"} and isinstance(item, (list, tuple)):
+            result[key] = [str(ref)[:24] for ref in list(item)[:64]]
         elif isinstance(item, str):
             result[key] = item[:160]
         elif isinstance(item, (int, float, bool)) or item is None:
@@ -524,6 +537,13 @@ def _validate_point(point: DataPoint, loc: str) -> List[ValidationIssue]:
     if point.confidence is not None and not (0.0 <= point.confidence <= 1.0):
         issues.append(
             ValidationIssue(f"{loc}.confidence", "confidence must be within [0, 1]")
+        )
+    if isinstance(point.series, str) and re.fullmatch(r"(?:series_\d+|S\d+)", point.series.strip(), flags=re.IGNORECASE):
+        issues.append(
+            ValidationIssue(
+                f"{loc}.series",
+                "evidence references such as series_1 or S1 cannot be used as final series labels",
+            )
         )
     return issues
 

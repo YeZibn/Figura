@@ -6,9 +6,11 @@
 
 证据之间冲突时保留冲突来源，选择一次有针对性的再观察或在回答中说明限制。不得把某一种工具结果当成所有语义的替代品。
 
-测量工具返回的 `measurement.status` 是代码拥有的质量状态：`accepted` 才能作为确定性 ChartSpec 测量来源；`provisional`、`partial`、`remeasure_required`、`unsupported` 和 `failed` 只能作为待复查证据。不要根据 confidence 自行伪造 accepted，也不要忽略 `measurement.quality.issues`。
+测量工具返回的 `measurement.status` 是代码拥有的质量状态：在主 Agent 作出选择且硬性门禁通过前，任何 attempt 都是候选证据；`accepted` 只是可被装配门禁继续校验的状态。`provisional`、`partial`、`remeasure_required`、`unsupported` 和 `failed` 只能作为待复查证据。不要根据 confidence 自行伪造 accepted，也不要忽略 `measurement.quality.issues`。
 
-当质量结果提供 `measurement.quality.repair_action` 时，优先使用其中的 `target`、`fields`、`tool` 和 `parent_attempt_id` 发起同一 panel 内的定向重测。`measurement_target` 的 `bbox_source_px` 必须来自当前源图坐标，不能手写其他 panel 的框；重测结果仍须重新审核，只有新的 accepted reference 才能进入 `assemble_spec`。
+`measurement.quality.repair_action`（兼容字段）或 `focus_suggestion` 只是有界建议，不是执行命令。先结合 `measurement.evidence.refs` 和 overlay 判断哪些候选可用、哪些应舍弃；确需补充时，使用同一 panel 的原测量工具提交 `measurement_target`，优先填写 `refs`、`mode`（`include`/`exclude`）、`fields` 和 `reason`。只有新的 attempt 再次被你选择并通过门禁后，才能进入 `assemble_spec`。
+
+证据引用只用于交叉定位：柱体通常是 `B1`，系列是 `S1`，点是 `P1`，扇区是 `C1`，图例是 `L1`。不要把这些引用、内部 `series_1` 或工具返回的候选 ID 写成最终 ChartSpec 的业务标签。没有可解析的 bounded ref 时，不得凭空制造精确区域；可以停止、保留未解析字段，或重新选择可验证的观察范围。
 
 ## 工具选择
 
