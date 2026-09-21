@@ -186,6 +186,9 @@ function measurementRepairSummary(event: AgentRunEvent): MeasurementRepairSummar
     reason: repairField(sources, ['reason', 'message']),
     nextAction: repairField(sources, ['next_action', 'nextAction']),
     budgetRemaining: repairNumberField(sources, ['budget_remaining', 'budgetRemaining']),
+    selectedRefs: Array.isArray(repair.selected_refs) ? repair.selected_refs.map(String).slice(0, 64) : undefined,
+    discardedRefs: Array.isArray(repair.discarded_refs) ? repair.discarded_refs.map(String).slice(0, 64) : undefined,
+    observationScope: recordValue(repair.observation_scope) || recordValue(payload.observation_scope) || undefined,
   }
 }
 
@@ -228,6 +231,22 @@ function measurementRepairDetail(event: AgentRunEvent): string {
     const selected = Array.isArray(payload.selected_refs) ? payload.selected_refs.join('、') : ''
     const discarded = Array.isArray(payload.discarded_refs) ? payload.discarded_refs.join('、') : ''
     return [selected ? `采用：${selected}` : '', discarded ? `舍弃：${discarded}` : '', '已记录主 Agent 证据选择'].filter(Boolean).join(' · ')
+  }
+  if (event.kind === 'measurement_evidence_discarded') {
+    const discarded = Array.isArray(payload.discarded_refs) ? payload.discarded_refs.join('、') : ''
+    const reason = boundedDisplayText(payload.evidence_basis) || '当前测量候选未被采用'
+    return [discarded ? `舍弃：${discarded}` : '明确放弃当前候选', `依据：${reason}`].join(' · ')
+  }
+  if (event.kind === 'measurement_observed') {
+    const scope = recordValue(payload.observation_scope)
+    const applied = scope?.applied === true ? '局部范围已应用' : scope ? '已记录观察范围' : '面板范围内观察'
+    const panel = payload.panel_id || payload.panelId
+    const status = payload.measurement_status || payload.status
+    return [panel ? `面板：${String(panel)}` : '', status ? `测量：${String(status)}` : '', applied].filter(Boolean).join(' · ')
+  }
+  if (event.kind === 'assembly_validation_failure') {
+    const issues = Array.isArray(payload.issues) ? payload.issues.map(String).slice(0, 3).join('；') : ''
+    return [payload.error ? `原因：${String(payload.error)}` : 'ChartSpec 组装校验未通过', issues ? `细节：${issues}` : ''].filter(Boolean).join(' · ')
   }
   const summary = measurementRepairSummary(event)
   if (!summary) return ''
@@ -596,11 +615,11 @@ function GeneratedChartView({ artifact, loader, onPreview }: { artifact: Generat
 }
 
 function eventLabel(event: AgentRunEvent): string {
-  const labels: Record<string, string> = { run_started: '运行已开始', resume_started: '继续执行已开始', model_started: '模型轮次开始', model_completed: '模型轮次完成', operation_completed: '操作结果已保存', recovery_blocked: '继续执行被阻止', progress: '处理中', generated_chart: '图表状态已更新', chart_review_started: '图表审核已开始', chart_review_required: '等待图表审核', chart_review_repair_required: '正在修复并重新审核', generated_chart_published: '图表已发布', generated_chart_rejected: '图表未发布', chart_review_completed: '图表审核完成', measurement_repair_required: '需要定向补充', measurement_repair_rejected: '定向补充被拒绝', measurement_repair_exhausted: '定向补充次数已用尽', measurement_decision_required: '等待主 Agent 选择测量证据', measurement_focus_requested: '已请求局部测量', measurement_focus_applied: '局部测量范围已应用', measurement_focus_failed: '局部测量未获得足够证据', measurement_evidence_selected: '测量证据选择已记录', review_started: '审核已开始', review_completed: '审核已通过', review_repair_required: '审核要求修复', review_failed: '审核未通过', review_gate_required: '主链路已暂停', review_gate_updated: '审核门禁状态已更新', tool_skipped: '工具未开始执行', final_answer: '最终回答已生成', budget_exhausted: '达到预算上限', run_failed: '运行失败', run_interrupted: '运行已中断', history_gap: '历史记录不完整', tool_result: '工具结果（历史记录不完整）' }
+  const labels: Record<string, string> = { run_started: '运行已开始', resume_started: '继续执行已开始', model_started: '模型轮次开始', model_completed: '模型轮次完成', operation_completed: '操作结果已保存', recovery_blocked: '继续执行被阻止', progress: '处理中', generated_chart: '图表状态已更新', chart_review_started: '图表审核已开始', chart_review_required: '等待图表审核', chart_review_repair_required: '正在修复并重新审核', generated_chart_published: '图表已发布', generated_chart_rejected: '图表未发布', chart_review_completed: '图表审核完成', measurement_observed: '测量候选已观察', measurement_repair_required: '需要定向补充', measurement_repair_rejected: '定向补充被拒绝', measurement_repair_exhausted: '定向补充次数已用尽', measurement_decision_required: '等待主 Agent 选择测量证据', measurement_focus_requested: '已请求局部测量', measurement_focus_applied: '局部测量范围已应用', measurement_focus_failed: '局部测量未获得足够证据', measurement_evidence_selected: '测量证据选择已记录', measurement_evidence_discarded: '测量候选已舍弃', assembly_validation_failure: 'ChartSpec 组装校验失败', review_started: '审核已开始', review_completed: '审核已通过', review_repair_required: '审核要求修复', review_failed: '审核未通过', review_gate_required: '主链路已暂停', review_gate_updated: '审核门禁状态已更新', tool_skipped: '工具未开始执行', final_answer: '最终回答已生成', budget_exhausted: '达到预算上限', run_failed: '运行失败', run_interrupted: '运行已中断', history_gap: '历史记录不完整', tool_result: '工具结果（历史记录不完整）' }
   return labels[event.kind] || event.kind
 }
 
-const reviewEventKinds = new Set(['review_started', 'review_completed', 'review_repair_required', 'review_failed', 'review_gate_required', 'review_gate_updated', 'chart_review_started', 'chart_review_required', 'chart_review_repair_required', 'chart_review_completed', 'generated_chart_published', 'generated_chart_rejected', 'measurement_repair_required', 'measurement_repair_rejected', 'measurement_repair_exhausted'])
+const reviewEventKinds = new Set(['review_started', 'review_completed', 'review_repair_required', 'review_failed', 'review_gate_required', 'review_gate_updated', 'chart_review_started', 'chart_review_required', 'chart_review_repair_required', 'chart_review_completed', 'generated_chart_published', 'generated_chart_rejected'])
 
 function isReviewEvent(event: AgentRunEvent): boolean {
   return reviewEventKinds.has(event.kind)
@@ -692,7 +711,7 @@ function RunTimeline({ timeline, expanded, onToggle, previewLoader, onPreview, o
       {gateBlocking && <div className="trace-warning review-gate-banner" role="status"><strong>主链路已暂停</strong><span>{reviewTypeLabel(executionGate?.reviewType)} · {reviewStateLabel(executionGate?.state, true)}{executionGate?.nextAction ? ` · 下一步：${String(executionGate.nextAction)}` : ''}</span></div>}
       {rows.length === 0 && <div className="trace-empty">没有可恢复的执行事件。</div>}
       {rows.map((row) => row.kind === 'event' ? (
-        isReviewEvent(row.event) ? <ReviewTimelineItem key={`${row.event.runId}-${row.event.sequence}`} event={row.event} /> : <div className={'trace-event ' + measurementEventClass(row.event.kind) + (row.event.kind === 'run_failed' || row.event.kind === 'run_interrupted' || row.event.kind === 'history_gap' ? ' error' : '')} key={`${row.event.runId}-${row.event.sequence}`}><span className="trace-event-dot" /><span className="trace-event-copy"><strong>{eventLabel(row.event)}</strong><small>{timestampLabel(row.event.timestamp)}{isMeasurementRepairEventKind(row.event.kind) ? ` · ${row.event.kind}` : ''}</small><span>{traceEventDetail(row.event)}</span></span></div>
+        isReviewEvent(row.event) ? <ReviewTimelineItem key={`${row.event.runId}-${row.event.sequence}`} event={row.event} /> : <div className={'trace-event ' + measurementEventClass(row.event.kind) + (row.event.kind === 'run_failed' || row.event.kind === 'run_interrupted' || row.event.kind === 'history_gap' || row.event.kind === 'assembly_validation_failure' ? ' error' : '')} key={`${row.event.runId}-${row.event.sequence}`}><span className="trace-event-dot" /><span className="trace-event-copy"><strong>{eventLabel(row.event)}</strong><small>{timestampLabel(row.event.timestamp)}{isMeasurementRepairEventKind(row.event.kind) ? ` · ${row.event.kind}` : ''}</small><span>{traceEventDetail(row.event)}</span></span></div>
       ) : <div className="trace-tool" key={row.step.id}><button className="trace-tool-header" onClick={() => setExpandedSteps((current) => { const next = new Set(current); next.has(row.step.id) ? next.delete(row.step.id) : next.add(row.step.id); return next })} aria-expanded={expandedSteps.has(row.step.id)}><span className="trace-event-dot" /><span className="trace-tool-name"><strong>{row.step.toolLabel || row.step.toolName}</strong><small>{row.step.toolName} · {row.step.callId}</small></span><span className={'run-status ' + row.step.status}>{row.step.status === 'running' ? '运行中' : row.step.status === 'success' ? '完成' : '失败'}</span>{expandedSteps.has(row.step.id) ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</button>{expandedSteps.has(row.step.id) && <div className="trace-tool-detail">{row.step.call && <div><div className="trace-detail-heading"><label>调用参数</label><CopyDetailButton value={eventPayload(row.step.call).arguments} /></div><pre>{textDetail(eventPayload(row.step.call).arguments)}</pre></div>}{row.step.result && <div><div className="trace-detail-heading"><label>工具结果</label><CopyDetailButton value={eventPayload(row.step.result).result || eventPayload(row.step.result).message} /></div>{row.step.resultTruncated && <small className="trace-warning">{toolResultIntegrityDetail(eventPayload(row.step.result))}</small>}<pre>{textDetail(eventPayload(row.step.result).result || eventPayload(row.step.result).message)}</pre>{Boolean(eventPayload(row.step.result).detailResource) && <EvaluationDetailResourceView resource={eventPayload(row.step.result).detailResource as Record<string, unknown>} evaluationId={evaluationId} caseId={caseId} />}</div>}{row.step.observations.map((observation, index) => <ObservationView key={index} observation={observation} loader={previewLoader} onPreview={onPreview} />)}</div>}</div>)}
     </div>}
   </section>

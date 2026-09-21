@@ -32,7 +32,7 @@ from .coordinates import (
 from .ocr import extract_text
 from .overlays import render_scatter_overlay
 from .layout import context_for_evidence, context_scope, filter_snippets_to_scope
-from .scope import apply_measurement_focus, measurement_focus_context
+from .scope import apply_measurement_focus, measurement_focus_context, observation_scope_focus_context
 
 _COLOR_TOLERANCE = 34
 _MAX_MARKER_SIDE_RATIO = 0.12
@@ -343,6 +343,7 @@ def _empty_result(
     warning: str,
     layout_context: dict[str, Any] | None = None,
     measurement_target: dict[str, Any] | None = None,
+    observation_scope: dict[str, Any] | None = None,
 ) -> ToolResult:
     data = {
         "image_size": image_size(np.asarray(image.convert("RGB"))),
@@ -367,11 +368,10 @@ def _empty_result(
         "confidence": confidence_map(overall=0.0, geometry=0.0, calibration=0.0, association=0.0),
         "warnings": [warning],
         "measurement_target": dict(measurement_target) if isinstance(measurement_target, dict) else None,
-        "focus": measurement_focus_context(
-            measurement_target,
-            width=image.width,
-            height=image.height,
-        ),
+        "observation_scope": dict(observation_scope) if isinstance(observation_scope, dict) else None,
+        "focus": observation_scope_focus_context(observation_scope, width=image.width, height=image.height)
+        if observation_scope is not None
+        else measurement_focus_context(measurement_target, width=image.width, height=image.height),
     }
     return ToolResult(
         data,
@@ -405,6 +405,7 @@ def extract_scatter_points(
     image_path: str,
     layout_context: dict[str, Any] | None = None,
     measurement_target: dict[str, Any] | None = None,
+    observation_scope: dict[str, Any] | None = None,
 ) -> ToolResult | dict:
     """Extract source-image marker evidence and optionally calibrated points."""
     path = Path(image_path)
@@ -419,15 +420,24 @@ def extract_scatter_points(
 
     scope = context_scope(layout_context)
     base_search_area = scope.get("bbox_px") if scope else default_plot_area(rgb)
-    focus = measurement_focus_context(
-        measurement_target,
-        width=int(rgb.shape[1]),
-        height=int(rgb.shape[0]),
-        base_region=base_search_area,
+    focus = (
+        observation_scope_focus_context(
+            observation_scope,
+            width=int(rgb.shape[1]),
+            height=int(rgb.shape[0]),
+            base_region=base_search_area,
+        )
+        if observation_scope is not None
+        else measurement_focus_context(
+            measurement_target,
+            width=int(rgb.shape[1]),
+            height=int(rgb.shape[0]),
+            base_region=base_search_area,
+        )
     )
     search_area = focus.get("search_area")
     if focus["requested"] and not focus["applied"]:
-        return _empty_result(chart_image, "focus_empty: target did not resolve to a measurable region", layout_context, measurement_target)
+        return _empty_result(chart_image, "focus_empty: target did not resolve to a measurable region", layout_context, measurement_target, observation_scope)
     working_rgb = apply_measurement_focus(rgb, focus)
     palette = detect_color_palette(working_rgb, region=search_area, max_colors=8)
     snippets = _ocr_snippets(path, scope) if scope else _ocr_snippets(path)
@@ -445,7 +455,7 @@ def extract_scatter_points(
     x_model = fit_axis_transform(x_ticks, x_axis_points) if x_axis_points else None
     y_model = fit_axis_transform(y_ticks, y_axis_points) if y_axis_points else None
     if not palette:
-        return _empty_result(chart_image, "no reliable scatter point population detected", layout_context, measurement_target)
+        return _empty_result(chart_image, "no reliable scatter point population detected", layout_context, measurement_target, observation_scope)
 
     series, overlaps, warnings, legend = _build_series(
         # Keep component extraction inside the same explicit focus mask used
@@ -461,7 +471,7 @@ def extract_scatter_points(
         legend_scope=scope.get("bbox_px") if scope else None,
     )
     if not series:
-        return _empty_result(chart_image, "no reliable scatter point population detected", layout_context, measurement_target)
+        return _empty_result(chart_image, "no reliable scatter point population detected", layout_context, measurement_target, observation_scope)
 
     conflicts: list[dict[str, Any]] = []
     if focus["requested"] and not series:
@@ -551,6 +561,7 @@ def extract_scatter_points(
         "confidence": confidence,
         "warnings": warnings,
         "measurement_target": dict(measurement_target) if isinstance(measurement_target, dict) else None,
+        "observation_scope": dict(observation_scope) if isinstance(observation_scope, dict) else None,
         "focus": {
             **focus,
             "region_px": focus.get("region_px"),
@@ -597,6 +608,11 @@ EXTRACT_SCATTER_POINTS = Tool(
             "measurement_target": {
                 "type": "object",
                 "description": "Optional bounded source-coordinate focus target for a remeasurement.",
+                "additionalProperties": True,
+            },
+            "observation_scope": {
+                "type": "object",
+                "description": "首次观察使用的当前 panel 有界范围；coordinate_space 可为 panel_norm、panel_px 或 source_px，包含 include/exclude 区域。",
                 "additionalProperties": True,
             },
         },

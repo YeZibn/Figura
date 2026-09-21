@@ -49,9 +49,7 @@ from ..measurement import (
 from ..review import (
     ChartReviewManager,
     GeneratedChartReviewAdapter,
-    MeasurementReviewAdapter,
     ReviewCoordinator,
-    ReviewDecision,
     ReviewIssue,
     ReviewResult,
     ReviewStatus,
@@ -97,6 +95,9 @@ def _measurement_repair_context_from_content(content: str) -> dict[str, Any] | N
     quality = measurement.get("quality") if isinstance(measurement.get("quality"), Mapping) else {}
     evidence = measurement.get("evidence") if isinstance(measurement.get("evidence"), Mapping) else {}
     decision = measurement.get("decision") if isinstance(measurement.get("decision"), Mapping) else {}
+    decision_status = str(decision.get("status") or "pending")[:32]
+    if decision_status in {"selected", "discarded", "abandoned"}:
+        return None
     focus_suggestion = quality.get("focus_suggestion") or quality.get("repair_action")
     result: dict[str, Any] = {
         "session_id": reference.get("session_id"),
@@ -108,8 +109,11 @@ def _measurement_repair_context_from_content(content: str) -> dict[str, Any] | N
         "warnings": list(quality.get("warnings") or [])[:12] if isinstance(quality.get("warnings"), list) else [],
         "issues": list(quality.get("issues") or [])[:8] if isinstance(quality.get("issues"), list) else [],
         "focus": evidence.get("focus") if isinstance(evidence.get("focus"), Mapping) else None,
+        "observation_scope": measurement.get("observation_scope") if isinstance(measurement.get("observation_scope"), Mapping) else None,
+        "series_map": dict(decision.get("series_map") or {}) if isinstance(decision.get("series_map"), Mapping) else {},
+        "evidence_basis": str(decision.get("evidence_basis") or "")[:80] or None,
         "focus_suggestion": focus_suggestion if isinstance(focus_suggestion, Mapping) else None,
-        "decision_status": str(decision.get("status") or "pending")[:32],
+        "decision_status": decision_status,
         "selected_refs": list(decision.get("selected_refs") or [])[:64] if isinstance(decision.get("selected_refs"), list) else [],
         "discarded_refs": list(decision.get("discarded_refs") or [])[:64] if isinstance(decision.get("discarded_refs"), list) else [],
         "next_action": "由主 Agent 选择、舍弃或调用同一测量工具携带 measurement_target 做定向补充",
@@ -135,19 +139,6 @@ def _repair_context_key(context: Mapping[str, Any]) -> tuple[str, ...]:
     if any(identity):
         return identity
     return (json.dumps(dict(context), ensure_ascii=False, sort_keys=True, default=str)[:512],)
-
-
-def _figure_has_measurement_decision(figure: Mapping[str, Any]) -> bool:
-    """Return whether a figure contains an explicit child measurement choice."""
-    charts = figure.get("charts")
-    if not isinstance(charts, list):
-        return False
-    return any(
-        isinstance(child, Mapping)
-        and isinstance(child.get("measurement_ref"), Mapping)
-        and isinstance(child.get("measurement_decision"), Mapping)
-        for child in charts
-    )
 
 
 def _merge_measurement_repair_contexts(
@@ -205,6 +196,9 @@ def _measurement_repair_contexts_from_sessions(
             "decision_status": session.decision_status,
             "focus_mode": session.focus_mode,
             "focus_suggestion": focus_suggestion,
+            "observation_scope": current.observation_scope,
+            "series_map": dict(session.series_map),
+            "evidence_basis": session.evidence_basis,
             "budget_remaining": session.repair_budget_remaining,
             "warnings": list(current.quality.get("warnings") or [])[:12] if isinstance(current.quality, Mapping) else [],
             "issues": list(current.quality.get("issues") or [])[:8] if isinstance(current.quality, Mapping) else [],
@@ -419,6 +413,9 @@ def _artifact_records_from_observation(
                 "measurement_selected_refs": list(measurement_decision.get("selected_refs") or [])[:64] if isinstance(measurement_decision.get("selected_refs"), list) else [],
                 "measurement_discarded_refs": list(measurement_decision.get("discarded_refs") or [])[:64] if isinstance(measurement_decision.get("discarded_refs"), list) else [],
                 "measurement_decision_status": str(measurement_decision.get("status") or "pending")[:32],
+                "measurement_series_map": dict(measurement_decision.get("series_map") or {}) if isinstance(measurement_decision.get("series_map"), Mapping) else {},
+                "measurement_evidence_basis": str(measurement_decision.get("evidence_basis") or "")[:80] or None,
+                "measurement_observation_scope": dict(measurement.get("observation_scope") or {}) if isinstance(measurement.get("observation_scope"), Mapping) else None,
                 "measurement_focus": dict(measurement_evidence.get("focus") or {}) if isinstance(measurement_evidence.get("focus"), dict) else None,
             }
         )
@@ -557,6 +554,15 @@ def _measurement_trace_fields(content: str) -> dict[str, Any]:
         result["measurement_decision_status"] = str(decision.get("status") or "pending")[:32]
         result["measurement_selected_refs"] = list(decision.get("selected_refs") or [])[:64]
         result["measurement_discarded_refs"] = list(decision.get("discarded_refs") or [])[:64]
+        result["measurement_series_map"] = dict(decision.get("series_map") or {}) if isinstance(decision.get("series_map"), Mapping) else {}
+        result["measurement_evidence_basis"] = str(decision.get("evidence_basis") or "")[:80] or None
+    observation_scope = measurement.get("observation_scope")
+    if isinstance(observation_scope, Mapping):
+        result["measurement_observation_scope"] = {
+            key: observation_scope.get(key)
+            for key in ("scope_id", "panel_id", "coordinate_space", "status", "applied", "requested", "include", "exclude", "source_regions", "objectives", "search_scope")
+            if observation_scope.get(key) is not None
+        }
     if isinstance(quality, dict):
         result["measurement_issue_count"] = min(
             16,
@@ -678,7 +684,6 @@ class Agent:
         self.attachments = attachments
         self._review_manager = review_manager or ChartReviewManager(attachments=attachments)
         self._review_coordinator = review_coordinator or ReviewCoordinator()
-        self._measurement_review_adapter = MeasurementReviewAdapter()
         self._generated_chart_review_adapter = GeneratedChartReviewAdapter()
         self._interruption_event = interruption_event
         self._recovery_context = recovery_context
@@ -1123,12 +1128,17 @@ class Agent:
                 source_panel_id = call_arguments.get("panel_id") if isinstance(call_arguments.get("panel_id"), str) else None
                 source_attachment_id = call_arguments.get("attachment_id") if isinstance(call_arguments.get("attachment_id"), str) else None
                 raw_measurement_target = call_arguments.get("measurement_target") if isinstance(call_arguments, dict) else None
+                raw_observation_scope = call_arguments.get("observation_scope") if isinstance(call_arguments, dict) else None
                 if source_panel_id is None and isinstance(raw_measurement_target, Mapping):
                     candidate_panel = raw_measurement_target.get("panel_id")
                     if isinstance(candidate_panel, str) and candidate_panel.strip():
                         source_panel_id = candidate_panel
+                if source_panel_id is None and isinstance(raw_observation_scope, Mapping):
+                    candidate_panel = raw_observation_scope.get("panel_id")
+                    if isinstance(candidate_panel, str) and candidate_panel.strip():
+                        source_panel_id = candidate_panel
                 parent_attempt_id = None
-                if call.name in MEASUREMENT_TOOLS:
+                if call.name in MEASUREMENT_TOOLS and isinstance(raw_measurement_target, Mapping):
                     for session in reversed(list(measurement_sessions.values())):
                         if session.attachment_id == source_attachment_id and session.panel_id in {source_panel_id, None, "__source__"}:
                             parent_attempt_id = session.current_attempt_id
@@ -1181,6 +1191,7 @@ class Agent:
                         source_panel_id=source_panel_id,
                         source_parent_attempt_id=parent_attempt_id,
                         source_measurement_target=prepared_target,
+                        source_observation_scope=raw_observation_scope if isinstance(raw_observation_scope, Mapping) else None,
                         measurement_context=measurement_sessions if call.name == "assemble_spec" else None,
                     )
                 self._raise_if_interrupted(run)
@@ -1224,14 +1235,25 @@ class Agent:
                     except Exception:  # noqa: BLE001 - observation diagnostics cannot abort the Agent
                         observation_refs = ()
                 observation = _attach_visual_observation_refs(observation, observation_refs)
-                if call.name == "assemble_spec":
-                    self._release_measurement_gate_from_assembly(
-                        run,
-                        observation.content,
-                        emitter=emitter,
-                        turn=turn,
-                        call_id=call.id,
-                    )
+                if call.name == "assemble_spec" and emitter is not None:
+                    try:
+                        assembly_payload = json.loads(observation.content)
+                    except (TypeError, json.JSONDecodeError):
+                        assembly_payload = None
+                    if isinstance(assembly_payload, Mapping) and assembly_payload.get("error"):
+                        issues = assembly_payload.get("issues")
+                        if not isinstance(issues, list):
+                            data_payload = assembly_payload.get("data")
+                            issues = data_payload.get("issues") if isinstance(data_payload, Mapping) else None
+                        emitter.emit(
+                            "assembly_validation_failure",
+                            turn=turn,
+                            tool_name=call.name,
+                            call_id=call.id,
+                            error=str(assembly_payload.get("error"))[:240],
+                            issues=[str(item)[:160] for item in issues[:12]] if isinstance(issues, list) else [],
+                            blocking=False,
+                        )
                 if call.name in MEASUREMENT_TOOLS:
                     if prepared_target is not None and emitter is not None:
                         emitter.emit(
@@ -1259,27 +1281,48 @@ class Agent:
                         measurement_data = measurement_payload.get("data") if isinstance(measurement_payload, dict) else None
                         if isinstance(measurement_data, dict):
                             measurement_session = register_measurement(measurement_sessions, measurement_data)
-                            measurement_review = self._measurement_review_adapter.submit(
-                                self._review_coordinator,
-                                run_id=run.id,
-                                tool_name=call.name,
-                                payload=measurement_payload,
-                                session=measurement_session,
-                            )
-                            if measurement_review is not None:
-                                self._record_shared_review(
-                                    run,
-                                    measurement_review,
-                                    emitter=emitter,
+                            if measurement_session is not None and emitter is not None:
+                                emitter.emit(
+                                    "measurement_observed",
                                     turn=turn,
                                     tool_name=call.name,
                                     call_id=call.id,
+                                    session_id=measurement_session.session_id,
+                                    attempt_id=measurement_session.current_attempt_id,
+                                    attachment_id=measurement_session.attachment_id,
+                                    panel_id=measurement_session.panel_id,
+                                    measurement_status=measurement_session.current_attempt().status
+                                    if measurement_session.current_attempt() is not None
+                                    else None,
+                                    decision_status=measurement_session.decision_status,
+                                    observation_scope=(measurement_data.get("observation_scope") if isinstance(measurement_data.get("observation_scope"), Mapping) else None),
+                                    blocking=False,
                                 )
-                            pending_measurement_repairs = _measurement_repair_contexts_from_sessions(
-                                measurement_sessions
-                            )
+                                if measurement_session.repair_budget_remaining <= 0 and measurement_session.decision_status == "pending":
+                                    emitter.emit(
+                                        "measurement_repair_exhausted",
+                                        turn=turn,
+                                        tool_name=call.name,
+                                        call_id=call.id,
+                                        session_id=measurement_session.session_id,
+                                        attempt_id=measurement_session.current_attempt_id,
+                                        budget_remaining=0,
+                                        next_action="由主 Agent 舍弃不可靠证据或选择已有有效引用；不自动重复测量",
+                                    )
+                            if measurement_session is not None:
+                                pending_measurement_repairs = _measurement_repair_contexts_from_sessions(
+                                    measurement_sessions
+                                )
                     except (TypeError, json.JSONDecodeError):
                         pass
+                if call.name == "assemble_spec":
+                    self._record_measurement_decision_events(
+                        run,
+                        observation.content,
+                        emitter=emitter,
+                        turn=turn,
+                        call_id=call.id,
+                    )
                 repair_context = _measurement_repair_context_from_content(observation.content)
                 if repair_context is not None:
                     pending_measurement_repairs = _merge_measurement_repair_contexts(
@@ -1538,40 +1581,6 @@ class Agent:
             return False
         if gate.state.value in {"failed", "exhausted"}:
             return False
-        if gate.review_type.value == "measurement":
-            if call_name == "assemble_spec":
-                # Assembly is the explicit decision boundary, but it must
-                # carry the current measurement reference and the main
-                # Agent's explicit selection.  Otherwise a model could
-                # bypass a blocked measurement by assembling an unrelated
-                # spec and waiting for the next turn.
-                direct_ref = arguments.get("measurement_ref")
-                if isinstance(direct_ref, Mapping):
-                    # The assembler can accept a legacy/no-bounded-ref
-                    # measurement without a separate decision.  If the
-                    # current attempt exposes bounded candidates, the
-                    # assembler itself returns measurement_decision_required.
-                    return True
-                for figure_key in ("figure",):
-                    figure = arguments.get(figure_key)
-                    if isinstance(figure, Mapping) and _figure_has_measurement_decision(figure):
-                        return True
-                figures = arguments.get("figures")
-                if isinstance(figures, list) and any(
-                    isinstance(figure, Mapping) and _figure_has_measurement_decision(figure)
-                    for figure in figures
-                ):
-                    return True
-                return False
-            if call_name not in MEASUREMENT_TOOLS:
-                return False
-            target = arguments.get("measurement_target")
-            if not isinstance(target, Mapping):
-                return False
-            parent_attempt_id = target.get("parent_attempt_id")
-            if parent_attempt_id is None:
-                return bool(target.get("refs") or target.get("bbox_source_px") or target.get("bbox_px"))
-            return isinstance(parent_attempt_id, str) and parent_attempt_id == gate.subject_id
         if gate.review_type.value == "generated_chart":
             return call_name in _RENDER_TOOL_NAMES or call_name == "assemble_spec"
         return False
@@ -1631,7 +1640,7 @@ class Agent:
         else:
             emitter.emit("review_failed", turn=turn, **payload)
 
-    def _release_measurement_gate_from_assembly(
+    def _record_measurement_decision_events(
         self,
         run: Any,
         content: str,
@@ -1640,7 +1649,7 @@ class Agent:
         turn: int,
         call_id: str,
     ) -> None:
-        """Release a measurement gate only after assembly records a decision."""
+        """Expose model evidence decisions without creating a measurement gate."""
         try:
             payload = json.loads(content)
         except (TypeError, json.JSONDecodeError):
@@ -1649,14 +1658,6 @@ class Agent:
         if data is None and isinstance(payload, Mapping):
             data = payload
         if not isinstance(data, Mapping) or data.get("error"):
-            return
-        gate = self._review_coordinator.gate(run.id)
-        if (
-            not gate.blocking
-            or gate.review_type is None
-            or gate.review_type.value != "measurement"
-            or not gate.review_id
-        ):
             return
         decisions: list[Mapping[str, Any]] = []
         direct_decision = data.get("_measurement_decision")
@@ -1667,48 +1668,27 @@ class Agent:
             decisions.extend(item for item in nested_decisions[:64] if isinstance(item, Mapping))
         for decision in decisions:
             attempt_id = str(decision.get("attempt_id") or "").strip()
-            if not attempt_id or gate.subject_id != attempt_id:
+            if not attempt_id:
                 continue
-            try:
-                record = self._review_coordinator.apply(
-                    gate.review_id,
-                    ReviewDecision(
-                        decision="pass",
-                        next_action="主 Agent 已选择当前测量证据；允许进入后续生成阶段",
-                        evidence=(
-                            {
-                                "attempt_id": attempt_id,
-                                "selected_refs": list(decision.get("selected_refs") or [])[:64],
-                                "discarded_refs": list(decision.get("discarded_refs") or [])[:64],
-                            },
-                        ),
-                        details={"decision_source": "main_agent_assembly"},
-                    ),
-                )
-            except (KeyError, TypeError, ValueError):
-                return
-            self._record_shared_review(
-                run,
-                record,
-                emitter=emitter,
-                turn=turn,
-                tool_name="assemble_spec",
-                call_id=call_id,
-                emit_start=False,
-            )
+            payload = {
+                "turn": turn,
+                "tool_name": "assemble_spec",
+                "call_id": call_id,
+                "session_id": decision.get("session_id"),
+                "attempt_id": attempt_id,
+                "selected_refs": list(decision.get("selected_refs") or [])[:64],
+                "discarded_refs": list(decision.get("discarded_refs") or [])[:64],
+                "decision_status": str(decision.get("decision_status") or decision.get("status") or "selected")[:32],
+                "series_map": dict(decision.get("series_map") or {}) if isinstance(decision.get("series_map"), Mapping) else {},
+                "evidence_basis": str(decision.get("evidence_basis") or "")[:80] or None,
+                "blocking": False,
+            }
+            self.memory.append(run, "measurement_decision", {"state": payload})
             if emitter is not None:
-                emitter.emit(
-                    "measurement_evidence_selected",
-                    turn=turn,
-                    tool_name="assemble_spec",
-                    call_id=call_id,
-                    session_id=decision.get("session_id"),
-                    attempt_id=attempt_id,
-                    selected_refs=list(decision.get("selected_refs") or [])[:64],
-                    discarded_refs=list(decision.get("discarded_refs") or [])[:64],
-                    decision_status=str(decision.get("decision_status") or "selected")[:32],
-                )
-            return
+                if payload["selected_refs"]:
+                    emitter.emit("measurement_evidence_selected", **payload)
+                if payload["discarded_refs"] or payload["decision_status"] in {"discarded", "abandoned"}:
+                    emitter.emit("measurement_evidence_discarded", **payload)
 
     def _skip_tool_calls(
         self,

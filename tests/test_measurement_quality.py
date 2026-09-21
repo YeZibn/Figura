@@ -478,7 +478,7 @@ def test_dispatch_adds_measurement_contract_with_server_context():
     assert measurement["evidence"]["visual_count"] == 1
 
 
-def test_assemble_spec_requires_code_owned_accepted_reference():
+def test_assemble_spec_validates_lineage_without_requiring_attempt_level_acceptance():
     data = attach_measurement_quality(
         _bar_data(),
         source_tool="measure_bars",
@@ -526,7 +526,7 @@ def test_assemble_spec_requires_code_owned_accepted_reference():
     )
     failed_sessions: dict[str, MeasurementSession] = {}
     register_measurement(failed_sessions, failed)
-    blocked_with_action = assemble_spec(
+    assembled_with_warning = assemble_spec(
         chart_type="bar",
         points=[{"category": "A", "value": 1}],
         x_label="类别",
@@ -534,7 +534,8 @@ def test_assemble_spec_requires_code_owned_accepted_reference():
         measurement_ref=failed["measurement"]["reference"],
         _measurement_context=failed_sessions,
     )
-    assert blocked_with_action["measurement_gate"]["repair_action"]["action"] == "remeasure"
+    assert "error" not in assembled_with_warning
+    assert assembled_with_warning["provenance"]["status"] in {"selected", "accepted"}
 
 
 def test_agent_passes_run_owned_measurement_session_to_assemble_gate():

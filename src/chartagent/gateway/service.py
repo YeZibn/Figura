@@ -15,7 +15,7 @@ from ..multimodal import build_registered_attachment_turn
 from ..runtime import AgentRuntime, create_agent_runtime, probe_agent_readiness
 from ..storage import StoragePaths, resolve_storage_paths
 from ..agent import AgentInterrupted, AgentRecoveryBlocked, REVIEW_INCOMPLETE_MESSAGE
-from ..agent.review_gate import _REVIEW_FAILED_MSG
+from ..agent.review_gate import _BUDGET_MSG, _REVIEW_FAILED_MSG
 from ..tools.core.result import GeneratedImage
 from ..trace import TraceSink, truncate_text
 from ..evaluation.reader import EvaluationReader, EvaluationReaderError
@@ -906,6 +906,31 @@ class GatewayService:
 
         if run.interruption_requested() or run.terminal:
             return
+        if str(answer) == _BUDGET_MSG:
+            if run.has_event("assembly_validation_failure"):
+                failure_code = "assembly_validation_failure"
+                failure_message = "ChartSpec 组装校验未通过，未生成可发布结果"
+                run.publish(
+                    "run_failed",
+                    {
+                        "code": failure_code,
+                        "message": failure_message,
+                    },
+                )
+                run.fail(failure_code, 422, failure_message, failure_code)
+                return
+            if run.has_event("measurement_repair_exhausted"):
+                failure_code = "measurement_repair_exhausted"
+                failure_message = "定向重测次数已用尽，未能形成可用证据"
+                run.publish(
+                    "run_failed",
+                    {
+                        "code": failure_code,
+                        "message": failure_message,
+                    },
+                )
+                run.fail(failure_code, 422, failure_message, failure_code)
+                return
         if str(answer) in {REVIEW_INCOMPLETE_MESSAGE, _REVIEW_FAILED_MSG}:
             gate = getattr(run, "execution_gate", {})
             exhausted = isinstance(gate, Mapping) and gate.get("state") == "exhausted"

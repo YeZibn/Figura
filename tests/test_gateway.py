@@ -32,6 +32,7 @@ from chartagent.trace import TraceEvent
 from chartagent.client.models import NormalizedResult, ToolCall
 from chartagent.tools import Tool, ToolRegistry, ToolResult
 from chartagent.tools.chart import register_chart_tools
+from chartagent.agent.review_gate import _BUDGET_MSG
 from tests.test_dashboard_decomposition import COMPLEX_IMAGE, REGIONS
 
 
@@ -709,6 +710,57 @@ def test_gateway_service_lifecycle_and_message(tmp_path):
     assert result["answer"] == "来自模拟 Agent"
     assert [item["kind"] for item in result["messages"]] == ["user", "assistant"]
     assert service.list_sessions()["sessions"][0]["runCount"] == 1
+
+
+@pytest.mark.parametrize(
+    ("event_kind", "expected_code"),
+    [
+        ("measurement_repair_exhausted", "measurement_repair_exhausted"),
+        ("assembly_validation_failure", "assembly_validation_failure"),
+    ],
+)
+def test_gateway_classifies_bounded_evidence_terminal_failures(tmp_path, event_kind, expected_code):
+    database = tmp_path / f"{event_kind}.db"
+
+    class FakeAgent:
+        def __init__(self, trace_sink):
+            self.trace_sink = trace_sink
+
+        def run(self, _text):
+            self.trace_sink(
+                TraceEvent(
+                    event_kind,
+                    payload={"tool_name": "assemble_spec", "blocking": False},
+                )
+            )
+            return _BUDGET_MSG
+
+    class FakeRuntime:
+        def __init__(self, trace_sink):
+            self.agent = FakeAgent(trace_sink)
+
+        def close(self):
+            return None
+
+    def runtime_factory(name, *, trace_sink, **_kwargs):
+        return FakeRuntime(trace_sink)
+
+    service = GatewayService(
+        database=database,
+        runtime_factory=runtime_factory,
+        readiness_probe=lambda: {"status": "ready", "provider": "openai", "model": "test-model"},
+    )
+    session_id = service.create_session(event_kind)["session"]["id"]
+    accepted = service.start_run(session_id, "触发边界失败")
+    run = service.get_run(session_id, accepted["run"]["runId"])
+    assert run.wait_terminal(timeout=2)
+    assert run.error_code == expected_code
+    history = service.get_run_history(session_id, run.run_id)
+    assert history["run"]["terminalCode"] == expected_code
+    assert any(event["kind"] == event_kind for event in history["events"])
+    assert history["events"][-1]["kind"] == "run_failed"
+    assert history["events"][-1]["payload"]["code"] == expected_code
+    service.close()
 
 
 def test_gateway_run_id_is_shared_by_runtime_memory_trace_and_projection(tmp_path):

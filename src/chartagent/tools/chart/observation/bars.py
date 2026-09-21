@@ -29,7 +29,7 @@ from .foundation import (
 from .coordinates import axis_geometry, cartesian_frame, fit_dominant_axis_line
 from .layout import context_for_evidence, context_frame, context_scope
 from .overlays import render_bar_overlay
-from .scope import apply_measurement_focus, measurement_focus_context
+from .scope import apply_measurement_focus, measurement_focus_context, observation_scope_focus_context
 
 Orientation = Literal["vertical", "horizontal"]
 
@@ -39,14 +39,11 @@ def _empty_result(
     warnings: list[str] | None = None,
     layout_context: dict[str, Any] | None = None,
     measurement_target: dict[str, Any] | None = None,
+    observation_scope: dict[str, Any] | None = None,
 ) -> ToolResult:
     warning_list = warnings or ["no bar geometry or baseline detected"]
     rgb = np.asarray(chart_image)
-    focus = measurement_focus_context(
-        measurement_target,
-        width=int(rgb.shape[1]),
-        height=int(rgb.shape[0]),
-    )
+    focus = observation_scope_focus_context(observation_scope, width=int(rgb.shape[1]), height=int(rgb.shape[0])) if observation_scope is not None else measurement_focus_context(measurement_target, width=int(rgb.shape[1]), height=int(rgb.shape[0]))
     if focus["requested"] and not focus["applied"]:
         warning_list = [*warning_list, "focus_empty: target did not resolve to a measurable region"]
     confidence = confidence_map(
@@ -74,6 +71,7 @@ def _empty_result(
         "confidence": confidence,
         "warnings": warning_list,
         "measurement_target": dict(measurement_target) if isinstance(measurement_target, dict) else None,
+        "observation_scope": dict(observation_scope) if isinstance(observation_scope, dict) else None,
         "focus": focus,
     }
     return ToolResult(
@@ -727,17 +725,13 @@ def _measure_chart(
     rgb: np.ndarray,
     layout_context: dict[str, Any] | None = None,
     measurement_target: dict[str, Any] | None = None,
+    observation_scope: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     layout = context_frame(layout_context)
     scope = context_scope(layout_context)
     measurement_area = layout.get("bbox_px") if layout else None
     base_search_area = measurement_area or (scope.get("bbox_px") if scope else None)
-    focus = measurement_focus_context(
-        measurement_target,
-        width=int(rgb.shape[1]),
-        height=int(rgb.shape[0]),
-        base_region=base_search_area,
-    )
+    focus = observation_scope_focus_context(observation_scope, width=int(rgb.shape[1]), height=int(rgb.shape[0]), base_region=base_search_area) if observation_scope is not None else measurement_focus_context(measurement_target, width=int(rgb.shape[1]), height=int(rgb.shape[0]), base_region=base_search_area)
     search_area = focus.get("search_area")
     if focus["requested"] and not focus["applied"]:
         return {
@@ -751,6 +745,7 @@ def _measure_chart(
             "layout_context": layout_context,
             "focus_region": None,
             "focus": focus,
+            "observation_scope": observation_scope,
         }
     working_rgb = apply_measurement_focus(rgb, focus)
     palette = detect_color_palette(working_rgb, region=search_area, max_colors=8)
@@ -775,6 +770,7 @@ def _measure_chart(
             "layout_context": layout_context,
             "focus_region": focus.get("region_px"),
             "focus": focus,
+            "observation_scope": observation_scope,
         }
     orientation: Orientation = "vertical" if vertical_score >= horizontal_score else "horizontal"
     candidates = vertical_candidates if orientation == "vertical" else horizontal_candidates
@@ -871,6 +867,7 @@ def measure_bars(
     image_path: str,
     layout_context: dict[str, Any] | None = None,
     measurement_target: dict[str, Any] | None = None,
+    observation_scope: dict[str, Any] | None = None,
 ) -> ToolResult | dict:
     """Measure two-dimensional bars with source-image geometry evidence."""
     path = Path(image_path)
@@ -884,11 +881,11 @@ def measure_bars(
     except Exception as exc:  # noqa: BLE001 - tool boundary
         return {"error": f"measure_bars failed for {image_path}: {exc}"}
 
-    measured = _measure_chart(rgb, layout_context, measurement_target)
+    measured = _measure_chart(rgb, layout_context, measurement_target, observation_scope)
     candidates = measured["candidates"]
     baseline = measured["baseline"]
     if not candidates:
-        return _empty_result(chart_image, measured["warnings"], layout_context, measurement_target)
+        return _empty_result(chart_image, measured["warnings"], layout_context, measurement_target, observation_scope)
 
     orientation: Orientation = measured.get("axis_orientation", "vertical")
     stacked = measured["bar_mode"] == "stacked"
@@ -1023,6 +1020,7 @@ def measure_bars(
         "warnings": warnings,
         "layout_context": context_for_evidence(layout_context),
         "measurement_target": dict(measurement_target) if isinstance(measurement_target, dict) else None,
+        "observation_scope": dict(observation_scope) if isinstance(observation_scope, dict) else None,
         "focus": {
             **(measured.get("focus") or {}),
             "region_px": measured.get("focus_region"),
@@ -1063,6 +1061,11 @@ MEASURE_BARS = Tool(
             "measurement_target": {
                 "type": "object",
                 "description": "Optional bounded source-coordinate focus target for a remeasurement.",
+                "additionalProperties": True,
+            },
+            "observation_scope": {
+                "type": "object",
+                "description": "首次观察使用的当前 panel 有界范围；coordinate_space 可为 panel_norm、panel_px 或 source_px，包含 include/exclude 区域。",
                 "additionalProperties": True,
             },
         },

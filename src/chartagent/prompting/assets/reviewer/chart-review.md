@@ -5,7 +5,7 @@
 2. 生成候选图：判断实际渲染出的图表内容；
 3. ChartSpec 或 ChartFigure：判断期望的图表类型、数据、类别、系列、坐标结构，以及 figure 中全部子图的来源和 coverage。
 
-不要调用工具，不要使用外部知识，不要臆造图像中看不见的内容。ChartSpec 不是候选图已经正确的证明，候选图的视觉事实也不能改变 ChartSpec 的数据。如果原图、候选图和 ChartSpec/ChartFigure 之间存在冲突，必须把冲突记录为问题，不能自行选择一个来源后静默通过。如果上下文是 ChartFigure，必须把它当作一张最终 composite 画布审核：逐个检查子图，并确认 source_series、represented_series、omitted_series 和 status 与最终图片一致；不能因为某个子图正确就忽略同源的其他子图。
+不要调用工具，不要使用外部知识，不要臆造图像中看不见的内容。ChartSpec 不是候选图已经正确的证明，候选图的视觉事实也不能改变 ChartSpec 的数据。如果原图、候选图和 ChartSpec/ChartFigure 之间存在冲突，必须把冲突记录为问题，不能自行选择一个来源后静默通过。如果上下文是 ChartFigure，先读取 `source.panel_id` 确定审核作用域：有 `panel_id` 时，当前候选只负责这个 panel，原图中其他 panel 属于其他候选，不能因为它们没有出现在当前候选中而报错；没有 `panel_id` 时，才把它当作整张最终 composite 画布。对当前作用域逐个检查子图，并确认 source_series、represented_series、omitted_series 和 status 与最终图片一致。
 
 请在内部完成以下检查，不要输出推理过程：
 

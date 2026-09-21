@@ -52,6 +52,10 @@ _PROVENANCE_FIELDS = (
     "quality",
     "selected_refs",
     "discarded_refs",
+    "decision_status",
+    "series_map",
+    "evidence_basis",
+    "observation_scope",
 )
 
 
@@ -242,9 +246,10 @@ class ChartSpec:
             else:
                 for field_name in ("session_id", "attempt_id", "attachment_id"):
                     if not isinstance(self.provenance.get(field_name), str) or not self.provenance.get(field_name):
-                        issues.append(ValidationIssue(f"provenance.{field_name}", "accepted measurement provenance is missing its identity"))
-                if self.provenance.get("status") != "accepted":
-                    issues.append(ValidationIssue("provenance.status", "measurement provenance must have accepted status"))
+                        issues.append(ValidationIssue(f"provenance.{field_name}", "measurement provenance is missing its identity"))
+                status = self.provenance.get("status")
+                if status not in {"accepted", "selected", "discarded", "abandoned", "provisional", "partial"}:
+                    issues.append(ValidationIssue("provenance.status", "measurement provenance has an unsupported status"))
 
         return issues
 
@@ -264,6 +269,14 @@ def _bounded_provenance(value: object) -> Optional[Dict[str, Any]]:
             }
         elif key in {"selected_refs", "discarded_refs"} and isinstance(item, (list, tuple)):
             result[key] = [str(ref)[:24] for ref in list(item)[:64]]
+        elif key == "series_map" and isinstance(item, Mapping):
+            result[key] = {str(name)[:80]: str(value)[:120] for name, value in list(item.items())[:32]}
+        elif key == "observation_scope" and isinstance(item, Mapping):
+            result[key] = {
+                str(name)[:64]: item_value
+                for name, item_value in list(item.items())[:24]
+                if isinstance(name, str)
+            }
         elif isinstance(item, str):
             result[key] = item[:160]
         elif isinstance(item, (int, float, bool)) or item is None:

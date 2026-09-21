@@ -20,6 +20,7 @@ def authorized_chart_tool(tool: Tool, attachments: AttachmentRegistry) -> Tool:
         from ..chart.observation.scope import (
             add_scope_metadata,
             localize_layout_context,
+            resolve_observation_scope,
             resolve_measurement_target,
             resolve_panel_scope,
             scoped_image_path,
@@ -27,8 +28,13 @@ def authorized_chart_tool(tool: Tool, attachments: AttachmentRegistry) -> Tool:
 
         panel_id = kwargs.pop("panel_id", None)
         measurement_target = kwargs.get("measurement_target")
+        observation_scope = kwargs.get("observation_scope")
         if not isinstance(panel_id, str) and isinstance(measurement_target, Mapping):
             candidate_panel_id = measurement_target.get("panel_id")
+            if isinstance(candidate_panel_id, str) and candidate_panel_id.strip():
+                panel_id = candidate_panel_id
+        if not isinstance(panel_id, str) and isinstance(observation_scope, Mapping):
+            candidate_panel_id = observation_scope.get("panel_id")
             if isinstance(candidate_panel_id, str) and candidate_panel_id.strip():
                 panel_id = candidate_panel_id
         if not isinstance(panel_id, str):
@@ -59,6 +65,19 @@ def authorized_chart_tool(tool: Tool, attachments: AttachmentRegistry) -> Tool:
             localized = localize_layout_context(kwargs.get("layout_context"), scope)
             if tool.name in {"measure_bars", "extract_line_series", "extract_pie_slices", "extract_scatter_points"}:
                 kwargs["layout_context"] = localized
+                if observation_scope is not None:
+                    resolved_scope, scope_error = resolve_observation_scope(observation_scope, scope)
+                    if resolved_scope is None:
+                        return {
+                            "error": f"observation scope routing failed: {scope_error or 'scope is unavailable'}",
+                            "observation_scope": {
+                                "status": "rejected",
+                                "code": "observation_scope_invalid",
+                                "panel_id": scope.panel.panel_id,
+                                "next_action": "重新提交当前 panel 内的 bounded include/exclude 范围，或直接观察整个 panel",
+                            },
+                        }
+                    kwargs["observation_scope"] = resolved_scope
                 if measurement_target is not None:
                     resolved_target, target_error = resolve_measurement_target(measurement_target, scope)
                     if resolved_target is None:
@@ -76,7 +95,12 @@ def authorized_chart_tool(tool: Tool, attachments: AttachmentRegistry) -> Tool:
                 kwargs.pop("layout_context", None)
             with scoped_image_path(item.canonical_path, scope) as local_path:
                 result = original(image_path=local_path, **kwargs)
-            return _decorate_scoped_result(result, scope, measurement_target=kwargs.get("measurement_target"))
+            return _decorate_scoped_result(
+                result,
+                scope,
+                measurement_target=kwargs.get("measurement_target"),
+                observation_scope=kwargs.get("observation_scope"),
+            )
 
         result = original(image_path=item.canonical_path, **kwargs)
         if tool.name == "decompose_chart_image" and panel_store is not None:
@@ -125,6 +149,21 @@ def authorized_chart_tool(tool: Tool, attachments: AttachmentRegistry) -> Tool:
                 },
                 "additionalProperties": False,
             }
+            schema["properties"]["observation_scope"] = {
+                "type": "object",
+                "description": "首次观察的当前 panel 有界范围。主模型先给出粗略 include/exclude 区域；运行时会校验其属于 panel，再交给传感器执行。它不同于 measurement_target，后者仅用于已有 attempt 的定向补充测量。",
+                "properties": {
+                    "panel_id": {"type": "string", "description": "可选；通常与外层 panel_id 一致。"},
+                    "attachment_id": {"type": "string", "description": "可选；必须与当前 attachment_id 一致。"},
+                    "coordinate_space": {"type": "string", "enum": ["panel_norm", "panel_px", "source_px"], "description": "范围坐标系；默认 panel_norm。"},
+                    "include": {"type": "array", "maxItems": 16, "items": {"type": "object", "additionalProperties": True}, "description": "要搜索的一个或多个区域，至少提供 bbox；也可提供 polygon。"},
+                    "exclude": {"type": "array", "maxItems": 16, "items": {"type": "object", "additionalProperties": True}, "description": "在搜索范围内明确排除的区域。"},
+                    "objectives": {"type": "array", "maxItems": 8, "items": {"type": "string"}, "description": "本次观察要确认的少量目标。"},
+                    "reason": {"type": "string", "description": "选择该范围的简短理由。"},
+                    "scope_id": {"type": "string", "description": "可选稳定范围 ID。"},
+                },
+                "additionalProperties": False,
+            }
     schema["properties"]["attachment_id"] = {
         "type": "string",
         "description": "Opaque authorized attachment ID from the user turn; never a local filesystem path or URL.",
@@ -160,18 +199,28 @@ def _regions_match_existing(regions: object, handoffs: list) -> bool:
     return names.issubset(existing_names) or len(handoffs) >= len(regions)
 
 
-def _decorate_scoped_result(result: object, scope, *, measurement_target: Mapping | None = None) -> object:
+def _decorate_scoped_result(
+    result: object,
+    scope,
+    *,
+    measurement_target: Mapping | None = None,
+    observation_scope: Mapping | None = None,
+) -> object:
     from ..chart.observation.scope import add_scope_metadata
 
     if not isinstance(result, ToolResult):
         if isinstance(result, dict):
             payload = dict(result)
             payload["scope"] = scope.envelope()
+            if isinstance(observation_scope, Mapping):
+                payload["observation_scope"] = dict(observation_scope)
             return payload
         return result
     data = add_scope_metadata(result.data, scope)
     if isinstance(data, dict) and isinstance(measurement_target, Mapping):
         data["measurement_target"] = dict(measurement_target)
+    if isinstance(data, dict) and isinstance(observation_scope, Mapping):
+        data["observation_scope"] = dict(observation_scope)
     images = []
     for image in result.images:
         metadata = dict(image.metadata) if isinstance(image.metadata, Mapping) else {}

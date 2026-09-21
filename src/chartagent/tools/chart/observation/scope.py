@@ -216,6 +216,170 @@ def resolve_measurement_target(
     return result, None
 
 
+def _scope_region_pixels(
+    region: Mapping[str, Any],
+    *,
+    coordinate_space: str,
+    scope: ResolvedPanelScope,
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Convert one normalized first-observation region to source/local pixels."""
+    raw_bbox = region.get("bbox")
+    raw_polygon = region.get("polygon")
+    panel_left, panel_top, panel_width, panel_height = (float(item) for item in scope.bbox)
+    source_width, source_height = scope.source_size
+
+    def bbox_from_values(values: Sequence[Any], *, normalized: bool, origin: tuple[float, float] = (0.0, 0.0)) -> list[float] | None:
+        if len(values) < 4:
+            return None
+        try:
+            left, top, width, height = (float(item) for item in values[:4])
+        except (TypeError, ValueError):
+            return None
+        if any(item != item or item in {float("inf"), float("-inf")} for item in (left, top, width, height)) or width <= 0 or height <= 0:
+            return None
+        if normalized:
+            if left < 0 or top < 0 or left + width > 1 or top + height > 1:
+                return None
+            left = panel_left + left * panel_width
+            top = panel_top + top * panel_height
+            width *= panel_width
+            height *= panel_height
+        else:
+            left += origin[0]
+            top += origin[1]
+        return [left, top, width, height]
+
+    if coordinate_space == "panel_norm":
+        source_bbox = bbox_from_values(raw_bbox, normalized=True) if isinstance(raw_bbox, Sequence) else None
+    elif coordinate_space == "panel_px":
+        source_bbox = bbox_from_values(raw_bbox, normalized=False, origin=scope.origin) if isinstance(raw_bbox, Sequence) else None
+    else:
+        source_bbox = bbox_from_values(raw_bbox, normalized=False) if isinstance(raw_bbox, Sequence) else None
+    source_points: list[list[float]] = []
+    if isinstance(raw_polygon, Sequence) and not isinstance(raw_polygon, (str, bytes)):
+        for point in list(raw_polygon)[:32]:
+            if not isinstance(point, Sequence) or isinstance(point, (str, bytes)) or len(point) < 2:
+                return None, "observation_scope polygon contains an invalid point"
+            try:
+                x, y = float(point[0]), float(point[1])
+            except (TypeError, ValueError):
+                return None, "observation_scope polygon contains a non-numeric point"
+            if coordinate_space == "panel_norm":
+                if not (0 <= x <= 1 and 0 <= y <= 1):
+                    return None, "observation_scope polygon is outside panel_norm"
+                x, y = panel_left + x * panel_width, panel_top + y * panel_height
+            elif coordinate_space == "panel_px":
+                x, y = x + scope.origin[0], y + scope.origin[1]
+            source_points.append([x, y])
+        if len(source_points) < 3:
+            return None, "observation_scope polygon needs at least three points"
+    if source_bbox is None and not source_points:
+        return None, "observation_scope region has no bounded geometry"
+
+    if source_bbox is not None:
+        left, top, width, height = source_bbox
+        right, bottom = left + width, top + height
+        if left < panel_left or top < panel_top or right > panel_left + panel_width or bottom > panel_top + panel_height:
+            return None, "observation_scope region is outside the selected panel"
+        if left < 0 or top < 0 or right > source_width or bottom > source_height:
+            return None, "observation_scope region is outside the source image"
+    if source_points:
+        if any(x < panel_left or y < panel_top or x > panel_left + panel_width or y > panel_top + panel_height for x, y in source_points):
+            return None, "observation_scope polygon is outside the selected panel"
+        if any(x < 0 or y < 0 or x > source_width or y > source_height for x, y in source_points):
+            return None, "observation_scope polygon is outside the source image"
+
+    result = {"role": str(region.get("role") or "geometry")[:48]}
+    if source_bbox is not None:
+        result["bbox_source_px"] = [round(item, 3) for item in source_bbox]
+        result["bbox_px"] = [
+            round(source_bbox[0] - scope.origin[0], 3),
+            round(source_bbox[1] - scope.origin[1], 3),
+            round(source_bbox[2], 3),
+            round(source_bbox[3], 3),
+        ]
+    if source_points:
+        result["polygon_source_px"] = [[round(x, 3), round(y, 3)] for x, y in source_points]
+        result["polygon_px"] = [[round(x - scope.origin[0], 3), round(y - scope.origin[1], 3)] for x, y in source_points]
+    if region.get("label"):
+        result["label"] = str(region["label"])[:96]
+    return result, None
+
+
+def _union_regions(regions: Sequence[Mapping[str, Any]], *, source: bool = False) -> list[int] | None:
+    boxes = [item.get("bbox_source_px" if source else "bbox_px") for item in regions if isinstance(item, Mapping)]
+    valid = [box for box in boxes if isinstance(box, Sequence) and len(box) >= 4]
+    if not valid:
+        return None
+    left = min(float(item[0]) for item in valid)
+    top = min(float(item[1]) for item in valid)
+    right = max(float(item[0]) + float(item[2]) for item in valid)
+    bottom = max(float(item[1]) + float(item[3]) for item in valid)
+    return [int(round(left)), int(round(top)), max(1, int(round(right - left))), max(1, int(round(bottom - top)))]
+
+
+def resolve_observation_scope(
+    value: object,
+    scope: ResolvedPanelScope,
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Authorize and convert a first-observation scope without creating an attempt."""
+    from ....measurement import ObservationScope, observation_scope_fingerprint
+
+    if value is None:
+        return None, None
+    requested = ObservationScope.from_mapping(value)
+    if requested is None:
+        return None, "observation_scope is malformed"
+    requested_attachment = requested.attachment_id
+    if requested_attachment and requested_attachment != scope.panel.attachment_id:
+        return None, "observation_scope does not belong to the selected attachment"
+    if requested.panel_id and requested.panel_id != scope.panel.panel_id:
+        return None, "observation_scope does not belong to the selected panel"
+    if not requested.include and not requested.exclude:
+        return None, "observation_scope must contain at least one bounded include or exclude region"
+    include: list[dict[str, Any]] = []
+    exclude: list[dict[str, Any]] = []
+    for raw, destination in ((requested.include, include), (requested.exclude, exclude)):
+        for region in raw[:16]:
+            resolved, error = _scope_region_pixels(region, coordinate_space=requested.coordinate_space, scope=scope)
+            if error is not None or resolved is None:
+                return None, error or "observation_scope region is invalid"
+            destination.append(resolved)
+    include_area = _union_regions(include)
+    if include and include_area is None:
+        return None, "observation_scope include regions have no usable area"
+    resolved = {
+        "scope_id": requested.scope_id or observation_scope_fingerprint(requested.to_dict()),
+        "attachment_id": scope.panel.attachment_id,
+        "panel_id": scope.panel.panel_id,
+        "coordinate_space": requested.coordinate_space,
+        "requested": requested.to_dict(),
+        "applied": True,
+        "status": "applied",
+        "include": include,
+        "exclude": exclude,
+        "include_regions_px": [item["bbox_px"] for item in include if item.get("bbox_px") is not None],
+        "exclude_regions_px": [item["bbox_px"] for item in exclude if item.get("bbox_px") is not None],
+        "include_polygons_px": [item["polygon_px"] for item in include if item.get("polygon_px") is not None],
+        "exclude_polygons_px": [item["polygon_px"] for item in exclude if item.get("polygon_px") is not None],
+        "regions_px": [item["bbox_px"] for item in include if item.get("bbox_px") is not None],
+        "polygons_px": [item["polygon_px"] for item in include if item.get("polygon_px") is not None],
+        "search_area": include_area or [0, 0, scope.local_size[0], scope.local_size[1]],
+        "search_scope": "scoped_include" if include_area else "panel_excluding_scope",
+        "source_regions": include + exclude,
+        "source_bbox_px": _union_regions(include, source=True) or list(scope.bbox),
+        "objectives": list(requested.objectives),
+        "reason": requested.reason,
+        "overlay": {
+            "panel_id": scope.panel.panel_id,
+            "source_bbox_px": _union_regions(include, source=True) or list(scope.bbox),
+            "include": include,
+            "exclude": exclude,
+        },
+    }
+    return resolved, None
+
+
 def measurement_target_region(
     value: Mapping[str, Any] | None,
     *,
@@ -369,13 +533,139 @@ def measurement_focus_context(
     }
 
 
+def observation_scope_focus_context(
+    value: Mapping[str, Any] | None,
+    *,
+    width: int,
+    height: int,
+    base_region: Sequence[int] | None = None,
+) -> dict[str, Any]:
+    """Project an authorized observation scope into the sensor focus contract."""
+    if not isinstance(value, Mapping):
+        return {
+            "requested": False,
+            "applied": False,
+            "status": "none",
+            "mode": None,
+            "target_refs": [],
+            "regions_px": [],
+            "polygons_px": [],
+            "region_px": None,
+            "search_area": list(base_region[:4]) if isinstance(base_region, Sequence) and len(base_region) >= 4 else [0, 0, width, height],
+            "search_scope": "panel_or_chart",
+        }
+    if value.get("applied") is False or value.get("status") in {"focus_empty", "rejected", "invalid"}:
+        return {
+            "requested": True,
+            "applied": False,
+            "status": value.get("status") or "focus_empty",
+            "mode": "include" if value.get("include") else "exclude",
+            "target_refs": [],
+            "regions_px": [],
+            "polygons_px": [],
+            "region_px": None,
+            "search_area": None,
+            "search_scope": "observation_scope",
+        }
+    base = list(base_region[:4]) if isinstance(base_region, Sequence) and len(base_region) >= 4 else [0, 0, width, height]
+    base = [max(0, int(base[0])), max(0, int(base[1])), max(1, int(base[2])), max(1, int(base[3]))]
+    include_regions = value.get("include_regions_px") or value.get("regions_px") or []
+    exclude_regions = value.get("exclude_regions_px") or []
+    include_polygons = value.get("include_polygons_px") or value.get("polygons_px") or []
+    exclude_polygons = value.get("exclude_polygons_px") or []
+    # Direct sensor callers may provide the model-facing scope without going
+    # through the attachment adapter. Treat that form as local panel space;
+    # the authorized adapter remains the only path that can turn source_px
+    # into an actual attachment/panel authorization.
+    if not include_regions and not exclude_regions and not include_polygons and not exclude_polygons:
+        from ....measurement import ObservationScope
+
+        requested = ObservationScope.from_mapping(value)
+        if requested is not None:
+            coordinate_space = requested.coordinate_space
+
+            def local_bbox(region: Mapping[str, Any]) -> list[float] | None:
+                raw = region.get("bbox")
+                if not isinstance(raw, Sequence) or len(raw) < 4:
+                    return None
+                values = [float(item) for item in raw[:4]]
+                if coordinate_space == "panel_norm":
+                    values = [values[0] * base[2], values[1] * base[3], values[2] * base[2], values[3] * base[3]]
+                return values
+
+            def local_polygon(region: Mapping[str, Any]) -> list[list[float]] | None:
+                raw = region.get("polygon")
+                if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes)):
+                    return None
+                points = [[float(point[0]), float(point[1])] for point in raw if isinstance(point, Sequence) and len(point) >= 2]
+                if coordinate_space == "panel_norm":
+                    points = [[point[0] * base[2], point[1] * base[3]] for point in points]
+                return points if len(points) >= 3 else None
+
+            for source_regions, destination_regions, destination_polygons in (
+                (requested.include, include_regions, include_polygons),
+                (requested.exclude, exclude_regions, exclude_polygons),
+            ):
+                for region in source_regions:
+                    bbox = local_bbox(region)
+                    polygon = local_polygon(region)
+                    if bbox is not None:
+                        destination_regions.append(bbox)
+                    if polygon is not None:
+                        destination_polygons.append(polygon)
+    include_regions = [list(item[:4]) for item in include_regions[:32] if isinstance(item, Sequence) and len(item) >= 4]
+    exclude_regions = [list(item[:4]) for item in exclude_regions[:32] if isinstance(item, Sequence) and len(item) >= 4]
+    include_polygons = [list(item) for item in include_polygons[:8] if isinstance(item, Sequence) and len(item) >= 3]
+    exclude_polygons = [list(item) for item in exclude_polygons[:8] if isinstance(item, Sequence) and len(item) >= 3]
+    if not include_regions and not include_polygons and not exclude_regions and not exclude_polygons:
+        return {
+            "requested": True,
+            "applied": False,
+            "status": "focus_empty",
+            "mode": "include",
+            "target_refs": [],
+            "regions_px": [],
+            "polygons_px": [],
+            "region_px": None,
+            "search_area": None,
+            "search_scope": "observation_scope",
+        }
+    all_include = include_regions
+    left = min((float(item[0]) for item in all_include), default=0.0)
+    top = min((float(item[1]) for item in all_include), default=0.0)
+    right = max((float(item[0]) + float(item[2]) for item in all_include), default=float(base[0] + base[2]))
+    bottom = max((float(item[1]) + float(item[3]) for item in all_include), default=float(base[1] + base[3]))
+    region = [max(0, int(round(left))), max(0, int(round(top))), max(1, int(round(right - left))), max(1, int(round(bottom - top)))]
+    return {
+        "requested": True,
+        "applied": True,
+        "status": "applied",
+        "mode": "include" if include_regions or include_polygons else "exclude",
+        "target_refs": [],
+        "regions_px": include_regions,
+        "polygons_px": include_polygons,
+        "include_regions_px": include_regions,
+        "exclude_regions_px": exclude_regions,
+        "include_polygons_px": include_polygons,
+        "exclude_polygons_px": exclude_polygons,
+        "region_px": region if include_regions else None,
+        "search_area": region if include_regions else base,
+        "search_scope": "observation_include" if include_regions else "panel_excluding_observation",
+        "scope": dict(value),
+    }
+
+
 def apply_measurement_focus(rgb: Any, focus: Mapping[str, Any]) -> Any:
     """Mask pixels outside/inside a focus so downstream sensors cannot rescan it."""
     if not isinstance(focus, Mapping) or not focus.get("requested") or not focus.get("applied"):
         return rgb
     regions = focus.get("regions_px")
     polygons = focus.get("polygons_px")
-    if (not isinstance(regions, list) or not regions) and (not isinstance(polygons, list) or not polygons):
+    include_regions = focus.get("include_regions_px") or regions
+    exclude_regions = focus.get("exclude_regions_px") or []
+    include_polygons = focus.get("include_polygons_px") or polygons
+    exclude_polygons = focus.get("exclude_polygons_px") or []
+    if (not isinstance(include_regions, list) or not include_regions) and (not isinstance(include_polygons, list) or not include_polygons) and (not exclude_regions) and (not exclude_polygons):
         return rgb
     import numpy as np
     from PIL import ImageDraw
@@ -383,8 +673,8 @@ def apply_measurement_focus(rgb: Any, focus: Mapping[str, Any]) -> Any:
     result = np.asarray(rgb).copy()
     height, width = result.shape[:2]
     allowed = np.zeros((height, width), dtype=bool)
-    if isinstance(regions, list):
-        for raw in regions[:32]:
+    if isinstance(include_regions, list):
+        for raw in include_regions[:32]:
             if not isinstance(raw, Sequence) or len(raw) < 4:
                 continue
             left, top, box_width, box_height = (int(item) for item in raw[:4])
@@ -392,10 +682,10 @@ def apply_measurement_focus(rgb: Any, focus: Mapping[str, Any]) -> Any:
             bottom = min(height, max(0, top) + max(0, box_height))
             if right > max(0, left) and bottom > max(0, top):
                 allowed[max(0, top):bottom, max(0, left):right] = True
-    if isinstance(polygons, list):
+    if isinstance(include_polygons, list):
         mask = Image.new("1", (width, height), 0)
         drawer = ImageDraw.Draw(mask)
-        for raw in polygons[:8]:
+        for raw in include_polygons[:8]:
             if isinstance(raw, Sequence) and len(raw) >= 3:
                 points = [
                     (max(0, min(width - 1, int(round(point[0])))), max(0, min(height - 1, int(round(point[1])))))
@@ -405,10 +695,38 @@ def apply_measurement_focus(rgb: Any, focus: Mapping[str, Any]) -> Any:
                 if len(points) >= 3:
                     drawer.polygon(points, fill=1)
         allowed |= np.asarray(mask, dtype=bool)
-    if focus.get("mode") == "include":
-        result[~allowed] = 255
+    if not include_regions and not include_polygons and (exclude_regions or exclude_polygons):
+        # An exclude-only observation scope keeps the whole authorized panel
+        # searchable and masks only the explicitly excluded shapes.
+        allowed[:] = True
+    excluded = np.zeros((height, width), dtype=bool)
+    if isinstance(exclude_regions, list):
+        for raw in exclude_regions[:32]:
+            if not isinstance(raw, Sequence) or len(raw) < 4:
+                continue
+            left, top, box_width, box_height = (int(item) for item in raw[:4])
+            right = min(width, max(0, left) + max(0, box_width))
+            bottom = min(height, max(0, top) + max(0, box_height))
+            if right > max(0, left) and bottom > max(0, top):
+                excluded[max(0, top):bottom, max(0, left):right] = True
+    if isinstance(exclude_polygons, list):
+        mask = Image.new("1", (width, height), 0)
+        drawer = ImageDraw.Draw(mask)
+        for raw in exclude_polygons[:8]:
+            if isinstance(raw, Sequence) and len(raw) >= 3:
+                points = [
+                    (max(0, min(width - 1, int(round(point[0])))), max(0, min(height - 1, int(round(point[1])))))
+                    for point in raw
+                    if isinstance(point, Sequence) and len(point) >= 2
+                ]
+                if len(points) >= 3:
+                    drawer.polygon(points, fill=1)
+        excluded |= np.asarray(mask, dtype=bool)
+    has_include = bool(include_regions or include_polygons)
+    if focus.get("mode") == "include" or has_include:
+        result[~allowed | excluded] = 255
     else:
-        result[allowed] = 255
+        result[excluded] = 255
     return result
 
 
@@ -538,9 +856,11 @@ __all__ = [
     "apply_measurement_focus",
     "localize_layout_context",
     "measurement_focus_context",
+    "observation_scope_focus_context",
     "measurement_target_region",
     "measurement_target_regions",
     "resolve_measurement_target",
+    "resolve_observation_scope",
     "resolve_panel_scope",
     "scoped_image_path",
 ]

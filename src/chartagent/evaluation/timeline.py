@@ -246,6 +246,8 @@ def _event_stages(kind: str, payload: Mapping[str, Any]) -> list[str]:
         "measurement_focus_requested",
         "measurement_focus_failed",
         "measurement_decision_required",
+        "measurement_repair_exhausted",
+        "assembly_validation_failure",
         "chart_review_repair_required",
         "review_repair_required",
     }:
@@ -321,6 +323,8 @@ def _apply_stage_statuses(
                 "measurement_repair_required",
                 "measurement_decision_required",
                 "measurement_focus_requested",
+                "measurement_observed",
+                "assembly_validation_failure",
             }
             for _, kind, _ in bucket
         )
@@ -765,7 +769,7 @@ def _tool_name(payload: Mapping[str, Any]) -> str | None:
 
 
 def _event_is_failure(kind: str, payload: Mapping[str, Any]) -> bool:
-    if kind in {"run_failed", "run_interrupted", "generated_chart_rejected", "measurement_repair_exhausted", "measurement_repair_rejected", "measurement_focus_failed", "review_failed"}:
+    if kind in {"run_failed", "run_interrupted", "generated_chart_rejected", "measurement_repair_exhausted", "measurement_repair_rejected", "measurement_focus_failed", "assembly_validation_failure", "review_failed"}:
         return True
     if kind in {"chart_review_repair_required", "review_repair_required", "review_gate_required", "recovery_blocked"}:
         return True
@@ -780,6 +784,8 @@ def _event_needs_repair(kind: str, payload: Mapping[str, Any]) -> bool:
         "measurement_decision_required",
         "measurement_focus_requested",
         "measurement_focus_failed",
+        "measurement_repair_exhausted",
+        "assembly_validation_failure",
         "chart_review_repair_required",
         "review_repair_required",
     }:
@@ -789,7 +795,7 @@ def _event_needs_repair(kind: str, payload: Mapping[str, Any]) -> bool:
 
 
 def _event_is_success(kind: str, payload: Mapping[str, Any]) -> bool:
-    if kind in {"run_started", "resume_started", "generated_chart", "generated_chart_published", "operation_completed", "chart_review_completed", "review_completed", "measurement_focus_applied", "measurement_evidence_selected"}:
+    if kind in {"run_started", "resume_started", "generated_chart", "generated_chart_published", "operation_completed", "chart_review_completed", "review_completed", "measurement_focus_applied", "measurement_evidence_selected", "measurement_evidence_discarded", "measurement_observed"}:
         return not _event_is_failure(kind, payload)
     if kind == "tool_result":
         statuses = _statuses(payload)

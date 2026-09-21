@@ -72,6 +72,7 @@ def dispatch_observation(
     source_panel_id: str | None = None,
     source_parent_attempt_id: str | None = None,
     source_measurement_target: Mapping[str, object] | None = None,
+    source_observation_scope: Mapping[str, object] | None = None,
     measurement_context: Mapping[str, object] | None = None,
 ) -> DispatchedObservation:
     """Dispatch a call with optional validated, in-memory image evidence."""
@@ -117,6 +118,8 @@ def dispatch_observation(
             source_measurement_target=args.get("measurement_target")
             if isinstance(args.get("measurement_target"), Mapping)
             else None,
+            source_observation_scope=source_observation_scope
+            or (args.get("observation_scope") if isinstance(args.get("observation_scope"), Mapping) else None),
         )
     except Exception:  # pragma: no cover - un-serializable result guard
         return DispatchedObservation(_error(f"Tool {name!r} result could not be serialized."))

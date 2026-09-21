@@ -12,9 +12,11 @@
 
 对于 line/scatter，如果证据中已经确认横轴类别（例如 `Jan`、`Feb`、`Mar`），必须在单图或 figure 子图中把有序类别传入 `x_categories`；`x_label` 只是轴标题，不能替代类别标签。没有可靠类别证据时不要猜测或伪造 `x_categories`，保留数值横轴。
 
-当数据来自测量工具时，先读取结果中的 `measurement.reference`、`measurement.status`、`measurement.evidence.refs`、overlay 和 `measurement.quality.issues`。主 Agent 必须先形成一次明确的 `measurement_decision`，记录当前 attempt 的 `selected_refs` 与 `discarded_refs`，再在 `assemble_spec` 中原样传入 `measurement_ref` 和该 decision。其他状态只能促使你选择、舍弃、保留未解析字段或显式调用带 `measurement_target` 的同一测量工具；warning 不会自动触发重测。不得手写、复制其他 panel 的 reference，也不得把普通 `source` 文本当作测量来源授权。
+当数据来自测量工具时，先读取结果中的 `measurement.reference`、`measurement.status`、`measurement.evidence.refs`、overlay 和 `measurement.quality.issues`。主 Agent 必须先形成一次明确的 `measurement_decision`，记录当前 attempt 的 `status`（`selected`、`discarded` 或 `abandoned`）、`selected_refs`、`discarded_refs`，必要时补充 `series_map` 与 `evidence_basis`，再在 `assemble_spec` 中原样传入 `measurement_ref` 和该 decision。`accepted` 不是主 Agent 必须伪造或等待的状态；warning 不会自动触发重测。不得手写、复制其他 panel 的 reference，也不得把普通 `source` 文本当作测量来源授权。
 
-局部补充只使用原图表测量工具的 `measurement_target`。优先用当前 attempt 的 compact refs 和 `include`/`exclude` mode；target 必须属于同一 attachment、panel 和 parent attempt。定向调用返回 `focus` 后，检查 `requested`、`applied`、`search_scope` 以及 `focus_empty`/`focus_insufficient`，不得假定工具在失败时自动扩大到完整 panel。一次测量结果只允许一个主 Agent 决策点，代码不会在审核、批处理结束或恢复时偷偷追加测量。
+首次测量应优先复用已有 `panel_id`，并可在工具参数中提供简单的 `observation_scope`：`coordinate_space` 使用 `panel_norm`、`panel_px` 或 `source_px`，通过 `include`/`exclude` 指定待观察的几何区域和少量 `objectives`。它只限定本次搜索，不创建或替换 measurement session。后续只有在当前 attempt 已暴露不确定 refs 时，才传 `measurement_target` 做定向补充；不要把两种范围字段同时当成同一语义。
+
+局部补充只使用原图表测量工具的 `measurement_target`。优先用当前 attempt 的 compact refs 和 `include`/`exclude` mode；target 必须属于同一 attachment、panel 和 parent attempt。定向调用返回 `focus` 后，检查 `requested`、`applied`、`search_scope` 以及 `focus_empty`/`focus_insufficient`，不得假定工具在失败时自动扩大到完整 panel。一次测量结果只允许一个主 Agent 决策点，代码不会在审核、批处理结束或恢复时偷偷追加测量。测量决策失败时返回可修复的组装错误；不创建 measurement review gate，也不因质量 warning 自动跳过同一批后续工具。
 
 如果 `assemble_spec` 返回错误，读取其定位到的 bounded issues，修改输入、重新观察或重新组装；没有成功组装的 ChartSpec、ChartFigure 或 ChartSpecCollection 不得直接返回为结构化结果，也不得交给 `render_chart`。
 

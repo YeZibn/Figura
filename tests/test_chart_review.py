@@ -138,6 +138,7 @@ def test_figure_vlm_prompt_contains_all_child_specs_and_coverage():
     assert '"source_series":["Q1","Q2"]' in text
     assert '"chart_id":"q1"' in text
     assert '"chart_id":"q2"' in text
+    assert "review_scope=当前候选只审核 ChartFigure.source.panel_id" in text
 
 
 def test_direct_candidate_is_independently_reviewed_and_promoted():

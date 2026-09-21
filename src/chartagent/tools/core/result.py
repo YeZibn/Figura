@@ -186,6 +186,7 @@ def normalize_tool_result(
     source_run_id: str | None = None,
     source_parent_attempt_id: str | None = None,
     source_measurement_target: Mapping[str, Any] | None = None,
+    source_observation_scope: Mapping[str, Any] | None = None,
 ) -> DispatchedObservation:
     """Normalize a legacy value or enriched ``ToolResult``.
 
@@ -216,6 +217,7 @@ def normalize_tool_result(
                 source_run_id=source_run_id,
                 parent_attempt_id=source_parent_attempt_id,
                 measurement_target=source_measurement_target,
+                observation_scope=source_observation_scope,
             )
             return DispatchedObservation(
                 json.dumps(
@@ -263,6 +265,15 @@ def normalize_tool_result(
         candidate_target = result.data.get("measurement_target")
         if isinstance(candidate_target, Mapping):
             resolved_measurement_target = candidate_target
+    resolved_observation_scope = source_observation_scope
+    if isinstance(result.data, Mapping):
+        candidate_scope = result.data.get("observation_scope")
+        if isinstance(candidate_scope, Mapping):
+            # The authorized adapter replaces the model's request with an
+            # applied local/source-coordinate envelope. Prefer that enriched
+            # value over the raw request passed through dispatch.
+            if resolved_observation_scope is None or candidate_scope.get("applied") is not None:
+                resolved_observation_scope = candidate_scope
     if source_tool in {
         "measure_bars",
         "extract_line_series",
@@ -284,6 +295,7 @@ def normalize_tool_result(
             source_run_id=source_run_id,
             parent_attempt_id=source_parent_attempt_id,
             measurement_target=resolved_measurement_target,
+            observation_scope=resolved_observation_scope,
             captions=[image.caption for image in images],
         )
 

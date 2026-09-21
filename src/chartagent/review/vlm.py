@@ -160,6 +160,11 @@ def build_vlm_review_messages(
     spec_text = json.dumps(_safe_spec_payload(spec), ensure_ascii=False, separators=(",", ":"))
     if len(spec_text) > MAX_REVIEW_SPEC:
         spec_text = spec_text[:MAX_REVIEW_SPEC]
+    review_scope = (
+        "当前候选只审核 ChartFigure.source.panel_id 所对应的面板；同一原图中的其他 panel 属于其他候选，不得要求当前候选包含它们。"
+        if isinstance(spec, ChartFigure) and spec.source.panel_id
+        else "当前候选审核整个 ChartFigure 画布，必须覆盖该 figure 内声明的全部子图。"
+    )
     context = [
         {
             "type": "text",
@@ -168,6 +173,7 @@ def build_vlm_review_messages(
                 f"review_id={candidate.review_id}\n"
                 f"chart_spec_digest={candidate.chart_spec_digest}\n"
                 f"candidate_size={candidate.width}x{candidate.height}\n"
+                f"review_scope={review_scope}\n"
                 f"{'ChartFigure' if isinstance(spec, ChartFigure) else 'ChartSpec'}={spec_text}"
             ),
         },

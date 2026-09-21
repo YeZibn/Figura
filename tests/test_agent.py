@@ -473,7 +473,7 @@ def test_multiple_tools_append_all_tool_messages_before_visual_observation():
     assert "Tool call ID: call-2" in evidence[3]["text"]
 
 
-def test_measurement_gate_stops_the_tool_batch_after_the_first_blocking_result():
+def test_measurement_quality_does_not_stop_the_tool_batch_after_observation():
     registry = ToolRegistry()
     registry.register(
         Tool(
@@ -528,7 +528,7 @@ def test_measurement_gate_stops_the_tool_batch_after_the_first_blocking_result()
     )
 
     answer = Agent(client, registry, max_steps=2, trace=events.append).run("检查两个 panel")
-    assert answer == "*stopped: generated chart review failed; no artifact published*"
+    assert answer == "done"
 
     messages = client.calls[1]["messages"]
     assert [message["role"] for message in messages] == ["user", "assistant", "tool", "tool"]
@@ -536,7 +536,8 @@ def test_measurement_gate_stops_the_tool_batch_after_the_first_blocking_result()
     assert not any(message["role"] == "user" and "measurement_repairs" in str(message["content"]) for message in messages)
     assert any(message["role"] == "tool" and "measurement" in str(message["content"]) for message in messages[2:3])
     skipped = [event for event in events if event.kind == "tool_skipped"]
-    assert [event.payload["call_id"] for event in skipped] == ["line-1"]
+    assert skipped == []
+    assert any(event.kind == "measurement_observed" for event in events)
 
 
 def test_invalid_generated_image_does_not_add_multimodal_turn():

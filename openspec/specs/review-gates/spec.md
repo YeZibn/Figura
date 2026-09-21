@@ -22,42 +22,60 @@
 
 ### Requirement: Review gates block downstream execution
 
-系统 SHALL 在审核状态为 `reviewing`、`repair_required`、`failed` 或 `exhausted` 时阻止主链路越过当前审核阶段。只有 `passed` 或策略允许的 `passed_with_warning` 才能释放后续阶段；审核门禁不得由模型最终文本、普通工具调用或客户端状态推断绕过。
+系统 SHALL 仅对真正需要发布保护的审核阶段建立共享阻塞门禁。生成图审核处于 `reviewing`、`repair_required`、`failed` 或 `exhausted` 时，系统 SHALL 阻止 render 后的 publish 或成功终结；measurement observation 的 warning、`partial` 或 `remeasure_required` SHALL 作为可追踪诊断，不得独占阻塞 OCR、布局观察、其他测量或主 Agent 的候选组装。
 
-#### Scenario: Pending review blocks the next stage
-- **WHEN** 测量审核或生成图审核尚未产生可接受决定
-- **THEN** 系统不得执行依赖该证据的 assemble、render、publish 或成功终结动作
-- **AND** 运行记录明确显示主链路处于审核门禁中
+#### Scenario: Measurement observation remains non-blocking
 
-#### Scenario: Warning is an explicit release
-- **WHEN** 审核产生策略允许的 warning 决定
-- **THEN** 系统记录 warning 并释放后续阶段
-- **AND** 后续结果明确携带带警告的审核状态，而不是显示为未经审核的成功
+- **WHEN** 测量工具返回候选和质量 warning
+- **THEN** 运行记录保存 observation、问题和可选下一动作
+- **AND** 主 Agent 仍可调用其他证据工具或提交 evidence decision
+
+#### Scenario: Generated chart review blocks publication
+
+- **WHEN** 生成图候选尚未通过生成审核
+- **THEN** 系统阻止发布和声称成功的最终结果
+- **AND** 候选、ChartSpec 和审核状态仍可被主 Agent 和客户端查看
+
+#### Scenario: Gate cannot be bypassed by final text
+
+- **WHEN** 模型最终文本声称候选已经通过，但生成审核仍处于阻塞状态
+- **THEN** 系统保持发布门禁关闭
+- **AND** 客户端显示代码拥有的审核状态
 
 ### Requirement: Review repair is a controlled sub-loop
 
-当审核返回 `repair_required` 且仍有预算时，系统 SHALL 只允许执行审核记录指定的修复动作；修复必须创建新的可归因 attempt 或 candidate，并 SHALL 在重新释放主链路前再次审核。修复动作不得被解释为普通流程继续。
+生成图审核返回 `repair_required` 且仍有预算时，系统 SHALL 只允许与该候选关联的 ChartSpec 修正和重新渲染，并在发布前重新审核。测量 observation 的局部重测不再作为共享 review gate 的独占子循环，而是主 Agent 可以主动调用的普通有界工具动作；两类动作都必须保留来源和父对象 lineage。
 
-#### Scenario: Unrelated work is rejected while repair is required
-- **WHEN** 当前审核要求定向重测或修正 ChartSpec
-- **THEN** 系统拒绝或延迟不属于该修复动作的后续工具、assemble、render 或 publish 操作
-- **AND** 修复上下文包含受影响区域、字段和父审核引用
+#### Scenario: Generated candidate repair is controlled
 
-#### Scenario: Repair creates a new review attempt
-- **WHEN** 指定修复动作完成
-- **THEN** 系统创建新的 attempt/candidate lineage 并提交新的审核记录
-- **AND** 父失败结果保持不可发布且可追踪
+- **WHEN** 当前生成图审核要求修正 ChartSpec
+- **THEN** 系统限制后续生成动作到该候选的修正和重新渲染
+- **AND** 父失败候选保持不可发布且可追踪
+
+#### Scenario: Measurement re-observation does not freeze unrelated work
+
+- **WHEN** 主 Agent 根据测量 warning 请求局部补充
+- **THEN** 系统记录新的 measurement attempt 和父 attempt
+- **AND** OCR、布局观察或对其他未依赖候选的判断不因该补充请求被隐式跳过
 
 ### Requirement: Review failures close the gate without implicit bypass
 
-审核失败、超时、证据不可用、非法审核结果或重试耗尽 SHALL 保持门禁关闭。系统 SHALL 返回有界的失败分类和恢复信息；在没有新的有效审核通过前，不得发布候选、组装未经接受的证据或生成声称成功的最终结果。
+生成图审核失败、超时、证据不可用、非法审核结果或重试耗尽 SHALL 保持生成发布门禁关闭，并返回有界的失败分类和恢复信息。测量 observation 的重测预算耗尽 SHALL 关闭该补充分支，但不应被伪装成生成图审核失败；如果模型选择其他可追溯证据，主链路可以继续。
 
-#### Scenario: Retry budget is exhausted
-- **WHEN** 审核或修复达到配置上限
-- **THEN** 当前审核进入 `exhausted` 或等价终态
-- **AND** 运行结果为非成功或非发布状态，并保留最后诊断
+#### Scenario: Generated review budget is exhausted
 
-#### Scenario: Review result is stale or mismatched
+- **WHEN** 生成图审核或候选修复达到配置上限
+- **THEN** 当前生成候选进入明确的 `exhausted` 非发布状态
+- **AND** 运行结果不得声称生成成功
+
+#### Scenario: Measurement repair budget is exhausted
+
+- **WHEN** 某个 measurement session 的局部补充达到上限
+- **THEN** 系统记录 `measurement_repair_exhausted` 及最后诊断
+- **AND** 不再自动重测，但不把整个 run 错报为 generated chart review failure
+
+#### Scenario: Stale review cannot release publication
+
 - **WHEN** 审核结果引用了错误的 subject、attempt、candidate 或 ChartSpec digest
 - **THEN** 系统拒绝应用该结果
 - **AND** 任何其他审核对象的门禁或发布状态都不发生变化

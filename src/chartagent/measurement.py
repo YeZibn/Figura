@@ -56,6 +56,23 @@ _LEGACY_REF_PATTERN = re.compile(
     re.IGNORECASE,
 )
 MEASUREMENT_FOCUS_MODES = frozenset({"include", "exclude"})
+OBSERVATION_COORDINATE_SPACES = frozenset({"panel_norm", "panel_px", "source_px"})
+OBSERVATION_REGION_ROLES = frozenset(
+    {
+        "plot",
+        "legend",
+        "axes",
+        "x_axis",
+        "y_axis",
+        "data_labels",
+        "annotation",
+        "baseline",
+        "geometry",
+        "panel",
+    }
+)
+MAX_OBSERVATION_REGIONS = 16
+MAX_OBSERVATION_OBJECTIVES = 8
 MEASUREMENT_REGION_KINDS = frozenset(
     {
         "panel",
@@ -289,6 +306,17 @@ def _polyline_bbox(value: object) -> list[float] | None:
     return [round(min(xs), 3), round(min(ys), 3), round(max(xs) - min(xs), 3), round(max(ys) - min(ys), 3)]
 
 
+def _has_numeric_value(value: Mapping[str, Any], *keys: str) -> bool:
+    for key in keys:
+        if _finite_number(value.get(key)) is not None:
+            return True
+    for nested_key in ("measure", "value", "data"):
+        nested = value.get(nested_key)
+        if isinstance(nested, Mapping) and any(_finite_number(nested.get(key)) is not None for key in keys):
+            return True
+    return False
+
+
 def build_measurement_evidence_refs(
     data: Mapping[str, Any],
     *,
@@ -317,6 +345,10 @@ def build_measurement_evidence_refs(
             bbox = _polyline_bbox(item["trace"].get("polyline_px"))
         if bbox is not None:
             entry["bbox_px"] = bbox
+        entry["has_numeric_value"] = bool(
+            _has_numeric_value(item, "x", "y", "value", "ratio")
+            or isinstance(item.get("trace"), Mapping) and bool(item["trace"].get("polyline_px"))
+        )
         refs.append(entry)
 
     if source_tool == "measure_bars":
@@ -334,6 +366,7 @@ def build_measurement_evidence_refs(
             bbox = _candidate_bbox(item)
             if bbox is not None:
                 entry["bbox_px"] = bbox
+            entry["has_numeric_value"] = _has_numeric_value(item, "value", "ratio", "height", "length")
             refs.append(entry)
     elif source_tool in {"extract_line_series", "extract_scatter_points"}:
         points = data.get("points") if isinstance(data.get("points"), list) else []
@@ -347,6 +380,7 @@ def build_measurement_evidence_refs(
             bbox = _candidate_bbox(item)
             if bbox is not None:
                 entry["bbox_px"] = bbox
+            entry["has_numeric_value"] = _has_numeric_value(item, "x", "y", "value")
             refs.append(entry)
     elif source_tool == "extract_pie_slices":
         sectors = data.get("sectors") if isinstance(data.get("sectors"), list) else []
@@ -360,6 +394,7 @@ def build_measurement_evidence_refs(
             bbox = _candidate_bbox(item)
             if bbox is not None:
                 entry["bbox_px"] = bbox
+            entry["has_numeric_value"] = _has_numeric_value(item, "value", "ratio", "angle_deg", "angle")
             refs.append(entry)
 
     legend = data.get("legend") if isinstance(data.get("legend"), list) else []
@@ -502,6 +537,148 @@ class MeasurementTarget:
             json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
         ).hexdigest()[:24]
         return f"mt_{digest}"
+
+
+def _observation_region(value: object, *, coordinate_space: str) -> dict[str, Any] | None:
+    """Normalize one model-provided observation region without inventing pixels."""
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        value = {"bbox": list(value)}
+    if not isinstance(value, Mapping):
+        return None
+    role = _text(value.get("role") or value.get("region_kind") or value.get("regionKind") or "geometry", MAX_MEASUREMENT_REGION_KIND).lower()
+    if role not in OBSERVATION_REGION_ROLES:
+        role = "geometry"
+    bbox_key = {
+        "panel_norm": ("bbox_norm", "bbox"),
+        "panel_px": ("bbox_px", "bbox_local_px", "bbox"),
+        "source_px": ("bbox_source_px", "bbox_px", "bbox"),
+    }.get(coordinate_space, ("bbox",))
+    bbox = None
+    for key in bbox_key:
+        bbox = _bbox(value.get(key))
+        if bbox is not None:
+            break
+    polygon_key = {
+        "panel_norm": ("polygon_norm", "polygon"),
+        "panel_px": ("polygon_px", "polygon_local_px", "polygon"),
+        "source_px": ("polygon_source_px", "polygon_px", "polygon"),
+    }.get(coordinate_space, ("polygon",))
+    polygon = None
+    for key in polygon_key:
+        polygon = _polygon(value.get(key))
+        if polygon is not None:
+            break
+    if bbox is None and polygon is None:
+        return None
+    if coordinate_space == "panel_norm":
+        if bbox is not None and (bbox[0] + bbox[2] > 1 or bbox[1] + bbox[3] > 1):
+            return None
+        if polygon is not None and any(x > 1 or y > 1 for x, y in polygon):
+            return None
+    result: dict[str, Any] = {"role": role}
+    if bbox is not None:
+        result["bbox"] = [round(item, 6) for item in bbox]
+    if polygon is not None:
+        result["polygon"] = [[round(x, 6), round(y, 6)] for x, y in polygon[:MAX_MEASUREMENT_POLYGON_POINTS]]
+    label = _text(value.get("label") or value.get("name"), 96)
+    if label:
+        result["label"] = label
+    return result
+
+
+@dataclass(frozen=True)
+class ObservationScope:
+    """The model's bounded first-observation request.
+
+    Unlike ``MeasurementTarget``, this object has no parent attempt and is
+    valid before a measurement session exists.  Pixel conversion and panel
+    authorization happen in the chart adapter, not in the model-facing schema.
+    """
+
+    panel_id: str | None
+    coordinate_space: str
+    include: tuple[dict[str, Any], ...] = ()
+    exclude: tuple[dict[str, Any], ...] = ()
+    objectives: tuple[str, ...] = ()
+    attachment_id: str | None = None
+    reason: str = ""
+    scope_id: str | None = None
+
+    @classmethod
+    def from_mapping(cls, value: object) -> "ObservationScope | None":
+        if not isinstance(value, Mapping):
+            return None
+        coordinate_space = str(value.get("coordinate_space") or value.get("coordinateSpace") or "panel_norm").strip().lower()
+        aliases = {"normalized": "panel_norm", "panel_normalized": "panel_norm", "source": "source_px", "local_px": "panel_px"}
+        coordinate_space = aliases.get(coordinate_space, coordinate_space)
+        if coordinate_space not in OBSERVATION_COORDINATE_SPACES:
+            return None
+        raw_include = value.get("include")
+        raw_exclude = value.get("exclude")
+        if isinstance(raw_include, Mapping):
+            raw_include = [raw_include]
+        if isinstance(raw_exclude, Mapping):
+            raw_exclude = [raw_exclude]
+        # A direct bbox is a convenient single-include shorthand.
+        if raw_include is None and any(key in value for key in ("bbox", "bbox_norm", "bbox_px", "bbox_source_px", "polygon", "polygon_norm", "polygon_px", "polygon_source_px")):
+            raw_include = [value]
+        include = tuple(
+            region
+            for raw in (raw_include if isinstance(raw_include, (list, tuple)) else ())
+            if (region := _observation_region(raw, coordinate_space=coordinate_space)) is not None
+        )[:MAX_OBSERVATION_REGIONS]
+        exclude = tuple(
+            region
+            for raw in (raw_exclude if isinstance(raw_exclude, (list, tuple)) else ())
+            if (region := _observation_region(raw, coordinate_space=coordinate_space)) is not None
+        )[:MAX_OBSERVATION_REGIONS]
+        raw_objectives = value.get("objectives") or value.get("objective") or value.get("analysis_targets") or ()
+        if isinstance(raw_objectives, str):
+            raw_objectives = [raw_objectives]
+        objectives = tuple(_text(item, 96) for item in raw_objectives if _text(item, 96))[:MAX_OBSERVATION_OBJECTIVES] if isinstance(raw_objectives, (list, tuple)) else ()
+        return cls(
+            panel_id=_text(value.get("panel_id") or value.get("panelId"), 160) or None,
+            coordinate_space=coordinate_space,
+            include=include,
+            exclude=exclude,
+            objectives=objectives,
+            attachment_id=_text(value.get("attachment_id") or value.get("source_attachment_id"), 160) or None,
+            reason=_text(value.get("reason"), 240),
+            scope_id=_text(value.get("scope_id") or value.get("scopeId"), MAX_MEASUREMENT_TARGET_ID) or None,
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        result: dict[str, Any] = {
+            "scope_id": self.scope_id,
+            "attachment_id": self.attachment_id,
+            "panel_id": self.panel_id,
+            "coordinate_space": self.coordinate_space,
+            "include": [dict(item) for item in self.include[:MAX_OBSERVATION_REGIONS]],
+            "exclude": [dict(item) for item in self.exclude[:MAX_OBSERVATION_REGIONS]],
+            "objectives": list(self.objectives[:MAX_OBSERVATION_OBJECTIVES]),
+            "reason": self.reason[:MAX_MEASUREMENT_TEXT],
+        }
+        return result
+
+    def fingerprint(self, *, tool: str | None = None) -> str:
+        payload = self.to_dict()
+        payload.pop("scope_id", None)
+        payload.pop("reason", None)
+        payload["tool"] = _text(tool, 80)
+        digest = hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:24]
+        return f"os_{digest}"
+
+
+def normalize_observation_scope(value: object) -> dict[str, Any] | None:
+    scope = ObservationScope.from_mapping(value)
+    if scope is None:
+        return None
+    return scope.to_dict()
+
+
+def observation_scope_fingerprint(value: object, *, tool: str | None = None) -> str | None:
+    scope = ObservationScope.from_mapping(value)
+    return scope.fingerprint(tool=tool) if scope is not None else None
 
 
 def normalize_measurement_target(value: object) -> dict[str, Any] | None:
@@ -668,6 +845,7 @@ def audit_measurement(
     source_panel_id: str | None = None,
     source_run_id: str | None = None,
     measurement_target: Mapping[str, Any] | None = None,
+    observation_scope: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Audit common evidence without changing chart-specific sensor fields."""
     chart_data = data if isinstance(data, Mapping) else {}
@@ -781,6 +959,17 @@ def audit_measurement(
     attempt_id = new_attempt_id()
     scope = _source_scope(chart_data)
     target = normalize_measurement_target(measurement_target)
+    if isinstance(observation_scope, Mapping) and (
+        observation_scope.get("applied") is not None
+        or observation_scope.get("status") in {"applied", "rejected", "focus_empty"}
+    ):
+        # The authorized adapter has already converted the model request into
+        # local/source pixel regions. Re-normalizing that envelope as a fresh
+        # panel_norm request would discard its bbox_px fields.
+        requested_scope = _json_safe(dict(observation_scope))
+        requested_scope = requested_scope if isinstance(requested_scope, dict) else None
+    else:
+        requested_scope = normalize_observation_scope(observation_scope)
     if target is not None:
         target["panel_id"] = target.get("panel_id") or panel
         target["parent_attempt_id"] = target.get("parent_attempt_id")
@@ -812,15 +1001,18 @@ def audit_measurement(
             "parent_attempt_id": None,
             "tool": _text(source_tool, 80),
             "scope": scope,
+            "observation_scope": requested_scope,
             "target": target,
             "target_fingerprint": measurement_target_fingerprint(target, tool=source_tool),
             "created_at": _now(),
         },
         "target": target,
+        "observation_scope": requested_scope,
         "source": {
             "attachment_id": attachment,
             "panel_id": panel,
             "scope": scope,
+            "observation_scope": requested_scope,
         },
         "quality": {
             "confidence": confidence,
@@ -841,6 +1033,16 @@ def audit_measurement(
             "status": "pending",
             "selected_refs": [],
             "discarded_refs": [],
+            "series_map": {},
+            "evidence_basis": None,
+        },
+        "execution": {
+            "status": "completed" if source_tool in MEASUREMENT_TOOLS else "failed",
+        },
+        "diagnostics": {
+            "status": status,
+            "warnings": warning_list[:12],
+            "issue_count": len(issues[:MAX_MEASUREMENT_ISSUES]),
         },
     }
 
@@ -856,6 +1058,7 @@ def attach_measurement_quality(
     source_run_id: str | None = None,
     parent_attempt_id: str | None = None,
     measurement_target: Mapping[str, Any] | None = None,
+    observation_scope: Mapping[str, Any] | None = None,
     captions: Iterable[object] = (),
 ) -> dict[str, Any]:
     """Copy chart data and attach a fresh bounded measurement envelope."""
@@ -869,6 +1072,7 @@ def attach_measurement_quality(
         source_panel_id=source_panel_id,
         source_run_id=source_run_id,
         measurement_target=measurement_target,
+        observation_scope=observation_scope,
     )
     attempt = dict(envelope.get("attempt") or {})
     if isinstance(parent_attempt_id, str) and parent_attempt_id:
@@ -918,6 +1122,7 @@ class MeasurementAttempt:
     tool: str
     status: str
     scope: dict[str, Any] | None = None
+    observation_scope: dict[str, Any] | None = None
     target: dict[str, Any] | None = None
     target_fingerprint: str | None = None
     quality: dict[str, Any] = field(default_factory=dict)
@@ -925,6 +1130,9 @@ class MeasurementAttempt:
     evidence_refs: tuple[dict[str, Any], ...] = ()
     selected_refs: tuple[str, ...] = ()
     discarded_refs: tuple[str, ...] = ()
+    decision_status: str = "pending"
+    series_map: dict[str, str] = field(default_factory=dict)
+    evidence_basis: str | None = None
     focus_mode: str | None = None
     created_at: str = field(default_factory=_now)
 
@@ -954,6 +1162,8 @@ class MeasurementAttempt:
             }
         focus = evidence.get("focus") if isinstance(evidence, Mapping) else None
         scope = _json_safe(attempt.get("scope") or source.get("scope"))
+        observation_scope = _json_safe(value.get("observation_scope") or attempt.get("observation_scope") or source.get("observation_scope"))
+        observation_scope = observation_scope if isinstance(observation_scope, dict) else None
         target = _json_safe(value.get("target") or attempt.get("target"))
         target = target if isinstance(target, dict) else None
         return cls(
@@ -966,6 +1176,7 @@ class MeasurementAttempt:
             tool=_text(attempt.get("tool"), 80),
             status=status,
             scope=scope if isinstance(scope, dict) else None,
+            observation_scope=observation_scope,
             target=target,
             target_fingerprint=_text(attempt.get("target_fingerprint"), 80) or measurement_target_fingerprint(target, tool=attempt.get("tool")),
             quality=quality if isinstance(quality, dict) else {},
@@ -973,6 +1184,13 @@ class MeasurementAttempt:
             evidence_refs=tuple(dict(item) for item in evidence_refs),
             selected_refs=normalize_evidence_refs(decision.get("selected_refs")),
             discarded_refs=normalize_evidence_refs(decision.get("discarded_refs")),
+            decision_status=_text(decision.get("status"), 32) or "pending",
+            series_map={
+                _text(key, 80): _text(item, 120)
+                for key, item in list((decision.get("series_map") or {}).items())[:MAX_MEASUREMENT_TARGET_FIELDS]
+                if _text(key, 80) and _text(item, 120)
+            } if isinstance(decision.get("series_map"), Mapping) else {},
+            evidence_basis=_text(decision.get("evidence_basis"), 80) or None,
             focus_mode=_text(focus.get("mode"), 24) or None if isinstance(focus, Mapping) else None,
             created_at=_text(attempt.get("created_at"), 64) or _now(),
         )
@@ -995,6 +1213,8 @@ class MeasurementAttempt:
             }
         focus = evidence.get("focus") if isinstance(evidence, Mapping) else None
         scope = _json_safe(value.get("scope"))
+        observation_scope = _json_safe(value.get("observation_scope"))
+        observation_scope = observation_scope if isinstance(observation_scope, dict) else None
         target = _json_safe(value.get("target"))
         target = target if isinstance(target, dict) else None
         attempt_id = _text(value.get("attempt_id"), 160)
@@ -1014,6 +1234,7 @@ class MeasurementAttempt:
             tool=_text(value.get("tool"), 80),
             status=status,
             scope=scope if isinstance(scope, dict) else None,
+            observation_scope=observation_scope,
             target=target,
             target_fingerprint=_text(value.get("target_fingerprint"), 80) or measurement_target_fingerprint(target, tool=value.get("tool")),
             quality=quality if isinstance(quality, dict) else {},
@@ -1021,6 +1242,13 @@ class MeasurementAttempt:
             evidence_refs=tuple(dict(item) for item in evidence_refs),
             selected_refs=normalize_evidence_refs(decision.get("selected_refs")),
             discarded_refs=normalize_evidence_refs(decision.get("discarded_refs")),
+            decision_status=_text(decision.get("status"), 32) or "pending",
+            series_map={
+                _text(key, 80): _text(item, 120)
+                for key, item in list((decision.get("series_map") or {}).items())[:MAX_MEASUREMENT_TARGET_FIELDS]
+                if _text(key, 80) and _text(item, 120)
+            } if isinstance(decision.get("series_map"), Mapping) else {},
+            evidence_basis=_text(decision.get("evidence_basis"), 80) or None,
             focus_mode=_text(focus.get("mode"), 24) or None if isinstance(focus, Mapping) else None,
             created_at=_text(value.get("created_at"), 64) or _now(),
         )
@@ -1036,6 +1264,7 @@ class MeasurementAttempt:
             "tool": self.tool,
             "status": self.status,
             "scope": _json_safe(self.scope),
+            "observation_scope": _json_safe(self.observation_scope),
             "target": _json_safe(self.target),
             "target_fingerprint": self.target_fingerprint,
             "quality": _json_safe(self.quality),
@@ -1043,6 +1272,13 @@ class MeasurementAttempt:
             "evidence_refs": _json_safe(list(self.evidence_refs)),
             "selected_refs": list(self.selected_refs),
             "discarded_refs": list(self.discarded_refs),
+            "decision": {
+                "status": self.decision_status,
+                "selected_refs": list(self.selected_refs),
+                "discarded_refs": list(self.discarded_refs),
+                "series_map": _json_safe(self.series_map),
+                "evidence_basis": self.evidence_basis,
+            },
             "focus_mode": self.focus_mode,
             "created_at": self.created_at,
         }
@@ -1069,6 +1305,9 @@ class MeasurementSession:
     discarded_refs: tuple[str, ...] = ()
     decision_status: str = "pending"
     decision_attempt_id: str | None = None
+    series_map: dict[str, str] = field(default_factory=dict)
+    evidence_basis: str | None = None
+    decision_fingerprint: str | None = None
     focus_mode: str | None = None
 
     @classmethod
@@ -1096,6 +1335,13 @@ class MeasurementSession:
             discarded_refs=normalize_evidence_refs(value.get("discarded_refs")),
             decision_status=_text(value.get("decision_status"), 32) or "pending",
             decision_attempt_id=_text(value.get("decision_attempt_id"), 160) or None,
+            series_map={
+                _text(key, 80): _text(item, 120)
+                for key, item in list((value.get("series_map") or {}).items())[:MAX_MEASUREMENT_TARGET_FIELDS]
+                if _text(key, 80) and _text(item, 120)
+            } if isinstance(value.get("series_map"), Mapping) else {},
+            evidence_basis=_text(value.get("evidence_basis"), 80) or None,
+            decision_fingerprint=_text(value.get("decision_fingerprint"), 80) or None,
             focus_mode=_text(value.get("focus_mode"), 24) or None,
         )
         if session.current_attempt_id and not any(item.attempt_id == session.current_attempt_id for item in attempts):
@@ -1123,6 +1369,9 @@ class MeasurementSession:
         self.discarded_refs = ()
         self.decision_status = "pending"
         self.decision_attempt_id = None
+        self.series_map = {}
+        self.evidence_basis = None
+        self.decision_fingerprint = None
         self.focus_mode = attempt.focus_mode
         return True
 
@@ -1198,6 +1447,8 @@ class MeasurementSession:
         selected_refs: object = (),
         discarded_refs: object = (),
         status: str = "selected",
+        series_map: Mapping[str, Any] | None = None,
+        evidence_basis: str | None = None,
     ) -> bool:
         if attempt_id != self.current_attempt_id:
             return False
@@ -1208,10 +1459,37 @@ class MeasurementSession:
             return False
         if set(selected) & set(discarded):
             return False
+        decision_status = _text(status, 32).lower() or "selected"
+        if decision_status not in {"pending", "selected", "discarded", "abandoned"}:
+            return False
+        if not selected and decision_status not in {"pending", "discarded", "abandoned"}:
+            return False
+        normalized_series_map = {
+            _text(key, 80): _text(value, 120)
+            for key, value in list((series_map or {}).items())[:MAX_MEASUREMENT_TARGET_FIELDS]
+            if _text(key, 80) and _text(value, 120)
+        }
+        normalized_basis = _text(evidence_basis, 80) or None
+        fingerprint_payload = {
+            "attempt_id": attempt_id,
+            "selected_refs": list(selected),
+            "discarded_refs": list(discarded),
+            "status": decision_status,
+            "series_map": normalized_series_map,
+            "evidence_basis": normalized_basis,
+        }
+        decision_fingerprint = hashlib.sha256(
+            json.dumps(fingerprint_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()[:24]
+        if self.decision_fingerprint == decision_fingerprint and self.decision_attempt_id == attempt_id:
+            return True
         self.selected_refs = selected
         self.discarded_refs = discarded
-        self.decision_status = _text(status, 32) or "selected"
+        self.decision_status = decision_status
         self.decision_attempt_id = attempt_id
+        self.series_map = normalized_series_map
+        self.evidence_basis = normalized_basis
+        self.decision_fingerprint = decision_fingerprint
         current_index = next(
             (index for index, item in enumerate(self.attempts) if item.attempt_id == attempt_id),
             None,
@@ -1222,6 +1500,9 @@ class MeasurementSession:
                 current,
                 selected_refs=selected,
                 discarded_refs=discarded,
+                decision_status=decision_status,
+                series_map=normalized_series_map,
+                evidence_basis=normalized_basis,
             )
         self.focus_mode = current.focus_mode if current else self.focus_mode
         return True
@@ -1284,6 +1565,9 @@ class MeasurementSession:
             "discarded_refs": list(self.discarded_refs),
             "decision_status": self.decision_status,
             "decision_attempt_id": self.decision_attempt_id,
+            "series_map": _json_safe(self.series_map),
+            "evidence_basis": self.evidence_basis,
+            "decision_fingerprint": self.decision_fingerprint,
             "focus_mode": self.focus_mode,
             "attempts": [item.to_dict() for item in self.attempts[-MAX_MEASUREMENT_ATTEMPTS:]],
         }
@@ -1414,18 +1698,18 @@ def measurement_gate(
             "message": "measurement attempt lineage does not match its reference",
             "next_action": "只使用当前 attachment/panel 下的最新测量证据",
         }
-    if attempt.status != "accepted":
-        quality = attempt.quality if isinstance(attempt.quality, Mapping) else {}
+    quality = attempt.quality if isinstance(attempt.quality, Mapping) else {}
+    if attempt.status in {"failed", "unsupported"}:
         issues = list(quality.get("issues", []))[:4] if isinstance(quality.get("issues"), list) else []
         return None, {
             "status": "blocked",
-            "code": "measurement_not_accepted",
+            "code": "measurement_execution_unusable",
             "location": location,
-            "message": f"measurement attempt status is {attempt.status}, not accepted",
+            "message": f"measurement attempt execution status is {attempt.status}",
             "measurement_status": attempt.status,
             "issues": _json_safe(issues),
             "repair_action": _json_safe(quality.get("repair_action")) if isinstance(quality.get("repair_action"), Mapping) else None,
-            "next_action": "根据 issue 补充观察或在目标区域重新测量",
+            "next_action": "改用可用的当前 observation，或由主 Agent 显式请求有界补充",
         }
     if require_decision and attempt.evidence_refs and any(
         isinstance(item, Mapping) and isinstance(item.get("bbox_px"), list)
@@ -1433,8 +1717,8 @@ def measurement_gate(
     ):
         if (
             session.decision_attempt_id != attempt.attempt_id
-            or session.decision_status not in {"selected", "accepted"}
-            or not session.selected_refs
+            or session.decision_status not in {"selected", "accepted", "discarded", "abandoned"}
+            or (session.decision_status in {"selected", "accepted"} and not session.selected_refs)
         ):
             return None, {
                 "status": "blocked",
@@ -1445,17 +1729,45 @@ def measurement_gate(
                 "available_refs": [item.get("ref") for item in attempt.evidence_refs[:MAX_MEASUREMENT_REFS]],
                 "next_action": "先根据 overlay 和 evidence.refs 提交 measurement_decision，再组装 ChartSpec",
             }
+    if session.selected_refs:
+        selected_index = {
+            str(item.get("ref")): item
+            for item in attempt.evidence_refs
+            if isinstance(item, Mapping)
+        }
+        empty_refs = [
+            ref
+            for ref in session.selected_refs
+            if isinstance(selected_index.get(ref), Mapping)
+            and selected_index[ref].get("kind") in {"bar", "point", "sector"}
+            and selected_index[ref].get("has_numeric_value") is False
+        ]
+        if empty_refs:
+            return None, {
+                "status": "blocked",
+                "code": "measurement_selected_ref_empty",
+                "location": f"{location}.selected_refs",
+                "message": "selected measurement refs do not contain the numeric fields required by the assembled chart",
+                "selected_refs": empty_refs[:MAX_MEASUREMENT_REFS],
+                "next_action": "舍弃空值候选，或由主 Agent 对对应区域发起一次有界补充",
+            }
+    selected_status = session.decision_status if session.decision_status in {"discarded", "abandoned"} else ("accepted" if attempt.status == "accepted" else "selected")
     return {
-        "status": "accepted",
+        "status": selected_status,
+        "measurement_status": attempt.status,
         "session_id": session.session_id,
         "attempt_id": attempt.attempt_id,
         "attachment_id": attempt.attachment_id,
         "panel_id": attempt.panel_id,
         "tool": attempt.tool,
         "quality": _json_safe(attempt.quality),
+        "observation_scope": _json_safe(attempt.observation_scope),
         "selected_refs": list(session.selected_refs),
         "discarded_refs": list(session.discarded_refs),
         "decision_status": session.decision_status,
+        "series_map": _json_safe(session.series_map),
+        "evidence_basis": session.evidence_basis,
+        "quality_warnings": list(quality.get("warnings") or [])[:12] if isinstance(quality.get("warnings"), list) else [],
     }, None
 
 
@@ -1463,8 +1775,13 @@ __all__ = [
     "MEASUREMENT_TOOLS",
     "MEASUREMENT_STATUSES",
     "MEASUREMENT_FOCUS_MODES",
+    "OBSERVATION_COORDINATE_SPACES",
+    "OBSERVATION_REGION_ROLES",
+    "MAX_OBSERVATION_REGIONS",
+    "MAX_OBSERVATION_OBJECTIVES",
     "MAX_REPAIR_ATTEMPTS",
     "MeasurementTarget",
+    "ObservationScope",
     "MeasurementAttempt",
     "MeasurementSession",
     "attach_measurement_quality",
@@ -1474,6 +1791,8 @@ __all__ = [
     "measurement_from_data",
     "measurement_gate",
     "measurement_target_fingerprint",
+    "normalize_observation_scope",
+    "observation_scope_fingerprint",
     "measurement_session_id",
     "normalize_evidence_refs",
     "normalize_measurement_target",

@@ -8,7 +8,7 @@
 
 ### Requirement: Main Agent context uses four explicit layers
 
-主 Agent 的模型上下文 SHALL 明确区分四类信息：静态职责、动态工具、过程产物和 Run/Turn 动态状态。每一类 SHALL 有稳定的来源标记和边界；缺失的动态层 SHALL 显式表示为空，不得用历史文本或模型推断伪造当前状态。
+主 Agent 的模型上下文 SHALL 明确区分四类信息：静态职责、动态工具、过程产物和 Run/Turn 动态状态。过程产物层 SHALL 包含 observation scope、候选 refs、overlay、质量 warning 和 selected/discarded 决策；Run/Turn 层 SHALL 表示当前可执行动作，而不得把普通测量 warning 自动写成强制 repair 状态。
 
 #### Scenario: Normal chart turn exposes the four layers
 
@@ -56,35 +56,36 @@
 
 ### Requirement: Process artifacts remain structured and attributable
 
-过程产物层 SHALL 能够表达源附件、dashboard panel、局部 crop、OCR 或几何观测、layout 结果、ChartSpec、生成候选和审核结果。每个产物 SHALL 保留稳定 ID、来源引用、范围或 lineage、状态、confidence 和 warnings 等适用元数据；结构化 JSON 和模型可见图片 SHALL 保持可关联，不得只保留不可验证的自由文本摘要。
+过程产物层 SHALL 能够表达源附件、dashboard panel、局部 crop、初始 observation scope、OCR 或几何观测、layout 结果、evidence selection、ChartSpec、生成候选和审核结果。每个产物 SHALL 保留稳定 ID、来源引用、范围或 lineage、状态、confidence 和 warnings 等适用元数据；结构化 JSON 和模型可见图片 SHALL 保持可关联，不得只保留不可验证的自由文本摘要。
 
-#### Scenario: Decomposition result becomes reusable process context
+#### Scenario: Observation result becomes reusable process context
 
-- **WHEN** dashboard 拆解产生 accepted panel 和局部预览
-- **THEN** 过程产物层记录 panel ID、源 attachment、scope、crop/resource 引用和状态
-- **AND** 后续工具和模型可以通过同一 panel ID 关联局部结果
+- **WHEN** dashboard 拆解或图表传感器产生 panel 和局部 observation
+- **THEN** 过程产物层记录 panel、scope、attempt、crop/resource、refs 和状态
+- **AND** 后续工具和模型可以通过同一 panel/attempt 关联局部结果
 
-#### Scenario: Generated candidate remains distinct from source evidence
+#### Scenario: Selection remains distinct from observation
 
-- **WHEN** render_chart 产生候选图并进入自动审核
-- **THEN** 候选图、ChartSpec、review 结果和 publication status 保持独立且可关联
-- **AND** 候选 preview 不会被过程产物摘要描述为已发布 artifact
+- **WHEN** 主 Agent 选择或舍弃测量候选
+- **THEN** 过程产物层单独记录 selected、discarded、semantic mapping 和 decision 来源
+- **AND** 工具原始 observation 不被覆盖或改写为模型结论
+
 
 ### Requirement: Run and Turn state is dynamic control context
 
-Run/Turn 动态状态层 SHALL 表示当前用户请求、active source、selected panel、执行阶段、最近工具动作、待办动作、review gate、恢复状态、重试预算和中断状态等代码拥有的事实。状态变化后，下一次模型调用 SHALL 获得更新后的状态；模型自由文本不得覆盖这些状态。
+Run/Turn 动态状态层 SHALL 表示当前用户请求、active source、selected panel、当前 scope、最近工具动作、可选下一动作、生成图 review gate、恢复状态、资源预算和中断状态等代码拥有的事实。普通 measurement warning SHALL 以诊断和可选动作出现，不得自动将主链路置于独占 reviewing 状态。
 
-#### Scenario: Scoped observation exposes the next action
+#### Scenario: Scoped observation exposes model choices
 
 - **WHEN** 当前 run 已选择一个 panel 并完成局部测量
-- **THEN** 动态状态明确当前阶段、selected panel 和下一步可执行动作
-- **AND** Agent 不会因为缺少旧对话文本而回到完整 dashboard 拆解
+- **THEN** 动态状态明确当前 panel、scope、候选 observation、可选动作和预算
+- **AND** Agent 可以选择、舍弃、补充或直接组装
 
-#### Scenario: Review recovery exposes bounded action
+#### Scenario: Generated review remains a blocking state
 
-- **WHEN** 候选审核失败且仍有修复预算
-- **THEN** 动态状态包含候选引用、审核分类、有限诊断和下一步修复动作
-- **AND** 状态明确禁止发布失败候选
+- **WHEN** 生成图候选尚未通过审核
+- **THEN** 动态状态明确禁止发布以及可执行的修复动作
+- **AND** 该生成审核状态与测量 warning 分开表达
 
 ### Requirement: Layer assembly preserves authority and untrusted evidence boundaries
 

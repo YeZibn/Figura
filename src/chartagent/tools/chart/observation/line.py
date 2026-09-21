@@ -32,7 +32,7 @@ from .layout import (
     context_scope,
     filter_snippets_to_scope,
 )
-from .scope import apply_measurement_focus, measurement_focus_context
+from .scope import apply_measurement_focus, measurement_focus_context, observation_scope_focus_context
 
 _TRACE_TOLERANCE = 30
 
@@ -416,6 +416,7 @@ def _empty_result(
     warning: str,
     layout_context: dict[str, Any] | None = None,
     measurement_target: dict[str, Any] | None = None,
+    observation_scope: dict[str, Any] | None = None,
 ) -> ToolResult:
     rgb = np.asarray(image.convert("RGB"))
     confidence = confidence_map(
@@ -446,11 +447,10 @@ def _empty_result(
         "confidence": confidence,
         "warnings": [warning],
         "measurement_target": dict(measurement_target) if isinstance(measurement_target, dict) else None,
-        "focus": measurement_focus_context(
-            measurement_target,
-            width=image.width,
-            height=image.height,
-        ),
+        "observation_scope": dict(observation_scope) if isinstance(observation_scope, dict) else None,
+        "focus": observation_scope_focus_context(observation_scope, width=image.width, height=image.height)
+        if observation_scope is not None
+        else measurement_focus_context(measurement_target, width=image.width, height=image.height),
     }
     return ToolResult(
         data,
@@ -469,6 +469,7 @@ def extract_line_series(
     image_path: str,
     layout_context: dict[str, Any] | None = None,
     measurement_target: dict[str, Any] | None = None,
+    observation_scope: dict[str, Any] | None = None,
 ) -> ToolResult | dict:
     """Extract source-image line traces and evidence-backed data points."""
     path = Path(image_path)
@@ -483,15 +484,24 @@ def extract_line_series(
 
     scope = context_scope(layout_context)
     base_search_area = scope.get("bbox_px") if scope else default_plot_area(rgb)
-    focus = measurement_focus_context(
-        measurement_target,
-        width=int(rgb.shape[1]),
-        height=int(rgb.shape[0]),
-        base_region=base_search_area,
+    focus = (
+        observation_scope_focus_context(
+            observation_scope,
+            width=int(rgb.shape[1]),
+            height=int(rgb.shape[0]),
+            base_region=base_search_area,
+        )
+        if observation_scope is not None
+        else measurement_focus_context(
+            measurement_target,
+            width=int(rgb.shape[1]),
+            height=int(rgb.shape[0]),
+            base_region=base_search_area,
+        )
     )
     search_area = focus.get("search_area")
     if focus["requested"] and not focus["applied"]:
-        return _empty_result(chart_image, "focus_empty: target did not resolve to a measurable region", layout_context, measurement_target)
+        return _empty_result(chart_image, "focus_empty: target did not resolve to a measurable region", layout_context, measurement_target, observation_scope)
     working_rgb = apply_measurement_focus(rgb, focus)
     preliminary_palette = _line_palette(working_rgb, search_area)
     frame, orientation, detection_area = detect_cartesian_frame(
@@ -615,7 +625,7 @@ def extract_line_series(
     if any(len(entry.get("trace", {}).get("fragments", [])) > 1 for entry in series):
         warnings.append("one or more series contain fragmented trace evidence")
     if not series:
-        return _empty_result(chart_image, "no reliable line series detected", layout_context, measurement_target)
+        return _empty_result(chart_image, "no reliable line series detected", layout_context, measurement_target, observation_scope)
 
     geometry_confidence = 0.9 if all(entry.get("trace", {}).get("polyline_px") for entry in series) else 0.35
     frame_confidence = 0.9 if frame.get("x_axis") and frame.get("y_axis") else 0.35
@@ -676,6 +686,7 @@ def extract_line_series(
         "series": series,
         "warnings": warnings,
         "measurement_target": dict(measurement_target) if isinstance(measurement_target, dict) else None,
+        "observation_scope": dict(observation_scope) if isinstance(observation_scope, dict) else None,
         "focus": {
             **focus,
             "region_px": focus.get("region_px"),
@@ -733,6 +744,11 @@ EXTRACT_LINE_SERIES = Tool(
             "measurement_target": {
                 "type": "object",
                 "description": "Optional bounded source-coordinate focus target for a remeasurement.",
+                "additionalProperties": True,
+            },
+            "observation_scope": {
+                "type": "object",
+                "description": "首次观察使用的当前 panel 有界范围；coordinate_space 可为 panel_norm、panel_px 或 source_px，包含 include/exclude 区域。",
                 "additionalProperties": True,
             },
         },

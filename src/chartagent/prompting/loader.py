@@ -143,6 +143,36 @@ def _bounded_ref_list(value: object, limit: int = 64) -> list[object]:
     return result
 
 
+def _bounded_observation_scope(value: object) -> dict[str, Any] | None:
+    """Keep the applied first-observation range visible without raw payloads."""
+    if not isinstance(value, Mapping):
+        return None
+    result: dict[str, Any] = {}
+    for key in ("scope_id", "attachment_id", "panel_id", "coordinate_space", "status", "search_scope", "reason"):
+        if value.get(key) is not None:
+            result[key] = _bounded_text(value.get(key), 240)
+    for key in ("applied", "requested"):
+        if value.get(key) is not None:
+            result[key] = bool(value.get(key)) if key == "applied" else value.get(key)
+    for key in ("objectives",):
+        if isinstance(value.get(key), (list, tuple)):
+            result[key] = [_bounded_text(item, 96) for item in list(value[key])[:8]]
+    for key in ("include", "exclude", "source_regions"):
+        regions = value.get(key)
+        if not isinstance(regions, (list, tuple)):
+            continue
+        bounded_regions: list[dict[str, Any]] = []
+        for region in list(regions)[:16]:
+            if not isinstance(region, Mapping):
+                continue
+            item = {name: region.get(name) for name in ("role", "label", "bbox_px", "bbox_source_px", "polygon_px", "polygon_source_px") if region.get(name) is not None}
+            if item:
+                bounded_regions.append(item)
+        if bounded_regions:
+            result[key] = bounded_regions
+    return result or None
+
+
 def _bounded_measurement_evidence(value: object) -> dict[str, Any] | list[dict[str, Any]] | None:
     """Project the model-facing measurement decision state into bounded JSON."""
     if isinstance(value, (list, tuple)):
@@ -168,12 +198,21 @@ def _bounded_measurement_evidence(value: object) -> dict[str, Any] | list[dict[s
         "decision_status",
         "focus_mode",
         "budget_remaining",
+        "evidence_basis",
     ):
         if value.get(key) is not None:
             result[key] = _bounded_text(value.get(key), 240)
     for key in ("selected_refs", "discarded_refs", "refs"):
         if value.get(key) is not None:
             result[key] = _bounded_ref_list(value.get(key))
+    if isinstance(value.get("series_map"), Mapping):
+        result["series_map"] = {
+            _bounded_text(name, 80): _bounded_text(item, 120)
+            for name, item in list(value["series_map"].items())[:32]
+        }
+    observation_scope = _bounded_observation_scope(value.get("observation_scope"))
+    if observation_scope is not None:
+        result["observation_scope"] = observation_scope
     for key in ("warnings", "issues"):
         if isinstance(value.get(key), (list, tuple)):
             result[key] = [

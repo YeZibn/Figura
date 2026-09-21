@@ -54,6 +54,11 @@ def _measurement_gate_error(gate: Mapping[str, Any], location: str) -> dict[str,
             "issues",
             "repair_action",
             "available_refs",
+            "selected_refs",
+            "discarded_refs",
+            "decision_status",
+            "series_map",
+            "evidence_basis",
         }
     }
     raw_location = str(bounded.get("location") or "measurement_ref")
@@ -113,19 +118,36 @@ def _record_measurement_decision(
         }
     selected = normalize_evidence_refs(decision.get("selected_refs") or decision.get("refs"))
     discarded = normalize_evidence_refs(decision.get("discarded_refs"))
-    if not selected:
+    raw_status = decision.get("status") or decision.get("decision_status")
+    decision_status = str(raw_status or ("selected" if selected else "discarded")).strip().lower()
+    if decision_status not in {"selected", "discarded", "abandoned"}:
+        return None, {
+            "status": "blocked",
+            "code": "measurement_decision_status_invalid",
+            "location": f"{location}.measurement_decision.status",
+            "message": "measurement_decision.status 必须是 selected、discarded 或 abandoned",
+            "next_action": "明确选择有效证据，或明确舍弃/放弃当前测量",
+        }
+    if decision_status == "selected" and not selected:
         return None, {
             "status": "blocked",
             "code": "measurement_decision_required",
             "location": f"{location}.measurement_decision.selected_refs",
-            "message": "measurement_decision 至少需要一个 selected_refs",
-            "next_action": "根据 overlay 选择要用于 ChartSpec 的证据引用",
+            "message": "selected 决策至少需要一个 selected_refs",
+            "next_action": "根据 overlay 选择要用于 ChartSpec 的证据引用，或将 status 改为 discarded/abandoned",
         }
+    if decision_status in {"discarded", "abandoned"} and not selected and not discarded:
+        # An explicit discard/abandon is meaningful even when the sensor did
+        # not expose bounded refs; the assembled points may come from direct
+        # visual reasoning or another source.
+        discarded = normalize_evidence_refs(decision.get("discarded_refs") or [])
     if not session.record_decision(
         attempt_id=attempt_id,
         selected_refs=selected,
         discarded_refs=discarded,
-        status="selected",
+        status=decision_status,
+        series_map=decision.get("series_map") if isinstance(decision.get("series_map"), Mapping) else None,
+        evidence_basis=str(decision.get("evidence_basis") or "")[:80] or None,
     ):
         return None, {
             "status": "blocked",
@@ -140,6 +162,8 @@ def _record_measurement_decision(
         "selected_refs": list(session.selected_refs),
         "discarded_refs": list(session.discarded_refs),
         "decision_status": session.decision_status,
+        "series_map": dict(session.series_map),
+        "evidence_basis": session.evidence_basis,
     }, None
 
 
@@ -251,6 +275,10 @@ def _assemble_single_spec(
     if decision_payload is not None and isinstance(chart_spec.provenance, dict):
         chart_spec.provenance["selected_refs"] = decision_payload["selected_refs"]
         chart_spec.provenance["discarded_refs"] = decision_payload["discarded_refs"]
+        chart_spec.provenance["decision_status"] = decision_payload["decision_status"]
+        chart_spec.provenance["series_map"] = decision_payload["series_map"]
+        chart_spec.provenance["evidence_basis"] = decision_payload["evidence_basis"]
+        chart_spec.provenance["observation_scope"] = provenance.get("observation_scope")
     validation = validate_generation(chart_spec)
     if validation.blocking:
         issues = validation.legacy_issues()
@@ -268,7 +296,9 @@ def _assemble_single_spec(
             "attempt_id": provenance.get("attempt_id"),
             "selected_refs": list(provenance.get("selected_refs") or []),
             "discarded_refs": list(provenance.get("discarded_refs") or []),
-            "decision_status": "legacy_accepted",
+            "decision_status": str(provenance.get("decision_status") or "legacy_accepted"),
+            "series_map": dict(provenance.get("series_map") or {}) if isinstance(provenance.get("series_map"), Mapping) else {},
+            "evidence_basis": provenance.get("evidence_basis"),
         }
     return assembled
 
@@ -329,10 +359,14 @@ def _figure_measurement_decisions(
         selected = list(session.selected_refs)
         discarded = list(session.discarded_refs)
         decision_status = "legacy_accepted"
+        series_map: dict[str, Any] = {}
+        evidence_basis = None
         if isinstance(decision, Mapping):
             selected = list(normalize_evidence_refs(decision.get("selected_refs") or decision.get("refs")))
             discarded = list(normalize_evidence_refs(decision.get("discarded_refs")))
-            decision_status = str(session.decision_status or "selected")[:32]
+            decision_status = str(decision.get("status") or decision.get("decision_status") or session.decision_status or "selected")[:32]
+            series_map = dict(decision.get("series_map") or {}) if isinstance(decision.get("series_map"), Mapping) else {}
+            evidence_basis = str(decision.get("evidence_basis") or "")[:80] or None
         decisions.append(
             {
                 "session_id": session_id,
@@ -340,6 +374,8 @@ def _figure_measurement_decisions(
                 "selected_refs": selected[:64],
                 "discarded_refs": discarded[:64],
                 "decision_status": decision_status,
+                "series_map": series_map,
+                "evidence_basis": evidence_basis,
             }
         )
     return decisions
@@ -588,23 +624,32 @@ MEASUREMENT_DECISION_SCHEMA = {
     "properties": {
         "session_id": {"type": "string", "description": "当前 measurement.reference 的 session_id；可省略并从 measurement_ref 继承。"},
         "attempt_id": {"type": "string", "description": "当前 measurement.reference 的 attempt_id；可省略并从 measurement_ref 继承。"},
-        "selected_refs": {"type": "array", "items": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9]{0,15}$"}, "minItems": 1, "maxItems": 64, "description": "主 Agent 明确选择用于当前 ChartSpec 的证据引用。"},
+        "status": {"type": "string", "enum": ["selected", "discarded", "abandoned"], "description": "主 Agent 对当前测量证据的明确决策。"},
+        "selected_refs": {"type": "array", "items": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9]{0,15}$"}, "maxItems": 64, "description": "主 Agent 明确选择用于当前 ChartSpec 的证据引用；discarded/abandoned 可以为空。"},
         "discarded_refs": {"type": "array", "items": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9]{0,15}$"}, "maxItems": 64, "description": "主 Agent 明确舍弃的当前 attempt 证据引用。"},
+        "series_map": {"type": "object", "additionalProperties": {"type": "string"}, "maxProperties": 32, "description": "可选的稳定系列身份映射，例如 series_1 到图例名称。"},
+        "evidence_basis": {"type": ["string", "null"], "maxLength": 80, "description": "简短说明本次选择依据。"},
     },
-    "required": ["selected_refs"],
+    "required": [],
     "additionalProperties": False,
 }
 
 MEASUREMENT_PROVENANCE_SCHEMA = {
     "type": "object",
     "properties": {
-        "status": {"type": "string", "enum": ["accepted"], "description": "Code-owned measurement acceptance status."},
+        "status": {"type": "string", "enum": ["accepted", "selected", "discarded", "abandoned", "provisional", "partial"], "description": "Code-owned measurement decision/provenance status."},
         "session_id": {"type": "string", "description": "Measurement session identity."},
         "attempt_id": {"type": "string", "description": "Accepted measurement attempt identity."},
         "attachment_id": {"type": "string", "description": "Source attachment identity."},
         "panel_id": {"type": ["string", "null"], "description": "Source panel identity."},
         "tool": {"type": "string", "description": "Measurement tool that produced the accepted evidence."},
         "quality": {"type": "object", "additionalProperties": True, "description": "Bounded quality summary retained for downstream audit."},
+        "selected_refs": {"type": "array", "items": {"type": "string"}, "maxItems": 64},
+        "discarded_refs": {"type": "array", "items": {"type": "string"}, "maxItems": 64},
+        "decision_status": {"type": "string", "maxLength": 32},
+        "series_map": {"type": "object", "additionalProperties": {"type": "string"}, "maxProperties": 32},
+        "evidence_basis": {"type": ["string", "null"], "maxLength": 80},
+        "observation_scope": {"type": "object", "additionalProperties": True, "description": "首次观察实际应用的 panel 范围；由服务端保留。"},
     },
     "required": ["status", "session_id", "attempt_id", "attachment_id"],
     "additionalProperties": False,
@@ -626,7 +671,7 @@ CHART_SPEC_SCHEMA = {
         },
         "axes": {"oneOf": [AXES_SCHEMA, {"type": "null"}], "description": "Cartesian x/y axes; omit or use null only for pie charts."},
         "dataset": {"type": "array", "items": POINT_SCHEMA, "minItems": 1, "maxItems": MAX_GENERATION_POINTS, "description": "Ordered typed data points; point shape must match the selected chart type."},
-        "provenance": {**MEASUREMENT_PROVENANCE_SCHEMA, "description": "Optional code-owned accepted measurement provenance."},
+        "provenance": {**MEASUREMENT_PROVENANCE_SCHEMA, "description": "Optional code-owned measurement provenance and model decision."},
     },
     "required": ["metadata", "dataset"],
     "additionalProperties": False,
@@ -666,8 +711,8 @@ FIGURE_CHILD_INPUT_SCHEMA = {
         "x_categories": {"type": "array", "items": {"type": "string"}, "maxItems": MAX_GENERATION_POINTS, "description": "Optional ordered x-axis category labels; preserve labels from the source panel for line/scatter charts."},
         "points": {"type": "array", "items": POINT_SCHEMA, "minItems": 1, "maxItems": MAX_GENERATION_POINTS, "description": "Child chart data points."},
         "source": {"type": ["string", "null"], "maxLength": MAX_GENERATION_LABEL_LENGTH, "description": "Optional child provenance label."},
-        "measurement_ref": {**MEASUREMENT_REF_SCHEMA, "description": "Optional server-issued accepted measurement reference for this child chart."},
-        "measurement_decision": {**MEASUREMENT_DECISION_SCHEMA, "description": "主 Agent 对当前 child 的证据选择；有 measurement refs 时必须提供。"},
+        "measurement_ref": {**MEASUREMENT_REF_SCHEMA, "description": "Optional server-issued measurement reference for this child chart."},
+        "measurement_decision": {**MEASUREMENT_DECISION_SCHEMA, "description": "主 Agent 对当前 child 的证据选择；可以选择、舍弃或放弃当前 attempt。"},
     },
     "required": ["chart_id", "chart_type", "points"],
     "additionalProperties": False,
@@ -715,8 +760,8 @@ ASSEMBLE_SPEC = Tool(
             "points": {"type": "array", "items": POINT_SCHEMA, "minItems": 1, "maxItems": MAX_GENERATION_POINTS, "description": "单图数据点；bar/pie 使用 category/value，line/scatter 使用 x/y。figure 模式填写到 charts 子项。"},
             "source": {"type": ["string", "null"], "maxLength": MAX_GENERATION_LABEL_LENGTH, "description": "单图可选来源标签；不授权访问本地路径。"},
             "x_categories": {"type": "array", "items": {"type": "string"}, "maxItems": MAX_GENERATION_POINTS, "description": "可选的有序横轴类别标签；line/scatter 必须保留源 panel 中已确认的类别文本，例如 Jan、Feb、Mar。"},
-            "measurement_ref": {**MEASUREMENT_REF_SCHEMA, "description": "可选的服务端测量引用；只有当前 run 中已接受的 measurement reference 才能通过门禁。"},
-            "measurement_decision": {**MEASUREMENT_DECISION_SCHEMA, "description": "根据当前 attempt 的 overlay 与 evidence.refs 做出的选择；有 refs 的测量必须提供。"},
+            "measurement_ref": {**MEASUREMENT_REF_SCHEMA, "description": "可选的服务端测量引用；服务端校验其来源、attempt 和当前 run 的证据状态。"},
+            "measurement_decision": {**MEASUREMENT_DECISION_SCHEMA, "description": "根据当前 attempt 的 overlay 与 evidence.refs 做出的选择；可以 selected、discarded 或 abandoned。"},
             "figure": {**FIGURE_INPUT_SCHEMA, "description": "同一 attachment_id + panel_id 下的多个独立子图及其 coverage。"},
             "figures": {"type": "array", "items": FIGURE_INPUT_SCHEMA, "minItems": 1, "maxItems": MAX_COLLECTION_FIGURES, "description": "来自多个 panel 的有序 figure 列表；不同来源不会自动合并。"},
             "collection_id": {"type": "string", "maxLength": 128, "description": "可选的稳定集合 ID。"},

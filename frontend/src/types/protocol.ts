@@ -173,6 +173,7 @@ export type AgentRunEvent = {
 }
 
 export const measurementRepairEventKinds = [
+  'measurement_observed',
   'measurement_repair_required',
   'measurement_repair_rejected',
   'measurement_repair_exhausted',
@@ -181,6 +182,7 @@ export const measurementRepairEventKinds = [
   'measurement_focus_applied',
   'measurement_focus_failed',
   'measurement_evidence_selected',
+  'measurement_evidence_discarded',
 ] as const
 
 export type MeasurementRepairEventKind = typeof measurementRepairEventKinds[number]
@@ -195,6 +197,9 @@ export type MeasurementRepairSummary = {
   reason?: string
   nextAction?: string
   budgetRemaining?: number
+  selectedRefs?: string[]
+  discardedRefs?: string[]
+  observationScope?: Record<string, unknown>
 }
 
 export function isMeasurementRepairEventKind(kind: string): kind is MeasurementRepairEventKind {
