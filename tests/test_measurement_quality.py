@@ -786,6 +786,10 @@ def test_agent_uses_main_decision_for_a_bounded_targeted_attempt_without_hidden_
     assert any(event.kind == "measurement_decision_required" for event in events)
     assert any(event.kind == "measurement_focus_requested" for event in events)
     assert any(event.kind == "measurement_evidence_selected" for event in events)
+    focus_request = next(event for event in events if event.kind == "measurement_focus_requested")
+    focused_observation = next(event for event in events if event.kind == "measurement_observed" and event.payload.get("unit_id") == focus_request.payload.get("unit_id"))
+    assert focused_observation.payload["unit_id"] == focus_request.payload["unit_id"]
+    assert focused_observation.payload["phase"] == "observe"
     assert all("/Users/" not in event.to_json() for event in events)
 
 

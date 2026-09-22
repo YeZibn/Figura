@@ -48,7 +48,28 @@ class ChartReviewManager:
         self.attachments = attachments
         self._items: dict[str, tuple[ChartCandidate, ChartSemantic]] = {}
         self._keys: dict[tuple[str, str, str], str] = {}
+        self._semantic_results: dict[tuple[str, str, str], ReviewResult] = {}
         self._lock = RLock()
+
+    @staticmethod
+    def _semantic_key(candidate: ChartCandidate) -> tuple[str, str, str]:
+        """Identify one immutable semantic review input."""
+        return candidate.candidate_id, candidate.review_id, candidate.chart_spec_digest
+
+    def semantic_result(self, candidate: ChartCandidate) -> ReviewResult | None:
+        """Return a cached VLM decision for this candidate attempt."""
+        with self._lock:
+            return self._semantic_results.get(self._semantic_key(candidate))
+
+    def remember_semantic_result(self, candidate: ChartCandidate, result: ReviewResult) -> ReviewResult:
+        """Store and idempotently return the only semantic result for an attempt."""
+        with self._lock:
+            key = self._semantic_key(candidate)
+            existing = self._semantic_results.get(key)
+            if existing is not None:
+                return existing
+            self._semantic_results[key] = result
+            return result
 
     def create_candidate(
         self,

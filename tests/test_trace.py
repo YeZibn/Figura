@@ -19,6 +19,7 @@ from chartagent import (
 from chartagent.client.models import NormalizedResult, ToolCall
 from chartagent.trace import TraceEmitter, TraceEvent, TraceLimits
 from chartagent.agent.artifacts import lifecycle_trace_fields
+from chartagent.decision_timeline import enrich_event_payload, legacy_envelope
 
 
 class _ScriptedClient:
@@ -148,6 +149,50 @@ def test_trace_event_direct_payload_is_json_safe():
     payload = event.to_dict()["payload"]
     assert payload["image"]["content"]["binary_omitted"] is True
     assert "raw-bytes" not in event.to_json()
+
+
+def test_trace_events_get_bounded_decision_unit_envelope_and_stable_transition():
+    first = enrich_event_payload(
+        "measurement_focus_applied",
+        {
+            "session_id": "session-1",
+            "attempt_id": "attempt-2",
+            "panel_id": "panel-left",
+            "next_action": {"required": True, "allowed": ["observe_same_scope"], "blocked": ["assemble"]},
+        },
+        run_id="run-1",
+        sequence=3,
+    )
+    replay = enrich_event_payload(
+        "measurement_focus_applied",
+        {key: value for key, value in first.items() if key not in {"transition_id", "correlation_version", "unit_id", "unit_type", "phase", "actor", "role", "parent_unit_id", "next_action"}},
+        run_id="run-1",
+        sequence=99,
+    )
+
+    assert first["unit_id"] == "measurement:attempt-2"
+    assert first["unit_type"] == "measurement"
+    assert first["phase"] == "observe"
+    assert first["actor"] == "tool"
+    assert first["next_action"]["required"] is True
+    assert first["transition_id"] == replay["transition_id"]
+
+    duplicate = enrich_event_payload(
+        "measurement_focus_applied",
+        first,
+        run_id="run-1",
+        sequence=3,
+    )
+    assert duplicate == first
+
+
+def test_legacy_envelope_does_not_infer_missing_parent_or_success():
+    envelope = legacy_envelope("run-1", 7, "review_completed")
+
+    assert envelope["unit_type"] == "legacy"
+    assert envelope["phase"] == "unknown"
+    assert envelope["actor"] == "unknown"
+    assert "parent_unit_id" not in envelope
 
 
 def test_agent_trace_orders_tools_visuals_and_keeps_reasoning_out_of_history():

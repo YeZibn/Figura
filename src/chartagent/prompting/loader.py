@@ -316,6 +316,49 @@ def _bounded_generation_context(value: object) -> dict[str, Any] | None:
     return result or None
 
 
+def _bounded_decision_context(value: object) -> dict[str, Any] | None:
+    """Project the code-owned action contract into compact model context."""
+    if not isinstance(value, Mapping):
+        return None
+    result: dict[str, Any] = {}
+    for key in (
+        "unit_id",
+        "unit_type",
+        "phase",
+        "status",
+        "candidate_id",
+        "next_action",
+    ):
+        if value.get(key) is not None:
+            result[key] = _bounded_text(value.get(key), 240)
+    if value.get("required") is not None:
+        result["required"] = bool(value.get("required"))
+    for key in ("allowed_actions", "blocked_actions"):
+        if isinstance(value.get(key), (list, tuple)):
+            result[key] = [_bounded_text(item, 96) for item in list(value[key])[:12]]
+    if value.get("budget_remaining") is not None:
+        try:
+            result["budget_remaining"] = max(0, int(value.get("budget_remaining") or 0))
+        except (TypeError, ValueError):
+            result["budget_remaining"] = 0
+    scope = value.get("scope")
+    if isinstance(scope, Mapping):
+        result["scope"] = {
+            "panel_id": _bounded_text(scope.get("panel_id"), 96) or None,
+            "attachment_ids": [
+                _bounded_text(item, 96)
+                for item in _bounded_list(scope.get("attachment_ids"), 16)
+            ],
+        }
+    evidence = _bounded_measurement_evidence(value.get("evidence"))
+    if evidence is not None:
+        result["evidence"] = evidence
+    generation_context = _bounded_generation_context(value.get("generation_context"))
+    if generation_context is not None:
+        result["generation_context"] = generation_context
+    return result or None
+
+
 def _tool_record(tool: Any) -> dict[str, Any]:
     if isinstance(tool, Mapping):
         if isinstance(tool.get("function"), Mapping):
@@ -442,6 +485,7 @@ def build_runtime_context(
             state.get("measurement_evidence", state.get("measurement_repair"))
         ),
         "generation_context": _bounded_generation_context(state.get("generation_context")),
+        "decision_context": _bounded_decision_context(state.get("decision_context")),
     }
     inventory = [dict(item) for item in list(panel_inventory)[:_MAX_PANEL_COUNT] if isinstance(item, Mapping)]
     payload = {

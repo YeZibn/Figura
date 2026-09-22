@@ -118,7 +118,11 @@ class GeneratedChartReviewAdapter:
             candidate.candidate_id,
             attempt=candidate.lineage_attempt,
             max_attempts=candidate.policy.max_attempts,
-            parent_id=candidate.parent_candidate_id,
+            parent_id=(
+                f"collection:{candidate.collection_id}"
+                if candidate.collection_id
+                else candidate.parent_candidate_id
+            ),
             subject_ref={
                 "candidate_id": candidate.candidate_id,
                 "review_id": candidate.review_id,
@@ -127,6 +131,9 @@ class GeneratedChartReviewAdapter:
                 "panel_ids": list(candidate.panel_ids[:16]),
                 "generation_context": candidate.generation_context.to_dict() if candidate.generation_context is not None else None,
                 "context_status": candidate.context_status,
+                "collection_id": candidate.collection_id,
+                "figure_id": candidate.figure_id,
+                "parent_candidate_id": candidate.parent_candidate_id,
             },
             evidence=(
                 {

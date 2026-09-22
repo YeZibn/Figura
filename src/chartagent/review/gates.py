@@ -537,9 +537,16 @@ class ReviewCoordinator:
                 and active_gate.subject_id
                 and _text(parent_id, 160) != active_gate.subject_id
             ):
-                raise ReviewGateBlocked(
-                    f"review gate is blocking run {normalized_run}: {active_gate.state.value}"
+                active_record = self._records.get(active_gate.review_id or "")
+                same_parent = bool(
+                    active_record is not None
+                    and active_record.parent_id
+                    and _text(parent_id, 160) == active_record.parent_id
                 )
+                if not same_parent:
+                    raise ReviewGateBlocked(
+                        f"review gate is blocking run {normalized_run}: {active_gate.state.value}"
+                    )
             record = ReviewRecord(
                 review_id=f"review_{uuid4().hex}",
                 run_id=normalized_run,
@@ -555,8 +562,8 @@ class ReviewCoordinator:
             )
             self._records[record.review_id] = record
             self._by_key[index] = record.review_id
-            self._gates[normalized_run] = _gate_for(record)
             self._trim_locked()
+            self._refresh_gate_locked(normalized_run)
             return record
 
     def get(self, review_id: str) -> ReviewRecord | None:
@@ -599,7 +606,7 @@ class ReviewCoordinator:
                 updated_at=_now(),
             )
             self._records[record.review_id] = record
-            self._gates[record.run_id] = _gate_for(record)
+            self._refresh_gate_locked(record.run_id)
             return record
 
     def mark_repair_phase(self, review_id: str, phase: str) -> ReviewRecord:
@@ -615,7 +622,7 @@ class ReviewCoordinator:
                 return current
             record = replace(current, repair_phase=normalized_phase, updated_at=_now())
             self._records[record.review_id] = record
-            self._gates[record.run_id] = _gate_for(record)
+            self._refresh_gate_locked(record.run_id)
             return record
 
     @staticmethod
@@ -639,16 +646,38 @@ class ReviewCoordinator:
                 raise KeyError(f"unknown review_id: {review_id}")
             record = replace(current, state=ReviewState.UNCERTAIN, next_action=_text(next_action, 240) or current.next_action, updated_at=_now())
             self._records[record.review_id] = record
-            self._gates[record.run_id] = _gate_for(record)
+            self._refresh_gate_locked(record.run_id)
             return record
 
     def records_for_run(self, run_id: str) -> tuple[ReviewRecord, ...]:
         with self._lock:
             return tuple(item for item in self._records.values() if item.run_id == str(run_id))
 
+    def _refresh_gate_locked(self, run_id: str) -> None:
+        """Keep the run gate closed while any related review remains unresolved."""
+        records = [item for item in self._records.values() if item.run_id == str(run_id)]
+        if not records:
+            self._gates[str(run_id)] = ExecutionGate()
+            return
+        superseded_subjects = {
+            item.subject_id
+            for item in records
+            if any(
+                child.parent_id == item.subject_id and child.attempt > item.attempt
+                for child in records
+            )
+        }
+        current_lineage = [item for item in records if item.subject_id not in superseded_subjects]
+        blocking = [item for item in current_lineage if item.blocking]
+        # Preserve insertion order: the first unresolved record keeps its
+        # diagnostic identity, while a later sibling may still be admitted
+        # when it has the same collection parent.
+        self._gates[str(run_id)] = _gate_for((blocking or current_lineage or records)[0])
+
     def restore(self, values: object) -> None:
         records = values if isinstance(values, list) else []
         with self._lock:
+            run_ids: set[str] = set()
             for value in records[: self.max_records]:
                 record = ReviewRecord.from_dict(value)
                 if record is None:
@@ -656,8 +685,10 @@ class ReviewCoordinator:
                 self._records[record.review_id] = record
                 key = (record.run_id, record.idempotency_key or review_idempotency_key(record.run_id, record.review_type, record.subject_id, record.attempt, record.parent_id))
                 self._by_key[key] = record.review_id
-                self._gates[record.run_id] = _gate_for(record)
+                run_ids.add(record.run_id)
             self._trim_locked()
+            for run_id in run_ids:
+                self._refresh_gate_locked(run_id)
 
     def restore_gate(self, run_id: str, value: object) -> None:
         """Restore a run projection when a checkpoint has no full record list."""

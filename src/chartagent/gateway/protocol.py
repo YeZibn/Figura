@@ -414,6 +414,20 @@ def _truncate_tool_result_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
         "status",
         "tool_status",
         "turn",
+        "correlation_version",
+        "unit_id",
+        "unit_type",
+        "phase",
+        "actor",
+        "role",
+        "parent_unit_id",
+        "transition_id",
+        "next_action",
+        "attempt",
+        "candidate_id",
+        "review_id",
+        "collection_id",
+        "repair_kind",
     )
     identity = {
         field: payload[field] if isinstance(payload[field], (bool, int, float)) else truncate_text(payload[field], 160)

@@ -10,6 +10,7 @@ from typing import Iterable
 from dataclasses import dataclass
 from uuid import uuid4
 
+from ..decision_timeline import enrich_event_payload
 from ..trace import TraceEvent, sanitize_payload
 from .history import GatewayHistoryStore
 from .protocol import (
@@ -154,7 +155,12 @@ class ManagedRun:
             run_id=self.run_id,
             sequence=self._next_sequence,
             kind=kind,
-            payload=payload or {},
+            payload=enrich_event_payload(
+                kind,
+                payload or {},
+                run_id=self.run_id,
+                sequence=self._next_sequence,
+            ),
         )
         if self.history_store is not None:
             try:
@@ -184,7 +190,17 @@ class ManagedRun:
                 return dict(self.execution_gate)
             self.execution_gate = clean
             if not self.terminal:
-                self._publish_locked("review_gate_updated", {"execution_gate": clean})
+                self._publish_locked(
+                    "review_gate_updated",
+                    {
+                        "execution_gate": clean,
+                        "review_id": clean.get("reviewId") or clean.get("review_id"),
+                        "candidate_id": clean.get("subjectId") or clean.get("subject_id"),
+                        "attempt": clean.get("attempt"),
+                        "repair_kind": clean.get("repairKind") or clean.get("repair_kind"),
+                        "blocking": clean.get("blocking"),
+                    },
+                )
             self._condition.notify_all()
         self._update_history(self.status, execution_gate=clean)
         return dict(clean)

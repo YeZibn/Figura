@@ -138,7 +138,19 @@ def artifact_records_from_observation(
         records[0].update(
             {
                 key: lifecycle[key]
-                for key in ("candidate_id", "attempt", "parent_attempt", "source_scope", "coverage", "repair_kind")
+                for key in (
+                    "candidate_id",
+                    "review_id",
+                    "collection_id",
+                    "attempt",
+                    "parent_attempt",
+                    "candidate_status",
+                    "review_status",
+                    "publication_status",
+                    "source_scope",
+                    "coverage",
+                    "repair_kind",
+                )
                 if key in lifecycle
             }
         )
@@ -338,6 +350,19 @@ def lifecycle_trace_fields(content: str) -> dict[str, Any]:
             candidate_id = item.get("candidateId") or item.get("candidate_id")
             if candidate_id:
                 fields["candidate_id"] = str(candidate_id)[:160]
+            review_id = item.get("reviewId") or item.get("review_id")
+            if review_id:
+                fields["review_id"] = str(review_id)[:160]
+            collection_id = item.get("collectionId") or item.get("collection_id")
+            if collection_id:
+                fields["collection_id"] = str(collection_id)[:160]
+            for source_key, field_name in (
+                ("candidateStatus", "candidate_status"),
+                ("reviewStatus", "review_status"),
+                ("publicationStatus", "publication_status"),
+            ):
+                if item.get(source_key) is not None:
+                    fields[field_name] = str(item[source_key])[:64]
             attempt_value = item.get("candidateAttempt") or item.get("lineageAttempt") or item.get("attempt")
             if attempt_value is not None:
                 try:

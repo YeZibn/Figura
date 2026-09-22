@@ -1273,6 +1273,15 @@ def test_oversized_tool_result_retains_outer_call_identity():
             "status": "success",
             "tool_status": "success",
             "turn": 3,
+            "correlation_version": 1,
+            "unit_id": "observation:line-call-7",
+            "unit_type": "observation",
+            "phase": "action",
+            "actor": "tool",
+            "role": "action",
+            "parent_unit_id": "generation:candidate-1",
+            "transition_id": "transition:line-call-7",
+            "next_action": {"required": False, "allowed": ["decide"], "blocked": []},
             "result": {"polyline": ["trace-" + ("x" * 2000) for _ in range(32)]},
         },
     )
@@ -1281,6 +1290,9 @@ def test_oversized_tool_result_retains_outer_call_identity():
     assert payload["call_id"] == "line-call-7"
     assert payload["status"] == "success"
     assert payload["turn"] == 3
+    assert payload["unit_id"] == "observation:line-call-7"
+    assert payload["parent_unit_id"] == "generation:candidate-1"
+    assert payload["transition_id"] == "transition:line-call-7"
     assert payload["result"]["truncated"] is True
     assert len(event.to_json()) <= 13000
 

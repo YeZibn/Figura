@@ -5,6 +5,7 @@ from chartagent.review.gates import (
     GateState,
     ReviewCoordinator,
     ReviewDecision,
+    ReviewGateBlocked,
     ReviewState,
     ReviewType,
     normalize_review_event,
@@ -115,6 +116,59 @@ def test_repair_decision_keeps_gate_closed_and_preserves_diagnostics():
     assert gate.issues[0].severity == "error"
     assert gate.repair_kind == "spec_only"
     assert gate.repair_phase == "assemble"
+
+
+def test_collection_review_allows_siblings_but_rejects_unrelated_parent():
+    coordinator = ReviewCoordinator()
+    first = coordinator.begin(
+        "run-collection",
+        ReviewType.GENERATED_CHART,
+        "candidate-left",
+        parent_id="collection:dashboard",
+    )
+
+    sibling = coordinator.begin(
+        "run-collection",
+        ReviewType.GENERATED_CHART,
+        "candidate-right",
+        parent_id="collection:dashboard",
+    )
+    assert sibling.parent_id == "collection:dashboard"
+    assert sibling.review_id != first.review_id
+
+    try:
+        coordinator.begin(
+            "run-collection",
+            ReviewType.GENERATED_CHART,
+            "candidate-other",
+            parent_id="collection:other",
+        )
+    except ReviewGateBlocked:
+        pass
+    else:
+        raise AssertionError("an unrelated collection must not cross the active review gate")
+
+    coordinator.apply(first.review_id, {"decision": "pass"})
+    assert coordinator.gate("run-collection").blocking is True
+    coordinator.apply(sibling.review_id, {"decision": "pass"})
+    assert coordinator.gate("run-collection").blocking is False
+
+    partial = ReviewCoordinator()
+    failed_child = partial.begin(
+        "run-collection-partial",
+        ReviewType.GENERATED_CHART,
+        "candidate-failed",
+        parent_id="collection:dashboard",
+    )
+    passing_child = partial.begin(
+        "run-collection-partial",
+        ReviewType.GENERATED_CHART,
+        "candidate-passing",
+        parent_id="collection:dashboard",
+    )
+    partial.apply(failed_child.review_id, {"decision": "repair_required", "next_action": "修复后重试"})
+    partial.apply(passing_child.review_id, {"decision": "pass"})
+    assert partial.gate("run-collection-partial").blocking is True
 
 
 def test_evidence_and_source_rebind_repair_phases_are_ordered():
@@ -379,6 +433,26 @@ def test_generated_review_blocks_then_releases_only_after_controlled_redraw(tmp_
     assert any(
         event.kind == "review_completed" and event.payload["execution_gate"]["blocking"] is False
         for event in events
+    )
+    canonical_starts = {
+        event.payload["transition_id"]
+        for event in events
+        if event.kind == "review_started"
+    }
+    compatibility_starts = {
+        event.payload["transition_id"]
+        for event in events
+        if event.kind == "chart_review_started"
+    }
+    assert canonical_starts == compatibility_starts
+    assert {event.payload["check_type"] for event in events if event.kind == "review_subcheck"} >= {
+        "deterministic_quality_audit",
+        "semantic_vlm",
+    }
+    assert all(
+        str(event.payload["unit_id"]).startswith("review:")
+        for event in events
+        if event.kind == "review_subcheck"
     )
 
 

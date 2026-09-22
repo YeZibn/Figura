@@ -5,6 +5,8 @@ import json
 from chartagent.review import (
     CandidateStatus,
     ChartReviewManager,
+    GeneratedChartReviewAdapter,
+    ReviewCoordinator,
     PublicationStatus,
     ReviewIssue,
     ReviewResult,
@@ -29,6 +31,7 @@ from chartagent.spec import (
     ChartFigureItem,
     ChartMetadata,
     ChartSpec,
+    ChartSpecCollection,
     ChartType,
     DataPoint,
     FigureLayout,
@@ -196,6 +199,58 @@ def test_figure_vlm_prompt_contains_all_child_specs_and_coverage():
     assert '"chart_id":"q1"' in text
     assert '"chart_id":"q2"' in text
     assert "review_scope=当前候选只审核 ChartFigure.source.panel_id" in text
+
+
+def test_collection_children_keep_independent_candidates_under_one_review_parent():
+    first = _figure_spec()
+    second = replace(
+        first,
+        figure_id="figure-review-2",
+        source=FigureSource("att_source_2", "panel_marketing"),
+    )
+    rendered = render_chart(ChartSpecCollection("collection-review", [first, second]).to_dict())
+    assert len(rendered.images) == 2
+
+    manager = ChartReviewManager()
+    coordinator = ReviewCoordinator()
+    adapter = GeneratedChartReviewAdapter()
+    candidates = [
+        manager.create_candidate("run-collection", "render-collection", image, figure)
+        for image, figure in zip(rendered.images, (first, second))
+    ]
+    records = [adapter.submit(coordinator, candidate=candidate) for candidate in candidates]
+
+    assert [candidate.collection_id for candidate in candidates] == ["collection-review", "collection-review"]
+    assert [candidate.figure_id for candidate in candidates] == ["figure-review", "figure-review-2"]
+    assert len({candidate.candidate_id for candidate in candidates}) == 2
+    assert {record.parent_id for record in records} == {"collection:collection-review"}
+    assert coordinator.gate("run-collection").blocking is True
+
+
+def test_semantic_review_result_is_idempotent_for_one_candidate_attempt():
+    spec = _bar_spec()
+    rendered = render_chart(spec.to_dict())
+    manager = ChartReviewManager()
+    candidate = manager.create_candidate(
+        "run-semantic-cache",
+        "render-1",
+        rendered.images[0],
+        spec,
+        source_attachment_ids=("att-source",),
+    )
+    first = ReviewResult(
+        status=ReviewStatus.COMPLETED,
+        decision="pass",
+        review_mode="vlm",
+        candidate_id=candidate.candidate_id,
+        review_id=candidate.review_id,
+        chart_spec_digest=candidate.chart_spec_digest,
+    )
+    second = replace(first, confidence=0.1)
+
+    assert manager.remember_semantic_result(candidate, first) is first
+    assert manager.remember_semantic_result(candidate, second) is first
+    assert manager.semantic_result(candidate) is first
 
 
 def test_direct_candidate_is_independently_reviewed_and_promoted():

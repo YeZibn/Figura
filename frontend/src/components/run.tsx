@@ -2,10 +2,8 @@ import { useState } from 'react'
 import { ChevronDown, ChevronRight, Terminal } from 'lucide-react'
 import { eventLabel, providerLabel, timestampLabel, toolResultIntegrityDetail } from '../domain/display'
 import { eventPayload, recordValue, textDetail } from '../domain/records'
-import { isReviewEvent, reviewGateFromPayload, reviewIssues, reviewStateLabel, reviewTypeLabel } from '../domain/review'
-import { measurementEventClass } from '../domain/measurement'
-import { executionGateValue, normalizeTimeline, type RunTimeline as RunTimelineModel } from '../domain/run/timeline'
-import { isMeasurementRepairEventKind } from '../types/protocol'
+import { reviewGateFromPayload, reviewIssues, reviewStateLabel, reviewTypeLabel } from '../domain/review'
+import { executionGateValue, projectDecisionTimeline, type DecisionUnit, type RunTimeline as RunTimelineModel } from '../domain/run/timeline'
 import type { AgentRunEvent, GeneratedChartReference } from '../types/protocol'
 import type { PreviewResourceLoader } from '../previewResources'
 import type { PreviewOpener } from './types'
@@ -39,9 +37,36 @@ export function ReviewTimelineItem({ event }: { event: AgentRunEvent }) {
   </div>
 }
 
+function decisionStatusLabel(status: DecisionUnit['status']): string {
+  return ({ unknown: '状态未知', pending: '待处理', completed: '已完成', failed: '失败', partial: '部分完成', blocked: '已阻塞', abandoned: '已放弃' } as Record<DecisionUnit['status'], string>)[status]
+}
+
+function decisionPhaseLabel(phase: DecisionUnit['phase']): string {
+  return ({ observe: '观察', decide: '决策', assemble: '组装', render: '渲染', review: '审核', repair: '修复', publish: '发布', action: '动作', unknown: '未知阶段' } as Record<DecisionUnit['phase'], string>)[phase]
+}
+
+function checkLabel(value: string): string {
+  return ({ deterministic_quality_audit: '确定性质量检查', semantic_vlm: 'VLM 语义审核' } as Record<string, string>)[value] || value
+}
+
+function DecisionToolStep({ step, previewLoader, onPreview, evaluationId, caseId }: { step: DecisionUnit['toolSteps'][number]; previewLoader: PreviewResourceLoader | null; onPreview?: PreviewOpener; evaluationId?: string; caseId?: string }) {
+  const [open, setOpen] = useState(false)
+  return <div className="trace-tool decision-tool-step"><button className="trace-tool-header" onClick={() => setOpen((value) => !value)} aria-expanded={open}><span className="trace-event-dot" /><span className="trace-tool-name"><strong>{step.toolLabel || step.toolName}</strong><small>{step.toolName} · {step.callId}</small></span><span className={'run-status ' + step.status}>{step.status === 'running' ? '运行中' : step.status === 'success' ? '完成' : '失败'}</span>{open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</button>{open && <div className="trace-tool-detail">{step.call && <div><div className="trace-detail-heading"><label>调用参数</label><CopyDetailButton value={eventPayload(step.call).arguments} /></div><pre>{textDetail(eventPayload(step.call).arguments)}</pre></div>}{step.result && <div><div className="trace-detail-heading"><label>工具结果</label><CopyDetailButton value={eventPayload(step.result).result || eventPayload(step.result).message} /></div>{step.resultTruncated && <small className="trace-warning">{toolResultIntegrityDetail(eventPayload(step.result))}</small>}<pre>{textDetail(eventPayload(step.result).result || eventPayload(step.result).message)}</pre>{Boolean(eventPayload(step.result).detailResource) && <EvaluationDetailResourceView resource={eventPayload(step.result).detailResource as Record<string, unknown>} evaluationId={evaluationId} caseId={caseId} />}</div>}{step.observations.map((observation, index) => <ObservationView key={index} observation={observation} loader={previewLoader} onPreview={onPreview} />)}</div>}</div>
+}
+
+function DecisionUnitItem({ unit, previewLoader, onPreview, evaluationId, caseId, depth = 0 }: { unit: DecisionUnit; previewLoader: PreviewResourceLoader | null; onPreview?: PreviewOpener; evaluationId?: string; caseId?: string; depth?: number }) {
+  const [open, setOpen] = useState(depth === 0 && (unit.status === 'pending' || unit.status === 'blocked'))
+  const action = unit.nextAction
+  const summary = [decisionPhaseLabel(unit.phase), action?.reason, action?.allowed.length ? `允许：${action.allowed.join('、')}` : ''].filter(Boolean).join(' · ')
+  const transitionEvents = unit.transitions.filter((event) => !['tool_call', 'tool_result', 'visual_observation'].includes(event.kind))
+  return <details className={'decision-unit decision-unit-' + unit.status + (unit.legacy ? ' decision-unit-legacy' : '')} open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
+    <summary><span className="decision-unit-marker" /><span className="decision-unit-heading"><strong>{unit.label}</strong><small>{decisionStatusLabel(unit.status)} · {decisionPhaseLabel(unit.phase)} · sequence {unit.firstSequence}{unit.lastSequence !== unit.firstSequence ? `–${unit.lastSequence}` : ''}</small></span><span className={'run-status ' + unit.status}>{decisionStatusLabel(unit.status)}</span></summary>
+    <div className="decision-unit-body">{summary && <div className="decision-unit-next">{summary}</div>}{unit.subchecks.length > 0 && <div className="decision-subchecks">{unit.subchecks.map((check) => <div className="decision-subcheck" key={check.id}><span className="trace-event-dot" /><span><strong>{checkLabel(check.checkType)}</strong><small>{check.status} · sequence {check.event.sequence}</small></span></div>)}</div>}{transitionEvents.map((event) => <div className="decision-transition" key={`${event.runId}-${event.sequence}`}><span className="trace-event-dot" /><span><strong>{eventLabel(event)}</strong><small>{timestampLabel(event.timestamp)} · {event.kind} · sequence {event.sequence}</small><span>{traceEventDetail(event)}</span></span></div>)}{unit.toolSteps.map((step) => <DecisionToolStep key={step.id} step={step} previewLoader={previewLoader} onPreview={onPreview} evaluationId={evaluationId} caseId={caseId} />)}{unit.children.map((child) => <DecisionUnitItem key={child.id} unit={child} previewLoader={previewLoader} onPreview={onPreview} evaluationId={evaluationId} caseId={caseId} depth={depth + 1} />)}{unit.events.length > 0 && <details className="decision-unit-raw"><summary>查看该 unit 的原始事件（{unit.events.length}）</summary><CopyDetailButton value={unit.events.map((event) => ({ sequence: event.sequence, kind: event.kind, payload: eventPayload(event) }))} /><pre>{textDetail(unit.events.map((event) => ({ sequence: event.sequence, kind: event.kind, payload: eventPayload(event) })))}</pre></details>}{unit.virtual && <div className="decision-unit-unavailable">父级由已有子事件重建；没有额外的独立事件可展开。</div>}</div>
+  </details>
+}
+
 export function RunTimeline({ timeline, expanded, onToggle, previewLoader, onPreview, onInterrupt, onRetry, onResume, showSummary = true, evaluationId, caseId }: { timeline: RunTimelineModel; expanded: boolean; onToggle: () => void; previewLoader: PreviewResourceLoader | null; onPreview?: PreviewOpener; onInterrupt?: () => void; onRetry?: () => void; onResume?: () => void; showSummary?: boolean; evaluationId?: string; caseId?: string }) {
-  const [expandedSteps, setExpandedSteps] = useState<Set<string>>(new Set())
-  const rows = normalizeTimeline(timeline.events)
+  const decisionUnits = projectDecisionTimeline(timeline.events)
   const summary = timeline.summary
   const status = summary.status
   const statusText = status === 'completed' ? '已完成' : status === 'failed' ? '失败' : status === 'interrupted' ? '已中断' : summary.cancelRequested ? '正在中断' : '运行中'
@@ -60,10 +85,8 @@ export function RunTimeline({ timeline, expanded, onToggle, previewLoader, onPre
       {timeline.historyGap && <div className="trace-warning" role="status">历史记录存在缺口，未显示缺失的执行步骤。</div>}
       {timeline.integrity && timeline.integrity.status !== 'complete' && <div className="trace-warning" role="status">{timeline.integrity.status === 'unavailable' ? '部分大结果只有摘要，旧 bundle 没有可恢复的完整安全资源。' : timeline.integrity.status === 'redacted' ? '部分字段已按安全边界隐藏；可见内容仍来自脱敏事件。' : '部分事件达到展示上限；可用时可加载完整安全结果。'}</div>}
       {gateBlocking && <div className="trace-warning review-gate-banner" role="status"><strong>主链路已暂停</strong><span>{reviewTypeLabel(executionGate?.reviewType)} · {reviewStateLabel(executionGate?.state, true)}{executionGate?.nextAction ? ` · 下一步：${String(executionGate.nextAction)}` : ''}</span></div>}
-      {rows.length === 0 && <div className="trace-empty">没有可恢复的执行事件。</div>}
-      {rows.map((row) => row.kind === 'event' ? (
-        isReviewEvent(row.event) ? <ReviewTimelineItem key={`${row.event.runId}-${row.event.sequence}`} event={row.event} /> : <div className={'trace-event ' + measurementEventClass(row.event.kind) + (row.event.kind === 'run_failed' || row.event.kind === 'run_interrupted' || row.event.kind === 'history_gap' || row.event.kind === 'assembly_validation_failure' ? ' error' : '')} key={`${row.event.runId}-${row.event.sequence}`}><span className="trace-event-dot" /><span className="trace-event-copy"><strong>{eventLabel(row.event)}</strong><small>{timestampLabel(row.event.timestamp)}{isMeasurementRepairEventKind(row.event.kind) ? ` · ${row.event.kind}` : ''}</small><span>{traceEventDetail(row.event)}</span></span></div>
-      ) : <div className="trace-tool" key={row.step.id}><button className="trace-tool-header" onClick={() => setExpandedSteps((current) => { const next = new Set(current); next.has(row.step.id) ? next.delete(row.step.id) : next.add(row.step.id); return next })} aria-expanded={expandedSteps.has(row.step.id)}><span className="trace-event-dot" /><span className="trace-tool-name"><strong>{row.step.toolLabel || row.step.toolName}</strong><small>{row.step.toolName} · {row.step.callId}</small></span><span className={'run-status ' + row.step.status}>{row.step.status === 'running' ? '运行中' : row.step.status === 'success' ? '完成' : '失败'}</span>{expandedSteps.has(row.step.id) ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</button>{expandedSteps.has(row.step.id) && <div className="trace-tool-detail">{row.step.call && <div><div className="trace-detail-heading"><label>调用参数</label><CopyDetailButton value={eventPayload(row.step.call).arguments} /></div><pre>{textDetail(eventPayload(row.step.call).arguments)}</pre></div>}{row.step.result && <div><div className="trace-detail-heading"><label>工具结果</label><CopyDetailButton value={eventPayload(row.step.result).result || eventPayload(row.step.result).message} /></div>{row.step.resultTruncated && <small className="trace-warning">{toolResultIntegrityDetail(eventPayload(row.step.result))}</small>}<pre>{textDetail(eventPayload(row.step.result).result || eventPayload(row.step.result).message)}</pre>{Boolean(eventPayload(row.step.result).detailResource) && <EvaluationDetailResourceView resource={eventPayload(row.step.result).detailResource as Record<string, unknown>} evaluationId={evaluationId} caseId={caseId} />}</div>}{row.step.observations.map((observation, index) => <ObservationView key={index} observation={observation} loader={previewLoader} onPreview={onPreview} />)}</div>}</div>)}
+      {decisionUnits.length === 0 && <div className="trace-empty">没有可恢复的执行事件。</div>}
+      {decisionUnits.map((unit) => <DecisionUnitItem key={unit.id} unit={unit} previewLoader={previewLoader} onPreview={onPreview} evaluationId={evaluationId} caseId={caseId} />)}
     </div>}
   </section>
 }

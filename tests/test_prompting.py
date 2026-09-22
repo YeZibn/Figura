@@ -7,9 +7,11 @@ from chartagent.prompting import (
     PromptResourceError,
     assemble_prompt_context,
     build_static_agent_prompt,
+    build_runtime_context,
     load_prompt_asset,
     panel_inventory_from_layout_contexts,
 )
+from chartagent.decision_context import build_decision_context
 from chartagent.agent import Agent
 from chartagent.client.models import NormalizedResult, ToolCall
 from chartagent.panels import PanelHandoff
@@ -149,6 +151,66 @@ def test_panel_inventory_preserves_stable_scope_and_status():
             "resource_ref": None,
         }
     ]
+
+
+def test_decision_context_marks_required_repair_without_copying_unbounded_state():
+    decision = build_decision_context(
+        run_id="run-review",
+        execution_gate={
+            "state": "repair_required",
+            "blocking": True,
+            "reviewId": "review-1",
+            "subjectId": "candidate-1",
+            "repairKind": "evidence_needed",
+            "repairPhase": "evidence",
+            "nextAction": "补充同一 panel 的 evidence",
+        },
+        selected_panel={"panel_id": "panel-left"},
+        generation_context={
+            "version": "context-v1",
+            "source_scope": {"attachment_id": "att-1", "panel_ids": ["panel-left"]},
+            "goal_summary": "不要把大图当成当前 panel",
+        },
+        retry_budget=4,
+    )
+    runtime = build_runtime_context(
+        {
+            "run_id": "run-review",
+            "decision_context": decision,
+        },
+        review_gate={"state": "repair_required", "blocking": True},
+    )
+
+    assert '"unit_id":"review:review-1"' in runtime
+    assert '"required":true' in runtime
+    assert '"same_scope_measurement"' in runtime
+    assert '"publish"' in runtime
+    assert '不要把大图当成当前 panel' in runtime
+    assert '/Users/' not in runtime
+
+
+def test_optional_measurement_decision_context_does_not_turn_warning_into_repair():
+    decision = build_decision_context(
+        run_id="run-measurement",
+        measurement_evidence=[{
+            "session_id": "session-1",
+            "attempt_id": "attempt-1",
+            "attachment_id": "att-1",
+            "panel_id": "panel-left",
+            "decision_status": "pending",
+            "focus": {"requested": True, "applied": True, "status": "pending"},
+        }],
+        retry_budget=2,
+    )
+    runtime = build_runtime_context(
+        {"run_id": "run-measurement", "decision_context": decision},
+    )
+
+    assert '"unit_id":"measurement:attempt-1"' in runtime
+    assert '"required":false' in runtime
+    assert '"select_evidence"' in runtime
+    assert '"focus applied"' not in runtime.lower()
+    assert '"blocked_actions":["publish"]' in runtime
 
 
 def test_openai_and_mcp_projections_share_the_same_tool_contract():

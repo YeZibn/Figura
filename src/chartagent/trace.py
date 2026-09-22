@@ -15,6 +15,8 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable, IO, Mapping, Optional
 
+from .decision_timeline import enrich_event_payload
+
 
 @dataclass(frozen=True)
 class TraceLimits:
@@ -239,6 +241,12 @@ class TraceEmitter:
         event_payload = dict(payload or {})
         event_payload.update(fields)
         self.sequence += 1
+        event_payload = enrich_event_payload(
+            kind,
+            event_payload,
+            run_id=self.run_id,
+            sequence=self.sequence,
+        )
         event = TraceEvent(
             kind=kind,
             run_id=self.run_id,
@@ -348,4 +356,5 @@ __all__ = [
     "summarize_images",
     "summarize_result",
     "truncate_text",
+    "enrich_event_payload",
 ]
