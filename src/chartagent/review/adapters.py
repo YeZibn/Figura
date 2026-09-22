@@ -7,7 +7,7 @@ from typing import Any
 
 from ..measurement import MeasurementSession
 from .gates import ReviewCoordinator, ReviewDecision, ReviewIssue, ReviewRecord, ReviewType
-from .manager import CandidateStatus, ChartCandidate, PublicationStatus, ReviewStatus
+from .models import CandidateStatus, ChartCandidate, PublicationStatus, ReviewStatus
 
 
 def _bounded_issues(value: object) -> tuple[ReviewIssue, ...]:

@@ -31,11 +31,17 @@ npm --prefix frontend run smoke
 
 ## 结构入口
 
-- `src/chartagent/agent.py`：Agent 循环、模型回合和工具调用。
-- `src/chartagent/runtime.py`：组装 Agent、memory、附件和工具。
+- `src/chartagent/agent/loop.py`：Agent 公共入口与顶层编排。
+- `src/chartagent/agent/turn.py`：单轮模型结果和工具输入/派发边界。
+- `src/chartagent/agent/recovery.py`：工作单元、checkpoint、中断和断点恢复投影。
+- `src/chartagent/agent/measurement_flow.py`、`panel_routing.py`、`artifacts.py`：测量状态、panel 路由和 observation/artifact 投影协作者。
+- `src/chartagent/measurement/`：Measurement evidence、scope、quality 与 lifecycle 领域实现。
+- `src/chartagent/review/`：Review models、policy、evaluator 与候选生命周期实现。
+- `src/chartagent/runtime/factory.py`：组装 Agent、memory、附件和工具。
 - `src/chartagent/client/`：OpenAI 兼容客户端与配置解析。
 - `src/chartagent/tools/chart/`：OCR、柱/线/饼/散点图传感器、`ChartSpec` 和 `render_chart`。
-- `src/chartagent/gateway/`：本地 HTTP、Run、SSE、历史、附件和图表 artifact。
+- `src/chartagent/gateway/`：本地 HTTP、Run、SSE、历史、附件和图表 artifact；`persistence.py` 负责持久化实现，`history.py` 与 `runs.py` 保留兼容入口，`run_lifecycle.py`、`run_manager.py`、`run_observations.py` 分别承载运行职责。
+- `src/chartagent/evaluation/`：评测 bundle、reader、timeline 与报告；`reader_projection.py`、`input_sources.py` 和 `timeline_*` 是内部归一化/诊断协作者，Gateway 通过 `evaluation_adapter.py` 只读访问。
 - `frontend/src/`：React + TypeScript + Vite；`gatewayClient` 是真实接口，`mockClient` 是模拟接口。
 - `tests/`：Python 测试；`openspec/specs/`：当前行为规格。
 

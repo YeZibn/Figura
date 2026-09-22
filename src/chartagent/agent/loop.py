@@ -33,16 +33,13 @@ from ..trace import (
     bounded_reasoning,
     summarize_arguments,
     summarize_images,
-    summarize_result,
 )
-from ..tools.core import ToolRegistry, dispatch_observation
+from ..tools.core import ToolRegistry
 from ..tools.core.presentation import get_tool_presentation
 from ..memory import AgentMemory, InMemoryAgentMemory, RunStatus
 from ..measurement import (
     MEASUREMENT_TOOLS,
     MeasurementSession,
-    measurement_target_fingerprint,
-    register_measurement,
     sessions_from_state,
     sessions_to_state,
 )
@@ -55,7 +52,7 @@ from ..review import (
     ReviewStatus,
     review_candidate_with_vlm,
 )
-from ..tools.core.result import DispatchedObservation, GeneratedImage
+from ..tools.core.result import GeneratedImage
 from .tool_schema import registry_tools, tool_to_openai_schema
 from .messages import assistant_entry, tool_entry
 from .review_gate import (
@@ -65,568 +62,51 @@ from .review_gate import (
     review_gate_context,
 )
 from .observations import observation_status
+from .artifacts import (
+    _artifact_records_from_observation,
+    _attach_visual_observation_refs,
+    _trace_result_summary,
+)
+from .measurement_flow import (
+    _measurement_repair_context_from_content,
+    _measurement_repair_contexts_from_sessions,
+    _measurement_trace_fields,
+    _merge_measurement_repair_contexts,
+    measurement_decisions_from_content,
+    register_measurement_observation,
+)
+from .panel_routing import (
+    MAX_LAYOUT_CONTEXTS as _MAX_LAYOUT_CONTEXTS_CANONICAL,
+    hydrate_persisted_panel_contexts,
+    layout_arguments,
+    panel_routing_error,
+    remember_layout_context,
+)
+from .recovery import (
+    AgentInterrupted,
+    AgentRecoveryBlocked,
+    begin_work_unit,
+    checkpoint,
+    checkpoint_state,
+    complete_work_unit,
+    interruption_requested,
+    model_result_payload,
+    raise_if_interrupted,
+    recovery_tool_calls,
+    uncertain_work_unit,
+)
+from .turn import (
+    assistant_message_for_result,
+    execute_model_turn,
+    prepare_and_dispatch_tool_call,
+)
 
 # Sentinel returned when the step budget is exhausted.
 VisualObservationSink = Callable[[str, str, Sequence[GeneratedImage]], Sequence[dict[str, Any]]]
 _LAYOUT_TOOL_NAME = "inspect_chart_layout"
 _DECOMPOSE_TOOL_NAME = "decompose_chart_image"
-_MAX_LAYOUT_CONTEXTS = 32
-_MAX_PENDING_MEASUREMENT_REPAIRS = 16
-_GEOMETRY_TOOL_NAMES = frozenset(
-    {"measure_bars", "extract_line_series", "extract_scatter_points", "extract_pie_slices"}
-)
-_SCOPED_TOOL_NAMES = _GEOMETRY_TOOL_NAMES | {"extract_text"}
+_MAX_LAYOUT_CONTEXTS = _MAX_LAYOUT_CONTEXTS_CANONICAL
 _RENDER_TOOL_NAMES = frozenset({"render_chart", "generate_chart"})
-
-
-def _measurement_repair_context_from_content(content: str) -> dict[str, Any] | None:
-    """Extract a compact evidence decision context for the next model turn."""
-    try:
-        payload = json.loads(content)
-    except (TypeError, json.JSONDecodeError):
-        return None
-    if not isinstance(payload, dict):
-        return None
-    data = payload.get("data") if isinstance(payload.get("data"), Mapping) else payload
-    measurement = data.get("measurement") if isinstance(data, Mapping) else None
-    if not isinstance(measurement, Mapping):
-        return None
-    reference = measurement.get("reference") if isinstance(measurement.get("reference"), Mapping) else {}
-    quality = measurement.get("quality") if isinstance(measurement.get("quality"), Mapping) else {}
-    evidence = measurement.get("evidence") if isinstance(measurement.get("evidence"), Mapping) else {}
-    decision = measurement.get("decision") if isinstance(measurement.get("decision"), Mapping) else {}
-    decision_status = str(decision.get("status") or "pending")[:32]
-    if decision_status in {"selected", "discarded", "abandoned"}:
-        return None
-    focus_suggestion = quality.get("focus_suggestion") or quality.get("repair_action")
-    result: dict[str, Any] = {
-        "session_id": reference.get("session_id"),
-        "attempt_id": reference.get("attempt_id"),
-        "attachment_id": reference.get("attachment_id"),
-        "panel_id": reference.get("panel_id"),
-        "status": str(measurement.get("status") or "provisional")[:32],
-        "refs": list(evidence.get("refs") or [])[:64] if isinstance(evidence.get("refs"), list) else [],
-        "warnings": list(quality.get("warnings") or [])[:12] if isinstance(quality.get("warnings"), list) else [],
-        "issues": list(quality.get("issues") or [])[:8] if isinstance(quality.get("issues"), list) else [],
-        "focus": evidence.get("focus") if isinstance(evidence.get("focus"), Mapping) else None,
-        "observation_scope": measurement.get("observation_scope") if isinstance(measurement.get("observation_scope"), Mapping) else None,
-        "series_map": dict(decision.get("series_map") or {}) if isinstance(decision.get("series_map"), Mapping) else {},
-        "evidence_basis": str(decision.get("evidence_basis") or "")[:80] or None,
-        "focus_suggestion": focus_suggestion if isinstance(focus_suggestion, Mapping) else None,
-        "decision_status": decision_status,
-        "selected_refs": list(decision.get("selected_refs") or [])[:64] if isinstance(decision.get("selected_refs"), list) else [],
-        "discarded_refs": list(decision.get("discarded_refs") or [])[:64] if isinstance(decision.get("discarded_refs"), list) else [],
-        "next_action": "由主 Agent 选择、舍弃或调用同一测量工具携带 measurement_target 做定向补充",
-    }
-    return result
-
-
-def _repair_context_key(context: Mapping[str, Any]) -> tuple[str, ...]:
-    """Return a stable identity for one bounded repair action."""
-    target = context.get("target")
-    target_id = target.get("target_id") if isinstance(target, Mapping) else None
-    identity = tuple(
-        str(context.get(key) or "")
-        for key in (
-            "attachment_id",
-            "panel_id",
-            "session_id",
-            "attempt_id",
-            "parent_attempt_id",
-            "action",
-        )
-    ) + (str(target_id or ""),)
-    if any(identity):
-        return identity
-    return (json.dumps(dict(context), ensure_ascii=False, sort_keys=True, default=str)[:512],)
-
-
-def _merge_measurement_repair_contexts(
-    *groups: Sequence[Mapping[str, Any] | None],
-) -> list[dict[str, Any]]:
-    """Merge repair actions without letting a later action overwrite one."""
-    result: list[dict[str, Any]] = []
-    seen: set[tuple[str, ...]] = set()
-    for group in groups:
-        for item in group or ():
-            if not isinstance(item, Mapping):
-                continue
-            context = {str(key): value for key, value in list(item.items())[:24]}
-            key = _repair_context_key(context)
-            if key in seen:
-                continue
-            seen.add(key)
-            result.append(context)
-            if len(result) >= _MAX_PENDING_MEASUREMENT_REPAIRS:
-                return result
-    return result
-
-
-def _measurement_repair_contexts_from_sessions(
-    sessions: Mapping[str, MeasurementSession],
-) -> list[dict[str, Any]]:
-    """Project every session's compact evidence decision state in stable order."""
-    contexts: list[dict[str, Any]] = []
-    for session in sessions.values():
-        current = session.current_attempt()
-        if current is None:
-            continue
-        status = current.status
-        if status in {"remeasure_required", "partial"} and session.repair_budget_remaining <= 0:
-            status = "exhausted"
-        focus_suggestion = (
-            current.quality.get("focus_suggestion") or current.quality.get("repair_action")
-            if isinstance(current.quality, Mapping)
-            else None
-        )
-        if isinstance(focus_suggestion, Mapping):
-            focus_suggestion = dict(focus_suggestion)
-            focus_suggestion.setdefault("budget_remaining", session.repair_budget_remaining)
-            if session.repair_budget_remaining <= 0:
-                focus_suggestion["status"] = "exhausted"
-        result = {
-            "session_id": session.session_id,
-            "attachment_id": session.attachment_id,
-            "panel_id": session.panel_id,
-            "attempt_id": current.attempt_id,
-            "status": status,
-            "refs": list(current.evidence_refs)[:64],
-            "selected_refs": list(session.selected_refs),
-            "discarded_refs": list(session.discarded_refs),
-            "decision_status": session.decision_status,
-            "focus_mode": session.focus_mode,
-            "focus_suggestion": focus_suggestion,
-            "observation_scope": current.observation_scope,
-            "series_map": dict(session.series_map),
-            "evidence_basis": session.evidence_basis,
-            "budget_remaining": session.repair_budget_remaining,
-            "warnings": list(current.quality.get("warnings") or [])[:12] if isinstance(current.quality, Mapping) else [],
-            "issues": list(current.quality.get("issues") or [])[:8] if isinstance(current.quality, Mapping) else [],
-            "next_action": "由主 Agent 选择、舍弃或调用同一测量工具携带 measurement_target 做定向补充",
-        }
-        contexts.append(result)
-    return _merge_measurement_repair_contexts(contexts)
-
-
-def _measurement_repair_context_from_sessions(
-    sessions: Mapping[str, MeasurementSession],
-) -> dict[str, Any] | None:
-    """Backward-compatible singular projection for callers outside the loop."""
-    contexts = _measurement_repair_contexts_from_sessions(sessions)
-    return contexts[0] if contexts else None
-
-
-def _measurement_repair_message(contexts: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
-    """Build a compatibility continuation message for legacy callers."""
-    payload = {"measurement_evidence": [dict(item) for item in contexts[:_MAX_PENDING_MEASUREMENT_REPAIRS]]}
-    return {
-        "role": "user",
-        "content": (
-            "当前测量结果需要主 Agent 结合 evidence.refs 做选择；如需补充，只能在同一 attachment/panel/session 内使用有界 measurement_target。"
-            "不要猜测缺失数值，也不要使用未接受 attempt：\n"
-            + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-        ),
-    }
-
-
-def _repair_target_context(
-    target: object,
-    sessions: Mapping[str, MeasurementSession],
-    *,
-    source_attachment_id: str | None,
-    source_panel_id: str | None,
-    source_tool: str,
-    parent_attempt_id: str | None,
-) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
-    """Validate a model target before an authorized sensor is dispatched."""
-    if not isinstance(target, Mapping):
-        return None, {
-            "status": "rejected",
-            "code": "measurement_target_invalid",
-            "location": "measurement_target",
-            "message": "measurement_target must be an object",
-            "next_action": "重新读取当前 attempt 的 evidence.refs，再决定是否发起定向补充",
-        }
-    if not source_attachment_id:
-        return None, {
-            "status": "rejected",
-            "code": "measurement_source_mismatch",
-            "location": "measurement_target",
-            "message": "targeted remeasurement requires the current attachment",
-            "next_action": "恢复当前来源后再发起定向重测",
-        }
-    requested_attachment = target.get("attachment_id") or target.get("source_attachment_id")
-    if requested_attachment is not None and str(requested_attachment) != source_attachment_id:
-        return None, {
-            "status": "rejected",
-            "code": "measurement_source_mismatch",
-            "location": "measurement_target.attachment_id",
-            "message": "measurement target does not belong to the current attachment",
-            "next_action": "只使用当前 measurement.evidence.refs，不要提交其他附件的 target",
-        }
-    requested_panel = target.get("panel_id") or target.get("panelId")
-    if requested_panel is not None and source_panel_id and str(requested_panel) != source_panel_id:
-        return None, {
-            "status": "rejected",
-            "code": "measurement_panel_mismatch",
-            "location": "measurement_target.panel_id",
-            "message": "measurement target does not belong to the current panel",
-            "next_action": "只使用当前 panel 的 evidence.refs 或区域",
-        }
-    session = next(
-        (
-            item
-            for item in reversed(list(sessions.values()))
-            if item.attachment_id == source_attachment_id and item.panel_id == source_panel_id
-        ),
-        None,
-    )
-    if session is None:
-        return None, {
-            "status": "rejected",
-            "code": "measurement_session_not_found",
-            "location": "measurement_target",
-            "message": "targeted remeasurement has no current measurement session",
-            "next_action": "先读取当前 panel 的完整测量结果，再根据 evidence.refs 决定补充区域",
-        }
-    normalized, error = session.validate_repair_target(
-        target,
-        tool=source_tool,
-        parent_attempt_id=parent_attempt_id,
-    )
-    if error is not None:
-        return None, error
-    if normalized is not None:
-        normalized["panel_id"] = source_panel_id
-        normalized["attachment_id"] = source_attachment_id
-        normalized["target_fingerprint"] = measurement_target_fingerprint(normalized, tool=source_tool)
-    return normalized, None
-
-
-def _attach_visual_observation_refs(
-    observation: DispatchedObservation,
-    references: Sequence[dict[str, Any]],
-) -> DispatchedObservation:
-    """Attach managed visual-resource refs to decomposition crop records."""
-    if not references or not observation.images:
-        return observation
-    try:
-        payload = json.loads(observation.content)
-    except (TypeError, json.JSONDecodeError):
-        return observation
-    if not isinstance(payload, dict):
-        return observation
-    data = payload.get("data")
-    if not isinstance(data, dict) or not isinstance(data.get("panels"), list):
-        return observation
-    by_key = {
-        str(reference.get("resourceKey")): reference
-        for reference in references
-        if isinstance(reference, dict) and isinstance(reference.get("resourceKey"), str)
-    }
-    ordered_refs = [reference for reference in references if isinstance(reference, dict)]
-    for image_index, image in enumerate(observation.images):
-        metadata = image.metadata if hasattr(image.metadata, "get") else {}
-        panel_id = metadata.get("panel_id") if isinstance(metadata, dict) else None
-        resource_key = metadata.get("resource_key") if isinstance(metadata, dict) else None
-        if not isinstance(panel_id, str):
-            continue
-        panel = next(
-            (item for item in data["panels"] if isinstance(item, dict) and item.get("id") == panel_id),
-            None,
-        )
-        if panel is None or not isinstance(panel.get("crop"), dict):
-            continue
-        reference = by_key.get(resource_key) if isinstance(resource_key, str) else None
-        if reference is None and len(ordered_refs) == len(observation.images):
-            reference = ordered_refs[image_index]
-        crop = dict(panel["crop"])
-        crop["resource_ref"] = dict(reference) if isinstance(reference, dict) else None
-        crop["status"] = "persisted" if reference is not None else "unavailable"
-        panel["crop"] = crop
-        layout_context = panel.get("layout_context")
-        if isinstance(layout_context, dict):
-            panel_context = dict(layout_context.get("panel") or {})
-            panel_context["crop_ref"] = crop["resource_ref"]
-            layout_context["panel"] = panel_context
-    payload["data"] = data
-    return DispatchedObservation(
-        content=json.dumps(payload, ensure_ascii=False),
-        images=observation.images,
-    )
-
-
-def _artifact_records_from_observation(
-    tool_name: str,
-    call_id: str,
-    content: str,
-    source_attachment_ids: Sequence[str],
-    references: Sequence[dict[str, Any]] = (),
-) -> list[dict[str, Any]]:
-    """Create a small attributable index while retaining the native result."""
-    try:
-        payload = json.loads(content)
-    except (TypeError, json.JSONDecodeError):
-        payload = {}
-    if not isinstance(payload, dict):
-        payload = {}
-    data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
-    warnings = payload.get("warnings", [])
-    if isinstance(data, dict) and isinstance(data.get("warnings"), list):
-        warnings = data.get("warnings")
-    warnings = [str(item)[:240] for item in warnings[:12]] if isinstance(warnings, list) else []
-    panel_ids = []
-    panels = data.get("panels") if isinstance(data, dict) else None
-    if isinstance(panels, list):
-        panel_ids = [str(item.get("id"))[:96] for item in panels if isinstance(item, dict) and item.get("id")]
-    measurement = data.get("measurement") if isinstance(data, dict) else None
-    status = "failed" if payload.get("error") else "observed"
-    if isinstance(measurement, dict):
-        status = str(measurement.get("status") or status)[:64]
-        reference = measurement.get("reference")
-        if isinstance(reference, dict) and isinstance(reference.get("panel_id"), str):
-            panel_ids = [reference["panel_id"]]
-    measurement_quality = measurement.get("quality") if isinstance(measurement, dict) else None
-    measurement_issues = measurement_quality.get("issues", []) if isinstance(measurement_quality, dict) else []
-    measurement_evidence = measurement.get("evidence") if isinstance(measurement, dict) and isinstance(measurement.get("evidence"), dict) else {}
-    measurement_decision = measurement.get("decision") if isinstance(measurement, dict) and isinstance(measurement.get("decision"), dict) else {}
-    records: list[dict[str, Any]] = [
-        {
-            "artifact_id": f"observation:{call_id}"[:128],
-            "kind": "observation",
-            "status": status,
-            "source_attachment_ids": list(source_attachment_ids),
-            "panel_ids": panel_ids,
-            "lineage": [tool_name],
-            "confidence": data.get("confidence") if isinstance(data, dict) else None,
-            "warnings": warnings,
-            "resource_refs": list(references),
-        }
-    ]
-    if isinstance(measurement, dict):
-        records[0].update(
-            {
-                "measurement_status": status,
-                "measurement_reference": dict(measurement.get("reference") or {}) if isinstance(measurement.get("reference"), dict) else None,
-                "measurement_issues": [item for item in measurement_issues[:8] if isinstance(item, dict)],
-                "measurement_evidence_refs": list(measurement_evidence.get("refs") or [])[:64] if isinstance(measurement_evidence.get("refs"), list) else [],
-                "measurement_selected_refs": list(measurement_decision.get("selected_refs") or [])[:64] if isinstance(measurement_decision.get("selected_refs"), list) else [],
-                "measurement_discarded_refs": list(measurement_decision.get("discarded_refs") or [])[:64] if isinstance(measurement_decision.get("discarded_refs"), list) else [],
-                "measurement_decision_status": str(measurement_decision.get("status") or "pending")[:32],
-                "measurement_series_map": dict(measurement_decision.get("series_map") or {}) if isinstance(measurement_decision.get("series_map"), Mapping) else {},
-                "measurement_evidence_basis": str(measurement_decision.get("evidence_basis") or "")[:80] or None,
-                "measurement_observation_scope": dict(measurement.get("observation_scope") or {}) if isinstance(measurement.get("observation_scope"), Mapping) else None,
-                "measurement_focus": dict(measurement_evidence.get("focus") or {}) if isinstance(measurement_evidence.get("focus"), dict) else None,
-            }
-        )
-    if tool_name == "assemble_spec" and not payload.get("error"):
-        assembled_kind = data.get("kind") if isinstance(data, dict) else None
-        if assembled_kind == "chart_figure":
-            records.append(
-                {
-                    "artifact_id": f"figure:{data.get('figure_id') or call_id}"[:128],
-                    "kind": "ChartFigure",
-                    "status": "validated",
-                    "source_attachment_ids": [data.get("source", {}).get("attachment_id")] if isinstance(data.get("source"), dict) else list(source_attachment_ids),
-                    "panel_ids": [data.get("source", {}).get("panel_id")] if isinstance(data.get("source"), dict) else panel_ids,
-                    "lineage": [f"observation:{call_id}"],
-                    "warnings": warnings,
-                    "provenance": data.get("provenance"),
-                    "coverage": data.get("coverage"),
-                    "child_chart_ids": [item.get("chart_id") for item in data.get("charts", []) if isinstance(item, dict)],
-                }
-            )
-        elif assembled_kind == "chart_spec_collection":
-            records.append(
-                {
-                    "artifact_id": f"chartspec-collection:{data.get('collection_id') or call_id}"[:128],
-                    "kind": "ChartSpecCollection",
-                    "status": "validated",
-                    "source_attachment_ids": list(source_attachment_ids),
-                    "panel_ids": panel_ids,
-                    "lineage": [f"observation:{call_id}"],
-                    "warnings": warnings,
-                    "provenance": data.get("provenance"),
-                    "figure_count": len(data.get("figures", [])) if isinstance(data.get("figures"), list) else 0,
-                }
-            )
-        else:
-            records.append(
-                {
-                    "artifact_id": f"chartspec:{call_id}"[:128],
-                    "kind": "ChartSpec",
-                    "status": "validated",
-                    "source_attachment_ids": list(source_attachment_ids),
-                    "panel_ids": panel_ids,
-                    "lineage": [f"observation:{call_id}"],
-                    "warnings": warnings,
-                    "provenance": data.get("provenance"),
-                }
-            )
-    for item in panels or []:
-        if not isinstance(item, dict) or not item.get("id"):
-            continue
-        crop = item.get("crop") if isinstance(item.get("crop"), dict) else {}
-        crop_refs = [crop.get("resource_ref")] if isinstance(crop.get("resource_ref"), dict) else []
-        records.append(
-            {
-                "artifact_id": f"panel:{item['id']}"[:128],
-                "kind": "panel",
-                "status": item.get("status", "observed"),
-                "source_attachment_ids": list(source_attachment_ids),
-                "panel_ids": [str(item["id"])],
-                "lineage": [f"observation:{call_id}"],
-                "confidence": item.get("confidence"),
-                "warnings": item.get("warnings", []),
-                "resource_refs": crop_refs or list(references),
-            }
-        )
-    review_items = data.get("review") if isinstance(data, dict) else None
-    if not isinstance(review_items, list) and isinstance(data, dict) and isinstance(data.get("candidate"), dict):
-        review_items = [data["candidate"]]
-    if isinstance(review_items, list):
-        for index, item in enumerate(review_items[:16], start=1):
-            if not isinstance(item, dict):
-                continue
-            candidate_id = str(item.get("candidateId") or f"{call_id}:{index}")[:128]
-            candidate_status = str(item.get("candidateStatus") or item.get("status") or "candidate")[:64]
-            records.append(
-                {
-                    "artifact_id": f"candidate:{candidate_id}"[:128],
-                    "kind": "candidate",
-                    "status": candidate_status,
-                    "source_attachment_ids": item.get("sourceAttachmentIds", source_attachment_ids),
-                    "panel_ids": item.get("panelIds", panel_ids),
-                    "lineage": [f"observation:{call_id}"],
-                    "warnings": warnings,
-                    "resource_refs": list(references),
-                }
-            )
-            review = item.get("review")
-            if isinstance(review, dict):
-                records.append(
-                    {
-                        "artifact_id": f"review:{item.get('reviewId') or candidate_id}"[:128],
-                        "kind": "review",
-                        "status": review.get("status", item.get("reviewStatus", "unknown")),
-                        "source_attachment_ids": item.get("sourceAttachmentIds", source_attachment_ids),
-                        "panel_ids": item.get("panelIds", panel_ids),
-                        "lineage": [f"candidate:{candidate_id}"],
-                        "confidence": review.get("confidence"),
-                        "warnings": [str(issue.get("message")) for issue in review.get("issues", []) if isinstance(issue, dict)],
-                    }
-                )
-    return records[:48]
-
-
-def _measurement_trace_fields(content: str) -> dict[str, Any]:
-    """Project only bounded measurement lifecycle fields into trace events."""
-    try:
-        payload = json.loads(content)
-    except (TypeError, json.JSONDecodeError):
-        return {}
-    data = payload.get("data") if isinstance(payload, dict) and isinstance(payload.get("data"), dict) else payload
-    measurement = data.get("measurement") if isinstance(data, dict) else None
-    if not isinstance(measurement, dict):
-        return {}
-    reference = measurement.get("reference")
-    quality = measurement.get("quality")
-    evidence = measurement.get("evidence") if isinstance(measurement.get("evidence"), dict) else {}
-    decision = measurement.get("decision") if isinstance(measurement.get("decision"), dict) else {}
-    result: dict[str, Any] = {
-        "measurement_status": str(measurement.get("status") or "unknown")[:48],
-        "measurement_reference": {
-            key: reference.get(key)
-            for key in ("session_id", "attempt_id", "attachment_id", "panel_id")
-            if isinstance(reference, dict) and reference.get(key) is not None
-        },
-    }
-    if isinstance(evidence, dict):
-        result["measurement_evidence_refs"] = list(evidence.get("refs") or [])[:64]
-        focus = evidence.get("focus")
-        if isinstance(focus, Mapping):
-            result["measurement_focus"] = {
-                key: focus.get(key)
-                for key in ("requested", "applied", "status", "mode", "target_refs", "search_scope")
-                if focus.get(key) is not None
-            }
-    if isinstance(decision, dict):
-        result["measurement_decision_status"] = str(decision.get("status") or "pending")[:32]
-        result["measurement_selected_refs"] = list(decision.get("selected_refs") or [])[:64]
-        result["measurement_discarded_refs"] = list(decision.get("discarded_refs") or [])[:64]
-        result["measurement_series_map"] = dict(decision.get("series_map") or {}) if isinstance(decision.get("series_map"), Mapping) else {}
-        result["measurement_evidence_basis"] = str(decision.get("evidence_basis") or "")[:80] or None
-    observation_scope = measurement.get("observation_scope")
-    if isinstance(observation_scope, Mapping):
-        result["measurement_observation_scope"] = {
-            key: observation_scope.get(key)
-            for key in ("scope_id", "panel_id", "coordinate_space", "status", "applied", "requested", "include", "exclude", "source_regions", "objectives", "search_scope")
-            if observation_scope.get(key) is not None
-        }
-    if isinstance(quality, dict):
-        result["measurement_issue_count"] = min(
-            16,
-            len(quality.get("issues", [])) if isinstance(quality.get("issues"), list) else 0,
-        )
-        result["measurement_blocking"] = bool(quality.get("blocking"))
-        repair_action = quality.get("repair_action")
-        if isinstance(repair_action, Mapping):
-            result["measurement_focus_suggestion"] = dict(repair_action)
-            result["measurement_repair_action"] = {
-                key: repair_action.get(key)
-                for key in ("action", "status", "tool", "attachment_id", "panel_id", "parent_attempt_id", "fields", "target", "next_action")
-                if repair_action.get(key) is not None
-            }
-            result["measurement_repair_status"] = str(repair_action.get("status") or "available")[:32]
-    target = measurement.get("target")
-    if isinstance(target, Mapping):
-        result["measurement_target"] = {
-            key: target.get(key)
-            for key in (
-                "target_id",
-                "panel_id",
-                "parent_attempt_id",
-                "region_kind",
-                "fields",
-                "bbox_source_px",
-                "source_image_size",
-                "bbox_px",
-                "local_image_size",
-                "clipped",
-            )
-            if target.get(key) is not None
-        }
-    return result
-
-
-def _trace_result_summary(content: str) -> Any:
-    """Keep tool-result traces useful without duplicating the quality envelope.
-
-    The model-facing observation keeps the complete measurement envelope.  The
-    Gateway trace already projects its bounded lifecycle fields at the event
-    level, so omitting the duplicate envelope from ``result`` leaves room for
-    the structured sensor data (including panel scope) to remain inspectable.
-    """
-    try:
-        payload = json.loads(content)
-    except (TypeError, json.JSONDecodeError):
-        return summarize_result(content)
-    if isinstance(payload, dict):
-        data = payload.get("data")
-        if isinstance(data, dict) and "measurement" in data:
-            payload = dict(payload)
-            payload["data"] = dict(data)
-            payload["data"].pop("measurement", None)
-        content = json.dumps(payload, ensure_ascii=False)
-    return summarize_result(content)
-
-
-class AgentInterrupted(RuntimeError):
-    """Raised when a cooperative run interruption is observed."""
-
-
-class AgentRecoveryBlocked(RuntimeError):
-    """Raised when a continuation reaches an operation with an unknown outcome."""
 
 
 class Agent:
@@ -860,48 +340,22 @@ class Agent:
                     trace_run_id=emitter.run_id,
                     trace_turn=turn,
                 )
-            self._raise_if_interrupted(run)
-            operation_id = f"model:{turn}"
-            if pending_recovery_calls:
-                result = NormalizedResult(tool_calls=pending_recovery_calls, finish_reason="tool_calls")
-                pending_recovery_calls = []
-            else:
-                self._begin_work_unit(operation_id, "model")
-                try:
-                    result = self.client.chat(self._messages, tools=tools, **chat_kwargs)
-                except Exception as exc:
-                    self._uncertain_work_unit(operation_id, "model_response_outcome_uncertain")
-                    self.memory.append(run, "error", {"error_code": "agent_call_failed", "error_type": type(exc).__name__[:64]})
-                    self.memory.finish(run, RunStatus.FAILED, "error")
-                    if emitter is not None and not isinstance(self.client, LLMClient):
-                        emitter.emit(
-                            "model_completed",
-                            turn=turn,
-                            status="error",
-                            error_code="agent_call_failed",
-                            error_type=type(exc).__name__[:64],
-                        )
-                    raise
-                self._complete_work_unit(operation_id, "model", self._model_result_payload(result))
-
-            if emitter is not None and not isinstance(self.client, LLMClient):
-                emitter.emit(
-                    "model_completed",
-                    turn=turn,
-                    status="ok",
-                    content_length=len(result.content),
-                    reasoning_available=bool(result.reasoning),
-                    tool_calls=len(result.tool_calls),
-                    finish_reason=result.finish_reason,
-                )
-            if emitter is not None and self._trace_reasoning:
-                emitter.emit(
-                    "reasoning",
-                    turn=turn,
-                    status="available" if result.reasoning else "unavailable",
-                    reasoning=bounded_reasoning(result.reasoning),
-                )
-
+            result, pending_recovery_calls = execute_model_turn(
+                self.client,
+                self._messages,
+                tools,
+                chat_kwargs=chat_kwargs,
+                pending_recovery_calls=pending_recovery_calls,
+                operation_begin=self._operation_begin,
+                operation_complete=self._operation_complete,
+                operation_uncertain=self._operation_uncertain,
+                memory=self.memory,
+                run=run,
+                interruption_event=self._interruption_event,
+                emitter=emitter,
+                turn=turn,
+                trace_reasoning=self._trace_reasoning,
+            )
             if not result.tool_calls:
                 self._raise_if_interrupted(run)
                 assistant_message = assistant_entry(result)
@@ -1034,18 +488,13 @@ class Agent:
                     )
                 return result.content
 
-            assistant_message = assistant_entry(
+            assistant_message, assistant_record = assistant_message_for_result(
                 result,
-                include_reasoning=(
-                    getattr(getattr(self.client, "config", None), "provider", None) == "deepseek"
-                    and getattr(getattr(self.client, "config", None), "enable_thinking", False)
-                    and bool(result.reasoning)
-                ),
+                client=self.client,
             )
             # ``assistant_message`` is the model-facing message. The memory
             # record stays sanitized and content/tool-call-only so provider
             # reasoning cannot leak into transcripts or ordinary records.
-            assistant_record = assistant_entry(result)
             self._current_messages.append(assistant_message)
             self._messages.append(assistant_message)
             self.memory.append(run, "assistant", {"message": assistant_record})
@@ -1125,75 +574,20 @@ class Agent:
                         call_id=call.id,
                         arguments=summarize_arguments(call.arguments),
                     )
-                source_panel_id = call_arguments.get("panel_id") if isinstance(call_arguments.get("panel_id"), str) else None
-                source_attachment_id = call_arguments.get("attachment_id") if isinstance(call_arguments.get("attachment_id"), str) else None
-                raw_measurement_target = call_arguments.get("measurement_target") if isinstance(call_arguments, dict) else None
-                raw_observation_scope = call_arguments.get("observation_scope") if isinstance(call_arguments, dict) else None
-                if source_panel_id is None and isinstance(raw_measurement_target, Mapping):
-                    candidate_panel = raw_measurement_target.get("panel_id")
-                    if isinstance(candidate_panel, str) and candidate_panel.strip():
-                        source_panel_id = candidate_panel
-                if source_panel_id is None and isinstance(raw_observation_scope, Mapping):
-                    candidate_panel = raw_observation_scope.get("panel_id")
-                    if isinstance(candidate_panel, str) and candidate_panel.strip():
-                        source_panel_id = candidate_panel
-                parent_attempt_id = None
-                if call.name in MEASUREMENT_TOOLS and isinstance(raw_measurement_target, Mapping):
-                    for session in reversed(list(measurement_sessions.values())):
-                        if session.attachment_id == source_attachment_id and session.panel_id in {source_panel_id, None, "__source__"}:
-                            parent_attempt_id = session.current_attempt_id
-                            break
-                prepared_target: dict[str, Any] | None = None
-                repair_error: dict[str, Any] | None = None
-                if call.name in MEASUREMENT_TOOLS and raw_measurement_target is not None:
-                    prepared_target, repair_error = _repair_target_context(
-                        raw_measurement_target,
-                        measurement_sessions,
-                        source_attachment_id=source_attachment_id,
-                        source_panel_id=source_panel_id,
-                        source_tool=call.name,
-                        parent_attempt_id=parent_attempt_id,
-                    )
-                    if repair_error is None and prepared_target is not None:
-                        call_arguments["measurement_target"] = prepared_target
-                dispatch_arguments = self._layout_arguments(
-                    call.name,
-                    json.dumps(call_arguments, ensure_ascii=False, separators=(",", ":"))
-                    if isinstance(call_arguments, dict)
-                    else call.arguments,
-                    layout_contexts,
+                dispatch = prepare_and_dispatch_tool_call(
+                    self.registry,
+                    call,
+                    run_id=run.id,
+                    layout_contexts=layout_contexts,
+                    measurement_sessions=measurement_sessions,
                 )
-                routing_error = self._panel_routing_error(
-                    call.name,
-                    dispatch_arguments,
-                    layout_contexts,
-                )
-                if repair_error is not None:
-                    observation = DispatchedObservation(
-                        json.dumps(
-                            {
-                                "error": "measurement repair rejected",
-                                "measurement_repair": repair_error,
-                            },
-                            ensure_ascii=False,
-                        )
-                    )
-                elif routing_error is not None:
-                    observation = DispatchedObservation(
-                        json.dumps({"error": routing_error}, ensure_ascii=False)
-                    )
-                else:
-                    observation = dispatch_observation(
-                        self.registry,
-                        call.name,
-                        dispatch_arguments,
-                        source_run_id=run.id,
-                        source_panel_id=source_panel_id,
-                        source_parent_attempt_id=parent_attempt_id,
-                        source_measurement_target=prepared_target,
-                        source_observation_scope=raw_observation_scope if isinstance(raw_observation_scope, Mapping) else None,
-                        measurement_context=measurement_sessions if call.name == "assemble_spec" else None,
-                    )
+                call_arguments = dispatch.call_arguments
+                source_panel_id = dispatch.source_panel_id
+                source_attachment_id = dispatch.source_attachment_id
+                parent_attempt_id = dispatch.parent_attempt_id
+                raw_observation_scope = dispatch.raw_observation_scope
+                prepared_target = dispatch.prepared_target
+                observation = dispatch.observation
                 self._raise_if_interrupted(run)
                 if call.name in {_LAYOUT_TOOL_NAME, _DECOMPOSE_TOOL_NAME}:
                     self._remember_layout_context(
@@ -1280,7 +674,10 @@ class Agent:
                         measurement_payload = json.loads(observation.content)
                         measurement_data = measurement_payload.get("data") if isinstance(measurement_payload, dict) else None
                         if isinstance(measurement_data, dict):
-                            measurement_session = register_measurement(measurement_sessions, measurement_data)
+                            measurement_session = register_measurement_observation(
+                                measurement_sessions,
+                                observation.content,
+                            )
                             if measurement_session is not None and emitter is not None:
                                 emitter.emit(
                                     "measurement_observed",
@@ -1650,23 +1047,7 @@ class Agent:
         call_id: str,
     ) -> None:
         """Expose model evidence decisions without creating a measurement gate."""
-        try:
-            payload = json.loads(content)
-        except (TypeError, json.JSONDecodeError):
-            return
-        data = payload.get("data") if isinstance(payload, Mapping) else None
-        if data is None and isinstance(payload, Mapping):
-            data = payload
-        if not isinstance(data, Mapping) or data.get("error"):
-            return
-        decisions: list[Mapping[str, Any]] = []
-        direct_decision = data.get("_measurement_decision")
-        if isinstance(direct_decision, Mapping):
-            decisions.append(direct_decision)
-        nested_decisions = data.get("_measurement_decisions")
-        if isinstance(nested_decisions, list):
-            decisions.extend(item for item in nested_decisions[:64] if isinstance(item, Mapping))
-        for decision in decisions:
+        for decision in measurement_decisions_from_content(content):
             attempt_id = str(decision.get("attempt_id") or "").strip()
             if not attempt_id:
                 continue
@@ -1741,13 +1122,7 @@ class Agent:
                 )
 
     def _begin_work_unit(self, operation_id: str, operation_kind: str) -> dict[str, Any]:
-        if self._operation_begin is None:
-            return {"operationId": operation_id, "state": "in_flight"}
-        try:
-            result = self._operation_begin(operation_id, operation_kind)
-            return result if isinstance(result, dict) else {"operationId": operation_id, "state": "in_flight"}
-        except Exception:  # noqa: BLE001 - journaling remains a bounded diagnostic
-            return {"operationId": operation_id, "state": "in_flight"}
+        return begin_work_unit(self._operation_begin, operation_id, operation_kind)
 
     def _complete_work_unit(
         self,
@@ -1756,20 +1131,17 @@ class Agent:
         result: dict[str, Any] | None = None,
         references: dict[str, Any] | None = None,
     ) -> None:
-        if self._operation_complete is None:
-            return
-        try:
-            self._operation_complete(operation_id, result=result, references=references)
-        except Exception:  # noqa: BLE001 - trace persistence cannot stop the Agent
-            self._uncertain_work_unit(operation_id, f"{operation_kind}_persistence_failed")
+        complete_work_unit(
+            self._operation_complete,
+            self._operation_uncertain,
+            operation_id,
+            operation_kind,
+            result,
+            references,
+        )
 
     def _uncertain_work_unit(self, operation_id: str, reason: str) -> None:
-        if self._operation_uncertain is None:
-            return
-        try:
-            self._operation_uncertain(operation_id, reason=reason)
-        except Exception:  # noqa: BLE001 - bounded recovery fallback
-            pass
+        uncertain_work_unit(self._operation_uncertain, operation_id, reason)
 
     def _checkpoint(
         self,
@@ -1779,23 +1151,14 @@ class Agent:
         phase: str,
         next_action: str,
     ) -> None:
-        if self._checkpoint_sink is None:
-            return
-        try:
-            checkpoint_state = dict(state)
-            checkpoint_state.setdefault("phase", phase)
-            checkpoint_state["nextAction"] = next_action
-            # The review coordinator is the single source of truth for the
-            # run-level gate.  Persist both its bounded record history and
-            # the current projection at every durable boundary so a resume
-            # cannot silently continue past an active review.
-            if hasattr(run, "id"):
-                review_state = self._review_coordinator.to_state(run.id)
-                checkpoint_state["reviewState"] = review_state
-                checkpoint_state["executionGate"] = review_state.get("executionGate", {})
-            self._checkpoint_sink(checkpoint_state, phase=phase, next_action=next_action)
-        except Exception:  # noqa: BLE001 - checkpoint failure is surfaced as unavailable metadata
-            return
+        checkpoint(
+            self._checkpoint_sink,
+            self._review_coordinator,
+            run,
+            state=state,
+            phase=phase,
+            next_action=next_action,
+        )
 
     @staticmethod
     def _checkpoint_state(
@@ -1812,112 +1175,43 @@ class Agent:
         measurement_sessions: Mapping[str, MeasurementSession] | None = None,
         pending_measurement_repairs: Sequence[Mapping[str, Any]] | None = None,
     ) -> dict[str, Any]:
-        repairs = (
-            _merge_measurement_repair_contexts(pending_measurement_repairs)
-            if pending_measurement_repairs is not None
-            else _measurement_repair_contexts_from_sessions(measurement_sessions or {})
+        return checkpoint_state(
+            user_input,
+            messages,
+            layout_contexts,
+            attachment_ids,
+            turn,
+            pending_tool_calls=pending_tool_calls,
+            pending_answer=pending_answer,
+            visual_references=visual_references,
+            artifact_records=artifact_records,
+            measurement_sessions=measurement_sessions,
+            pending_measurement_repairs=pending_measurement_repairs,
         )
-        result = {
-            "prompt": user_input if isinstance(user_input, str) else "[image attachment turn]",
-            "messages": list(messages),
-            "layoutContexts": layout_contexts,
-            "attachmentIds": list(attachment_ids),
-            "currentTurn": turn,
-            "pendingToolCalls": [
-                {"id": call.id, "name": call.name, "arguments": call.arguments}
-                for call in pending_tool_calls
-            ],
-            "visualReferences": list(visual_references)[:32],
-            "artifactIndex": list(artifact_records)[:48],
-            "measurementSessions": sessions_to_state(measurement_sessions or {}),
-            "pendingMeasurementRepairs": repairs,
-            # Keep the old field as a compatibility projection for older
-            # reconnect consumers. Never choose one action when there are
-            # multiple pending panels.
-            "pendingMeasurementRepair": repairs[0] if len(repairs) == 1 else None,
-        }
-        if pending_answer is not None:
-            result["pendingAnswer"] = pending_answer
-        return result
 
     @staticmethod
     def _model_result_payload(result: NormalizedResult) -> dict[str, Any]:
-        return {
-            "content": result.content,
-            "finishReason": result.finish_reason,
-            "toolCalls": [
-                {"id": call.id, "name": call.name, "arguments": call.arguments}
-                for call in result.tool_calls
-            ],
-        }
+        return model_result_payload(result)
 
     @staticmethod
     def _recovery_tool_calls(recovery: Optional[dict[str, Any]]) -> list[ToolCall]:
-        if not isinstance(recovery, dict) or recovery.get("nextAction") not in {"tool", "dispatch_tool"}:
-            return []
-        raw = recovery.get("pendingToolCalls")
-        if not isinstance(raw, list):
-            return []
-        calls: list[ToolCall] = []
-        for item in raw[:16]:
-            if not isinstance(item, dict):
-                continue
-            if not all(isinstance(item.get(key), str) and item.get(key) for key in ("id", "name", "arguments")):
-                continue
-            calls.append(ToolCall(item["id"], item["name"], item["arguments"]))
-        return calls
+        return recovery_tool_calls(recovery)
 
     def _interruption_requested(self) -> bool:
-        event = self._interruption_event
-        if event is None:
-            return False
-        if callable(event):
-            try:
-                return bool(event())
-            except Exception:  # noqa: BLE001 - cancellation must remain best effort
-                return False
-        is_set = getattr(event, "is_set", None)
-        return bool(is_set()) if callable(is_set) else bool(event)
+        return interruption_requested(self._interruption_event)
 
     def _raise_if_interrupted(self, run: Any) -> None:
-        if not self._interruption_requested():
-            return
-        try:
-            self.memory.finish(run, RunStatus.INTERRUPTED, "interrupted")
-        finally:
-            raise AgentInterrupted("Agent run was interrupted")
+        raise_if_interrupted(self._interruption_event, self.memory, run)
 
+    # These small methods preserve the historical Agent test hooks while the
+    # actual panel routing implementation lives in its focused collaborator.
     @staticmethod
     def _layout_arguments(
         tool_name: str,
         arguments: str,
         layout_contexts: dict[str, dict[str, Any]],
     ) -> str:
-        """Inject one cached validated layout into a geometry call."""
-        if tool_name not in _GEOMETRY_TOOL_NAMES or not layout_contexts:
-            return arguments
-        try:
-            parsed = json.loads(arguments) if arguments.strip() else {}
-        except json.JSONDecodeError:
-            return arguments
-        if not isinstance(parsed, dict) or parsed.get("layout_context") is not None:
-            return arguments
-        attachment_id = parsed.get("attachment_id")
-        panel_id = parsed.get("panel_id")
-        context = None
-        if isinstance(attachment_id, str) and isinstance(panel_id, str) and panel_id:
-            context = layout_contexts.get(f"{attachment_id}::{panel_id}")
-        if context is None and isinstance(attachment_id, str):
-            context = layout_contexts.get(attachment_id)
-        if context is None and len(layout_contexts) == 1:
-            context = next(iter(layout_contexts.values()))
-        if context is None:
-            return arguments
-        parsed["layout_context"] = context
-        # Keep the public call compatible with direct test/custom sensors; the
-        # authorized adapter recovers the panel ID from the injected context.
-        parsed.pop("panel_id", None)
-        return json.dumps(parsed, ensure_ascii=False, separators=(",", ":"))
+        return layout_arguments(tool_name, arguments, layout_contexts)
 
     @staticmethod
     def _panel_routing_error(
@@ -1925,79 +1219,14 @@ class Agent:
         arguments: str,
         layout_contexts: dict[str, dict[str, Any]],
     ) -> str | None:
-        """Reject an unresolved explicit panel route before sensor dispatch."""
-        if tool_name not in _SCOPED_TOOL_NAMES:
-            return None
-        try:
-            parsed = json.loads(arguments) if arguments.strip() else {}
-        except json.JSONDecodeError:
-            return None
-        if not isinstance(parsed, dict) or "panel_id" not in parsed:
-            return None
-        panel_id = parsed.get("panel_id")
-        attachment_id = parsed.get("attachment_id")
-        if not isinstance(panel_id, str) or not panel_id.strip():
-            return "panel routing failed: panel_id must be a non-empty stable identifier"
-        if not isinstance(attachment_id, str) or not attachment_id.strip():
-            return "panel routing failed: attachment_id is required with panel_id"
-        key = f"{attachment_id}::{panel_id}"
-        context = layout_contexts.get(key)
-        if not isinstance(context, dict):
-            return f"panel routing failed: {panel_id!r} is not registered for this attachment"
-        scope = context.get("analysis_scope", context.get("panel_scope"))
-        if not isinstance(scope, dict) or not isinstance(scope.get("bbox_px"), (list, tuple)):
-            return f"panel routing failed: {panel_id!r} has no usable analysis scope"
-        return None
+        return panel_routing_error(tool_name, arguments, layout_contexts)
 
     def _hydrate_persisted_panel_contexts(
         self,
         layout_contexts: dict[str, dict[str, Any]],
         attachment_ids: Sequence[str],
     ) -> None:
-        """Load durable panel scopes into this run's routing cache."""
-        store = getattr(self.attachments, "panel_store", None)
-        if store is None or not hasattr(store, "list_panel_handoffs"):
-            return
-        ids = tuple(attachment_ids)
-        if not ids and hasattr(store, "get_active_source"):
-            ids = tuple(getattr(store.get_active_source(), "attachment_ids", ()) or ())
-        for attachment_id in ids[:16]:
-            try:
-                handoffs = store.list_panel_handoffs(attachment_id)
-            except Exception:  # noqa: BLE001 - persisted routing is advisory
-                continue
-            for handoff in handoffs[:_MAX_LAYOUT_CONTEXTS]:
-                context = {
-                    "version": 1,
-                    "context_id": f"{handoff.panel_id}_layout",
-                    "source_attachment_id": handoff.attachment_id,
-                    "coordinate_system": "polar_2d" if handoff.chart_type == "pie" else "cartesian_2d" if handoff.role == "chart" or handoff.chart_type in {"bar", "line", "scatter"} else "unknown",
-                    "analysis_scope": {
-                        "role": "panel_scope",
-                        "bbox_px": list(handoff.analysis_scope),
-                        "source_origin_px": list(handoff.source_origin),
-                        "confidence": handoff.confidence,
-                        "evidence": ["persisted_panel_handoff"],
-                    },
-                    "measurement_frame": None,
-                    "panel": {
-                        "id": handoff.panel_id,
-                        "name": handoff.name,
-                        "source_bbox_px": list(handoff.source_bbox),
-                        "scope_bbox_px": list(handoff.analysis_scope),
-                    },
-                    "validation": {
-                        "status": "accepted" if handoff.status == "active" else "partial",
-                        "accepted_for_analysis": handoff.status == "active",
-                        "accepted_for_measurement": False,
-                        "confidence": handoff.confidence,
-                        "warnings": list(handoff.warnings),
-                    },
-                    "evidence": ["persisted_panel_handoff", "source_coordinates"],
-                }
-                layout_contexts[f"{attachment_id}::{handoff.panel_id}"] = context
-                if len(layout_contexts) >= _MAX_LAYOUT_CONTEXTS:
-                    return
+        hydrate_persisted_panel_contexts(self.attachments, layout_contexts, attachment_ids)
 
     @staticmethod
     def _remember_layout_context(
@@ -2005,50 +1234,7 @@ class Agent:
         arguments: str,
         layout_contexts: dict[str, dict[str, Any]],
     ) -> None:
-        try:
-            payload = json.loads(content)
-            parsed_arguments = json.loads(arguments) if arguments.strip() else {}
-        except (json.JSONDecodeError, TypeError):
-            return
-        if not isinstance(payload, dict) or not isinstance(parsed_arguments, dict):
-            return
-        attachment_id = parsed_arguments.get("attachment_id")
-        if not isinstance(attachment_id, str) or not attachment_id:
-            return
-        data = payload.get("data")
-        if not isinstance(data, dict):
-            return
-        if isinstance(data.get("panels"), list):
-            for panel in data["panels"]:
-                if not isinstance(panel, dict) or not isinstance(panel.get("id"), str):
-                    continue
-                context = panel.get("layout_context")
-                if not isinstance(context, dict):
-                    continue
-                cached = dict(context)
-                cached["source_attachment_id"] = attachment_id
-                panel_summary = dict(cached.get("panel") or {})
-                panel_summary.update(
-                    {
-                        "id": panel["id"],
-                        "name": panel.get("name"),
-                        "chart_type": panel.get("chart_type"),
-                    }
-                )
-                cached["panel"] = panel_summary
-                layout_contexts[f"{attachment_id}::{panel['id']}"] = cached
-                while len(layout_contexts) > _MAX_LAYOUT_CONTEXTS:
-                    layout_contexts.pop(next(iter(layout_contexts)))
-            return
-        context = data.get("layout_context")
-        if not isinstance(context, dict):
-            return
-        cached = dict(context)
-        cached["source_attachment_id"] = attachment_id
-        layout_contexts[attachment_id] = cached
-        while len(layout_contexts) > _MAX_LAYOUT_CONTEXTS:
-            layout_contexts.pop(next(iter(layout_contexts)))
-
+        remember_layout_context(content, arguments, layout_contexts)
     @staticmethod
     def _review_items(content: str) -> list[dict[str, Any]]:
         try:

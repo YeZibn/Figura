@@ -1,0 +1,22 @@
+* { box-sizing: border-box; }
+
+body {
+  min-width: 320px;
+  min-height: 100vh;
+  margin: 0;
+  background: var(--canvas);
+}
+
+button,
+textarea,
+input { font: inherit; }
+
+button:focus-visible,
+textarea:focus-visible,
+input:focus-visible {
+  outline: none;
+  box-shadow: var(--focus);
+}
+
+button:disabled { cursor: not-allowed; }
+

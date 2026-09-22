@@ -1,8 +1,8 @@
-"""chartagent - agentic foundation for ChartAgent.
+"""Public package exports for Figura's chart-analysis Agent runtime.
 
-Start here with the LLM client, a multi-turn conversation session, and a
-declarative tool system. No agent loop, MCP server, or chart reading/generation
-lives in this package yet.
+The package exposes the LLM client-facing conversation API, the tool system,
+the Agent loop, chart observation and generation helpers, and review services.
+Lower-level modules remain organized by domain under ``chartagent``.
 """
 
 from .agent import Agent, registry_tools

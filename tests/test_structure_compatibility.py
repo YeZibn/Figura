@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 
 from chartagent.review import chart_spec_digest as review_chart_spec_digest
 from chartagent.spec import ChartSpec, chart_spec_digest
@@ -17,11 +18,27 @@ CANONICAL_MODULES = (
     "chartagent.agent.observations",
     "chartagent.agent.review_gate",
     "chartagent.agent.tool_schema",
+    "chartagent.agent.artifacts",
+    "chartagent.agent.panel_routing",
+    "chartagent.agent.measurement_flow",
+    "chartagent.agent.recovery",
+    "chartagent.agent.turn",
     "chartagent.runtime",
     "chartagent.runtime.factory",
     "chartagent.runtime.models",
     "chartagent.runtime.prompts",
     "chartagent.runtime.readiness",
+    "chartagent.gateway.persistence",
+    "chartagent.gateway.persistence_connection",
+    "chartagent.gateway.persistence_errors",
+    "chartagent.gateway.operation_journal",
+    "chartagent.gateway.run_persistence",
+    "chartagent.gateway.evaluation_adapter",
+    "chartagent.gateway.service_evaluation",
+    "chartagent.gateway.http_transport",
+    "chartagent.gateway.run_observations",
+    "chartagent.gateway.run_lifecycle",
+    "chartagent.gateway.run_manager",
     "chartagent.attachments",
     "chartagent.attachments.registry",
     "chartagent.attachments.policy",
@@ -30,7 +47,6 @@ CANONICAL_MODULES = (
     "chartagent.review.manager",
     "chartagent.review.models",
     "chartagent.review.policy",
-    "chartagent.review.evidence",
     "chartagent.review.evaluator",
     "chartagent.tools.core",
     "chartagent.tools.integrations",
@@ -43,6 +59,11 @@ CANONICAL_MODULES = (
     "chartagent.tools.core.registry",
     "chartagent.tools.core.result",
     "chartagent.tools.core.presentation",
+    "chartagent.evaluation.reader_projection",
+    "chartagent.evaluation.input_sources",
+    "chartagent.evaluation.timeline_model",
+    "chartagent.evaluation.timeline_evidence",
+    "chartagent.evaluation.timeline_attribution",
     "chartagent.tools.integrations.mcp",
     "chartagent.tools.builtins.filesystem",
     "chartagent.tools.builtins.json",
@@ -88,6 +109,62 @@ def test_chart_spec_digest_compatibility_export_is_canonical() -> None:
     )
     assert chart_spec_digest is review_chart_spec_digest
     assert chart_spec_digest(spec) == review_chart_spec_digest(spec)
+
+
+def test_review_package_exports_point_to_canonical_modules() -> None:
+    from chartagent.review import (
+        ChartCandidate,
+        ReviewPolicy,
+        ReviewResult,
+        review_candidate_bytes,
+        select_review_policy,
+    )
+    from chartagent.review.evaluator import review_candidate_bytes as canonical_evaluator
+    from chartagent.review.models import ChartCandidate as canonical_candidate
+    from chartagent.review.models import ReviewResult as canonical_result
+    from chartagent.review.policy import ReviewPolicy as canonical_policy
+    from chartagent.review.policy import select_review_policy as canonical_selector
+
+    assert ChartCandidate is canonical_candidate
+    assert ReviewResult is canonical_result
+    assert ReviewPolicy is canonical_policy
+    assert select_review_policy is canonical_selector
+    assert review_candidate_bytes is canonical_evaluator
+
+
+def test_review_result_json_shape_is_stable() -> None:
+    from chartagent.review import ReviewIssue, ReviewResult, ReviewStatus
+
+    result = ReviewResult(
+        status=ReviewStatus.COMPLETED,
+        checks={"structure": "passed"},
+        issues=(ReviewIssue("warning", "labels", "可读性提示", "warning"),),
+        evidence=({"kind": "encoded_artifact", "width": 320},),
+        decision="pass_with_warning",
+        confidence=0.8,
+        review_mode="vlm",
+    )
+    payload = result.to_dict()
+
+    assert json.loads(json.dumps(payload, ensure_ascii=False)) == payload
+    assert payload["status"] == "completed"
+    assert payload["issues"][0]["severity"] == "warning"
+    assert payload["evidence"][0]["kind"] == "encoded_artifact"
+
+
+def test_measurement_package_exports_point_to_canonical_modules() -> None:
+    import chartagent.measurement as measurement
+    from chartagent.measurement.evidence import build_measurement_evidence_refs
+    from chartagent.measurement.lifecycle import MeasurementAttempt, MeasurementSession
+    from chartagent.measurement.quality import audit_measurement
+    from chartagent.measurement.scope import MeasurementTarget, ObservationScope
+
+    assert measurement.MeasurementTarget is MeasurementTarget
+    assert measurement.ObservationScope is ObservationScope
+    assert measurement.MeasurementAttempt is MeasurementAttempt
+    assert measurement.MeasurementSession is MeasurementSession
+    assert measurement.audit_measurement is audit_measurement
+    assert measurement.build_measurement_evidence_refs is build_measurement_evidence_refs
 
 
 def test_protocol_projections_use_canonical_tool_definition() -> None:

@@ -18,8 +18,9 @@ from ..agent import AgentInterrupted, AgentRecoveryBlocked, REVIEW_INCOMPLETE_ME
 from ..agent.review_gate import _BUDGET_MSG, _REVIEW_FAILED_MSG
 from ..tools.core.result import GeneratedImage
 from ..trace import TraceSink, truncate_text
-from ..evaluation.reader import EvaluationReader, EvaluationReaderError
 from .attachments import AttachmentStoreError, EphemeralAttachmentStore
+from .evaluation_adapter import EvaluationReaderAdapter
+from .service_evaluation import EvaluationWorkbenchMixin
 from .history import GatewayHistoryStore, HistoryStoreError
 from .projection import project_completed_runs, session_summary
 from .runs import HistoricalRun, ManagedRun, RunManager
@@ -103,7 +104,7 @@ def _safe_readiness(value: object) -> dict[str, Any]:
     return result
 
 
-class GatewayService:
+class GatewayService(EvaluationWorkbenchMixin):
     """Translate stable gateway operations into Agent and memory calls."""
 
     def __init__(
@@ -146,7 +147,7 @@ class GatewayService:
         self._readiness_probe = readiness_probe or (lambda: probe_agent_readiness(model=self.model))
         # Evaluation bundles are intentionally read through a separate,
         # read-only projection.  They never enter the ordinary session store.
-        self._evaluation_reader = EvaluationReader(self.storage.root)
+        self._evaluation_reader = EvaluationReaderAdapter(self.storage.root)
 
     def _open_memory(self, name: str, *, create: bool = True) -> SQLiteAgentMemory:
         return SQLiteAgentMemory(name, database=self.database, create=create)
@@ -206,88 +207,6 @@ class GatewayService:
         sessions = [session_summary(item).to_dict() for item in SQLiteAgentMemory.list_session_stats(database=self.database)]
         return success({"sessions": sessions})
 
-    def list_evaluations(self) -> dict[str, Any]:
-        return success({"evaluations": self._evaluation_reader.list_summaries()})
-
-    def get_evaluation(self, evaluation_id: object) -> dict[str, Any]:
-        return success(self._evaluation_call(lambda: self._evaluation_reader.get_evaluation(self._evaluation_id(evaluation_id))))
-
-    def get_evaluation_case(self, evaluation_id: object, case_id: object) -> dict[str, Any]:
-        return success(self._evaluation_call(
-            lambda: self._evaluation_reader.get_case(
-                self._evaluation_id(evaluation_id),
-                self._case_id(case_id),
-            )
-        ))
-
-    def get_evaluation_history(
-        self,
-        evaluation_id: object,
-        case_id: object,
-        after_sequence: int = 0,
-    ) -> dict[str, Any]:
-        return success(self._evaluation_call(
-            lambda: self._evaluation_reader.get_history(
-                self._evaluation_id(evaluation_id),
-                self._case_id(case_id),
-                after_sequence=max(0, int(after_sequence)),
-            )
-        ))
-
-    def get_evaluation_history_details(
-        self,
-        evaluation_id: object,
-        case_id: object,
-        after_record_sequence: int = 0,
-    ) -> dict[str, Any]:
-        return success(self._evaluation_call(
-            lambda: self._evaluation_reader.get_history_details(
-                self._evaluation_id(evaluation_id),
-                self._case_id(case_id),
-                after_record_sequence=max(0, int(after_record_sequence)),
-            )
-        ))
-
-    def get_evaluation_resource(
-        self,
-        evaluation_id: object,
-        resource_id: object,
-        *,
-        case_id: object | None = None,
-    ) -> tuple[bytes, str]:
-        result = self._evaluation_call(
-            lambda: self._evaluation_reader.get_resource(
-                self._evaluation_id(evaluation_id),
-                self._resource_id(resource_id),
-                case_id=self._case_id(case_id) if case_id is not None else None,
-            )
-        )
-        return result
-
-    @staticmethod
-    def _evaluation_id(value: object) -> str:
-        if not isinstance(value, str) or not value.strip():
-            raise GatewayFault("evaluation_not_found", 404, "评测批次不存在")
-        return value.strip()
-
-    @staticmethod
-    def _case_id(value: object) -> str:
-        if not isinstance(value, str) or not value.strip():
-            raise GatewayFault("evaluation_case_not_found", 404, "评测 case 不存在")
-        return value.strip()
-
-    @staticmethod
-    def _resource_id(value: object) -> str:
-        if not isinstance(value, str) or not value.strip():
-            raise GatewayFault("evaluation_resource_not_found", 404, "评测资源不存在")
-        return value.strip()
-
-    @staticmethod
-    def _evaluation_call(operation):
-        try:
-            return operation()
-        except EvaluationReaderError as exc:
-            raise GatewayFault(exc.code, exc.status, exc.message) from exc
 
     def create_session(self, raw_name: object) -> dict[str, Any]:
         name = validate_session_name(raw_name)

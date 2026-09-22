@@ -1,0 +1,102 @@
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(27, 42, 38, .2);
+}
+
+.session-dialog {
+  width: min(380px, 100%);
+  padding: 22px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: 0 18px 50px rgba(35, 55, 51, .18);
+}
+
+.session-dialog h2 {
+  margin: 0 0 17px;
+  color: var(--ink);
+  font-size: 16px;
+}
+
+.dialog-message {
+  margin: -5px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.session-dialog label {
+  display: block;
+  margin-bottom: 7px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.session-dialog input {
+  display: block;
+  width: 100%;
+  padding: 10px 11px;
+  border: 1px solid #cfdbd6;
+  border-radius: 5px;
+  outline: 0;
+  background: var(--panel-strong);
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.session-dialog input:focus {
+  border-color: #81b5ab;
+  box-shadow: var(--focus);
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.dialog-actions button {
+  min-height: 32px;
+  padding: 7px 11px;
+  border-radius: 5px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.dialog-secondary {
+  border: 1px solid var(--line);
+  background: var(--panel-strong);
+  color: #65736f;
+}
+
+.dialog-primary {
+  border: 1px solid var(--brand);
+  background: var(--brand);
+  color: #fff;
+}
+
+.dialog-danger {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid #d98b84;
+  background: var(--danger);
+  color: #fff;
+}
+
+.dialog-danger:hover:not(:disabled) { background: #a9443c; }
+.dialog-danger:disabled { cursor: wait; opacity: .7; }
+
+.dialog-primary:disabled {
+  border-color: #d8e3df;
+  background: #d8e3df;
+  color: #98a6a1;
+}
+
+.status-error { background: var(--danger); }

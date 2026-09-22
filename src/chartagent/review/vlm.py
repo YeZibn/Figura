@@ -12,7 +12,7 @@ from typing import Any, Sequence
 from ..prompting import build_reviewer_prompt
 from ..spec import ChartFigure, ChartSpec
 from ..tools.core.result import GeneratedImage
-from .manager import (
+from .models import (
     MAX_REVIEW_ISSUES,
     MAX_REVIEW_TEXT,
     ChartCandidate,

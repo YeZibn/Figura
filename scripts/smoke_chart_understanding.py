@@ -23,7 +23,7 @@ from chartagent.multimodal import build_registered_attachment_turn  # noqa: E402
 from chartagent.cli import AGENT_SYSTEM_PROMPT  # noqa: E402
 from chartagent.client import LLMClient, load_environment  # noqa: E402
 from chartagent.tools.chart import register_chart_tools  # noqa: E402
-from chartagent.tools.chart.spec_tools import validate_spec  # noqa: E402
+from chartagent.tools.chart.specification import validate_spec  # noqa: E402
 from tests.chart_fixtures import annotated_bar_chart  # noqa: E402
 
 

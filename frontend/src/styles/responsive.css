@@ -1,0 +1,98 @@
+@media (max-width: 1120px) {
+  .app-shell { grid-template-columns: 224px minmax(0, 1fr); }
+  .right-panel { display: none; }
+  .evaluation-case-panel { display: block; }
+}
+
+@media (max-width: 760px) {
+  .app-shell {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    height: auto;
+    min-height: 100vh;
+    padding: 0;
+  }
+
+  .panel {
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  .sidebar {
+    min-height: auto;
+    padding: 12px;
+    border-width: 0 0 1px;
+  }
+
+  .brand { padding: 2px 4px 13px; }
+
+  .session-list {
+    display: flex;
+    overflow-x: auto;
+    padding-bottom: 2px;
+  }
+
+  .session-item { min-width: 200px; }
+
+  .session-empty {
+    width: 100%;
+    padding: 16px 12px;
+  }
+
+  .sidebar-footer { display: none; }
+
+  .conversation {
+    min-height: 620px;
+    border-width: 0 0 1px;
+  }
+
+  .conversation-header { padding: 18px 16px 16px; }
+  .conversation-header-actions { align-items: flex-end; flex-direction: column-reverse; gap: 7px; }
+  .provider-selector select { min-width: 132px; }
+  .conversation h1 { font-size: 18px; }
+
+  .conversation-meta {
+    max-width: 180px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .message-scroll { padding: 20px 16px; }
+  .composer { padding: 12px 16px 15px; }
+
+  .right-panel {
+    display: block;
+    min-height: 270px;
+    border-width: 0;
+    padding: 18px 16px;
+  }
+
+  .attachment-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+  .attachment-card img,
+  .attachment-placeholder { aspect-ratio: 4 / 3; }
+}
+
+@media (max-width: 470px) {
+  .conversation-header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 11px;
+  }
+
+  .run-chip { max-width: 100%; }
+  .attachment-list { grid-template-columns: 1fr; }
+  .message-body { max-width: calc(100% - 39px); }
+}
+
+@media (max-width: 600px) {
+  .preview-backdrop { padding: 8px; }
+  .interactive-preview { border-radius: 6px; }
+  .interactive-preview-header { padding: 12px; }
+  .preview-viewport { padding: 10px; }
+  .interactive-preview-controls { align-items: stretch; flex-direction: column; }
+  .preview-zoom-controls { justify-content: center; }
+  .preview-control-hint { text-align: center; }
+}
