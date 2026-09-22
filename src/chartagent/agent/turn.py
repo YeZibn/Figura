@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from collections.abc import Mapping, Sequence
 from typing import Any, Callable, Optional
 
-from ..client.client import LLMClient
+from ..client.client import LLMClient, classify_provider_error
 from ..client.models import NormalizedResult, ToolCall
 from ..measurement import MEASUREMENT_TOOLS, MeasurementSession
 from ..memory import RunStatus
@@ -72,15 +72,34 @@ def execute_model_turn(
         try:
             result = client.chat(messages, tools=tools, **chat_kwargs)
         except Exception as exc:
-            uncertain_work_unit(operation_uncertain, operation_id, "model_response_outcome_uncertain")
-            memory.append(run, "error", {"error_code": "agent_call_failed", "error_type": type(exc).__name__[:64]})
-            memory.finish(run, RunStatus.FAILED, "error")
+            failure = classify_provider_error(exc)
+            if not failure["outcome_known"]:
+                uncertain_work_unit(operation_uncertain, operation_id, "model_response_outcome_uncertain")
+            memory.append(
+                run,
+                "error",
+                {
+                    "error_code": failure["failure_code"],
+                    "failure_category": failure["failure_category"],
+                    "safe_message": failure["safe_message"],
+                    "provider_status": failure.get("provider_status"),
+                    "retryable": failure["retryable"],
+                    "outcome_known": failure["outcome_known"],
+                    "error_type": type(exc).__name__[:64],
+                },
+            )
+            memory.finish(run, RunStatus.FAILED, failure["failure_code"])
             if emitter is not None and not isinstance(client, LLMClient):
                 emitter.emit(
                     "model_completed",
                     turn=turn,
                     status="error",
-                    error_code="agent_call_failed",
+                    error_code=failure["failure_code"],
+                    failure_category=failure["failure_category"],
+                    safe_message=failure["safe_message"],
+                    provider_status=failure.get("provider_status"),
+                    retryable=failure["retryable"],
+                    outcome_known=failure["outcome_known"],
                     error_type=type(exc).__name__[:64],
                 )
             raise

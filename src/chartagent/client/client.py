@@ -81,6 +81,62 @@ def _provider_error_summary(error: BaseException) -> dict[str, Any]:
     }
 
 
+def classify_provider_error(error: BaseException) -> dict[str, Any]:
+    """Return a bounded, provider-neutral failure classification.
+
+    A received deterministic 4xx response is different from a timeout or a
+    transport failure: the former is known rejected work, while the latter
+    leaves the remote outcome uncertain and must remain recovery-blocked.
+    """
+    summary = _provider_error_summary(error)
+    status = summary.get("provider_status")
+    transient_statuses = {408, 425, 500, 502, 503, 504}
+    if status is None:
+        category = "transport_uncertain"
+        failure_code = "provider_transport_uncertain"
+        outcome_known = False
+        retryable = True
+    elif status in transient_statuses:
+        category = "provider_transient"
+        failure_code = "provider_transient_failure"
+        outcome_known = False
+        retryable = True
+    elif status == 402:
+        category = "provider_balance"
+        failure_code = "provider_balance_required"
+        outcome_known = True
+        retryable = False
+    elif status in {401, 403}:
+        category = "provider_authorization"
+        failure_code = "provider_authorization_failed"
+        outcome_known = True
+        retryable = False
+    elif status == 429:
+        category = "provider_rate_limited"
+        failure_code = "provider_rate_limited"
+        outcome_known = True
+        retryable = True
+    elif 400 <= status < 500:
+        category = "provider_request_rejected"
+        failure_code = "provider_request_rejected"
+        outcome_known = True
+        retryable = False
+    else:
+        category = "provider_failure"
+        failure_code = "provider_failure"
+        outcome_known = False
+        retryable = True
+    safe_message = summary.get("provider_error_message") or "模型提供方请求失败"
+    return {
+        **summary,
+        "failure_category": category,
+        "failure_code": failure_code,
+        "safe_message": truncate_text(safe_message, 240),
+        "retryable": retryable,
+        "outcome_known": outcome_known,
+    }
+
+
 def _default_observation_sink(entry: Mapping[str, Any]) -> None:
     """Emit a sanitized observation entry via stdlib logging (no secrets)."""
     logger.info("llm_call provider=%s model=%s", entry.get("provider"), entry.get("model"))
@@ -319,6 +375,7 @@ class LLMClient:
             completion = self._sdk.chat.completions.create(**request)
         except Exception as exc:
             if trace is not None:
+                failure = classify_provider_error(exc)
                 trace.emit(
                     "model_completed",
                     turn=trace_turn,
@@ -327,6 +384,11 @@ class LLMClient:
                     status="error",
                     elapsed_ms=int((time.monotonic() - started) * 1000),
                     error_code="provider_request_failed",
+                    failure_category=failure["failure_category"],
+                    failure_code=failure["failure_code"],
+                    safe_message=failure["safe_message"],
+                    retryable=failure["retryable"],
+                    outcome_known=failure["outcome_known"],
                     **_provider_error_summary(exc),
                 )
             raise

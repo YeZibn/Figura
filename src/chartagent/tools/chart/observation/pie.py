@@ -918,7 +918,7 @@ EXTRACT_PIE_SLICES = Tool(
     description=(
         "测量普通的二维饼图并返回源图绘图区几何、稳定扇区证据、经过门控的角度和比例、图例/OCR 关联、"
         "置信度、警告及源尺寸叠加图。用于可识别的圆形饼图；不要把 donut、爆炸、嵌套、3D、透视或含义不明的圆形图形当成完整的平面饼图数据。"
-        "返回 effective_scope、evidence refs 和质量 warning；warning 不会自动触发重测，将比例用于 ChartSpec 恢复前必须由主 Agent 检查证据并记录选择。"
+        "返回 effective_scope、evidence refs 和质量 warning；warning 不会自动触发重测。主 Agent 应检查证据后直接在 assemble_spec 中传入实际采用的 evidence_refs，未采用候选无需单独记录。"
     ),
     parameters={
         "type": "object",

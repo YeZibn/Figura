@@ -313,7 +313,7 @@ def test_measurement_target_refs_reject_unknown_or_unbounded_candidates():
     assert unbounded["code"] == "measurement_target_ref_unbounded"
 
 
-def test_assemble_requires_and_records_explicit_measurement_decision():
+def test_assemble_uses_actual_evidence_refs_without_requiring_measurement_decision():
     from chartagent.tools.chart.specification import assemble_spec
 
     data = attach_measurement_quality(
@@ -343,17 +343,20 @@ def test_assemble_requires_and_records_explicit_measurement_decision():
     assert session is not None
     reference = data["measurement"]["reference"]
 
-    blocked = assemble_spec(
+    assembled = assemble_spec(
         chart_type="bar",
         points=[{"category": "A", "value": 1}],
         x_label="类别",
         y_label="数值",
         measurement_ref=reference,
         _measurement_context=sessions,
+        evidence_refs=["B1"],
     )
-    assert blocked["measurement_gate"]["code"] == "measurement_decision_required"
+    assert "error" not in assembled
+    assert assembled["provenance"]["evidence_refs"] == ["B1"]
+    assert "_measurement_decision" not in assembled
 
-    assembled = assemble_spec(
+    legacy = assemble_spec(
         chart_type="bar",
         points=[{"category": "A", "value": 1, "series": "Q1"}],
         x_label="类别",
@@ -365,9 +368,22 @@ def test_assemble_requires_and_records_explicit_measurement_decision():
         },
         _measurement_context=sessions,
     )
-    assert "error" not in assembled
-    assert assembled["_measurement_decision"]["selected_refs"] == ["B1"]
-    assert assembled["provenance"]["selected_refs"] == ["B1"]
+    assert "error" not in legacy
+    assert legacy["_measurement_decision"]["selected_refs"] == ["B1"]
+    assert legacy["provenance"]["selected_refs"] == ["B1"]
+
+    conflict = assemble_spec(
+        chart_type="bar",
+        points=[{"category": "A", "value": 1}],
+        x_label="类别",
+        y_label="数值",
+        measurement_ref=reference,
+        evidence_refs=["B1"],
+        measurement_decision={"selected_refs": ["S1"]},
+        _measurement_context=sessions,
+    )
+    assert conflict["issues"][0]["location"].endswith("evidence_refs")
+    assert "conflicts" in conflict["issues"][0]["message"]
 
     invalid_label = assemble_spec(
         chart_type="bar",

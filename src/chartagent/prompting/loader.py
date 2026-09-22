@@ -174,7 +174,13 @@ def _bounded_observation_scope(value: object) -> dict[str, Any] | None:
 
 
 def _bounded_measurement_evidence(value: object) -> dict[str, Any] | list[dict[str, Any]] | None:
-    """Project the model-facing measurement decision state into bounded JSON."""
+    """Project model-facing measurement facts into bounded JSON.
+
+    Selection and discard state remains available in persisted artifacts for
+    compatibility, but it is not part of the ordinary runtime decision
+    contract.  The model-facing summary focuses on observations and refs that
+    can actually be inspected or referenced by the next tool call.
+    """
     if isinstance(value, (list, tuple)):
         result = []
         for item in list(value)[:16]:
@@ -194,15 +200,13 @@ def _bounded_measurement_evidence(value: object) -> dict[str, Any] | list[dict[s
         "session_id",
         "attempt_id",
         "parent_attempt_id",
-        "next_action",
-        "decision_status",
         "focus_mode",
         "budget_remaining",
         "evidence_basis",
     ):
         if value.get(key) is not None:
             result[key] = _bounded_text(value.get(key), 240)
-    for key in ("selected_refs", "discarded_refs", "refs"):
+    for key in ("refs", "evidence_refs", "used_refs"):
         if value.get(key) is not None:
             result[key] = _bounded_ref_list(value.get(key))
     if isinstance(value.get("series_map"), Mapping):
@@ -317,7 +321,7 @@ def _bounded_generation_context(value: object) -> dict[str, Any] | None:
 
 
 def _bounded_decision_context(value: object) -> dict[str, Any] | None:
-    """Project the code-owned action contract into compact model context."""
+    """Project factual decision context without ordinary action whitelists."""
     if not isinstance(value, Mapping):
         return None
     result: dict[str, Any] = {}
@@ -327,15 +331,21 @@ def _bounded_decision_context(value: object) -> dict[str, Any] | None:
         "phase",
         "status",
         "candidate_id",
-        "next_action",
+        "repair_hint",
+        "publication_status",
     ):
         if value.get(key) is not None:
             result[key] = _bounded_text(value.get(key), 240)
-    if value.get("required") is not None:
-        result["required"] = bool(value.get("required"))
-    for key in ("allowed_actions", "blocked_actions"):
+    for key in ("hard_constraints",):
         if isinstance(value.get(key), (list, tuple)):
             result[key] = [_bounded_text(item, 96) for item in list(value[key])[:12]]
+    review = value.get("review")
+    if isinstance(review, Mapping):
+        result["review"] = {
+            key: _bounded_text(review.get(key), 240) if key != "publication_blocked" else bool(review.get(key))
+            for key in ("review_id", "candidate_id", "state", "repair_kind", "repair_hint", "publication_blocked")
+            if review.get(key) is not None
+        }
     if value.get("budget_remaining") is not None:
         try:
             result["budget_remaining"] = max(0, int(value.get("budget_remaining") or 0))

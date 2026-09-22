@@ -8,7 +8,7 @@
 
 ### Requirement: Measurement evidence has an explicit lifecycle
 
-系统 SHALL 为每次源图测量提供可追踪的执行状态、质量结果和主 Agent 决策状态。执行状态至少区分完成与失败；质量结果 SHALL 保留 `provisional`、`partial`、`remeasure_required`、`unsupported` 和 `failed` 等适用诊断；主 Agent 决策 SHALL 独立记录 selected、discarded、abandoned 或 pending。质量 warning 或局部问题不得自动成为主流程的全局阻塞条件。
+系统 SHALL 为每次源图测量提供可追踪的执行状态、质量结果、attempt lineage 和实际下游使用情况。质量结果 SHALL 保留 `provisional`、`partial`、`remeasure_required`、`unsupported` 和 `failed` 等适用诊断；模型无需为每次 attempt 创建 selected/discarded/abandoned 状态。质量 warning 或局部问题不得自动成为主流程门禁。
 
 #### Scenario: Initial measurement remains observable evidence
 
@@ -22,11 +22,11 @@
 - **THEN** 结果保留对应 warning 和可选的补充范围建议
 - **AND** 系统不得自动重测、阻塞其他观察工具或结束主链路
 
-#### Scenario: Main Agent selects a candidate subset
+#### Scenario: Actual evidence use is recorded
 
-- **WHEN** 主 Agent 根据原图、overlay、证据引用和质量信息选择或舍弃候选
-- **THEN** 系统记录 selected、discarded 和未采用的 attempt 信息
-- **AND** `assemble_spec` 只对被引用的证据执行来源、范围和结构校验
+- **WHEN** 后续装配引用该 attempt 的部分 refs
+- **THEN** 系统记录实际使用的 refs 和 provenance
+- **AND** 未使用 refs 保持普通候选状态
 
 ### Requirement: Measurement attempts remain attributable
 
@@ -122,25 +122,25 @@
 
 ### Requirement: Measurement review is a hard gate for the main chain
 
-测量结果 SHALL 经过质量审计并保留主 Agent 的证据选择，但 measurement review 不得作为独占的共享执行门禁。进入 `assemble_spec` 时，系统 SHALL 对被选择的 evidence refs 执行 attachment、panel、attempt、范围、幂等和必要结构校验；warning、未解析系列标签或未被选择的误检候选不得阻塞其他观察和组装。
+测量结果 SHALL 经过质量审计，但 measurement review SHALL NOT 成为独占主链路或组装前决策门禁。`assemble_spec` SHALL 只校验实际引用证据的 attachment、panel、attempt、范围和必要结构；warning、未解析标签、未引用候选或缺少独立 decision 状态不得阻塞其他观察和合法组装。
 
-#### Scenario: Measurement observation does not block unrelated evidence
+#### Scenario: Measurement observation does not block unrelated work
 
-- **WHEN** 一次测量返回 warning、`partial` 或 `remeasure_required`
-- **THEN** 主 Agent 仍可以调用 OCR、布局观察、其他测量或查看原图
-- **AND** 系统不得创建独占 measurement review gate 来跳过同一工具批次中的其他工作
+- **WHEN** 测量返回 warning、`partial` 或 `remeasure_required`
+- **THEN** 主 Agent仍可调用 OCR、布局、其他测量或直接视觉装配
+- **AND** 系统不创建独占 measurement review gate
 
-#### Scenario: Assembly validates selected evidence
+#### Scenario: Assembly validates only referenced evidence
 
-- **WHEN** 主 Agent 提交当前 panel 的 evidence decision 和 ChartSpec
-- **THEN** 系统校验 selected/discarded refs 属于当前 attachment、panel 和 attempt
-- **AND** 未被选择的错误候选不会使被选择的有效候选整体失效
+- **WHEN** 主 Agent提交 measurement refs 和 ChartSpec
+- **THEN** 系统校验这些 refs 属于当前来源和 attempt
+- **AND** 未引用误检不影响合法 refs
 
-#### Scenario: Invalid selected evidence is rejected safely
+#### Scenario: Invalid referenced evidence is rejected safely
 
-- **WHEN** 主 Agent 选择不存在、越界、来源不匹配或缺少必要数值的 ref
-- **THEN** `assemble_spec` 返回定位到具体 ref 的结构化错误
-- **AND** 系统不发布或渲染依赖该非法 ref 的结果
+- **WHEN** 主 Agent引用不存在、越界、来源不匹配或缺少必要数值的 ref
+- **THEN** `assemble_spec` 返回定位错误
+- **AND** 系统不渲染或发布依赖该 ref 的结果
 
 ### Requirement: Measurement evidence exposes compact stable references
 
@@ -196,19 +196,17 @@ attempt 的补充测量 SHALL 使用 `measurement_target` 指向候选证据、�
 
 ### Requirement: Evidence quality does not autonomously select semantic roles
 
-测量质量门禁 SHALL 报告几何/数值质量、warning、候选引用和可用角色信息，但不得把
-OCR/CV 的候选名称自动升级为 ChartSpec 的业务语义，也不得在发现 warning 时自动选择或
-舍弃系列。主 Agent SHALL 记录 selected/discarded/abandoned 决策。
+测量质量审计 SHALL 报告几何、数值、warning、候选引用和可用角色线索，但不得自动把 OCR/CV 候选升级为业务语义，也不得替主 Agent选择系列。主 Agent通过最终工具输入、ChartSpec 语义和实际引用表达选择，系统不要求额外的 decision 对象。
 
 #### Scenario: Legend swatch is discarded explicitly
 
 - **WHEN** 测量结果包含可能是 legend swatch 的候选
-- **THEN** 结果将其标为候选并提供位置/角色线索
-- **AND** 最终 discarded 决策记录由主 Agent 产生，而不是工具静默删除
+- **THEN** 结果提供位置和角色线索
+- **AND** 主 Agent可以不引用该候选，无需单独提交 discarded 状态
 
 ### Requirement: Focused measurement closes its observation obligation
 
-局部测量 SHALL 区分 focus request、effective scope、measurement observation 和 evidence decision。`focus_applied` 只有在绑定到一个明确的 measurement attempt 时才有效；若该 attempt 没有产生对应 observation，系统 SHALL 将其保留为 pending、failed 或 abandoned，而不得当作有效证据。
+局部测量 SHALL 区分 focus request、effective scope 和 measurement observation。`focus_applied` 只有在绑定明确 attempt 时才有效；无有效 observation 时 SHALL 记录 pending 或 failed 事实，但不得要求模型关闭独立 decision unit，也不得单独阻止模型选择其他合法修复路线。
 
 #### Scenario: Applied focus is followed by same-scope observation
 
@@ -218,38 +216,32 @@ OCR/CV 的候选名称自动升级为 ChartSpec 的业务语义，也不得在�
 
 #### Scenario: Applied focus has no observation
 
-- **WHEN** 局部范围已应用但工具没有返回该范围的有效 observation
-- **THEN** 系统记录明确的 pending、failed 或 abandoned 状态和下一步
-- **AND** 若该动作属于 evidence-needed gate，则 assemble 和 publication 继续保持阻塞
+- **WHEN** 局部范围已应用但没有有效 observation
+- **THEN** 系统记录 pending 或 failed 状态和诊断
+- **AND** 主 Agent可以选择其他授权工具、调整范围或停止
 
-### Requirement: Evidence decisions are bound to one measurement attempt
+### Requirement: Bound generation evidence to an effective source scope
 
-每个 measurement attempt SHALL 至多拥有一个当前有效的 selected/discarded/abandoned decision。decision SHALL 绑定 session、attempt、scope 和 evidence refs，并 SHALL 在 assemble 使用前持久化；重复提交相同 decision SHALL 幂等返回已有状态。
+测量 evidence SHALL 绑定经过授权和解析的 effective attachment/panel scope。若 scope 由工具根据唯一上下文补全，结果 SHALL 明确记录 requested scope、effective scope 和绑定依据；若 scope 不可解析，系统不得产生可被 assemble 接受的 evidence ref。
 
-#### Scenario: Selected and discarded refs are co-located
+#### Scenario: Bound scope produces attributable evidence
 
-- **WHEN** Agent 从一个 observation 中选择 S1 并舍弃 S2
-- **THEN** 系统在同一 attempt 下保存 selected refs、discarded refs 和 decision basis
-- **AND** assemble 只能消费 selected refs 或明确的 legacy/direct input
+- **WHEN** 测量调用在唯一授权 panel 内完成并返回候选
+- **THEN** attempt 和 evidence refs 记录该 panel、effective scope 和质量状态
+- **AND** assemble 可以定位到同一来源范围而不依赖模型猜测内部身份
 
-#### Scenario: Assemble does not create a second decision
+#### Scenario: Scope error produces no accepted evidence
 
-- **WHEN** assemble_spec 读取一个已经记录的 measurement decision
-- **THEN** assemble 只验证并引用该 decision
-- **AND** 工具结果快照不会再次制造一个新的证据选择事件
+- **WHEN** 测量调用的 source scope 缺失、歧义或跨 panel
+- **THEN** 质量状态为 scope error 或等价的非证据状态
+- **AND** 该调用不得产生 accepted evidence 或推动 candidate 进入 assemble
 
-### Requirement: Required and optional measurement actions are distinguishable
+### Requirement: Scope repair remains a local, attributable action
 
-系统 SHALL 区分由审核修复明确要求的 same-scope measurement 与 Agent 主动发起的可选 focused observation。只有 required action 未关闭时才阻塞其所属 repair gate；可选动作可以被 Agent 放弃，但必须留下可追溯的理由和状态。
+source scope 修复 SHALL 保持在当前 attachment/panel 和对应 measurement attempt 的边界内。修复错误、重新绑定或放弃 SHALL 记录在同一证据 lineage 下，并 SHALL 不自动扩大搜索范围或自动选择语义角色。
 
-#### Scenario: Required evidence repair blocks assembly
+#### Scenario: Rebinding does not widen measurement
 
-- **WHEN** generated review 返回 evidence_needed 且指定同一 panel 的 measurement target
-- **THEN** 在该 target 完成 observation 或明确进入 terminal/abandoned 前，系统不得推进该候选的 assemble
-- **AND** 其他不属于该 repair 的 run 状态仍然可被记录
-
-#### Scenario: Optional focus can be abandoned explicitly
-
-- **WHEN** Agent 判断可选的局部观察收益不足并选择放弃
-- **THEN** 系统关闭该 optional target 并保存 abandonment reason
-- **AND** 不自动发起下一次测量
+- **WHEN** Agent 根据工具 action hint 重新提交同一 panel 的 source context
+- **THEN** 新 attempt 明确关联父 attempt 并只读取有效同范围
+- **AND** 工具不因为第一次 scope 错误而回退到全图测量

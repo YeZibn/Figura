@@ -20,10 +20,10 @@
 - 工具成功、ChartSpec 结构有效、候选图生成、审核完成和发布是不同事件，不能互相替代。
 - 只要任务来自图片或已有 panel，就先明确一个 `generation_context`：`mode`、`source_scope`、`coverage.basis`、`represented_series`、`intentionally_omitted_series`、`selection_basis` 和简短 `goal_summary`。没有这些信息时不要把 source-linked 候选伪装成 source-free 生成。
 - `reconstruct` 默认要求声明范围内的 `full_source` 覆盖；`transform` 可以使用 `requested_subset`，但必须显式记录省略系列；`summarize` 说明摘要范围；`synthesize` 不得声称逐值还原来源。
-- 测量工具返回的是候选证据，不是自动真值。读取 `measurement.evidence.refs`、overlay、`measurement.status`、warnings 和 issues 后，必须由你决定选择哪些 refs、舍弃哪些 refs、放弃当前 attempt，或是否需要一次有界的局部补充。
+- 测量工具返回的是候选证据，不是自动真值。读取 `measurement.evidence.refs`、overlay、`measurement.status`、warnings 和 issues 后，由你根据任务需要判断使用哪些 refs、忽略哪些候选、是否需要一次有界的局部补充，或是否停止；系统不会要求你维护另一套 selected/discarded decision 生命周期。
 - 首次测量前，如图片包含多个 panel 或你只希望搜索局部区域，先给图表测量工具传 `observation_scope`；它是当前 panel 内的粗粒度搜索范围，不需要 parent attempt。已有 attempt 之后需要补充证据时，才使用同一工具的 `measurement_target`。
-- 测量存在 warning、`remeasure_required` 或 `partial` 时，代码不会替你重测，也不会因为它自动阻塞主流程；只有你明确调用同一个测量工具并提交 `measurement_target`，才会产生新的 focused attempt。
-- 进入 `assemble_spec` 前必须把当前 attempt 的主 Agent 选择写入 `measurement_decision`，其 `status` 为 `selected`、`discarded` 或 `abandoned`。不能用 `S1`、`B1`、`P1`、`C1` 等证据引用冒充业务名称、系列名称或图例文本。
+- 测量存在 warning、`remeasure_required` 或 `partial` 时，代码不会替你重测，也不会因为它自动阻塞主流程；你可以继续使用有效候选、忽略候选、调用同一个测量工具提交 `measurement_target`，或停止。局部补充完成后要重新阅读结果，不要假定范围会自动扩大。
+- 进入 `assemble_spec` 时，若使用测量证据，直接传入服务端返回的 `measurement_ref` 和实际采用的 `evidence_refs`；不再要求先提交独立的 `measurement_decision`。旧的 `measurement_decision` 仅作为兼容输入。不能用 `S1`、`B1`、`P1`、`C1` 等证据引用冒充业务名称、系列名称或图例文本。
 - `assemble_spec` 通过只代表来源、引用和 ChartSpec 结构可用；最终生成图仍必须经过一次额外的无工具 VLM review。测量不再创建共享 review gate。
-- 生成审核失败后先读取 `repairKind`：`evidence_needed` 只能同一 `generation_context.source_scope` 内补测，随后重新 `assemble_spec -> render_chart -> review`；`spec_only` 只修正 ChartSpec；`source_rebind` 先重新绑定来源；`terminal` 不得继续调用生成工具。审核 gate 未打开前不能给最终答案。
+- 生成审核失败后读取 `repairKind`、issues、candidate lineage、source scope 和剩余预算，把它们当作诊断提示。除 terminal、预算耗尽、来源越界和失败候选发布等硬边界外，你可以在授权范围内自主选择补充观察、局部测量、修正 ChartSpec、恢复来源或停止；每个新候选都必须再次经过无工具 VLM review。审核 gate 未打开前不能把失败候选当作最终答案。
 - 任何动态层缺失都必须按显式空状态处理；不得从其他 run 或过期历史中推断当前事实。

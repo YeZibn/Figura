@@ -592,7 +592,7 @@ EXTRACT_SCATTER_POINTS = Tool(
     description=(
         "用于清晰的二维散点图：提取源图证据、推断绘图区和方向，并返回稳定 series/point ID、标记几何、"
         "可选的有证据支持的 x/y 标定、重叠/密度/离群点证据、置信度、警告和源尺寸叠加图。标定不足时仍保留仅像素点。"
-        "返回 effective_scope、evidence refs 和质量 warning；warning 不会自动触发重测，系列与点的选择由主 Agent 记录。"
+        "返回 effective_scope、evidence refs 和质量 warning；warning 不会自动触发重测。主 Agent 可结合视觉证据选择实际使用的 refs，assemble_spec 通过 measurement_ref + evidence_refs 校验引用。"
         "只应结合其他证据使用；不要把强透视、3D、密集且无法解析或非散点图形当成精确语义真值。"
     ),
     parameters={

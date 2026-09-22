@@ -22,7 +22,7 @@ function repairNumberField(sources: Record<string, unknown>[], keys: string[]): 
 }
 
 export function measurementRepairSummary(event: AgentRunEvent): MeasurementRepairSummary | null {
-  const repairKinds = new Set(['measurement_observed', 'measurement_repair_required', 'measurement_repair_rejected', 'measurement_repair_exhausted', 'measurement_decision_required', 'measurement_focus_requested', 'measurement_focus_applied', 'measurement_focus_failed', 'measurement_evidence_selected', 'measurement_evidence_discarded'])
+  const repairKinds = new Set(['measurement_observed', 'measurement_repair_required', 'measurement_repair_rejected', 'measurement_repair_exhausted', 'measurement_decision_required', 'measurement_focus_requested', 'measurement_focus_applied', 'measurement_focus_failed', 'measurement_evidence_selected', 'measurement_evidence_discarded', 'measurement_evidence_used'])
   if (!repairKinds.has(event.kind)) return null
   const payload = eventPayload(event)
   const repair = recordValue(payload.repair) || payload
@@ -46,6 +46,11 @@ export function measurementRepairSummary(event: AgentRunEvent): MeasurementRepai
 
 export function measurementRepairDetail(event: AgentRunEvent): string {
   const payload = eventPayload(event)
+  if (event.kind === 'measurement_evidence_used') {
+    const refs = Array.isArray(payload.evidence_refs) ? payload.evidence_refs.map(String).slice(0, 12).join('、') : ''
+    const panel = payload.panel_id || payload.panelId
+    return [panel ? `面板：${String(panel)}` : '', refs ? `实际采用：${refs}` : '已记录实际采用的测量证据'].filter(Boolean).join(' · ')
+  }
   if (event.kind === 'measurement_decision_required') {
     const decision = recordValue(payload.decision) || payload
     const refs = Array.isArray(decision.refs) ? decision.refs.map((item) => {
@@ -118,7 +123,7 @@ export function measurementRepairDetail(event: AgentRunEvent): string {
 }
 
 export function measurementEventClass(kind: string): string {
-  const measurementKinds = new Set(['measurement_observed', 'measurement_repair_required', 'measurement_repair_rejected', 'measurement_repair_exhausted', 'measurement_decision_required', 'measurement_focus_requested', 'measurement_focus_applied', 'measurement_focus_failed', 'measurement_evidence_selected', 'measurement_evidence_discarded'])
+  const measurementKinds = new Set(['measurement_observed', 'measurement_repair_required', 'measurement_repair_rejected', 'measurement_repair_exhausted', 'measurement_decision_required', 'measurement_focus_requested', 'measurement_focus_applied', 'measurement_focus_failed', 'measurement_evidence_selected', 'measurement_evidence_discarded', 'measurement_evidence_used'])
   if (!measurementKinds.has(kind)) return ''
   if (kind === 'measurement_focus_applied' || kind === 'measurement_evidence_selected') return 'repair success'
   if (kind === 'measurement_focus_failed' || kind === 'measurement_repair_rejected' || kind === 'measurement_repair_exhausted') return 'repair error'

@@ -12,25 +12,33 @@ REVIEW_INCOMPLETE_MESSAGE = _REVIEW_REQUIRED_MSG
 
 
 def review_gate_context(gate: Mapping[str, Any]) -> str:
-    """Serialize bounded review obligations as model-visible JSON context."""
+    """Serialize bounded review facts as model-visible JSON context.
+
+    A failed review blocks publication, but it does not prescribe a single
+    repair action.  Keep the candidate identity, scope-bearing metadata and
+    diagnostic hints visible while leaving the next authorized tool choice to
+    the main Agent.
+    """
     pending = gate.get("pending")
     failed = gate.get("failed")
     published = gate.get("published")
     retryable = bool(gate.get("retryable"))
-    required_action = "review_pending_candidates" if pending else "correct_failed_candidates" if failed and retryable else "stop_unpublished" if failed else "resolve_review_outcome"
+    status = "reviewing" if pending else "repair_available" if failed and retryable else "terminal" if failed else "open"
     payload = {
         "type": "chart_review_gate",
-        "required_action": required_action,
-        "pending": list(pending) if isinstance(pending, list) else [],
-        "failed": list(failed) if isinstance(failed, list) else [],
-        "published": list(published) if isinstance(published, list) else [],
+        "status": status,
+        "publication_blocked": bool(pending or failed),
+        "pending": list(pending)[:8] if isinstance(pending, list) else [],
+        "failed": list(failed)[:8] if isinstance(failed, list) else [],
+        "published": list(published)[:8] if isinstance(published, list) else [],
         "retryable": retryable,
-        "recovery_actions": list(gate.get("recoveryActions", ()))[:16] if isinstance(gate.get("recoveryActions"), list) else [],
+        "repair_hints": list(gate.get("recoveryActions", ()))[:8] if isinstance(gate.get("recoveryActions"), list) else [],
     }
     if isinstance(gate.get("recoveryActions"), list) and gate.get("recoveryActions"):
         first_action = gate["recoveryActions"][0]
         if isinstance(first_action, Mapping):
             payload["repair_kind"] = str(first_action.get("repairKind") or "terminal")[:32]
+            payload["repair_hint"] = str(first_action.get("action") or "")[:160] or None
             payload["repair_target"] = first_action.get("target") if isinstance(first_action.get("target"), Mapping) else None
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 

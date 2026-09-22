@@ -1045,7 +1045,7 @@ MEASURE_BARS = Tool(
     description=(
         "测量授权图像中的二维竖直、横向、旋转、分组或堆叠柱。返回源图多边形几何、拟合的零基线、"
         "带符号的数值轴长度、归一化比例、稳定 category/series 身份、置信度、警告和源尺寸叠加图。"
-        "返回 effective_scope、evidence refs、候选位置和质量 warning；warning 不会自动触发第二次测量，业务系列的选择与舍弃由主 Agent 记录。"
+        "返回 effective_scope、evidence refs、候选位置和质量 warning；warning 不会自动触发第二次测量。主 Agent 可直接在 assemble_spec 中用 measurement_ref + evidence_refs 表达实际采用的候选，未采用候选无需额外 decision。"
         "当需要柱体几何或相对大小时使用；不要用于 3D、强透视或严重遮挡的柱，也不要在缺少坐标标定时把结果当成精确源值。"
     ),
     parameters={

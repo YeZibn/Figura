@@ -267,6 +267,65 @@ def measurement_decisions_from_content(content: str) -> list[Mapping[str, Any]]:
     return decisions
 
 
+def measurement_evidence_uses_from_content(content: str) -> list[dict[str, Any]]:
+    """Extract refs actually used by a successful ChartSpec assembly.
+
+    This is intentionally derived from the assembled provenance rather than
+    from a separate model-maintained decision lifecycle.  Legacy decision
+    envelopes are handled by ``measurement_decisions_from_content`` for
+    diagnostics only.
+    """
+    try:
+        payload = json.loads(content)
+    except (TypeError, json.JSONDecodeError):
+        return []
+    if not isinstance(payload, Mapping):
+        return []
+    data = payload.get("data") if isinstance(payload.get("data"), Mapping) else payload
+    if not isinstance(data, Mapping) or data.get("error"):
+        return []
+    uses: list[dict[str, Any]] = []
+
+    def append_use(spec: Mapping[str, Any], *, fallback_refs: object = None) -> None:
+        provenance = spec.get("provenance") if isinstance(spec.get("provenance"), Mapping) else {}
+        refs = provenance.get("evidence_refs") if isinstance(provenance, Mapping) else None
+        if refs is None:
+            refs = spec.get("_evidence_refs", fallback_refs)
+        if not isinstance(refs, list):
+            return
+        bounded_refs = [str(item)[:32] for item in refs[:64] if isinstance(item, str) and item.strip()]
+        if not bounded_refs:
+            return
+        reference = {
+            key: provenance.get(key)
+            for key in ("session_id", "attempt_id", "attachment_id", "panel_id")
+            if isinstance(provenance, Mapping) and provenance.get(key) is not None
+        }
+        uses.append(
+            {
+                **reference,
+                "evidence_refs": bounded_refs,
+                "status": "used",
+            }
+        )
+
+    kind = data.get("kind")
+    if kind == "chart_spec_collection" and isinstance(data.get("figures"), list):
+        for figure in data["figures"][:16]:
+            if not isinstance(figure, Mapping):
+                continue
+            for chart in figure.get("charts", [])[:32] if isinstance(figure.get("charts"), list) else []:
+                if isinstance(chart, Mapping):
+                    append_use(chart)
+    elif kind == "chart_figure":
+        for chart in data.get("charts", [])[:32] if isinstance(data.get("charts"), list) else []:
+            if isinstance(chart, Mapping):
+                append_use(chart)
+    else:
+        append_use(data)
+    return uses[:64]
+
+
 def measurement_trace_fields(content: str) -> dict[str, Any]:
     """Project only bounded measurement lifecycle fields into trace events."""
     try:
@@ -358,3 +417,4 @@ _merge_measurement_repair_contexts = merge_measurement_repair_contexts
 _measurement_repair_contexts_from_sessions = measurement_repair_contexts_from_sessions
 _repair_target_context = repair_target_context
 _measurement_trace_fields = measurement_trace_fields
+_measurement_evidence_uses_from_content = measurement_evidence_uses_from_content

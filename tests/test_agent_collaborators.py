@@ -9,6 +9,7 @@ from chartagent.agent.artifacts import (
 )
 from chartagent.agent.measurement_flow import (
     measurement_decisions_from_content,
+    measurement_evidence_uses_from_content,
     measurement_repair_context_from_content,
     merge_measurement_repair_contexts,
 )
@@ -103,6 +104,35 @@ def test_measurement_flow_projects_bounded_decisions() -> None:
     assert context["refs"] == ["ref_1"]
     assert len(decisions) == 1
     assert len(merged) == 2
+
+
+def test_measurement_flow_derives_actual_evidence_use_from_assembly() -> None:
+    content = json.dumps(
+        {
+            "data": {
+                "metadata": {"chart_type": "bar"},
+                "provenance": {
+                    "session_id": "s1",
+                    "attempt_id": "a1",
+                    "attachment_id": "att_1",
+                    "panel_id": "panel_1",
+                    "evidence_refs": ["B1", "B2"],
+                },
+                "_evidence_refs": ["B1", "B2"],
+            }
+        }
+    )
+
+    uses = measurement_evidence_uses_from_content(content)
+
+    assert uses == [{
+        "session_id": "s1",
+        "attempt_id": "a1",
+        "attachment_id": "att_1",
+        "panel_id": "panel_1",
+        "evidence_refs": ["B1", "B2"],
+        "status": "used",
+    }]
 
 
 def test_extracted_turn_boundaries_preserve_operation_order() -> None:

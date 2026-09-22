@@ -153,7 +153,7 @@ def test_panel_inventory_preserves_stable_scope_and_status():
     ]
 
 
-def test_decision_context_marks_required_repair_without_copying_unbounded_state():
+def test_decision_context_exposes_review_facts_without_action_whitelist():
     decision = build_decision_context(
         run_id="run-review",
         execution_gate={
@@ -182,14 +182,17 @@ def test_decision_context_marks_required_repair_without_copying_unbounded_state(
     )
 
     assert '"unit_id":"review:review-1"' in runtime
-    assert '"required":true' in runtime
-    assert '"same_scope_measurement"' in runtime
-    assert '"publish"' in runtime
+    assert '"review_id":"review-1"' in runtime
+    assert '"repair_kind":"evidence_needed"' in runtime
+    assert '"repair_hint":"补充同一 panel 的 evidence"' in runtime
+    assert '"current_candidate_not_publishable"' in runtime
+    assert '"allowed_actions"' not in runtime
+    assert '"blocked_actions"' not in runtime
     assert '不要把大图当成当前 panel' in runtime
     assert '/Users/' not in runtime
 
 
-def test_optional_measurement_decision_context_does_not_turn_warning_into_repair():
+def test_measurement_context_exposes_observation_facts_without_decision_state_machine():
     decision = build_decision_context(
         run_id="run-measurement",
         measurement_evidence=[{
@@ -207,10 +210,11 @@ def test_optional_measurement_decision_context_does_not_turn_warning_into_repair
     )
 
     assert '"unit_id":"measurement:attempt-1"' in runtime
-    assert '"required":false' in runtime
-    assert '"select_evidence"' in runtime
+    assert '"status":"available"' in runtime
+    assert '"allowed_actions"' not in runtime
+    assert '"blocked_actions"' not in runtime
+    assert '"required"' not in runtime
     assert '"focus applied"' not in runtime.lower()
-    assert '"blocked_actions":["publish"]' in runtime
 
 
 def test_openai_and_mcp_projections_share_the_same_tool_contract():

@@ -46,7 +46,7 @@ def test_test4_replay_reconstructs_closed_units_and_collection_lineage():
 
     repair_measurement_events = events[11:15]
     assert {event["unit_id"] for event in repair_measurement_events} == {"measurement:matt-test4-repair"}
-    assert repair_measurement_events[0]["next_action"]["required"] is True
+    assert "next_action" not in repair_measurement_events[0]
 
     retry_generation_events = events[15:18]
     assert {event["unit_id"] for event in retry_generation_events} == {"generation:candidate-test4-retry"}

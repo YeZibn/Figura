@@ -76,6 +76,18 @@ export type RunHandle = {
   executionGate?: ExecutionGate | null
 }
 
+export type FailureContext = {
+  category?: string
+  code?: string
+  location?: string
+  providerStatus?: number
+  safeMessage?: string
+  retryable?: boolean
+  outcomeKnown?: boolean
+  firstFailureRef?: Record<string, unknown>
+  actionHint?: string
+}
+
 export type ObservationReference = {
   observationId: string
   mediaType: string
@@ -152,6 +164,7 @@ export const measurementRepairEventKinds = [
   'measurement_focus_failed',
   'measurement_evidence_selected',
   'measurement_evidence_discarded',
+  'measurement_evidence_used',
 ] as const
 
 export type MeasurementRepairEventKind = typeof measurementRepairEventKinds[number]

@@ -31,7 +31,44 @@ def authorized_chart_tool(tool: Tool, attachments: AttachmentRegistry) -> Tool:
         raw_generation_context = kwargs.pop("generation_context", None)
         candidate_id = kwargs.pop("candidate_id", None)
         candidate_attempt = kwargs.pop("candidate_attempt", None)
-        generation_context = normalize_generation_context(raw_generation_context)
+        measurement_target = kwargs.get("measurement_target")
+        observation_scope = kwargs.get("observation_scope")
+        if not isinstance(panel_id, str) and isinstance(measurement_target, Mapping):
+            candidate_panel_id = measurement_target.get("panel_id")
+            if isinstance(candidate_panel_id, str) and candidate_panel_id.strip():
+                panel_id = candidate_panel_id
+        if not isinstance(panel_id, str) and isinstance(observation_scope, Mapping):
+            candidate_panel_id = observation_scope.get("panel_id")
+            if isinstance(candidate_panel_id, str) and candidate_panel_id.strip():
+                panel_id = candidate_panel_id
+        if not isinstance(panel_id, str):
+            layout_context = kwargs.get("layout_context")
+            panel_summary = layout_context.get("panel") if isinstance(layout_context, Mapping) else None
+            panel_id = panel_summary.get("id") if isinstance(panel_summary, Mapping) else None
+        panel_store = getattr(attachments, "panel_store", None)
+        if not isinstance(panel_id, str) and callable(getattr(panel_store, "list_panel_handoffs", None)):
+            handoffs = panel_store.list_panel_handoffs(attachment_id)
+            if len(handoffs) == 1:
+                panel_id = getattr(handoffs[0], "panel_id", None)
+        source_scope_hint = (
+            {"attachment_id": attachment_id, "panel_ids": [panel_id]}
+            if isinstance(panel_id, str) and panel_id.strip()
+            else None
+        )
+        raw_scope = raw_generation_context.get("source_scope") if isinstance(raw_generation_context, Mapping) else None
+        raw_scope = raw_scope or (raw_generation_context.get("sourceScope") if isinstance(raw_generation_context, Mapping) else None)
+        scope_bound = (
+            raw_generation_context is not None
+            and raw_scope is None
+            and source_scope_hint is not None
+            and str(raw_generation_context.get("mode") or "") != "synthesize"
+            if isinstance(raw_generation_context, Mapping)
+            else False
+        )
+        generation_context = normalize_generation_context(
+            raw_generation_context,
+            source_scope_hint=source_scope_hint,
+        )
         if raw_generation_context is not None and generation_context is None:
             return {
                 "error": "generation_context must contain a valid mode, coverage, selection_basis and goal_summary",
@@ -64,16 +101,6 @@ def authorized_chart_tool(tool: Tool, attachments: AttachmentRegistry) -> Tool:
                     "source_scope": source_scope_resolution.to_dict(),
                     "action_hint": source_scope_resolution.action_hint or "重新绑定 active panel handoff",
                 }
-        measurement_target = kwargs.get("measurement_target")
-        observation_scope = kwargs.get("observation_scope")
-        if not isinstance(panel_id, str) and isinstance(measurement_target, Mapping):
-            candidate_panel_id = measurement_target.get("panel_id")
-            if isinstance(candidate_panel_id, str) and candidate_panel_id.strip():
-                panel_id = candidate_panel_id
-        if not isinstance(panel_id, str) and isinstance(observation_scope, Mapping):
-            candidate_panel_id = observation_scope.get("panel_id")
-            if isinstance(candidate_panel_id, str) and candidate_panel_id.strip():
-                panel_id = candidate_panel_id
         if not isinstance(panel_id, str) and generation_context is not None and generation_context.source_scope is not None:
             context_panels = generation_context.source_scope.panel_ids
             if len(context_panels) == 1:
@@ -157,12 +184,25 @@ def authorized_chart_tool(tool: Tool, attachments: AttachmentRegistry) -> Tool:
                 kwargs.pop("layout_context", None)
             with scoped_image_path(item.canonical_path, scope) as local_path:
                 result = original(image_path=local_path, **kwargs)
+            binding = None
+            if scope_bound:
+                binding = {
+                    "status": "bound",
+                    "basis": "unique_runtime_scope",
+                    "requested_scope": None,
+                    "effective_scope": (
+                        source_scope_resolution.effective_scope
+                        if source_scope_resolution is not None
+                        else scope.envelope()
+                    ),
+                }
             return _decorate_scoped_result(
                 result,
                 scope,
                 measurement_target=kwargs.get("measurement_target"),
                 observation_scope=kwargs.get("observation_scope"),
                 generation_context=generation_context,
+                generation_context_binding=binding,
                 candidate_id=candidate_id,
                 candidate_attempt=candidate_attempt,
             )
@@ -186,6 +226,18 @@ def authorized_chart_tool(tool: Tool, attachments: AttachmentRegistry) -> Tool:
         return _decorate_context_result(
             result,
             generation_context=generation_context,
+            generation_context_binding=(
+                {
+                    "status": "bound",
+                    "basis": "unique_runtime_scope",
+                    "requested_scope": None,
+                    "effective_scope": source_scope_resolution.effective_scope
+                    if source_scope_resolution is not None
+                    else None,
+                }
+                if scope_bound
+                else None
+            ),
             candidate_id=candidate_id,
             candidate_attempt=candidate_attempt,
         )
@@ -253,6 +305,7 @@ def _decorate_scoped_result(
     measurement_target: Mapping | None = None,
     observation_scope: Mapping | None = None,
     generation_context: object = None,
+    generation_context_binding: Mapping[str, Any] | None = None,
     candidate_id: object = None,
     candidate_attempt: object = None,
 ) -> object:
@@ -267,6 +320,7 @@ def _decorate_scoped_result(
             return _decorate_context_result(
                 payload,
                 generation_context=generation_context,
+                generation_context_binding=generation_context_binding,
                 candidate_id=candidate_id,
                 candidate_attempt=candidate_attempt,
             )
@@ -276,7 +330,7 @@ def _decorate_scoped_result(
         data["measurement_target"] = dict(measurement_target)
     if isinstance(data, dict) and isinstance(observation_scope, Mapping):
         data["observation_scope"] = dict(observation_scope)
-    data = _context_data(data, generation_context, candidate_id, candidate_attempt)
+    data = _context_data(data, generation_context, candidate_id, candidate_attempt, generation_context_binding)
     images = []
     for image in result.images:
         metadata = dict(image.metadata) if isinstance(image.metadata, Mapping) else {}
@@ -293,12 +347,20 @@ def _decorate_scoped_result(
     return ToolResult(data, images=tuple(images), warnings=result.warnings, evidence=evidence)
 
 
-def _context_data(data: object, context: object, candidate_id: object, candidate_attempt: object) -> object:
+def _context_data(
+    data: object,
+    context: object,
+    candidate_id: object,
+    candidate_attempt: object,
+    generation_context_binding: Mapping[str, Any] | None = None,
+) -> object:
     if not isinstance(data, Mapping):
         return data
     result = dict(data)
     if context is not None:
         result["generation_context"] = context.to_dict() if hasattr(context, "to_dict") else context
+    if isinstance(generation_context_binding, Mapping):
+        result["generation_context_binding"] = dict(generation_context_binding)
     if isinstance(candidate_id, str) and candidate_id.strip():
         result["candidate_id"] = candidate_id[:160]
     if isinstance(candidate_attempt, int) and candidate_attempt > 0:
@@ -306,14 +368,23 @@ def _context_data(data: object, context: object, candidate_id: object, candidate
     return result
 
 
-def _decorate_context_result(result: object, *, generation_context: object, candidate_id: object, candidate_attempt: object) -> object:
+def _decorate_context_result(
+    result: object,
+    *,
+    generation_context: object,
+    generation_context_binding: Mapping[str, Any] | None = None,
+    candidate_id: object,
+    candidate_attempt: object,
+) -> object:
     if isinstance(result, ToolResult):
-        data = _context_data(result.data, generation_context, candidate_id, candidate_attempt)
+        data = _context_data(result.data, generation_context, candidate_id, candidate_attempt, generation_context_binding)
         images = []
         for image in result.images:
             metadata = dict(image.metadata) if isinstance(image.metadata, Mapping) else {}
             if generation_context is not None:
                 metadata["generation_context"] = generation_context.to_dict() if hasattr(generation_context, "to_dict") else generation_context
+            if isinstance(generation_context_binding, Mapping):
+                metadata["generation_context_binding"] = dict(generation_context_binding)
             if isinstance(candidate_id, str) and candidate_id.strip():
                 metadata["candidate_id"] = candidate_id[:160]
             if isinstance(candidate_attempt, int) and candidate_attempt > 0:
@@ -321,7 +392,7 @@ def _decorate_context_result(result: object, *, generation_context: object, cand
             images.append(GeneratedImage(image.content, image.media_type, image.caption, metadata))
         return ToolResult(data, images=tuple(images), warnings=result.warnings, evidence=result.evidence)
     if isinstance(result, Mapping):
-        return _context_data(result, generation_context, candidate_id, candidate_attempt)
+        return _context_data(result, generation_context, candidate_id, candidate_attempt, generation_context_binding)
     return result
 
 

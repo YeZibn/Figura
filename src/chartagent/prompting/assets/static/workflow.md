@@ -14,7 +14,7 @@ figure 还必须在有上下文时声明 `coverage.basis`：`full_source`、`req
 
 对于 line/scatter，如果证据中已经确认横轴类别（例如 `Jan`、`Feb`、`Mar`），必须在单图或 figure 子图中把有序类别传入 `x_categories`；`x_label` 只是轴标题，不能替代类别标签。没有可靠类别证据时不要猜测或伪造 `x_categories`，保留数值横轴。
 
-当数据来自测量工具时，先读取结果中的 `measurement.reference`、`measurement.status`、`measurement.evidence.refs`、overlay 和 `measurement.quality.issues`。主 Agent 必须先形成一次明确的 `measurement_decision`，记录当前 attempt 的 `status`（`selected`、`discarded` 或 `abandoned`）、`selected_refs`、`discarded_refs`，必要时补充 `series_map` 与 `evidence_basis`，再在 `assemble_spec` 中原样传入 `measurement_ref` 和该 decision。`accepted` 不是主 Agent 必须伪造或等待的状态；warning 不会自动触发重测。不得手写、复制其他 panel 的 reference，也不得把普通 `source` 文本当作测量来源授权。
+当数据来自测量工具时，先读取结果中的 `measurement.reference`、`measurement.status`、`measurement.evidence.refs`、overlay 和 `measurement.quality.issues`。主 Agent 根据图像和任务决定使用哪些 refs；需要使用测量证据时，在 `assemble_spec` 中传入服务端返回的 `measurement_ref` 和实际采用的 `evidence_refs`。不需要先创建独立 `measurement_decision`，warning 也不会自动触发重测。不得手写、复制其他 panel 的 reference，也不得把普通 `source` 文本当作测量来源授权。
 
 首次测量应优先复用已有 `panel_id`，并可在工具参数中提供简单的 `observation_scope`：`coordinate_space` 使用 `panel_norm`、`panel_px` 或 `source_px`，通过 `include`/`exclude` 指定待观察的几何区域和少量 `objectives`。它只限定本次搜索，不创建或替换 measurement session。后续只有在当前 attempt 已暴露不确定 refs 时，才传 `measurement_target` 做定向补充；不要把两种范围字段同时当成同一语义。
 
@@ -26,6 +26,6 @@ figure 还必须在有上下文时声明 `coverage.basis`：`full_source`、`req
 
 `render_chart` 产生的是 candidate preview，不是已验证或已发布图。生成候选后必须等待代码触发的一次额外、无工具的 VLM review。审核结果中的 `decision`、`confidence`、`checks` 和 `issues` 是系统提供的证据，主 Agent 不得生成、编辑或覆盖审核 JSON。
 
-审核失败但仍有预算时，严格按 `repairKind` 进入有界子循环：`evidence_needed -> 同 scope 的 measurement_target -> measurement_decision -> assemble_spec -> render_chart -> 一次 VLM review`；`spec_only` 只允许修正 ChartSpec；`source_rebind` 先恢复有效 attachment/panel handoff；`terminal` 立即保持未发布。同源 figure 不能只修复并发布其中一张子图。`source_binding_failure` 应恢复或重新选择源证据，不能凭空补数据。重试耗尽时保持未发布并输出有界诊断。
+审核失败但仍有预算时，读取 `repairKind`、issues、source scope 和候选 lineage，把它们作为修复提示而不是固定阶段。主 Agent可以在授权范围内选择观察、局部 measurement、ChartSpec 修正、来源恢复或停止；每次重新渲染都创建新 candidate，并重新经过一次 VLM review。`terminal`、预算耗尽、越界来源或失败候选发布仍必须保持未发布。同源 figure 不能只修复并发布其中一张子图。`source_binding_failure` 应恢复或重新选择源证据，不能凭空补数据。
 
 候选、ChartSpec、review result 和 publication status 必须独立关联。`reviewStatus=completed` 不等于通过；只有 `publicationStatus=published` 才能无条件称为已发布，`published_with_warning` 必须保留警告。

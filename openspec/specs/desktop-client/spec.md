@@ -163,43 +163,37 @@ unassociated legacy messages through a compatible fallback presentation.
 
 ### Requirement: User can inspect persisted Agent runs
 
-The desktop workspace SHALL display each Agent run as a compact execution
-group with its status, duration or timestamps when available, event count, and
-expand/collapse control. Inside the group it SHALL render ordered model,
-tool, result, visual, and failure events, correlating tool evidence by call
-identifier. A bounded or truncated tool result SHALL remain part of the
-corresponding tool step and SHALL NOT become an unknown standalone step when
-the outer tool identity is available.
+The desktop workspace SHALL display each Agent run as a compact execution group with its status, timestamps when available, and expand/collapse control. Inside the group it SHALL render a chronological user-facing timeline containing meaningful tool, observation, measurement, generation, review, recovery, and failure steps. A tool call and its result SHALL be represented as one logical step, while model-start, model-completion, operation-save, run-start, and resume-start lifecycle events SHALL remain available in the persisted history but SHALL NOT appear as ordinary visible timeline rows. A bounded or truncated tool result SHALL remain part of the corresponding tool step and SHALL NOT become an unknown standalone step when the outer tool identity is available.
 
 #### Scenario: Completed run remains visible after reload
 
 - **WHEN** the user reloads a session containing completed runs
-- **THEN** the client restores their run summaries and can expand each one to
-  inspect its persisted event history
+- **THEN** the client restores their run summaries and can expand each one to inspect its persisted user-facing timeline
 
 #### Scenario: Tool status is correlated
 
 - **WHEN** a tool call and its result share a call identifier
-- **THEN** the UI shows one logical tool step whose status changes from running
-  to success or failure
-- **AND** its arguments, bounded result, and visual evidence are available
-  behind the step disclosure control
+- **THEN** the UI shows one logical tool step whose status changes from running to success or failure
+- **AND** its arguments, bounded result, and visual evidence are available behind the step disclosure control
+
+#### Scenario: Technical lifecycle events stay hidden
+
+- **WHEN** a run history contains model-start, model-completion, or operation-save events
+- **THEN** the ordinary timeline does not render separate rows or cards for those events
+- **AND** the run status, tool steps, domain milestones, and terminal error remain understandable without opening raw history
 
 #### Scenario: Truncated result remains in its tool step
 
-- **WHEN** the Gateway marks a tool result body as truncated but preserves the
-  originating tool name and call identifier
+- **WHEN** the Gateway marks a tool result body as truncated but preserves the originating tool name and call identifier
 - **THEN** the UI keeps the result under the originating tool step
 - **AND** it shows an explicit bounded or truncated-state indicator
 - **AND** it does not render a separate “unknown tool” step
 
 #### Scenario: Legacy or incomplete history is explicit
 
-- **WHEN** a run has no recoverable events, has an event-history gap, or was
-  interrupted by a Gateway restart
-- **THEN** the UI shows an explicit unavailable, incomplete, or interrupted
-  state
-- **AND** it does not fabricate missing execution steps
+- **WHEN** a run has no recoverable events, has an event-history gap, or was interrupted by a Gateway restart
+- **THEN** the UI shows an explicit unavailable, incomplete, or interrupted state
+- **AND** it does not fabricate missing execution steps or expose a technical lifecycle bucket as the main user-facing process
 
 ### Requirement: User can inspect attachments
 
@@ -679,18 +673,24 @@ SHALL never create a new run.
 
 ### Requirement: Desktop client renders a grouped decision timeline
 
-普通运行详情 SHALL 将相关 execution events 聚合为 decision units，并按 observe、decide、assemble、render、review、repair、publish 的阶段顺序展示。顶层摘要 SHALL 使用稳定的中文状态，原始工具和事件细节 SHALL 可展开查看。
+普通运行详情 SHALL 从同一份 execution events 派生内部 decision-unit 关联和面向用户的扁平时间线。内部 unit 仍 SHALL 保留 observe、decide、assemble、render、review、repair、publish 阶段、lineage 和去重语义，但界面顶层只 SHALL 展示可解释的测量、工具、审核、生成、发布、恢复或错误步骤。process、turn、operation 和 legacy 关联不得直接渲染为嵌套的顶层容器；sequence 和原始 payload 仅在按需详情中显示。
 
 #### Scenario: User follows one candidate from evidence to publication
 
 - **WHEN** 一个 run 包含测量、证据选择、assemble、render、review 和 publication
-- **THEN** 用户可以在一个可展开 unit 中按顺序看到这些阶段
-- **AND** 工具结果、模型决策和门禁状态不会被混排成无法解释的事件列表
+- **THEN** 用户可以在一条连续时间线上按顺序看到这些有业务意义的阶段
+- **AND** 工具结果、模型生命周期事件和门禁内部关联不会制造额外的套娃卡片
+
+#### Scenario: Tool invocation is a single visible step
+
+- **WHEN** 一个工具依次产生 tool_call、tool_result 和 visual_observation
+- **THEN** UI 将它们合并为一条可折叠工具步骤
+- **AND** 用户无需阅读模型轮次或 operation-save 事件即可理解工具是否完成及其结果
 
 #### Scenario: Pending unit is visually distinct
 
 - **WHEN** 局部范围已应用但后续 observation 或 evidence decision 尚未完成
-- **THEN** UI 显示待完成状态和下一步动作
+- **THEN** UI 在扁平时间线上显示待完成状态和下一步动作
 - **AND** 不使用“已完成”或“已发布”标签替代该状态
 
 ### Requirement: Client distinguishes observations, decisions, actions, gates, and publication
@@ -721,10 +721,42 @@ SHALL never create a new run.
 
 ### Requirement: Timeline details remain read-only and recoverable
 
-展开、刷新和重连时间线 SHALL 只读取已有事件、诊断和安全资源，不得重新触发模型、工具、审核或发布。历史缺失、截断和不可用状态 SHALL 在对应 unit 上明确展示。
+展开、刷新和重连时间线 SHALL 只读取已有事件、诊断和安全资源，不得重新触发模型、工具、审核或发布。用户默认看到面向业务的步骤；技术生命周期字段、sequence、原始 payload 和兼容关联 SHALL 只能通过受限的按需详情读取。历史缺失、截断和不可用状态 SHALL 在对应可见步骤或运行摘要上明确展示。
 
 #### Scenario: Refresh does not repeat a review
 
 - **WHEN** 用户刷新一个已完成或失败的 run
-- **THEN** UI 从历史记录重建相同的 review cycle
+- **THEN** UI 从历史记录重建相同的用户时间线和 review cycle
 - **AND** 不产生新的 VLM invocation 或 publication action
+
+### Requirement: Runtime timeline presents compatibility groups instead of event noise
+
+桌面客户端 SHALL 将普通生命周期事件显示在可理解的运行过程或有界历史容器中；只有具备可解释 decision-unit 语义的事件才作为独立顶层决策单元。所有容器 SHALL 保留事件数量、顺序和展开入口，并使用稳定的中文状态。
+
+#### Scenario: Test-style run is readable
+
+- **WHEN** run 只完成加载、拆解、一次工具调用后失败
+- **THEN** 用户可以看到加载、拆解、工具调用、失败原因和终态的连续过程
+- **AND** 页面不会被大量相互独立的“关联不可用”卡片淹没
+
+#### Scenario: Historical fallback is bounded
+
+- **WHEN** 客户端读取旧版本事件且无法建立过程关联
+- **THEN** 客户端将旧事件放入明确的兼容容器并标注关联能力边界
+- **AND** 不把兼容容器内的事件解释为某个候选已通过审核或已发布
+
+### Requirement: Client exposes actionable provider and scope errors
+
+错误摘要 SHALL 优先展示结构化 failure category、provider 状态或工具字段错误、safe message 和下一步提示；原始 payload SHALL 继续以受限、只读方式展开。没有结构化字段时才使用通用 fallback 文本。
+
+#### Scenario: Balance or authorization failure is visible
+
+- **WHEN** provider 返回余额、授权或请求限制类拒绝
+- **THEN** 客户端显示对应的可读原因和 provider 状态
+- **AND** 用户不需要展开原始 JSON 才能知道失败不是图表数据问题
+
+#### Scenario: Source scope validation failure is visible
+
+- **WHEN** 图表工具因 source scope 缺失、不一致或歧义拒绝调用
+- **THEN** 客户端显示具体字段、当前范围和 action hint
+- **AND** 不把该错误显示成无上下文的 render 或 review 失败

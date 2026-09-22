@@ -8,7 +8,7 @@
 
 ### Requirement: Main Agent context uses four explicit layers
 
-主 Agent 的模型上下文 SHALL 明确区分四类信息：静态职责、动态工具、过程产物和 Run/Turn 动态状态。过程产物层 SHALL 包含 observation scope、候选 refs、overlay、质量 warning 和 selected/discarded 决策；Run/Turn 层 SHALL 表示当前可执行动作，而不得把普通测量 warning 自动写成强制 repair 状态。
+主 Agent 上下文 SHALL 保持静态职责、动态工具、过程产物和 Run/Turn 动态状态四层。过程产物 SHALL 包含 observation scope、候选 refs、overlay、质量 warning 和实际使用的 provenance；Run/Turn 层 SHALL 提供当前事实、问题、候选状态和预算，不得把普通测量或审核修复建议表达为代码拥有的业务动作清单。
 
 #### Scenario: Normal chart turn exposes the four layers
 
@@ -127,16 +127,13 @@ linked generation context SHALL 作为结构化动态上下文在适当层注入
 
 ### Requirement: Main prompt defines an explicit evidence decision matrix
 
-静态职责和动态状态 SHALL 要求 Agent 依次判断：任务模式、来源范围、需要代表的系列、
-证据是否足够、是否需要同范围补测，以及是否可以 assemble/render。提示词 SHALL 明确
-工具 warning/remeasure suggestion 不是自动动作；Agent 必须显式选择 selected、discarded
-或 request evidence repair。
+静态职责和动态状态 SHALL 帮助 Agent判断任务模式、来源范围、覆盖目标、证据充分性和可用工具，但 SHALL 将这些内容表达为决策原则和事实，而非必须提交 selected/discarded 状态的流程协议。工具 warning、remeasure suggestion 和 review repair hint SHALL 明确为非自动、非强制建议。
 
 #### Scenario: Warning does not cause an unexplained duplicate measurement
 
-- **WHEN** 一次测量返回 warning 或 remeasure suggestion
-- **THEN** Agent 可以选择接受、舍弃、局部补测或向用户澄清
-- **AND** 未产生显式决策前不会自动再调用测量工具
+- **WHEN** 测量返回 warning 或 remeasure suggestion
+- **THEN** Agent可以采用已有证据、忽略候选、局部补测、改用其他证据或停止
+- **AND** 系统不会自动调用工具，也不要求先写独立 decision 对象
 
 ### Requirement: Review prompt is a separate tool-free contract
 
@@ -152,29 +149,29 @@ review history；不得暴露可调用工具，也不得要求审核 VLM 自行�
 
 ### Requirement: Main Agent receives a compact current decision context
 
-每轮主 Agent prompt SHALL 在现有四层体系中提供一个有界的当前 decision context，至少表达 current unit、phase、status、scope、当前 evidence/candidate 引用、required next action 和剩余预算。该 context SHALL 引用已有结构化事实，不得复制一份会漂移的自然语言任务合同。
+每轮主 Agent prompt SHALL 在现有四层体系中提供有界的当前状态摘要，至少表达当前 scope、可用 evidence/candidate 引用、issues、publication status、恢复状态和剩余预算。摘要 SHALL 引用代码拥有的事实，不得包含普通业务动作的 allowed/blocked action contract；仅不可绕过的授权、结构和发布约束可以标记为硬限制。
 
 #### Scenario: Agent distinguishes focus from observation
 
-- **WHEN** 当前 unit 已应用 focused scope 但尚未获得 observation
-- **THEN** prompt 明确显示 pending observation 和允许的同 scope action
-- **AND** 不把 focus applied 描述为已经获得可组装证据
+- **WHEN** 当前范围已经应用但尚未获得 observation
+- **THEN** prompt 将 focus 和 observation 作为不同事实表达
+- **AND** 不指定模型必须继续同一测量或提交 abandoned 状态
 
 #### Scenario: Agent sees evidence decision lineage
 
-- **WHEN** 当前 attempt 已经有 selected/discarded refs
-- **THEN** prompt 显示 decision status、attempt 和允许的后续 assemble/remeasure action
-- **AND** Agent 不需要从多条重复事件中猜测当前状态
+- **WHEN** 当前 attempt 已有候选 refs 或部分 refs 已被装配使用
+- **THEN** prompt 显示 attempt、scope、refs 和已使用 provenance
+- **AND** Agent不需要维护另一套 selected/discarded lifecycle
 
 ### Requirement: Decision context declares allowed and blocked actions
 
-动态状态层 SHALL 明确列出当前允许、需要显式确认和被阻塞的动作。普通 warning 可以作为可选行动建议；required repair、scope violation、review gate 和 publication status SHALL 作为代码拥有的约束呈现。
+动态状态层 SHALL 只对授权越界、无效来源、非法 ChartSpec、失败候选发布、terminal 状态和预算耗尽声明硬性阻止。对测量选择、修复工具、局部补测、ChartSpec 调整或来源恢复的建议 SHALL 作为可选 `repair_hint` 或 issue 表达，不得形成普通业务动作白名单。
 
 #### Scenario: Required evidence repair is explicit
 
-- **WHEN** generated review 要求同一 panel 的 evidence repair
-- **THEN** prompt 显示 same-scope measurement 为允许或必需动作，并阻止跨 panel、直接 assemble 或 publication
-- **AND** Agent 可以显式选择完成、放弃或进入 terminal recovery
+- **WHEN** generated review 失败但仍有预算
+- **THEN** prompt 明确当前候选不可发布并显示 issues 与建议
+- **AND** Agent可以在授权范围内自主选择修复动作
 
 #### Scenario: Prompt does not turn a warning into an automatic loop
 
@@ -184,10 +181,10 @@ review history；不得暴露可调用工具，也不得要求审核 VLM 自行�
 
 ### Requirement: Prompt context remains aligned with the timeline projection
 
-主 Agent prompt 使用的 decision context 与客户端 timeline 使用相同的 unit、phase、attempt 和 status 标识。提示词 SHALL 不把 review snapshot 或原始工具结果快照当成新的决策转换。
+主 Agent prompt 与客户端时间线 SHALL 共享 run、candidate、attempt、scope 和 publication 身份，但两者无需共享模型内部下一动作状态。内部 decision、repair phase 和 subcheck 事件可以保留在 trace；默认客户端和模型上下文 SHALL 分别投影为适合其用途的事实摘要。
 
 #### Scenario: Model and client agree on the next action
 
-- **WHEN** timeline 显示当前 unit 等待证据选择
-- **THEN** prompt 显示相同的 pending unit 和 allowed decision actions
-- **AND** 模型输出的后续工具调用可以通过同一 transition 关联回 timeline
+- **WHEN** 同一 candidate 正在审核或修复
+- **THEN** prompt 与客户端引用相同 candidate/review 身份和最终状态
+- **AND** 客户端无需显示模型的候选动作，模型也无需遵循 UI projection 的步骤容器

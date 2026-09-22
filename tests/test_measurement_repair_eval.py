@@ -251,13 +251,8 @@ def test_each_chart_family_completes_targeted_repair_and_assembly(sample: dict):
         if isinstance(item, dict) and item.get("bbox_px")
     ]
     gated, gate_error = measurement_gate(accepted.reference(), sessions)
-    if selected_refs:
-        assert gated is None
-        assert gate_error is not None
-        assert gate_error["code"] == "measurement_decision_required"
-    else:
-        assert gate_error is None
-        assert gated is not None and gated["attempt_id"] == accepted.attempt_id
+    assert gate_error is None
+    assert gated is not None and gated["attempt_id"] == accepted.attempt_id
     assembly_kwargs = dict(
         chart_type=chart_type,
         points=_points(chart_type),
@@ -268,17 +263,12 @@ def test_each_chart_family_completes_targeted_repair_and_assembly(sample: dict):
         _measurement_context=sessions,
     )
     if selected_refs:
-        assembly_kwargs["measurement_decision"] = {
-            "session_id": accepted.session_id,
-            "attempt_id": accepted.attempt_id,
-            "selected_refs": selected_refs,
-            "discarded_refs": [],
-        }
+        assembly_kwargs["evidence_refs"] = selected_refs
     assembly = assemble_spec(**assembly_kwargs)
     assert "error" not in assembly
     assert assembly["provenance"]["status"] == "accepted"
     if selected_refs:
-        assert assembly["provenance"]["selected_refs"] == selected_refs
+        assert assembly["provenance"]["evidence_refs"] == selected_refs
 
 
 def test_eval_metrics_compare_initial_and_targeted_repair_states():
@@ -504,6 +494,9 @@ def test_checkpoint_restores_pending_lineage_and_accepted_attempt():
     assert restored_session.accepted_attempt().parent_attempt_id == parent
     assert state["pendingMeasurementRepair"]["decision_status"] == "pending"
     assert state["pendingMeasurementRepair"]["attempt_id"] == restored_session.current_attempt_id
+    # A pending diagnostic decision is reusable context, not a recovery action
+    # that forces another measurement before the model can continue.
+    assert Agent._recovery_tool_calls({"nextAction": "model", **state}) == []
 
 
 def test_direct_assembly_without_measurement_session_keeps_legacy_path():

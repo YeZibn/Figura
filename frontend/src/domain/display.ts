@@ -62,8 +62,28 @@ export function chartTypeLabel(value: string): string {
 }
 
 export function eventLabel(event: AgentRunEvent): string {
-  const labels: Record<string, string> = { run_started: '运行已开始', resume_started: '继续执行已开始', model_started: '模型轮次开始', model_completed: '模型轮次完成', operation_completed: '操作结果已保存', recovery_blocked: '继续执行被阻止', progress: '处理中', generated_chart: '图表状态已更新', chart_review_started: '图表审核已开始', chart_review_required: '等待图表审核', chart_review_repair_required: '正在修复并重新审核', generated_chart_published: '图表已发布', generated_chart_rejected: '图表未发布', chart_review_completed: '图表审核完成', measurement_observed: '测量候选已观察', measurement_repair_required: '需要定向补充', measurement_repair_rejected: '定向补充被拒绝', measurement_repair_exhausted: '定向补充次数已用尽', measurement_decision_required: '等待主 Agent 选择测量证据', measurement_focus_requested: '已请求局部测量', measurement_focus_applied: '局部测量范围已应用', measurement_focus_failed: '局部测量未获得足够证据', measurement_evidence_selected: '测量证据选择已记录', measurement_evidence_discarded: '测量候选已舍弃', assembly_validation_failure: 'ChartSpec 组装校验失败', review_started: '审核已开始', review_completed: '审核已通过', review_repair_required: '审核要求修复', review_failed: '审核未通过', review_gate_required: '主链路已暂停', review_gate_updated: '审核门禁状态已更新', tool_skipped: '工具未开始执行', final_answer: '最终回答已生成', budget_exhausted: '达到预算上限', run_failed: '运行失败', run_interrupted: '运行已中断', history_gap: '历史记录不完整', tool_result: '工具结果（历史记录不完整）' }
+  const labels: Record<string, string> = { run_started: '运行已开始', resume_started: '继续执行已开始', model_started: '模型轮次开始', model_completed: '模型轮次完成', operation_completed: '操作结果已保存', recovery_blocked: '继续执行被阻止', progress: '处理中', generated_chart: '图表状态已更新', chart_review_started: '图表审核已开始', chart_review_required: '等待图表审核', chart_review_repair_required: '正在修复并重新审核', generated_chart_published: '图表已发布', generated_chart_rejected: '图表未发布', chart_review_completed: '图表审核完成', measurement_observed: '测量结果已记录', measurement_repair_required: '需要定向补充', measurement_repair_rejected: '定向补充被拒绝', measurement_repair_exhausted: '定向补充次数已用尽', measurement_decision_required: '测量证据状态已记录', measurement_focus_requested: '局部测量已请求', measurement_focus_applied: '局部测量范围已应用', measurement_focus_failed: '局部测量未获得足够证据', measurement_evidence_selected: '测量证据选择已记录', measurement_evidence_discarded: '测量候选已舍弃', measurement_evidence_used: '实际采用的测量证据已记录', assembly_validation_failure: 'ChartSpec 组装校验失败', review_started: '审核已开始', review_completed: '审核已通过', review_repair_required: '审核要求修复', review_failed: '审核未通过', review_gate_required: '主链路已暂停', review_gate_updated: '审核状态已更新', tool_skipped: '工具未开始执行', final_answer: '最终回答已生成', budget_exhausted: '达到预算上限', run_failed: '运行失败', run_interrupted: '运行已中断', history_gap: '历史记录不完整', tool_result: '工具结果（历史记录不完整）' }
   return labels[event.kind] || event.kind
+}
+
+export function failureCategoryLabel(value?: string): string {
+  return ({
+    provider_balance: 'Provider 余额不足',
+    provider_authorization: 'Provider 鉴权失败',
+    provider_rate_limit: 'Provider 请求受限',
+    provider_rate_limited: 'Provider 请求受限',
+    provider_request: 'Provider 请求被拒绝',
+    provider_request_rejected: 'Provider 请求被拒绝',
+    provider_transient: 'Provider 临时故障',
+    provider_failure: 'Provider 请求失败',
+    transport_uncertain: '远端结果未知',
+    operation_outcome_uncertain: '操作结果未知',
+    source_scope: '源图范围错误',
+    measurement_evidence: '测量证据错误',
+    assembly_validation: '图表组装校验失败',
+    review_terminal: '审核终态失败',
+    tool_rejected: '工具拒绝执行',
+  } as Record<string, string>)[value || ''] || value || '执行失败'
 }
 
 export function gatewayStatusText(mode: 'mock' | 'gateway', runtimeStatus: GatewayRuntimeStatus | null, health: GatewayHealth | null): string {
@@ -102,8 +122,8 @@ export function evaluationDetailEntryLabel(entry: EvaluationDetailEntry): string
   if (entry.kind === 'tool_message') return '模型可见工具消息'
   if (entry.kind === 'tool_call') return entry.toolLabel || entry.toolName || '工具调用'
   if (entry.kind === 'tool_result') return (entry.toolLabel || entry.toolName || '工具') + ' · 工具结果'
-  if (entry.kind === 'repair' || entry.kind.startsWith('measurement_repair') || entry.kind.startsWith('measurement_')) return '测量证据决策信息'
-  if (entry.kind.startsWith('review') || entry.kind.startsWith('chart_review')) return '审核门禁信息'
+  if (entry.kind === 'repair' || entry.kind.startsWith('measurement_repair') || entry.kind.startsWith('measurement_')) return '测量证据诊断信息'
+  if (entry.kind.startsWith('review') || entry.kind.startsWith('chart_review')) return '审核诊断信息'
   if (entry.kind === 'visual_observation') return '视觉观察'
   if (entry.kind === 'generated_chart') return '生成结果'
   return entry.kind || '运行记录'

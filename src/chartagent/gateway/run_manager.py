@@ -157,6 +157,12 @@ class RunManager:
                 "code": "worker_error",
                 "reason": "worker_submit_failed",
                 "message": "Agent worker could not be started",
+                "failure_category": "worker_startup",
+                "failure_code": "worker_error",
+                "safe_message": "Agent worker could not be started",
+                "retryable": True,
+                "outcome_known": True,
+                "first_failure_ref": {"kind": "run_failed", "stage": "startup"},
             })
             run.fail("worker_error", 503, "Agent worker could not be started", "worker_submit_failed")
             return run

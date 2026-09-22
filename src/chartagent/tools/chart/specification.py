@@ -26,6 +26,7 @@ from ...spec import (
     MAX_FIGURE_COLUMNS,
     ValidationIssue,
     generation_context_schema,
+    normalize_generation_context,
 )
 from ...measurement import MeasurementSession, measurement_gate, normalize_evidence_refs
 from ..core.definition import Tool
@@ -56,6 +57,8 @@ def _measurement_gate_error(gate: Mapping[str, Any], location: str) -> dict[str,
             "issues",
             "repair_action",
             "available_refs",
+            "missing_refs",
+            "evidence_refs",
             "selected_refs",
             "discarded_refs",
             "decision_status",
@@ -74,11 +77,20 @@ def _measurement_gate_error(gate: Mapping[str, Any], location: str) -> dict[str,
     }
 
 
-def _generation_context_error(value: object, location: str) -> dict[str, Any] | None:
+def _generation_context_error(
+    value: object,
+    location: str,
+    *,
+    source_scope_hint: Mapping[str, Any] | None = None,
+) -> dict[str, Any] | None:
     """Normalize and validate one model-provided generation context."""
     if value is None:
         return None
-    context = value if isinstance(value, GenerationContext) else GenerationContext.from_dict(value)
+    context = (
+        value
+        if isinstance(value, GenerationContext)
+        else normalize_generation_context(value, source_scope_hint=source_scope_hint)
+    )
     if context is None:
         return _assembly_error("generation_context must be a structured object", location)
     issues = context.validate(location)
@@ -93,10 +105,29 @@ def _generation_context_error(value: object, location: str) -> dict[str, Any] | 
     return None
 
 
-def _normalized_generation_context(value: object) -> GenerationContext | None:
+def _normalized_generation_context(
+    value: object,
+    *,
+    source_scope_hint: Mapping[str, Any] | None = None,
+) -> GenerationContext | None:
     if isinstance(value, GenerationContext):
         return value
-    return GenerationContext.from_dict(value)
+    return normalize_generation_context(value, source_scope_hint=source_scope_hint)
+
+
+def _source_scope_hint(
+    expected_source: FigureSource | None,
+    measurement_ref: Mapping[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    source = expected_source
+    if source is not None:
+        return {"attachment_id": source.attachment_id, "panel_ids": [source.panel_id]}
+    if isinstance(measurement_ref, Mapping):
+        attachment_id = measurement_ref.get("attachment_id")
+        panel_id = measurement_ref.get("panel_id")
+        if isinstance(attachment_id, str) and attachment_id.strip() and isinstance(panel_id, str) and panel_id.strip():
+            return {"attachment_id": attachment_id, "panel_ids": [panel_id]}
+    return None
 
 
 def _context_scope_mismatch(
@@ -252,6 +283,7 @@ def _assemble_single_spec(
     source: str | None = None,
     x_categories: list[str] | None = None,
     measurement_ref: Mapping[str, Any] | None = None,
+    evidence_refs: object | None = None,
     measurement_decision: Mapping[str, Any] | None = None,
     measurement_context: Mapping[str, Any] | None = None,
     generation_context: GenerationContext | Mapping[str, Any] | None = None,
@@ -264,10 +296,17 @@ def _assemble_single_spec(
     except (TypeError, ValueError):
         return _assembly_error(f"unknown chart_type: {chart_type!r}", "chart_type")
 
-    context_error = _generation_context_error(generation_context, "generation_context")
+    context_error = _generation_context_error(
+        generation_context,
+        "generation_context",
+        source_scope_hint=_source_scope_hint(expected_source, measurement_ref),
+    )
     if context_error is not None:
         return context_error
-    context = _normalized_generation_context(generation_context)
+    context = _normalized_generation_context(
+        generation_context,
+        source_scope_hint=_source_scope_hint(expected_source, measurement_ref),
+    )
     if context is not None:
         scope_error = _context_scope_mismatch(
             context,
@@ -280,8 +319,32 @@ def _assemble_single_spec(
 
     if not isinstance(points, list) or not points:
         return _assembly_error("points must be a non-empty array", "points")
+    if evidence_refs is not None and measurement_ref is None:
+        return _assembly_error(
+            "evidence_refs requires the matching server-issued measurement_ref",
+            f"{location}.evidence_refs",
+        )
 
     provenance = None
+    legacy_selected_refs = (
+        normalize_evidence_refs(
+            measurement_decision.get("selected_refs") or measurement_decision.get("refs")
+        )
+        if isinstance(measurement_decision, Mapping)
+        else ()
+    )
+    resolved_evidence_refs = evidence_refs
+    if evidence_refs is not None and legacy_selected_refs:
+        normalized_evidence_refs = normalize_evidence_refs(evidence_refs)
+        if normalized_evidence_refs != legacy_selected_refs:
+            return _assembly_error(
+                "evidence_refs conflicts with legacy measurement_decision.selected_refs",
+                f"{location}.evidence_refs",
+            )
+        resolved_evidence_refs = normalized_evidence_refs
+    elif evidence_refs is None and legacy_selected_refs:
+        resolved_evidence_refs = legacy_selected_refs
+
     decision_payload, decision_error = _record_measurement_decision(
         measurement_decision,
         measurement_ref=measurement_ref,
@@ -290,10 +353,12 @@ def _assemble_single_spec(
     )
     if decision_error is not None:
         return _measurement_gate_error(decision_error, location)
+
     if measurement_ref is not None:
         provenance, gate_error = measurement_gate(
             measurement_ref,
             measurement_context,
+            evidence_refs=resolved_evidence_refs,
             expected_attachment_id=expected_source.attachment_id if expected_source else None,
             expected_panel_id=(
                 expected_source.panel_id
@@ -364,6 +429,8 @@ def _assemble_single_spec(
         chart_spec.provenance["series_map"] = decision_payload["series_map"]
         chart_spec.provenance["evidence_basis"] = decision_payload["evidence_basis"]
         chart_spec.provenance["observation_scope"] = provenance.get("observation_scope")
+    elif isinstance(chart_spec.provenance, dict) and isinstance(provenance, Mapping):
+        chart_spec.provenance["evidence_refs"] = list(provenance.get("evidence_refs") or [])
     validation = validate_generation(chart_spec)
     if validation.blocking:
         issues = validation.legacy_issues()
@@ -376,15 +443,7 @@ def _assemble_single_spec(
     if decision_payload is not None:
         assembled["_measurement_decision"] = decision_payload
     elif measurement_ref is not None and isinstance(provenance, Mapping):
-        assembled["_measurement_decision"] = {
-            "session_id": provenance.get("session_id"),
-            "attempt_id": provenance.get("attempt_id"),
-            "selected_refs": list(provenance.get("selected_refs") or []),
-            "discarded_refs": list(provenance.get("discarded_refs") or []),
-            "decision_status": str(provenance.get("decision_status") or "legacy_accepted"),
-            "series_map": dict(provenance.get("series_map") or {}) if isinstance(provenance.get("series_map"), Mapping) else {},
-            "evidence_basis": provenance.get("evidence_basis"),
-        }
+        assembled["_evidence_refs"] = list(provenance.get("evidence_refs") or [])
     return assembled
 
 
@@ -413,6 +472,7 @@ def _figure_child_input(
         "x_categories": child.get("x_categories"),
         "source": child.get("source"),
         "measurement_ref": child.get("measurement_ref"),
+        "evidence_refs": child.get("evidence_refs"),
         "measurement_decision": child.get("measurement_decision"),
         "generation_context": child.get("generation_context", inherited_context),
     }
@@ -445,14 +505,16 @@ def _figure_measurement_decisions(
             continue
         if session.current_attempt_id != attempt_id:
             continue
-        selected = list(session.selected_refs)
+        explicit_refs = child.get("evidence_refs")
+        selected = list(normalize_evidence_refs(explicit_refs)) if explicit_refs is not None else list(session.selected_refs)
         discarded = list(session.discarded_refs)
-        decision_status = "legacy_accepted"
+        decision_status = "inferred" if explicit_refs is not None else "legacy_accepted"
         series_map: dict[str, Any] = {}
         evidence_basis = None
         if isinstance(decision, Mapping):
-            selected = list(normalize_evidence_refs(decision.get("selected_refs") or decision.get("refs")))
-            discarded = list(normalize_evidence_refs(decision.get("discarded_refs")))
+            if explicit_refs is None:
+                selected = list(normalize_evidence_refs(decision.get("selected_refs") or decision.get("refs")))
+                discarded = list(normalize_evidence_refs(decision.get("discarded_refs")))
             decision_status = str(decision.get("status") or decision.get("decision_status") or session.decision_status or "selected")[:32]
             series_map = dict(decision.get("series_map") or {}) if isinstance(decision.get("series_map"), Mapping) else {}
             evidence_basis = str(decision.get("evidence_basis") or "")[:80] or None
@@ -483,10 +545,17 @@ def _assemble_figure(
         return _collection_error("figure source must include attachment_id and panel_id", f"{location}.source")
     source = FigureSource.from_dict(source_raw)
     raw_context = figure.get("generation_context")
-    context_error = _generation_context_error(raw_context, f"{location}.generation_context")
+    context_error = _generation_context_error(
+        raw_context,
+        f"{location}.generation_context",
+        source_scope_hint=_source_scope_hint(source),
+    )
     if context_error is not None:
         return context_error
-    generation_context = _normalized_generation_context(raw_context)
+    generation_context = _normalized_generation_context(
+        raw_context,
+        source_scope_hint=_source_scope_hint(source),
+    )
     if generation_context is not None:
         scope_error = _context_scope_mismatch(
             generation_context,
@@ -604,6 +673,7 @@ def assemble_spec(
     source: str | None = None,
     x_categories: list[str] | None = None,
     measurement_ref: dict[str, Any] | None = None,
+    evidence_refs: list[str] | None = None,
     measurement_decision: dict[str, Any] | None = None,
     generation_context: dict[str, Any] | None = None,
     *,
@@ -669,6 +739,7 @@ def assemble_spec(
         source,
         x_categories=x_categories,
         measurement_ref=measurement_ref,
+        evidence_refs=evidence_refs,
         measurement_decision=measurement_decision,
         measurement_context=_measurement_context,
         generation_context=generation_context,
@@ -752,9 +823,9 @@ MEASUREMENT_DECISION_SCHEMA = {
     "properties": {
         "session_id": {"type": "string", "description": "当前 measurement.reference 的 session_id；可省略并从 measurement_ref 继承。"},
         "attempt_id": {"type": "string", "description": "当前 measurement.reference 的 attempt_id；可省略并从 measurement_ref 继承。"},
-        "status": {"type": "string", "enum": ["selected", "discarded", "abandoned"], "description": "主 Agent 对当前测量证据的明确决策。"},
-        "selected_refs": {"type": "array", "items": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9]{0,15}$"}, "maxItems": 64, "description": "主 Agent 明确选择用于当前 ChartSpec 的证据引用；discarded/abandoned 可以为空。"},
-        "discarded_refs": {"type": "array", "items": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9]{0,15}$"}, "maxItems": 64, "description": "主 Agent 明确舍弃的当前 attempt 证据引用。"},
+        "status": {"type": "string", "enum": ["selected", "discarded", "abandoned"], "description": "兼容旧调用的显式证据决策；新调用优先直接使用 evidence_refs。"},
+        "selected_refs": {"type": "array", "items": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9]{0,15}$"}, "maxItems": 64, "description": "兼容旧调用的证据引用；新调用使用同级 evidence_refs。"},
+        "discarded_refs": {"type": "array", "items": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9]{0,15}$"}, "maxItems": 64, "description": "兼容旧调用的舍弃引用，不是新流程的必填生命周期。"},
         "series_map": {"type": "object", "additionalProperties": {"type": "string"}, "maxProperties": 32, "description": "可选的稳定系列身份映射，例如 series_1 到图例名称。"},
         "evidence_basis": {"type": ["string", "null"], "maxLength": 80, "description": "简短说明本次选择依据。"},
     },
@@ -765,16 +836,17 @@ MEASUREMENT_DECISION_SCHEMA = {
 MEASUREMENT_PROVENANCE_SCHEMA = {
     "type": "object",
     "properties": {
-        "status": {"type": "string", "enum": ["accepted", "selected", "discarded", "abandoned", "provisional", "partial"], "description": "Code-owned measurement decision/provenance status."},
+        "status": {"type": "string", "enum": ["accepted", "inferred", "selected", "discarded", "abandoned", "provisional", "partial"], "description": "代码拥有的测量来源事实；inferred 表示本次只校验了实际传入的 evidence_refs。"},
         "session_id": {"type": "string", "description": "Measurement session identity."},
         "attempt_id": {"type": "string", "description": "Accepted measurement attempt identity."},
         "attachment_id": {"type": "string", "description": "Source attachment identity."},
         "panel_id": {"type": ["string", "null"], "description": "Source panel identity."},
         "tool": {"type": "string", "description": "Measurement tool that produced the accepted evidence."},
         "quality": {"type": "object", "additionalProperties": True, "description": "Bounded quality summary retained for downstream audit."},
-        "selected_refs": {"type": "array", "items": {"type": "string"}, "maxItems": 64},
-        "discarded_refs": {"type": "array", "items": {"type": "string"}, "maxItems": 64},
-        "decision_status": {"type": "string", "maxLength": 32},
+        "evidence_refs": {"type": "array", "items": {"type": "string"}, "maxItems": 64, "description": "Evidence refs actually used by the assembled ChartSpec."},
+        "selected_refs": {"type": "array", "items": {"type": "string"}, "maxItems": 64, "description": "旧 provenance 的兼容字段。"},
+        "discarded_refs": {"type": "array", "items": {"type": "string"}, "maxItems": 64, "description": "旧 provenance 的兼容字段。"},
+        "decision_status": {"type": "string", "maxLength": 32, "description": "旧 provenance 的兼容字段，不是新的组装门禁。"},
         "series_map": {"type": "object", "additionalProperties": {"type": "string"}, "maxProperties": 32},
         "evidence_basis": {"type": ["string", "null"], "maxLength": 80},
         "observation_scope": {"type": "object", "additionalProperties": True, "description": "首次观察实际应用的 panel 范围；由服务端保留。"},
@@ -799,7 +871,7 @@ CHART_SPEC_SCHEMA = {
         },
         "axes": {"oneOf": [AXES_SCHEMA, {"type": "null"}], "description": "Cartesian x/y axes; omit or use null only for pie charts."},
         "dataset": {"type": "array", "items": POINT_SCHEMA, "minItems": 1, "maxItems": MAX_GENERATION_POINTS, "description": "Ordered typed data points; point shape must match the selected chart type."},
-        "provenance": {**MEASUREMENT_PROVENANCE_SCHEMA, "description": "Optional code-owned measurement provenance and model decision."},
+        "provenance": {**MEASUREMENT_PROVENANCE_SCHEMA, "description": "Optional code-owned measurement provenance; evidence_refs only records refs actually used by this ChartSpec."},
         "generation_context": generation_context_schema(),
     },
     "required": ["metadata", "dataset"],
@@ -842,7 +914,8 @@ FIGURE_CHILD_INPUT_SCHEMA = {
         "points": {"type": "array", "items": POINT_SCHEMA, "minItems": 1, "maxItems": MAX_GENERATION_POINTS, "description": "Child chart data points."},
         "source": {"type": ["string", "null"], "maxLength": MAX_GENERATION_LABEL_LENGTH, "description": "Optional child provenance label."},
         "measurement_ref": {**MEASUREMENT_REF_SCHEMA, "description": "Optional server-issued measurement reference for this child chart."},
-        "measurement_decision": {**MEASUREMENT_DECISION_SCHEMA, "description": "主 Agent 对当前 child 的证据选择；可以选择、舍弃或放弃当前 attempt。"},
+        "evidence_refs": {"type": "array", "items": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9]{0,15}$"}, "maxItems": 64, "description": "模型实际用于当前 child 的测量证据引用；必须来自 measurement_ref 对应 attempt。"},
+        "measurement_decision": {**MEASUREMENT_DECISION_SCHEMA, "description": "兼容旧 child 输入；新 child 直接传实际采用的 evidence_refs。"},
         "generation_context": generation_context_schema(),
     },
     "required": ["chart_id", "chart_type", "points"],
@@ -876,8 +949,8 @@ ASSEMBLE_SPEC = Tool(
     description=(
         "根据已收集的证据原子地组装并校验 ChartSpec、同源 ChartFigure 或多来源 ChartSpecCollection。"
         "单图使用 chart_type 和 points；同源多子图使用 figure，必须提供 attachment_id、panel_id、coverage 和独立 charts；不同来源使用 figures。"
-        "source-linked 任务应同时传入 generation_context，明确 mode、source_scope、coverage basis、represented/omitted series 和 selection_basis；服务端会拒绝跨 panel 或静默省略。"
-        "若使用测量结果，必须原样传入当前观察返回的 measurement_ref，并在有 evidence.refs 时提供 measurement_decision.selected_refs；服务端会校验来源、attempt 和引用选择。不要把 S1、series_1 等证据引用当成最终系列名称。"
+        "source-linked 任务应传入 generation_context，明确 mode、coverage basis、represented/omitted series 和 selection_basis；优先提供 source_scope，若当前 attachment/panel 唯一且已授权，服务端只会在该范围内安全绑定，否则拒绝歧义或跨 panel 请求。"
+        "若使用测量结果，必须原样传入当前观察返回的 measurement_ref，并可用同级 evidence_refs 提供实际使用的候选引用；服务端会校验来源、attempt 和引用。旧 measurement_decision 仅为兼容字段。不要把 S1、series_1 等证据引用当成最终系列名称。"
     ),
     parameters={
         "type": "object",
@@ -894,7 +967,8 @@ ASSEMBLE_SPEC = Tool(
             "source": {"type": ["string", "null"], "maxLength": MAX_GENERATION_LABEL_LENGTH, "description": "单图可选来源标签；不授权访问本地路径。"},
             "x_categories": {"type": "array", "items": {"type": "string"}, "maxItems": MAX_GENERATION_POINTS, "description": "可选的有序横轴类别标签；line/scatter 必须保留源 panel 中已确认的类别文本，例如 Jan、Feb、Mar。"},
         "measurement_ref": {**MEASUREMENT_REF_SCHEMA, "description": "可选的服务端测量引用；服务端校验其来源、attempt 和当前 run 的证据状态。"},
-        "measurement_decision": {**MEASUREMENT_DECISION_SCHEMA, "description": "根据当前 attempt 的 overlay 与 evidence.refs 做出的选择；可以 selected、discarded 或 abandoned。"},
+        "evidence_refs": {"type": "array", "items": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9]{0,15}$"}, "maxItems": 64, "description": "模型实际用于当前 ChartSpec 的测量证据引用；必须来自 measurement_ref 对应 attempt。"},
+        "measurement_decision": {**MEASUREMENT_DECISION_SCHEMA, "description": "兼容旧输入；新输入直接传 measurement_ref + evidence_refs，未采用候选无需单独记录。"},
         "generation_context": {**generation_context_schema(), "description": "source-linked 单图的任务合同；必须与 measurement_ref 的 attachment/panel 和 coverage 语义一致。"},
         "figure": {**FIGURE_INPUT_SCHEMA, "description": "同一 attachment_id + panel_id 下的多个独立子图及其 coverage。"},
             "figures": {"type": "array", "items": FIGURE_INPUT_SCHEMA, "minItems": 1, "maxItems": MAX_COLLECTION_FIGURES, "description": "来自多个 panel 的有序 figure 列表；不同来源不会自动合并。"},

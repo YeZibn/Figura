@@ -418,13 +418,20 @@ uncertain provider, tool, rendering, review, or publication operation.
 
 ### Requirement: Recoverable review failures return to the main Agent
 
-当生成候选的审核失败且仍有重试预算时，Agent loop SHALL 收到结构化审核诊断并继续运行。对于语义或渲染问题，主 Agent SHALL 能够提交修正后的 ChartSpec 并生成新候选；对于源绑定问题，流程 SHALL 优先修复源上下文。
+当生成候选的审核失败且仍有重试预算时，Agent loop SHALL 将结构化审核诊断、候选身份、来源范围和剩余预算返回主 Agent。主 Agent SHALL 能够根据问题自主选择修正 ChartSpec、补充观察、局部测量、恢复来源绑定或停止；系统 SHALL NOT 仅因 `repair_kind` 将后续工具调用限定为一条固定阶段链。任何修复产生的新候选仍 SHALL 重新审核。
 
-#### Scenario: Semantic failure triggers a corrected candidate
+#### Scenario: Semantic failure triggers a model-selected correction
 
 - **WHEN** VLM review 拒绝候选并返回具体语义问题
-- **THEN** 主 Agent 收到该问题而不是立即得到最终失败答复
-- **AND** 主 Agent 可以 assemble 新 ChartSpec、render 新候选并进入下一次审核
+- **THEN** 主 Agent 收到问题、候选身份、来源范围和剩余预算
+- **AND** 主 Agent 可以选择适用的授权工具或直接修正 ChartSpec
+- **AND** 新候选重新进入生成审核
+
+#### Scenario: Repair hint does not become a tool whitelist
+
+- **WHEN** 审核将问题分类为 `spec_only`、`evidence_needed` 或 `source_rebind`
+- **THEN** 该分类作为诊断和修复建议返回
+- **AND** 系统不因该分类拒绝同一任务范围内其他合法工具调用
 
 ### Requirement: Exhausted review recovery terminates explicitly
 
@@ -438,25 +445,25 @@ uncertain provider, tool, rendering, review, or publication operation.
 
 ### Requirement: Agent keeps measurement evidence decisions bounded
 
-Agent loop SHALL 将测量返回的 observation scope、evidence refs、issues、focus suggestion、attempt lineage 和主 Agent 的选择结果作为有界的模型上下文保存。多个 measurement session 的上下文 SHALL 保持来源、面板和 attempt 边界；主 Agent 的显式局部补充、重复目标拒绝、舍弃和预算耗尽 SHALL 以结构化状态反馈，但不得隐式创建全量重测或独占主链路。
+Agent loop SHALL 将 measurement observation 的 scope、evidence refs、issues、overlay、attempt lineage 和实际被下游引用的 refs 作为有界上下文保存。多个 measurement session SHALL 保持来源、面板和 attempt 边界；系统 SHALL NOT 要求主 Agent先创建独立 selected/discarded/abandoned decision unit 才能调用 `assemble_spec`。
 
-#### Scenario: Observation returns decision context to the model
+#### Scenario: Observation returns evidence facts to the model
 
 - **WHEN** 测量工具返回候选、warning 或局部结果
-- **THEN** Agent 将结构化问题、evidence refs、overlay、scope 和下一动作交给模型
-- **AND** 系统不要求模型先通过独立 measurement review 才能继续观察
+- **THEN** Agent 将结构化问题、refs、overlay、scope 和非强制建议交给模型
+- **AND** 上下文不包含替模型规定普通业务动作的 allowed/blocked action contract
 
 #### Scenario: Multiple measurements retain independent evidence contexts
 
-- **WHEN** 同一个 assistant 工具批次中的多个测量结果分别绑定不同的 panel 或 measurement session
-- **THEN** Agent 保留每个 measurement session 的 attachment、panel、attempt、父 attempt、证据引用和选择状态
-- **AND** 任何一个 session 的结果都不会因为另一个结果后到达而被覆盖
+- **WHEN** 同一个 assistant 工具批次中的多个测量结果分别绑定不同 panel 或 session
+- **THEN** Agent 保留每个 session 的 attachment、panel、attempt、父 attempt 和证据引用
+- **AND** 任一 session 都不会因另一个结果后到达而被覆盖
 
-#### Scenario: Measurement target exhaustion remains bounded
+#### Scenario: Used evidence is derived from the assembly request
 
-- **WHEN** 主 Agent 重复提交相同 target、来源身份失配或超过局部补充次数上限
-- **THEN** Agent 停止该补充分支并保留可恢复的 checkpoint、失败原因和 lineage
-- **AND** 其他合法观察或直接视觉路径不被错误标记为生成审核失败
+- **WHEN** 主 Agent 在 `assemble_spec` 中引用当前 attempt 的部分 refs
+- **THEN** 系统将这些 refs 记录为本次装配实际使用的 provenance
+- **AND** 未引用候选无需逐项生成 discarded decision
 
 ### Requirement: Measurement repair remains compatible with direct assembly
 
@@ -476,31 +483,53 @@ Agent loop SHALL 将测量返回的 observation scope、evidence refs、issues�
 
 ### Requirement: Main-chain measurement decisions are model-led
 
-主 Agent SHALL 在同一主链路中消费测量工具返回的结构化结果、稳定证据引用、overlay、观察范围和质量警告，并自主决定选择候选、舍弃误检、映射语义、请求局部补充或停止。系统不得通过独立测量审核器替主 Agent 作出语义选择。
+主 Agent SHALL 在同一主链路中消费测量工具结果并自主决定使用哪些候选、忽略哪些误检、映射语义、请求局部补充或改用直接视觉理解。系统 SHALL 通过工具输入和实际 evidence refs 记录可追踪事实，不得要求模型维护额外的 measurement decision 状态机，也不得通过独立测量审核器替模型作出语义选择。
 
-#### Scenario: Main Agent accepts a usable observation
+#### Scenario: Main Agent uses a candidate subset
 
-- **WHEN** 测量工具返回候选结果且主 Agent 判断现有证据足以支持目标图表
-- **THEN** 主 Agent 可以提交 selected/discarded refs 和语义映射到 `assemble_spec`
-- **AND** 系统不自动发起额外测量
+- **WHEN** 测量工具返回的部分候选足以支持目标图表
+- **THEN** 主 Agent可以只把实际使用的 refs 传给 `assemble_spec`
+- **AND** 系统验证这些 refs 后继续，不要求提交 discarded refs
 
 #### Scenario: Main Agent requests an initial scoped observation
 
-- **WHEN** 主 Agent 在第一次测量前能够判断 plot 或 legend 的大致范围
+- **WHEN** 主 Agent 能够判断 plot 或 legend 的大致范围
 - **THEN** 主 Agent 可以提交 `observation_scope`
-- **AND** 该调用不要求先存在父 attempt
+- **AND** 该调用不要求父 attempt 或预先登记的 decision
 
 #### Scenario: Main Agent requests focused evidence
 
-- **WHEN** 主 Agent 发现某个候选、系列、基准线或局部区域仍不确定
-- **THEN** 主 Agent 可以再次调用对应的原测量工具并提供 `measurement_target`
-- **AND** 该工具调用被记录为新的有父级关系的 measurement attempt
+- **WHEN** 主 Agent判断某个候选、系列、基准线或区域仍不确定
+- **THEN** 主 Agent可以调用对应测量工具并提供 `measurement_target`
+- **AND** 该调用创建有父级关系的新 attempt，但不锁定后续修复工具顺序
 
-#### Scenario: Main Agent discards a false candidate
+#### Scenario: Main Agent ignores a false candidate
 
-- **WHEN** 主 Agent 根据证据引用和源图像判断某个候选是图例、文字或其他误检
-- **THEN** 主 Agent 可以在装配请求中排除该引用
-- **AND** 系统不得因为该候选存在 warning 而自动重测整个 panel
+- **WHEN** 主 Agent判断某个候选是图例、文字或其他误检
+- **THEN** 主 Agent可以不在装配输入中引用该候选
+- **AND** 系统不要求单独提交舍弃状态，也不自动重测整个 panel
+
+### Requirement: Assembly validates actual evidence use without a separate decision envelope
+
+主循环 SHALL 允许 `assemble_spec` 通过 `measurement_ref + evidence_refs` 直接接收模型实际采用的 measurement refs，或接收不带 measurement provenance 的合法视觉输入。系统 SHALL 对被引用证据执行 session、attachment、panel、attempt、范围、引用和必要结构校验；只有非法引用或无效 ChartSpec 可以阻止当前组装，缺少独立 `measurement_decision` 不得成为阻断原因。
+
+#### Scenario: Referenced evidence is valid
+
+- **WHEN** 主 Agent提交属于当前来源和 attempt 的合法 evidence refs
+- **THEN** 组装继续并保存实际使用的 provenance
+- **AND** 同一 observation 中未引用的候选不会阻塞组装
+
+#### Scenario: Referenced evidence is invalid
+
+- **WHEN** 主 Agent提交不存在、越界、跨来源或结构不完整的 ref
+- **THEN** 系统返回定位到该 ref 的结构化错误
+- **AND** 不自动重测、不渲染、不发布依赖该引用的结果
+
+#### Scenario: Direct visual assembly remains available
+
+- **WHEN** 主 Agent不引用测量结果而提交合法 ChartSpec
+- **THEN** 系统执行通常的结构校验和生成审核
+- **AND** 当前 run 中未使用的 measurement observation 不会强制要求 abandoned decision
 
 ### Requirement: Measurement warnings do not schedule hidden tool calls
 
@@ -517,19 +546,3 @@ Agent loop SHALL 将测量返回的 observation scope、evidence refs、issues�
 - **WHEN** Agent 从 checkpoint 或断线状态恢复，且最近一次测量已经完成
 - **THEN** 恢复状态停留在等待主 Agent 决策的阶段
 - **AND** 恢复流程不得重新执行相同的测量调用
-
-### Requirement: Assembly is blocked until the main-chain evidence decision is explicit
-
-主循环 SHALL 要求使用 measurement evidence 的 `assemble_spec` 请求携带主 Agent 的 selected/discarded decision，并校验来源、范围、引用和幂等约束；该要求不得扩展为“整个 attempt 必须 accepted”。未被选择的候选可以被舍弃，未采用的 observation 可以被放弃，只有被选中的非法证据或结构化 ChartSpec 才能阻止当前组装。
-
-#### Scenario: Assembly receives an explicit candidate decision
-
-- **WHEN** 主 Agent 根据 overlay 和 evidence refs 提交 selected/discarded refs
-- **THEN** 系统校验 decision 属于当前 attachment、panel 和 attempt
-- **AND** 如果 selected refs 合法，组装可以继续，即使同一 attempt 仍有非阻断 warning
-
-#### Scenario: Invalid candidate decision is rejected safely
-
-- **WHEN** 主 Agent 提交不存在、越界、来源失配或互相重叠的 refs
-- **THEN** 系统返回结构化 decision error
-- **AND** 不自动重测、不发布、不把模型的最终文本当作通过依据

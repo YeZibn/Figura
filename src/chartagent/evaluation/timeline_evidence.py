@@ -292,7 +292,7 @@ def _event_needs_repair(kind: str, payload: Mapping[str, Any]) -> bool:
 
 
 def _event_is_success(kind: str, payload: Mapping[str, Any]) -> bool:
-    if kind in {"run_started", "resume_started", "generated_chart", "generated_chart_published", "operation_completed", "chart_review_completed", "review_completed", "measurement_focus_applied", "measurement_evidence_selected", "measurement_evidence_discarded", "measurement_observed"}:
+    if kind in {"run_started", "resume_started", "generated_chart", "generated_chart_published", "operation_completed", "chart_review_completed", "review_completed", "measurement_focus_applied", "measurement_evidence_selected", "measurement_evidence_discarded", "measurement_evidence_used", "measurement_observed"}:
         return not _event_is_failure(kind, payload)
     if kind == "tool_result":
         statuses = _statuses(payload)

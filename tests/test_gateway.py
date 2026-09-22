@@ -913,11 +913,15 @@ def test_gateway_service_maps_unavailable_agent_and_preserves_history(tmp_path):
     run = service.get_run(session_id, accepted["run"]["runId"])
     assert run.wait_terminal(timeout=2)
     failure = next(event for event in run.iter_events() if event.kind == "run_failed")
-    assert failure.payload == {
-        "code": "agent_unavailable",
-        "reason": "missing_configuration",
-        "message": "Agent service is unavailable",
-    }
+    assert failure.payload["code"] == "agent_unavailable"
+    assert failure.payload["reason"] == "missing_configuration"
+    assert failure.payload["message"] == "Agent service is unavailable"
+    assert failure.payload["process_id"] == "run"
+    assert failure.payload["failure_category"] == "agent_setup"
+    assert failure.payload["failure_code"] == "agent_unavailable"
+    assert failure.payload["safe_message"] == "Agent service is unavailable"
+    assert failure.payload["outcome_known"] is True
+    assert failure.payload["first_failure_ref"] == {"kind": "run_failed", "stage": "setup"}
 
 
 def test_attachment_upload_projects_safe_metadata_and_survives_restart(tmp_path):

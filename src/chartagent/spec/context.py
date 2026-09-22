@@ -265,9 +265,25 @@ def context_digest(context: GenerationContext | Mapping[str, Any] | None) -> str
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
-def normalize_generation_context(value: object) -> GenerationContext | None:
-    """Parse a model/tool value without inventing a context on malformed input."""
-    context = GenerationContext.from_dict(value)
+def normalize_generation_context(
+    value: object,
+    *,
+    source_scope_hint: Mapping[str, Any] | GenerationSourceScope | None = None,
+) -> GenerationContext | None:
+    """Parse a context and bind only a unique, authorized runtime scope hint."""
+    candidate = dict(value) if isinstance(value, Mapping) else value
+    if isinstance(candidate, dict):
+        raw_scope = candidate.get("source_scope") or candidate.get("sourceScope")
+        mode = str(candidate.get("mode") or "")
+        if raw_scope is None and mode != GenerationMode.SYNTHESIZE.value and source_scope_hint is not None:
+            hint = (
+                source_scope_hint
+                if isinstance(source_scope_hint, GenerationSourceScope)
+                else GenerationSourceScope.from_dict(source_scope_hint)
+            )
+            if hint is not None and not hint.validate():
+                candidate["source_scope"] = hint.to_dict()
+    context = GenerationContext.from_dict(candidate)
     return context
 
 
@@ -275,7 +291,7 @@ def generation_context_schema() -> dict[str, Any]:
     """Return the bounded JSON Schema shared by chart-facing tools."""
     return {
         "type": "object",
-        "description": "当前生成任务的来源与覆盖合同；工具只校验范围，不替主 Agent 决定系列语义。",
+        "description": "当前生成任务的来源与覆盖合同；source-linked 模式需要 source_scope，唯一授权 panel 可由工具安全绑定；工具不替主 Agent 决定系列语义。",
         "properties": {
             "version": {"type": "integer", "minimum": 1, "maximum": MAX_CONTEXT_VERSION, "description": "上下文版本。"},
             "mode": {
@@ -284,8 +300,8 @@ def generation_context_schema() -> dict[str, Any]:
                 "description": "任务模式：reconstruct、transform、summarize 或 synthesize。",
             },
             "source_scope": {
-                "type": "object",
-                "description": "授权来源范围；source-linked 模式必须指定 attachment_id 和 panel_ids。",
+                "type": ["object", "null"],
+                "description": "授权来源范围；source-linked 模式必须有 attachment_id 和 panel_ids，可由唯一已授权 panel 安全绑定。",
                 "properties": {
                     "attachment_id": {"type": "string", "maxLength": 160, "description": "当前授权附件 ID。"},
                     "panel_ids": {
@@ -321,6 +337,19 @@ def generation_context_schema() -> dict[str, Any]:
             "goal_summary": {"type": "string", "maxLength": MAX_CONTEXT_TEXT, "description": "当前生成目标的简短说明。"},
         },
         "required": ["mode", "coverage", "selection_basis", "goal_summary"],
+        "anyOf": [
+            {
+                "required": ["mode", "source_scope"],
+                "properties": {
+                    "mode": {"enum": [item.value for item in GenerationMode if item is not GenerationMode.SYNTHESIZE]},
+                    "source_scope": {"type": "object"},
+                },
+            },
+            {
+                "required": ["mode"],
+                "properties": {"mode": {"const": GenerationMode.SYNTHESIZE.value}},
+            },
+        ],
         "additionalProperties": False,
     }
 

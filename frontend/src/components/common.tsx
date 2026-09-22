@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from 'react'
 import { loadEvaluationResource } from '../api/gateway/evaluationResource'
-import { eventPayload, textDetail } from '../domain/records'
+import { eventPayload, failureContext, textDetail } from '../domain/records'
+import { failureCategoryLabel } from '../domain/display'
 import { measurementRepairDetail } from '../domain/measurement'
 import { isMeasurementRepairEventKind } from '../types/protocol'
 import type { AgentRunEvent } from '../types/protocol'
@@ -41,6 +42,20 @@ export function EvaluationDetailResourceView({ resource, evaluationId, caseId }:
 export function traceEventDetail(event: AgentRunEvent): string {
   if (isMeasurementRepairEventKind(event.kind)) return measurementRepairDetail(event)
   const payload = eventPayload(event)
+  const failure = failureContext(payload)
+  if (failure) {
+    const details = [
+      failure.safeMessage || payload.message,
+      failure.category ? `分类：${failureCategoryLabel(failure.category)}` : undefined,
+      failure.code ? `错误码：${failure.code}` : undefined,
+      failure.location ? `字段：${failure.location}` : undefined,
+      failure.providerStatus !== undefined ? `Provider 状态：${failure.providerStatus}` : undefined,
+      failure.retryable !== undefined ? `可重试：${failure.retryable ? '是' : '否'}` : undefined,
+      failure.outcomeKnown === false ? '远端结果：未知' : undefined,
+      failure.actionHint,
+    ].filter(Boolean).map(String)
+    if (details.length > 0) return details.join(' · ')
+  }
   return textDetail(payload.message || payload.status || payload.publication_status || payload.reason || (event.kind === 'generated_chart' ? '生成图表结果已移至最终结果区域' : ''))
 }
 

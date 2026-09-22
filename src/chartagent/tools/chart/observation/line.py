@@ -728,7 +728,7 @@ EXTRACT_LINE_SERIES = Tool(
     description=(
         "用于清晰的二维折线图：从授权的单系列或多系列图表中提取源图轨迹和有证据支持的点。"
         "返回绘图区、坐标标定、稳定 series ID、轨迹几何、标记或刻度采样点、置信度、警告和源尺寸叠加图；"
-        "语义标定不足时仍保留像素证据，并返回 effective_scope、evidence refs 和质量 warning；warning 不会自动触发重测，系列选择由主 Agent 记录。"
+        "语义标定不足时仍保留像素证据，并返回 effective_scope、evidence refs 和质量 warning；warning 不会自动触发重测。主 Agent 可按需使用或忽略 refs，并在 assemble_spec 中传入实际采用的 evidence_refs。"
         "不要用于填充区域、强透视、3D，或在坐标轴/采样锚点无法标定时声称精确语义值。"
     ),
     parameters={

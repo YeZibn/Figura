@@ -53,6 +53,7 @@ _PROVENANCE_FIELDS = (
     "panel_id",
     "tool",
     "quality",
+    "evidence_refs",
     "selected_refs",
     "discarded_refs",
     "decision_status",
@@ -288,7 +289,7 @@ def _bounded_provenance(value: object) -> Optional[Dict[str, Any]]:
                 "confidence": dict(item.get("confidence") or {}) if isinstance(item.get("confidence"), Mapping) else {},
                 "blocking": bool(item.get("blocking", False)),
             }
-        elif key in {"selected_refs", "discarded_refs"} and isinstance(item, (list, tuple)):
+        elif key in {"evidence_refs", "selected_refs", "discarded_refs"} and isinstance(item, (list, tuple)):
             result[key] = [str(ref)[:24] for ref in list(item)[:64]]
         elif key == "series_map" and isinstance(item, Mapping):
             result[key] = {str(name)[:80]: str(value)[:120] for name, value in list(item.items())[:32]}

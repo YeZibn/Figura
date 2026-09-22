@@ -77,75 +77,59 @@ OCR、图表几何传感器和布局观测 SHALL 向模型返回可区分的证�
 - **THEN** 模型不把该值作为确定事实写入最终解释
 - **AND** 最终结果保留警告、候选值或明确的未解析状态
 
-### Requirement: Measurement evidence must pass an acceptance gate before assembly
+### Requirement: Measurement evidence is validated when referenced
 
-当 ChartSpec 使用图表测量结果时，证据融合流程 SHALL 确认 measurement session、attachment、panel、attempt 和主 Agent 的 evidence decision 存在。系统不得要求整个 attempt 先成为全局 `accepted`；组装器 SHALL 只校验被选中的 refs 是否真实存在、来源正确、范围合法并满足所使用字段的必要结构。测量 warning、未解析的语义标签和未选中的候选不得被静默当作最终事实，但也不得阻塞模型选择其他证据。
+当 ChartSpec 使用图表测量结果时，证据融合流程 SHALL 只验证请求通过 `measurement_ref + evidence_refs` 实际引用的 session、attachment、panel、attempt 和 refs。有效引用 SHALL 形成 ChartSpec provenance；未引用候选、普通 warning 和未解析标签不得成为组装门禁，也不得被静默写入最终数据。
 
-#### Scenario: Selected valid evidence permits assembly
+#### Scenario: Referenced valid evidence permits assembly
 
-- **WHEN** 当前 attachment 和 panel 的测量 attempt 存在，且主 Agent 选择了合法 evidence refs
-- **THEN** 模型可以将这些 refs 作为 ChartSpec provenance 请求 `assemble_spec`
-- **AND** ChartSpec 保留被选择的来源摘要、warning 和证据决策
+- **WHEN** 模型引用当前来源和 attempt 中的合法 refs
+- **THEN** 系统校验这些 refs 并保存来源摘要和适用 warning
+- **AND** 组装不要求独立 evidence decision 状态
 
-#### Scenario: Unselected false candidates do not block assembly
+#### Scenario: Unreferenced false candidates do not block assembly
 
-- **WHEN** 测量结果包含图例色块、文字或其他误检候选，且主 Agent 在 decision 中舍弃它们
-- **THEN** 组装器只校验剩余 selected refs
-- **AND** 不因同一 attempt 中存在被舍弃候选而要求重新测量整个 panel
+- **WHEN** measurement observation 同时包含有效候选和图例色块等误检
+- **THEN** 组装器只处理请求中实际引用的候选
+- **AND** 不要求重新测量或显式舍弃其余候选
 
-#### Scenario: Invalid selected evidence blocks only the assembly
+#### Scenario: Invalid referenced evidence blocks only dependent assembly
 
-- **WHEN** selected ref 不存在、跨越来源边界或缺少所需数值
-- **THEN** 系统返回定位到该 ref 的结构化错误
-- **AND** 系统不自动重测、不发布结果，模型可以修正 decision 或改用其他证据
+- **WHEN** 被引用 ref 不存在、跨来源或缺少必要结构
+- **THEN** 系统返回定位到该 ref 的错误
+- **AND** 模型可以改正引用、改用其他证据或停止
 
 ### Requirement: Gate failures provide a bounded recovery action
 
-证据选择或组装校验失败 SHALL 返回有界的原因、证据位置、当前 panel 和可供主 Agent 选择的下一步动作。下一步动作可以是补充观察、局部重测、舍弃候选、改用视觉证据或放弃无法解决的字段；系统不得要求模型猜测缺失数据，也不得由门禁自动执行动作。
+证据引用或组装校验失败 SHALL 返回有界的原因、位置、当前来源范围和可选修复提示。修复提示可以包括补充观察、局部测量、忽略候选、改用视觉证据或停止，但 SHALL 作为建议而非代码拥有的唯一下一动作；系统不得自动执行修复，也不得要求模型猜测缺失数据。
 
-#### Scenario: Evidence issue requests targeted observation
+#### Scenario: Evidence issue suggests targeted observation
 
 - **WHEN** 当前候选的基准线、文字、系列关系或局部几何仍不确定
-- **THEN** 结果指出相关 ref/字段和可用的 `observation_scope` 或 `measurement_target`
-- **AND** 主 Agent 可以自主选择是否继续观察
+- **THEN** 结果指出相关 ref/字段和可用 scope/target 建议
+- **AND** 主 Agent可以自主选择该建议或其他同范围合法动作
 
 #### Scenario: Unrecoverable evidence remains non-final
 
-- **WHEN** 主 Agent 选择不再补充证据，或定向补充证据仍不能解决关键字段
+- **WHEN** 主 Agent不再补充证据，或补充后仍不能解决关键字段
 - **THEN** 融合结果保留未解析字段、问题和 attempt lineage
-- **AND** 系统不得用未确认的测量候选自动替代模型的最终语义判断
+- **AND** 系统不得用未确认候选自动替代模型判断
 
 ### Requirement: Direct visual assembly remains compatible
 
-对于没有采用测量证据、且模型直接基于清晰源图视觉理解组装合法 ChartSpec 的请求，系统 SHALL 保持直接装配路径。即使当前 run 曾经产生未采用的 observation，模型仍可明确放弃该 observation 后直接组装；该路径不得绕过 ChartSpec 结构校验和后续生成审核。
+对于没有采用测量证据、且模型直接基于清晰源图视觉理解组装合法 ChartSpec 的请求，系统 SHALL 保持直接装配路径。当前 run 曾产生但未被引用的 observation SHALL 留在内部历史中，不得要求模型提交 abandoned decision；该路径仍不得绕过 ChartSpec 结构校验和生成审核。
 
 #### Scenario: No measurement evidence is required
 
-- **WHEN** 模型没有引用任何测量工具结果而提交一个合法的单 ChartSpec
-- **THEN** 系统按照现有路径完成结构装配
-- **AND** 不要求调用方伪造 measurement attempt
+- **WHEN** 模型没有引用测量工具结果而提交合法 ChartSpec 或 collection
+- **THEN** 系统完成结构装配
+- **AND** 不要求伪造 measurement attempt 或 decision
 
-#### Scenario: A measured observation can be abandoned
+#### Scenario: Unused observation remains auditable
 
-- **WHEN** 模型判断已有测量结果不适用于当前图表语义
-- **THEN** 模型可以提交 abandoned observation 或不提供 measurement provenance
-- **AND** 系统保留该 observation 的历史记录但不阻塞直接装配
-
-### Requirement: Measurement gate failures drive targeted evidence recovery
-
-当 `assemble_spec` 因 measurement evidence 未被接受而阻断时，系统 SHALL 返回当前 panel/source 身份、受影响字段、证据引用和可选的父 attempt 上下文。主 Agent 可以据此在同一主链路中请求当前 panel 的定向补充证据，但系统不得自动切换 panel、自动重测或直接发布结果。
-
-#### Scenario: Blocked assembly requests a targeted remeasurement
-
-- **WHEN** 当前柱状图 attempt 因 baseline issue 未通过 measurement gate
-- **THEN** 组装结果包含指向 baseline 或相关 bar region 的有界 focus suggestion
-- **AND** 主 Agent 可以继续当前 run 的证据闭环并调用原测量工具，而不是直接结束为成功或发布结果
-
-#### Scenario: Unrecoverable evidence remains non-final
-
-- **WHEN** 定向补充证据仍不能解决关键字段，或 repair budget 已耗尽
-- **THEN** 融合结果保留未解析字段、问题和 attempt lineage
-- **AND** 系统不得用模型猜值替代 accepted measurement evidence
+- **WHEN** 模型改用视觉或其他合法证据而未引用已有 measurement observation
+- **THEN** observation 继续保留在内部历史
+- **AND** 不阻塞当前装配
 
 ### Requirement: Semantic labels remain separate from evidence references
 

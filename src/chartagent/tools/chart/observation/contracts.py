@@ -32,7 +32,7 @@ _REGION_SCHEMA = {
 
 MEASUREMENT_TARGET_SCHEMA: dict[str, Any] = {
     "type": "object",
-    "description": "已有 measurement attempt 的同 panel 定向补充目标；不会自动触发重测。",
+    "description": "可选的同 panel 定向补充目标；只有主 Agent主动传入时才会创建新 attempt，不会自动触发重测，也不会因为 warning 自动重测。补充结果必须重新阅读。",
     "properties": {
         "target_id": {"type": "string", "maxLength": 128, "description": "有界目标身份。"},
         "attachment_id": {"type": "string", "maxLength": 160, "description": "必须等于当前授权附件。"},
@@ -82,7 +82,7 @@ def measurement_contract_properties() -> dict[str, Any]:
             "type": "integer",
             "minimum": 1,
             "maximum": 8,
-            "description": "可选当前 candidate attempt 序号；不会触发自动重测。",
+            "description": "可选当前 candidate attempt 序号；只用于 lineage 关联，不触发自动重测。",
         },
     }
 

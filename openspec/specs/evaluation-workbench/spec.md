@@ -93,19 +93,41 @@ The evaluation workspace SHALL provide a read-only run transcript whose grouping
 
 ### Requirement: Evaluation run transcript matches ordinary session trace
 
-The evaluation workspace SHALL render a selected case as a read-only equivalent of the ordinary session run trace. It SHALL use the same event labels, tool-call/result correlation, expandable result behavior, visual-observation attachment behavior, and lifecycle/error presentation, while preserving evaluation-specific case, report, and evidence context.
+The evaluation workspace SHALL render a selected case as a read-only equivalent of the ordinary session user-facing timeline. It SHALL use the same tool-call/result correlation, expandable result behavior, visual-observation attachment behavior, domain-step labels, terminal/error presentation, and technical-lifecycle filtering, while preserving evaluation-specific case, report, and evidence context. Model-start, model-completion, and operation-save events SHALL remain available as persisted history but SHALL NOT be rendered as separate visible transcript rows.
 
 #### Scenario: User reviews a selected case like a normal conversation run
 
 - **WHEN** the user opens a case with a persisted run
-- **THEN** the evaluation workspace shows the run transcript without requiring a separate summary-only timeline before tool details can be inspected
-- **AND** tool calls, tool results, observations, repair events, review events, and terminal events appear in their original execution order
+- **THEN** the evaluation workspace shows the same flat chronological timeline used by an ordinary run
+- **AND** tool calls, tool results, observations, repair events, review events, and terminal events appear in their original meaningful order
+
+#### Scenario: Evaluation hides technical lifecycle noise
+
+- **WHEN** a case history contains model-start, model-completion, or operation-save events
+- **THEN** the case timeline does not create separate cards or rows for those events
+- **AND** their failure context, when relevant, is surfaced through the associated visible error or terminal step
 
 #### Scenario: Evaluation transcript remains read-only
 
 - **WHEN** the user expands or refreshes an evaluation transcript
 - **THEN** the client never submits a new model/tool operation or mutates the evaluation bundle
 - **AND** the ordinary session workspace retains its existing run, retry, resume, and interruption behavior
+
+### Requirement: Evaluation uses the runtime compatibility projection
+
+评测工作台 SHALL 对普通 lifecycle/process/legacy 事件使用与普通运行相同的兼容分组、错误字段和去重规则。评测报告可以增加 case 上下文，但不得把同一事件重新解释成另一套顶层时间线。
+
+#### Scenario: Evaluation shows an incomplete run faithfully
+
+- **WHEN** case 在拆解或测量工具阶段失败，且历史中同时存在模型、operation 和 terminal events
+- **THEN** case 时间线显示连续过程、失败阶段和终态
+- **AND** 不因事件缺少 `unit_id` 而制造大量独立历史卡片或跳过失败上下文
+
+#### Scenario: Evaluation replay matches ordinary run
+
+- **WHEN** 普通运行视图和评测 case 指向同一份 execution history
+- **THEN** 两者使用相同的分组、错误分类、顺序和详情引用
+- **AND** 评测读取不会重新执行模型、工具或审核
 
 ### Requirement: Large sanitized tool results remain retrievable
 

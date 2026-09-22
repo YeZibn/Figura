@@ -15,6 +15,7 @@ from ..multimodal import build_registered_attachment_turn
 from ..runtime import AgentRuntime, create_agent_runtime, probe_agent_readiness
 from ..storage import StoragePaths, resolve_storage_paths
 from ..agent import AgentInterrupted, AgentRecoveryBlocked, REVIEW_INCOMPLETE_MESSAGE
+from ..client.client import classify_provider_error
 from ..agent.review_gate import _BUDGET_MSG, _REVIEW_FAILED_MSG
 from ..tools.core.result import GeneratedImage
 from ..trace import TraceSink, truncate_text
@@ -801,6 +802,12 @@ class GatewayService(EvaluationWorkbenchMixin):
                     "code": "agent_unavailable",
                     "reason": reason,
                     "message": "Agent service is unavailable",
+                    "failure_category": "agent_setup",
+                    "failure_code": "agent_unavailable",
+                    "safe_message": "Agent service is unavailable",
+                    "retryable": True,
+                    "outcome_known": True,
+                    "first_failure_ref": {"kind": "run_failed", "stage": "setup"},
                 },
             )
             run.fail("agent_unavailable", 503, "Agent service is unavailable", reason)
@@ -809,7 +816,20 @@ class GatewayService(EvaluationWorkbenchMixin):
             try:
                 answer = runtime.agent.run(prompt)
             except AgentRecoveryBlocked:
-                run.publish("run_failed", {"code": RECOVERY_BLOCKED_CODE, "reason": "operation_outcome_uncertain", "message": "运行无法安全继续执行"})
+                run.publish(
+                    "run_failed",
+                    {
+                        "code": RECOVERY_BLOCKED_CODE,
+                        "reason": "operation_outcome_uncertain",
+                        "message": "运行无法安全继续执行",
+                        "failure_category": "operation_outcome_uncertain",
+                        "failure_code": RECOVERY_BLOCKED_CODE,
+                        "safe_message": "运行无法安全继续执行",
+                        "retryable": True,
+                        "outcome_known": False,
+                        "first_failure_ref": {"kind": "recovery_blocked", "stage": "operation"},
+                    },
+                )
                 run.fail(RECOVERY_BLOCKED_CODE, 409, "运行无法安全继续执行", "operation_outcome_uncertain")
                 return
             except AgentInterrupted:
@@ -817,8 +837,31 @@ class GatewayService(EvaluationWorkbenchMixin):
                     run.interrupt("user_cancelled", "运行已按用户请求中断")
                 return
             except Exception as exc:
-                run.publish("run_failed", {"code": "agent_failed", "message": "Agent run failed"})
-                run.fail("agent_failed", 502, "Agent run failed")
+                failure = classify_provider_error(exc)
+                if failure["outcome_known"]:
+                    code = str(failure["failure_code"])
+                    status = int(failure.get("provider_status") or 502)
+                    reason = str(failure["failure_category"])
+                    message = str(failure["safe_message"])
+                else:
+                    code = RECOVERY_BLOCKED_CODE
+                    status = 409
+                    reason = "operation_outcome_uncertain"
+                    message = "运行无法安全确认模型请求结果"
+                failure_payload = {
+                    "code": code,
+                    "reason": reason,
+                    "message": message,
+                    "failure_category": failure["failure_category"],
+                    "failure_code": failure["failure_code"],
+                    "safe_message": failure["safe_message"],
+                    "provider_status": failure.get("provider_status"),
+                    "retryable": failure["retryable"],
+                    "outcome_known": failure["outcome_known"],
+                    "first_failure_ref": {"kind": "model_completed", "stage": "model"},
+                }
+                run.publish("run_failed", failure_payload)
+                run.fail(code, status, message, reason)
                 return
         finally:
             runtime.close()
@@ -834,6 +877,12 @@ class GatewayService(EvaluationWorkbenchMixin):
                     {
                         "code": failure_code,
                         "message": failure_message,
+                        "failure_category": "assembly_validation",
+                        "failure_code": failure_code,
+                        "safe_message": failure_message,
+                        "retryable": False,
+                        "outcome_known": True,
+                        "first_failure_ref": {"kind": "assembly_validation_failure", "stage": "assemble"},
                     },
                 )
                 run.fail(failure_code, 422, failure_message, failure_code)
@@ -846,6 +895,12 @@ class GatewayService(EvaluationWorkbenchMixin):
                     {
                         "code": failure_code,
                         "message": failure_message,
+                        "failure_category": "measurement_evidence",
+                        "failure_code": failure_code,
+                        "safe_message": failure_message,
+                        "retryable": False,
+                        "outcome_known": True,
+                        "first_failure_ref": {"kind": "measurement_repair_exhausted", "stage": "measure"},
                     },
                 )
                 run.fail(failure_code, 422, failure_message, failure_code)
@@ -860,6 +915,12 @@ class GatewayService(EvaluationWorkbenchMixin):
                 {
                     "code": failure_code,
                     "message": failure_message,
+                    "failure_category": "review_terminal",
+                    "failure_code": failure_code,
+                    "safe_message": failure_message,
+                    "retryable": False,
+                    "outcome_known": True,
+                    "first_failure_ref": {"kind": "review_failed", "stage": "review"},
                 },
             )
             run.fail(failure_code, 422, failure_message, failure_code)

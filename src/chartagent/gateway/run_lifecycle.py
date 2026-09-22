@@ -27,6 +27,17 @@ from .protocol import (
 
 DEFAULT_MAX_RUN_EVENTS = 256
 DEFAULT_RUN_RETENTION_SECONDS = 120.0
+_RUN_PROCESS_KINDS = frozenset(
+    {
+        "run_started",
+        "resume_started",
+        "recovery_blocked",
+        "run_failed",
+        "run_interrupted",
+        "final_answer",
+        "budget_exhausted",
+    }
+)
 
 def _recovery_from_dict(value: dict | None) -> RunRecovery:
     if not isinstance(value, dict):
@@ -151,13 +162,18 @@ class ManagedRun:
     def _publish_locked(self, kind: str, payload: dict | None = None) -> RunEvent:
         """Append one event while the run condition lock is held."""
         self._next_sequence += 1
+        event_payload = dict(payload or {})
+        if kind in _RUN_PROCESS_KINDS and not any(
+            event_payload.get(key) for key in ("process_id", "processId", "operation_id", "operationId", "turn")
+        ):
+            event_payload["process_id"] = "run"
         event = RunEvent(
             run_id=self.run_id,
             sequence=self._next_sequence,
             kind=kind,
             payload=enrich_event_payload(
                 kind,
-                payload or {},
+                event_payload,
                 run_id=self.run_id,
                 sequence=self._next_sequence,
             ),

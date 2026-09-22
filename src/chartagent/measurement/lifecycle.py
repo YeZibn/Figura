@@ -537,10 +537,11 @@ def measurement_gate(
     reference: object,
     context: Mapping[str, Any] | None,
     *,
+    evidence_refs: object | None = None,
     expected_attachment_id: str | None = None,
     expected_panel_id: str | None = None,
     location: str = "measurement_ref",
-    require_decision: bool = True,
+    require_decision: bool = False,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     """Validate a model-provided reference against code-owned session state."""
     if not isinstance(reference, Mapping):
@@ -642,7 +643,36 @@ def measurement_gate(
                 "available_refs": [item.get("ref") for item in attempt.evidence_refs[:MAX_MEASUREMENT_REFS]],
                 "next_action": "先根据 overlay 和 evidence.refs 提交 measurement_decision，再组装 ChartSpec",
             }
-    if session.selected_refs:
+    requested_refs: tuple[str, ...] | None = None
+    if evidence_refs is not None:
+        if not isinstance(evidence_refs, (list, tuple, set)):
+            return None, {
+                "status": "blocked",
+                "code": "measurement_evidence_refs_invalid",
+                "location": f"{location}.evidence_refs",
+                "message": "evidence_refs must be an array of compact evidence references",
+                "next_action": "只提交当前 measurement attempt 返回的 evidence refs",
+            }
+        requested_refs = normalize_evidence_refs(evidence_refs)
+        available_refs = {
+            str(item.get("ref"))
+            for item in attempt.evidence_refs
+            if isinstance(item, Mapping) and item.get("ref")
+        }
+        missing_refs = [ref for ref in requested_refs if ref not in available_refs]
+        if missing_refs:
+            return None, {
+                "status": "blocked",
+                "code": "measurement_evidence_ref_unknown",
+                "location": f"{location}.evidence_refs",
+                "message": "one or more evidence_refs are not in the referenced measurement attempt",
+                "missing_refs": missing_refs[:MAX_MEASUREMENT_REFS],
+                "available_refs": sorted(available_refs)[:MAX_MEASUREMENT_REFS],
+                "next_action": "重新读取当前 measurement observation 后修正 evidence_refs",
+            }
+
+    effective_refs = requested_refs if requested_refs is not None else session.selected_refs
+    if effective_refs:
         selected_index = {
             str(item.get("ref")): item
             for item in attempt.evidence_refs
@@ -650,7 +680,7 @@ def measurement_gate(
         }
         empty_refs = [
             ref
-            for ref in session.selected_refs
+            for ref in effective_refs
             if isinstance(selected_index.get(ref), Mapping)
             and selected_index[ref].get("kind") in {"bar", "point", "sector"}
             and selected_index[ref].get("has_numeric_value") is False
@@ -659,12 +689,18 @@ def measurement_gate(
             return None, {
                 "status": "blocked",
                 "code": "measurement_selected_ref_empty",
-                "location": f"{location}.selected_refs",
+                "location": f"{location}.evidence_refs",
                 "message": "selected measurement refs do not contain the numeric fields required by the assembled chart",
                 "selected_refs": empty_refs[:MAX_MEASUREMENT_REFS],
                 "next_action": "舍弃空值候选，或由主 Agent 对对应区域发起一次有界补充",
             }
-    selected_status = session.decision_status if session.decision_status in {"discarded", "abandoned"} else ("accepted" if attempt.status == "accepted" else "selected")
+    selected_status = (
+        session.decision_status
+        if requested_refs is None and session.decision_status in {"discarded", "abandoned"}
+        else "accepted"
+        if attempt.status == "accepted"
+        else "selected"
+    )
     return {
         "status": selected_status,
         "measurement_status": attempt.status,
@@ -675,9 +711,12 @@ def measurement_gate(
         "tool": attempt.tool,
         "quality": _json_safe(attempt.quality),
         "observation_scope": _json_safe(attempt.observation_scope),
-        "selected_refs": list(session.selected_refs),
-        "discarded_refs": list(session.discarded_refs),
-        "decision_status": session.decision_status,
+        "evidence_refs": list(effective_refs),
+        # Compatibility fields for old readers. New callers use evidence_refs
+        # and are not required to create a decision state.
+        "selected_refs": list(effective_refs),
+        "discarded_refs": list(session.discarded_refs) if requested_refs is None else [],
+        "decision_status": session.decision_status if requested_refs is None else "inferred",
         "series_map": _json_safe(session.series_map),
         "evidence_basis": session.evidence_basis,
         "quality_warnings": list(quality.get("warnings") or [])[:12] if isinstance(quality.get("warnings"), list) else [],

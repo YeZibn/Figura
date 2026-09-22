@@ -44,19 +44,19 @@
 
 ### Requirement: Review repair is a controlled sub-loop
 
-生成图审核返回 `repair_required` 且仍有预算时，系统 SHALL 只允许与该候选关联的 ChartSpec 修正和重新渲染，并在发布前重新审核。测量 observation 的局部重测不再作为共享 review gate 的独占子循环，而是主 Agent 可以主动调用的普通有界工具动作；两类动作都必须保留来源和父对象 lineage。
+生成图审核返回失败且仍有预算时，系统 SHALL 保持原候选不可发布，将结构化问题、来源范围、候选 lineage、剩余预算和可选 repair hint 返回主 Agent。主 Agent SHALL 在授权范围内自主选择观察、测量、来源恢复、ChartSpec 修正和重新渲染；系统 SHALL NOT 按 repair phase 建立工具白名单。任何新候选仍必须经过审核。
 
-#### Scenario: Generated candidate repair is controlled
+#### Scenario: Generated candidate repair is model-directed
 
-- **WHEN** 当前生成图审核要求修正 ChartSpec
-- **THEN** 系统限制后续生成动作到该候选的修正和重新渲染
+- **WHEN** 当前生成图审核失败且仍有预算
+- **THEN** 主 Agent收到有界诊断并选择适用的合法动作
 - **AND** 父失败候选保持不可发布且可追踪
 
-#### Scenario: Measurement re-observation does not freeze unrelated work
+#### Scenario: Repair remains bounded
 
-- **WHEN** 主 Agent 根据测量 warning 请求局部补充
-- **THEN** 系统记录新的 measurement attempt 和父 attempt
-- **AND** OCR、布局观察或对其他未依赖候选的判断不因该补充请求被隐式跳过
+- **WHEN** 主 Agent选择补证据、重组装或重新绑定来源
+- **THEN** 每个工具继续执行自身授权、scope、引用和结构校验
+- **AND** 重试预算与新候选审核仍然适用
 
 ### Requirement: Review failures close the gate without implicit bypass
 
@@ -95,34 +95,19 @@
 - **AND** 不把未完成审核当作已通过
 ### Requirement: Review outcomes expose a bounded repair kind
 
-审核 gate SHALL 将失败或需要补充的信息归一化为 `spec_only`、`evidence_needed`、
-`source_rebind` 或 `terminal`，并将 repair kind 与 candidate attempt 绑定。未识别或越界
-的 repair kind SHALL 按 terminal/blocked 处理，而不是继续执行未知动作。
+审核结果 SHALL 可以将失败归一化为 `spec_only`、`evidence_needed`、`source_rebind` 或 `terminal`，并与 candidate attempt 绑定。除 `terminal` 和预算耗尽外，repair kind SHALL 作为主 Agent的诊断提示而不是唯一允许动作；未知分类 SHALL 保持候选不可发布并返回通用结构化问题。
 
-#### Scenario: Review issue selects evidence repair
+#### Scenario: Review suggests evidence repair
 
-- **WHEN** 审核认为现有 scope 内的一个值缺少足够证据，但来源 panel 仍然有效
-- **THEN** gate 返回 `evidence_needed`
-- **AND** 主 Agent 只被允许在同一 scope 内补证据并重新装配
+- **WHEN** 审核认为同一来源范围内的值缺少证据
+- **THEN** 结果返回 `evidence_needed`、相关 issue 和可选 target
+- **AND** 主 Agent可以选择补测、重新观察、修正规格或停止
 
-### Requirement: Evidence repair is an in-gate bounded sub-loop
+#### Scenario: Terminal outcome prevents false success
 
-`evidence_needed` SHALL 开启一个有界的审核修复子循环，允许的顺序为
-same-scope evidence -> ChartSpec assembly -> render -> VLM review。子循环 SHALL 继承原
-候选上下文、受最大 attempt 次数限制，并在每次失败后保留诊断；不得因为首次审核失败
-而直接把 Run 标为成功或无上下文结束。
-
-#### Scenario: Successful evidence repair returns to review
-
-- **WHEN** 同一 panel 的补充测量完成且新 ChartSpec 已渲染
-- **THEN** gate 再次执行生成图审核
-- **AND** 只有新的审核通过才允许 publication
-
-#### Scenario: Repair budget is exhausted
-
-- **WHEN** evidence repair 达到最大 attempt 次数仍未通过
-- **THEN** gate 进入 terminal/failed 状态并返回最后一次结构化诊断
-- **AND** 候选保持不可发布
+- **WHEN** 审核返回 terminal 或预算耗尽
+- **THEN** 系统禁止继续发布该候选
+- **AND** Run 返回明确的未发布诊断
 
 ### Requirement: Scope violations fail closed
 
@@ -137,35 +122,19 @@ scope，gate SHALL 拒绝该动作并记录 scope violation；不得通过扩大
 
 ### Requirement: A candidate attempt has one canonical review cycle
 
-每个 generated candidate attempt SHALL 对外表现为一个 canonical review cycle。该 cycle 可以包含 deterministic quality audit、semantic VLM review、repair decision 和最终状态，但 shared gate 更新、review snapshot 和子检查结果不得各自创建新的顶层审核周期。
+每个 generated candidate attempt SHALL 对外表现为一个 canonical review cycle。内部 deterministic audit、semantic VLM review、状态快照和修复分类 SHALL 继续可追踪，但默认用户时间线 SHALL 只显示一次审核开始和一个最终审核结果；失败结果 SHALL 显示原因。
 
-#### Scenario: Review cycle contains deterministic and semantic checks
+#### Scenario: Internal checks produce one visible review summary
 
 - **WHEN** 候选先通过确定性质量检查，再等待或执行 semantic VLM review
-- **THEN** gate 维持同一个 review identity 和 candidate attempt
-- **AND** 时间线只显示一个审核周期及其子检查状态
+- **THEN** gate 维持同一个 review identity
+- **AND** 默认客户端不把内部检查显示为多个 subcheck 或重复审核步骤
 
 #### Scenario: Replayed state does not reopen a completed cycle
 
 - **WHEN** 相同 candidate attempt 的 completed review snapshot 被重复提交
 - **THEN** gate 返回已有 review state
 - **AND** 不重复执行审核或重新打开 publication gate
-
-### Requirement: Review repair exposes one ordered next phase
-
-每种 repair kind SHALL 暴露当前 phase 和唯一允许的下一阶段集合。`evidence_needed` 的合法顺序 SHALL 为 same-scope evidence、assemble、render、review；`spec_only` 不得直接跳过 assemble/render；`source_rebind` 不得在旧 scope 上继续补测。
-
-#### Scenario: Evidence repair follows the bounded path
-
-- **WHEN** review 返回 evidence_needed
-- **THEN** 主链路只能在同一 scope 完成证据、重新 assemble、重新 render 并回到 review
-- **AND** 跨 panel、跳过 assemble 或直接 publication 的请求被拒绝并记录 scope/gate violation
-
-#### Scenario: Unresolved next action blocks publication
-
-- **WHEN** review cycle 仍有 required next action
-- **THEN** gate 保持 blocking
-- **AND** final text、tool result snapshot 或旧 review 状态不能释放 publication
 
 ### Requirement: Collection children share a review parent
 

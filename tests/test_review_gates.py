@@ -456,7 +456,7 @@ def test_generated_review_blocks_then_releases_only_after_controlled_redraw(tmp_
     )
 
 
-def test_evidence_needed_repair_runs_same_scope_evidence_assemble_render_review(tmp_path):
+def test_evidence_needed_repair_allows_model_selected_assemble_render_review(tmp_path):
     initial_spec = ChartSpec(
         metadata=ChartMetadata(chart_type=ChartType.BAR, title="销售"),
         axes=Axes(x=Axis(label="季度", categories=["Q1", "Q2", "Q3"]), y=Axis(label="金额")),
@@ -580,20 +580,6 @@ def test_evidence_needed_repair_runs_same_scope_evidence_assemble_render_review(
                     ToolCall("render-1", "render_chart", json.dumps({"spec": spec_payload}, ensure_ascii=False)),
                 ])
             if self.outer_turn == 2:
-                return NormalizedResult(tool_calls=[ToolCall("measure-1", "measure_bars", json.dumps({
-                    "attachment_id": attachment.id,
-                    "panel_id": "panel_sales",
-                    "generation_context": context.to_dict(),
-                    "candidate_attempt": 1,
-                    "measurement_target": {
-                        "target_id": "value-B1",
-                        "panel_id": "panel_sales",
-                        "refs": ["B1"],
-                        "fields": ["value"],
-                        "reason": "确认柱体数值",
-                    },
-                }, ensure_ascii=False))])
-            if self.outer_turn == 3:
                 return NormalizedResult(tool_calls=[ToolCall("assemble-1", "assemble_spec", json.dumps({
                     "chart_type": "bar",
                     "points": [{"category": "Q1", "value": 10}, {"category": "Q2", "value": 20}, {"category": "Q3", "value": 30}],
@@ -602,7 +588,7 @@ def test_evidence_needed_repair_runs_same_scope_evidence_assemble_render_review(
                     "y_label": "金额",
                     "generation_context": context.to_dict(),
                 }, ensure_ascii=False))])
-            if self.outer_turn == 4:
+            if self.outer_turn == 3:
                 return NormalizedResult(tool_calls=[ToolCall("render-2", "render_chart", json.dumps({"spec": spec_payload}, ensure_ascii=False))])
             return NormalizedResult(content="证据已补充，图表审核通过", finish_reason="stop")
 
@@ -621,10 +607,93 @@ def test_evidence_needed_repair_runs_same_scope_evidence_assemble_render_review(
 
     assert answer == "证据已补充，图表审核通过"
     assert len([item for item in calls if item.get("tools") is None]) == 2
-    assert [event.payload["call_id"] for event in events if event.kind == "measurement_observed"] == ["measure-initial", "measure-1"]
+    assert [event.payload["call_id"] for event in events if event.kind == "measurement_observed"] == ["measure-initial"]
     assert not any(event.kind == "tool_skipped" for event in events)
     assert any(event.kind == "review_repair_required" and event.payload["repair_kind"] == "evidence_needed" for event in events)
     assert any(event.kind == "review_completed" and event.payload["execution_gate"]["blocking"] is False for event in events)
+
+
+def test_generated_review_gate_allows_alternative_authorized_tools_but_rejects_wrong_context():
+    spec = ChartSpec(
+        metadata=ChartMetadata(chart_type=ChartType.BAR, title="销售"),
+        axes=Axes(x=Axis(label="季度", categories=["Q1", "Q2"]), y=Axis(label="金额")),
+        dataset=[DataPoint(category="Q1", value=10), DataPoint(category="Q2", value=20)],
+    )
+    context = GenerationContext(
+        mode=GenerationMode.TRANSFORM,
+        source_scope=GenerationSourceScope("att-source", ("panel-sales",), revision=1),
+        coverage=GenerationCoverage(
+            basis=CoverageBasis.FULL_SOURCE,
+            source_series=("Q1", "Q2"),
+            represented_series=("Q1", "Q2"),
+            status=CoverageStatus.COMPLETE,
+        ),
+        selection_basis=SelectionBasis.AGENT_RESOLVED,
+        goal_summary="审核失败后允许模型选择修复方式",
+    )
+    spec.generation_context = context
+    rendered = render_chart(spec.to_dict())
+    manager = ChartReviewManager()
+    candidate = manager.create_candidate(
+        "run-directed-repair",
+        "render-1",
+        rendered.images[0],
+        spec,
+        source_attachment_ids=("att-source",),
+    )
+    failed = manager.process(
+        candidate,
+        semantic_result=ReviewResult(
+            status=ReviewStatus.COMPLETED,
+            decision="fail",
+            confidence=0.2,
+            review_mode="vlm",
+            candidate_id=candidate.candidate_id,
+            review_id=candidate.review_id,
+            chart_spec_digest=candidate.chart_spec_digest,
+            issues=(ReviewIssue("value_uncertain", "dataset[0]", "需要补充证据"),),
+            repair_kind="evidence_needed",
+        ),
+    )
+    coordinator = ReviewCoordinator()
+    GeneratedChartReviewAdapter().submit(coordinator, candidate=failed)
+    registry = ToolRegistry()
+    for name in ("inspect_chart_layout", "measure_bars", "assemble_spec", "render_chart"):
+        registry.register(Tool(name, name, {"type": "object", "properties": {}}, lambda **_: {}))
+    agent = Agent(
+        type("Client", (), {})(),
+        registry,
+        review_manager=manager,
+        review_coordinator=coordinator,
+    )
+
+    assert agent._review_gate_allows_call(
+        "run-directed-repair",
+        "inspect_chart_layout",
+        {},
+    ) is True
+    assert agent._review_gate_allows_call(
+        "run-directed-repair",
+        "assemble_spec",
+        {"generation_context": context.to_dict()},
+    ) is True
+    assert agent._review_gate_allows_call(
+        "run-directed-repair",
+        "measure_bars",
+        {"generation_context": context.to_dict()},
+    ) is True
+    wrong_context = context.to_dict()
+    wrong_context["source_scope"] = {"attachment_id": "att-other", "panel_ids": ["panel-other"], "revision": 1}
+    assert agent._review_gate_allows_call(
+        "run-directed-repair",
+        "measure_bars",
+        {"generation_context": wrong_context},
+    ) is False
+    assert agent._review_gate_allows_call(
+        "run-directed-repair",
+        "publish_chart",
+        {},
+    ) is False
 
 
 def test_generated_candidate_review_uses_shared_gate_and_lineage():

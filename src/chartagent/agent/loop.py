@@ -73,6 +73,7 @@ from .measurement_flow import (
     _measurement_repair_context_from_content,
     _measurement_repair_contexts_from_sessions,
     _measurement_trace_fields,
+    _measurement_evidence_uses_from_content,
     _merge_measurement_repair_contexts,
     measurement_decisions_from_content,
     register_measurement_observation,
@@ -817,18 +818,19 @@ class Agent:
                         pending_measurement_repairs,
                         [repair_context],
                     )
-                    pending_action = str(repair_context.get("next_action") or "等待主 Agent 证据决策")[:240]
-                    self.memory.append(run, "measurement_decision", {"state": repair_context})
+                    pending_action = "读取当前测量证据并由主 Agent判断是否使用或补充"[:240]
+                    # Keep the old memory record readable for recovery and
+                    # evaluation, but it is evidence availability, not a
+                    # blocking decision obligation.
+                    self.memory.append(run, "measurement_decision", {"state": {**repair_context, "required": False}})
                     if emitter is not None:
                         emitter.emit(
                             "measurement_decision_required",
                             turn=turn,
                             tool_name=call.name,
                             call_id=call.id,
-                            required=bool(
-                                self._review_coordinator.gate(run.id).blocking
-                                and self._review_coordinator.gate(run.id).repair_kind == "evidence_needed"
-                            ),
+                            required=False,
+                            diagnostic_only=True,
                             decision=repair_context,
                         )
                         focus = repair_context.get("focus")
@@ -1079,7 +1081,13 @@ class Agent:
         return terminal_answer
 
     def _review_gate_allows_call(self, run_id: str, call_name: str, arguments: Mapping[str, Any]) -> bool:
-        """Allow only the repair action that owns an active shared gate."""
+        """Allow model-selected, source-safe repair work under a review gate.
+
+        The gate owns publication and terminal-state safety.  It deliberately
+        does not turn a VLM repair hint into an ordered tool whitelist; each
+        selected tool remains responsible for its own authorization, scope,
+        lineage and schema checks.
+        """
         gate = self._review_coordinator.gate(run_id)
         if not gate.blocking:
             return True
@@ -1087,48 +1095,49 @@ class Agent:
             return False
         if gate.state.value in {"failed", "exhausted"}:
             return False
-        if gate.review_type.value == "generated_chart":
-            repair_kind = gate.repair_kind
-            generation_tools = _RENDER_TOOL_NAMES | {"assemble_spec"}
-            measurement_tools = set(MEASUREMENT_TOOLS)
-            if repair_kind == "spec_only":
-                if gate.repair_phase == "assemble":
-                    return call_name == "assemble_spec"
-                if gate.repair_phase == "render":
-                    return call_name in _RENDER_TOOL_NAMES
-                return False
-            if repair_kind == "evidence_needed":
-                if gate.repair_phase == "evidence":
-                    if call_name not in measurement_tools:
-                        return False
-                elif gate.repair_phase == "assemble":
-                    return call_name == "assemble_spec"
-                elif gate.repair_phase == "render":
-                    return call_name in _RENDER_TOOL_NAMES
-                else:
-                    return False
-                if call_name not in measurement_tools:
-                    return False
-                candidate = self._review_manager.get(gate.subject_id or "")
-                if candidate is None or candidate.generation_context is None:
-                    return False
-                from ..spec import context_digest, normalize_generation_context
-
-                requested_context = normalize_generation_context(arguments.get("generation_context"))
-                if requested_context is None or context_digest(requested_context) != candidate.context_digest:
-                    return False
-                requested_candidate = arguments.get("candidate_id")
-                return requested_candidate in {None, candidate.candidate_id}
-            if repair_kind == "source_rebind":
-                if gate.repair_phase == "rebind":
-                    return call_name in {_DECOMPOSE_TOOL_NAME, _LAYOUT_TOOL_NAME}
-                if gate.repair_phase == "assemble":
-                    return call_name == "assemble_spec"
-                if gate.repair_phase == "render":
-                    return call_name in _RENDER_TOOL_NAMES
-                return False
+        if gate.review_type.value != "generated_chart":
             return False
-        return False
+
+        repair_tools = {
+            _DECOMPOSE_TOOL_NAME,
+            _LAYOUT_TOOL_NAME,
+            "extract_text",
+            "assemble_spec",
+            *_RENDER_TOOL_NAMES,
+            *MEASUREMENT_TOOLS,
+        }
+        if call_name not in repair_tools or self.registry.get(call_name) is None:
+            return False
+
+        candidate = self._review_manager.get(gate.subject_id or "")
+        if candidate is None:
+            return False
+        requested_candidate = arguments.get("candidate_id")
+        if requested_candidate is not None and requested_candidate != candidate.candidate_id:
+            return False
+
+        # If the model supplies an explicit generation context, it must be the
+        # same immutable context as the failed candidate.  Missing context is
+        # left to the selected tool's own source-scope validation so a model
+        # may first recover a source binding or use a valid visual-only input.
+        from ..spec import context_digest, normalize_generation_context
+
+        raw_contexts: list[object] = []
+        if arguments.get("generation_context") is not None:
+            raw_contexts.append(arguments.get("generation_context"))
+        spec = arguments.get("spec")
+        if isinstance(spec, Mapping):
+            if spec.get("generation_context") is not None:
+                raw_contexts.append(spec.get("generation_context"))
+            figure = spec.get("figure")
+            if isinstance(figure, Mapping) and figure.get("generation_context") is not None:
+                raw_contexts.append(figure.get("generation_context"))
+        if candidate.context_digest and raw_contexts:
+            for raw_context in raw_contexts:
+                normalized = normalize_generation_context(raw_context)
+                if normalized is None or context_digest(normalized) != candidate.context_digest:
+                    return False
+        return True
 
     def _advance_generated_repair_phase(self, run_id: str, phase: str) -> None:
         """Move the active generated-chart repair sub-loop to its next phase."""
@@ -1237,7 +1246,25 @@ class Agent:
         call_id: str,
         seen: set[str] | None = None,
     ) -> None:
-        """Expose model evidence decisions without creating a measurement gate."""
+        """Record actual evidence use and retain legacy decisions diagnostically."""
+        for evidence_use in _measurement_evidence_uses_from_content(content):
+            evidence_key = json.dumps(evidence_use, ensure_ascii=False, sort_keys=True, default=str)
+            if seen is not None:
+                evidence_key = f"evidence_used:{evidence_key}"
+                if evidence_key in seen:
+                    continue
+                seen.add(evidence_key)
+            payload = {
+                "turn": turn,
+                "tool_name": "assemble_spec",
+                "call_id": call_id,
+                **evidence_use,
+                "blocking": False,
+                "diagnostic_only": False,
+            }
+            self.memory.append(run, "evidence_used", {"state": payload})
+            if emitter is not None:
+                emitter.emit("measurement_evidence_used", **payload)
         for decision in measurement_decisions_from_content(content):
             attempt_id = str(decision.get("attempt_id") or "").strip()
             if not attempt_id:
@@ -1276,9 +1303,9 @@ class Agent:
             self.memory.append(run, "measurement_decision", {"state": payload})
             if emitter is not None:
                 if payload["selected_refs"]:
-                    emitter.emit("measurement_evidence_selected", **payload)
+                    emitter.emit("measurement_evidence_selected", **payload, diagnostic_only=True)
                 if payload["discarded_refs"] or payload["decision_status"] in {"discarded", "abandoned"}:
-                    emitter.emit("measurement_evidence_discarded", **payload)
+                    emitter.emit("measurement_evidence_discarded", **payload, diagnostic_only=True)
 
     def _skip_tool_calls(
         self,
