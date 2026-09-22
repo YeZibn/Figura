@@ -7,6 +7,8 @@ from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from chartagent import (
     Agent,
     GeneratedImage,
@@ -19,7 +21,7 @@ from chartagent import (
 from chartagent.client.models import NormalizedResult, ToolCall
 from chartagent.trace import TraceEmitter, TraceEvent, TraceLimits
 from chartagent.agent.artifacts import lifecycle_trace_fields
-from chartagent.decision_timeline import enrich_event_payload, legacy_envelope
+from chartagent.decision_timeline import TimelineProtocolError, enrich_event_payload
 
 
 class _ScriptedClient:
@@ -74,6 +76,14 @@ def test_trace_event_serializes_in_order_and_redacts_bounded_data():
     emitter.emit(
         "tool_call",
         turn=2,
+        unit_id="observation:trace-call",
+        unit_type="observation",
+        phase="action",
+        actor="tool",
+        role="action",
+        call_id="trace-call",
+        state="running",
+        transition_id="observation:trace-call:started",
         api_key="do-not-print",
         authorization="Bearer do-not-print",
         arguments={"path": "x" * 100},
@@ -155,6 +165,13 @@ def test_trace_events_get_bounded_decision_unit_envelope_and_stable_transition()
     first = enrich_event_payload(
         "measurement_focus_applied",
         {
+            "unit_id": "measurement:attempt-2",
+            "unit_type": "measurement",
+            "phase": "observe",
+            "actor": "tool",
+            "role": "observation",
+            "state": "applied",
+            "transition_id": "measurement:attempt-2:focus-applied",
             "session_id": "session-1",
             "attempt_id": "attempt-2",
             "panel_id": "panel-left",
@@ -163,12 +180,7 @@ def test_trace_events_get_bounded_decision_unit_envelope_and_stable_transition()
         run_id="run-1",
         sequence=3,
     )
-    replay = enrich_event_payload(
-        "measurement_focus_applied",
-        {key: value for key, value in first.items() if key not in {"transition_id", "correlation_version", "unit_id", "unit_type", "phase", "actor", "role", "parent_unit_id", "next_action"}},
-        run_id="run-1",
-        sequence=99,
-    )
+    replay = enrich_event_payload("measurement_focus_applied", first, run_id="run-1", sequence=99)
 
     assert first["unit_id"] == "measurement:attempt-2"
     assert first["unit_type"] == "measurement"
@@ -186,13 +198,17 @@ def test_trace_events_get_bounded_decision_unit_envelope_and_stable_transition()
     assert duplicate == first
 
 
-def test_legacy_envelope_does_not_infer_missing_parent_or_success():
-    envelope = legacy_envelope("run-1", 7, "review_completed")
+def test_malformed_timeline_event_is_rejected_without_fallback_identity():
+    with pytest.raises(TimelineProtocolError, match="缺少 unit_id"):
+        enrich_event_payload(
+            "review_completed",
+            {"review_id": "review-1", "state": "passed"},
+            run_id="run-1",
+            sequence=7,
+        )
 
-    assert envelope["unit_type"] == "legacy"
-    assert envelope["phase"] == "unknown"
-    assert envelope["actor"] == "unknown"
-    assert "parent_unit_id" not in envelope
+    with pytest.raises(TimelineProtocolError, match="已废弃"):
+        enrich_event_payload("chart_review_completed", {}, run_id="run-1", sequence=8)
 
 
 def test_agent_trace_orders_tools_visuals_and_keeps_reasoning_out_of_history():

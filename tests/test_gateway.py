@@ -544,7 +544,20 @@ def test_managed_run_interrupt_is_terminal_and_blocks_late_events(tmp_path):
     memory = SQLiteAgentMemory("interrupt", database=tmp_path / "sessions.db")
     manager = RunManager(history_store=store)
     run = manager.create(memory.session.id)
-    run.publish("tool_call", {"tool_name": "slow_tool"})
+    run.publish(
+        "tool_call",
+        {
+            "unit_id": "observation:slow-call",
+            "unit_type": "observation",
+            "phase": "action",
+            "actor": "tool",
+            "role": "action",
+            "transition_id": "observation:slow-call:started",
+            "state": "running",
+            "tool_name": "slow_tool",
+            "call_id": "slow-call",
+        },
+    )
 
     assert run.interrupt() is True
     assert run.status.value == "interrupted"
@@ -580,6 +593,12 @@ def test_gateway_replays_measurement_repair_events_and_checkpoint_after_reconnec
         "measurement_repair_required",
         {
             "attachment_id": "att_eval",
+            "unit_id": "measurement:matt_parent",
+            "unit_type": "measurement",
+            "phase": "repair",
+            "actor": "system",
+            "role": "gate",
+            "transition_id": "measurement:matt_parent:repair_required",
             "panel_id": "panel_bars",
             "parent_attempt_id": parent_attempt,
             "target": target,
@@ -613,6 +632,12 @@ def test_gateway_replays_measurement_repair_events_and_checkpoint_after_reconnec
         "measurement_repair_exhausted",
         {
             "attachment_id": "att_eval",
+            "unit_id": "measurement:matt_parent",
+            "unit_type": "measurement",
+            "phase": "repair",
+            "actor": "system",
+            "role": "gate",
+            "transition_id": "measurement:matt_parent:repair_exhausted",
             "panel_id": "panel_bars",
             "parent_attempt_id": parent_attempt,
             "status": "exhausted",
@@ -730,7 +755,17 @@ def test_gateway_classifies_bounded_evidence_terminal_failures(tmp_path, event_k
             self.trace_sink(
                 TraceEvent(
                     event_kind,
-                    payload={"tool_name": "assemble_spec", "blocking": False},
+                    payload={
+                        "unit_id": "measurement:fake" if event_kind.startswith("measurement_") else "generation:fake",
+                        "unit_type": "measurement" if event_kind.startswith("measurement_") else "generation",
+                        "phase": "repair" if event_kind.startswith("measurement_") else "assemble",
+                        "actor": "system" if event_kind.startswith("measurement_") else "tool",
+                        "role": "gate" if event_kind.startswith("measurement_") else "action",
+                        "transition_id": f"fake:{event_kind}",
+                        "state": "exhausted" if event_kind.startswith("measurement_") else "failed",
+                        "tool_name": "assemble_spec",
+                        "blocking": False,
+                    },
                 )
             )
             return _BUDGET_MSG
@@ -1245,7 +1280,20 @@ def test_gateway_rejects_non_loopback_server_host(tmp_path):
 def test_run_manager_replays_ordered_events_and_expires_observations():
     manager = RunManager(retention_seconds=0.01)
     run = manager.create("session-1")
-    run.publish("tool_call", {"tool_name": "measure_bars"})
+    run.publish(
+        "tool_call",
+        {
+            "unit_id": "measurement:measure-call",
+            "unit_type": "measurement",
+            "phase": "action",
+            "actor": "tool",
+            "role": "action",
+            "transition_id": "measurement:measure-call:started",
+            "state": "running",
+            "tool_name": "measure_bars",
+            "call_id": "measure-call",
+        },
+    )
     run.complete("done")
     events = list(run.iter_events())
     assert [event.kind for event in events] == ["run_started", "tool_call"]
@@ -1313,10 +1361,10 @@ def test_async_gateway_run_streams_trace_and_scoped_visual_observation(tmp_path)
         def run(self, prompt):
             run = self.memory.begin_run()
             self.memory.append(run, "user", {"text": prompt})
-            self.trace_sink(TraceEvent("tool_call", run_id="agent", turn=1, payload={"tool_name": "inspect", "call_id": "c1"}))
+            self.trace_sink(TraceEvent("tool_call", run_id="agent", turn=1, payload={"unit_id": "observation:c1", "unit_type": "observation", "phase": "action", "actor": "tool", "role": "action", "transition_id": "observation:c1:started", "state": "running", "tool_name": "inspect", "call_id": "c1"}))
             image = GeneratedImage(b"overlay", "image/png", "检测结果")
             refs = self.visual_observation_sink("inspect", "c1", [image])
-            self.trace_sink(TraceEvent("visual_observation", run_id="agent", turn=1, payload={"observations": refs}))
+            self.trace_sink(TraceEvent("visual_observation", run_id="agent", turn=1, payload={"unit_id": "observation:c1", "unit_type": "observation", "phase": "observe", "actor": "tool", "role": "observation", "transition_id": "observation:c1:observed", "state": "observed", "tool_name": "inspect", "call_id": "c1", "observations": refs}))
             self.memory.append(run, "final", {"answer": "已完成"})
             self.memory.finish(run, RunStatus.COMPLETED, "final")
             return "已完成"
@@ -1510,7 +1558,7 @@ def test_gateway_history_survives_in_memory_run_expiry_and_scopes_artifacts(tmp_
 
     manager = RunManager(retention_seconds=0.01, history_store=store)
     active = manager.create(session_id)
-    active.publish("tool_call", {"tool_name": "inspect", "call_id": "replay"})
+    active.publish("tool_call", {"unit_id": "observation:replay", "unit_type": "observation", "phase": "action", "actor": "tool", "role": "action", "transition_id": "observation:replay:started", "state": "running", "tool_name": "inspect", "call_id": "replay"})
     active.complete("恢复完成")
     time.sleep(0.03)
     manager.cleanup()
@@ -1544,10 +1592,10 @@ def test_gateway_replays_scope_lifecycle_fields_without_merging_event_kinds(tmp_
         "parent_attempt": "cand_parent",
         "source_scope": scope,
     }
-    store.append_event(RunEvent(run_id, 1, "measurement_observed", {**common, "status": "partial"}))
-    store.append_event(RunEvent(run_id, 2, "measurement_evidence_selected", {**common, "refs": ["B1"]}))
-    store.append_event(RunEvent(run_id, 3, "chart_review_started", {**common, "repair_kind": "evidence_needed"}))
-    store.append_event(RunEvent(run_id, 4, "generated_chart_rejected", {**common, "repair_kind": "evidence_needed"}))
+    store.append_event(RunEvent(run_id, 1, "measurement_observed", {**common, "unit_id": "measurement:matt_scope", "unit_type": "measurement", "phase": "observe", "actor": "tool", "role": "observation", "state": "partial", "transition_id": "measurement:matt_scope:observed"}))
+    store.append_event(RunEvent(run_id, 2, "measurement_evidence_selected", {**common, "unit_id": "measurement:matt_scope", "unit_type": "measurement", "phase": "decide", "actor": "agent", "role": "decision", "state": "selected", "transition_id": "measurement:matt_scope:selected", "refs": ["B1"]}))
+    store.append_event(RunEvent(run_id, 3, "review_started", {**common, "unit_id": "review:review_scope", "unit_type": "review", "phase": "review", "actor": "system", "role": "review", "review_id": "review_scope", "review_type": "generated_chart", "state": "reviewing", "transition_id": "review:review_scope:started", "repair_kind": "evidence_needed"}))
+    store.append_event(RunEvent(run_id, 4, "generated_chart_rejected", {**common, "unit_id": "publication:cand_scope", "unit_type": "publication", "phase": "publish", "actor": "system", "role": "publication", "review_id": "review_scope", "state": "rejected", "publication_status": "rejected", "transition_id": "publication:cand_scope:rejected", "repair_kind": "evidence_needed"}))
     store.update_run(run_id, RunStatus.COMPLETED, answer_source="已完成")
 
     reopened = GatewayHistoryStore(database, artifact_root=tmp_path / "run-artifacts")
@@ -1556,7 +1604,7 @@ def test_gateway_replays_scope_lifecycle_fields_without_merging_event_kinds(tmp_
     assert [event["kind"] for event in history["events"]] == [
         "measurement_observed",
         "measurement_evidence_selected",
-        "chart_review_started",
+        "review_started",
         "generated_chart_rejected",
     ]
     assert history["events"][2]["payload"]["source_scope"] == scope
@@ -1852,10 +1900,10 @@ def test_async_gateway_orders_generated_chart_event_after_tool_result(tmp_path):
                 "生成图表：趋势",
                 metadata={"kind": "generated_chart", "chart_type": "line", "title": "趋势", "width": 1200, "height": 800},
             )
-            self.trace_sink(TraceEvent("tool_call", run_id="agent", turn=1, payload={"tool_name": "render_chart", "call_id": "c1"}))
-            self.trace_sink(TraceEvent("tool_result", run_id="agent", turn=1, payload={"tool_name": "render_chart", "call_id": "c1", "status": "success"}))
+            self.trace_sink(TraceEvent("tool_call", run_id="agent", turn=1, payload={"unit_id": "generation:c1", "unit_type": "generation", "phase": "action", "actor": "tool", "role": "action", "transition_id": "generation:c1:started", "state": "running", "tool_name": "render_chart", "call_id": "c1"}))
+            self.trace_sink(TraceEvent("tool_result", run_id="agent", turn=1, payload={"unit_id": "generation:c1", "unit_type": "generation", "phase": "action", "actor": "tool", "role": "action", "transition_id": "generation:c1:completed", "state": "completed", "tool_name": "render_chart", "call_id": "c1", "status": "success"}))
             refs = self.visual_observation_sink("render_chart", "c1", [image])
-            self.trace_sink(TraceEvent("generated_chart", run_id="agent", turn=1, payload={"tool_name": "render_chart", "call_id": "c1", "artifacts": refs}))
+            self.trace_sink(TraceEvent("generated_chart", run_id="agent", turn=1, payload={"unit_id": "generation:c1", "unit_type": "generation", "phase": "render", "actor": "tool", "role": "action", "transition_id": "generation:c1:generated", "state": "available", "tool_name": "render_chart", "call_id": "c1", "artifacts": refs}))
             self.memory.append(run, "final", {"answer": "已重绘"})
             self.memory.finish(run, RunStatus.COMPLETED, "final")
             return "已重绘"

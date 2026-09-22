@@ -25,7 +25,7 @@ def review_gate_context(gate: Mapping[str, Any]) -> str:
     retryable = bool(gate.get("retryable"))
     status = "reviewing" if pending else "repair_available" if failed and retryable else "terminal" if failed else "open"
     payload = {
-        "type": "chart_review_gate",
+        "type": "execution_review_gate",
         "status": status,
         "publication_blocked": bool(pending or failed),
         "pending": list(pending)[:8] if isinstance(pending, list) else [],

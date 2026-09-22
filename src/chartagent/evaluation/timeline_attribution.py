@@ -59,8 +59,6 @@ def _apply_stage_statuses(
         pending_only = all(
             kind in {
                 "tool_call",
-                "chart_review_required",
-                "chart_review_started",
                 "measurement_repair_required",
                 "measurement_decision_required",
                 "measurement_focus_requested",
@@ -175,7 +173,7 @@ def _detect_review_without_repair(
     review_failures = [
         (_sequence(event), _kind(event))
         for event in events
-        if _kind(event) in {"generated_chart_rejected", "chart_review_completed", "review_failed"}
+        if _kind(event) in {"generated_chart_rejected", "review_failed"}
         and _event_is_failure(_kind(event), _payload(event))
     ]
     repairs = [
@@ -186,7 +184,6 @@ def _detect_review_without_repair(
             "measurement_focus_requested",
             "measurement_focus_applied",
             "measurement_evidence_selected",
-            "chart_review_repair_required",
             "review_repair_required",
         }
     ]

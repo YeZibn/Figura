@@ -148,7 +148,7 @@ class ChartReviewManager:
                 )
             )
             if context is None and source_linked_without_context:
-                context_status = "legacy_unknown"
+                context_status = "unbound"
             context_hash = context_digest(context)
             if lineage_attempt > policy.max_attempts:
                 exhausted = ReviewResult(
@@ -270,7 +270,7 @@ class ChartReviewManager:
 
         Source-linked candidates without a bound context are deliberately not
         allowed to fall back to the whole attachment.  They remain
-        ``legacy_unknown`` until the caller rebinds a panel scope.
+        ``unbound`` until the caller rebinds a panel scope.
         """
         if candidate.generation_context is None:
             if candidate.source_attachment_ids:

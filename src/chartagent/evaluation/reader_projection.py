@@ -1069,8 +1069,8 @@ class EvaluationReader:
             entry["detailResource"] = detail_resource
         elif persisted_truncated:
             entry["detailUnavailable"] = True
-            entry["detailUnavailableReason"] = "legacy_bundle_no_detail_resource"
-        if kind.startswith("measurement_repair") or kind in {"measurement_observed", "measurement_repair_required", "measurement_repair_rejected", "measurement_repair_exhausted", "measurement_decision_required", "measurement_focus_requested", "measurement_focus_applied", "measurement_focus_failed", "measurement_evidence_selected", "measurement_evidence_discarded", "measurement_evidence_used", "assembly_validation_failure", "review_started", "review_completed", "review_repair_required", "review_failed", "review_gate_required", "review_gate_updated", "chart_review_started", "chart_review_required", "chart_review_repair_required", "chart_review_completed", "generated_chart_published", "generated_chart_rejected"}:
+            entry["detailUnavailableReason"] = "detail_resource_unavailable"
+        if kind.startswith("measurement_repair") or kind in {"measurement_observed", "measurement_repair_required", "measurement_repair_rejected", "measurement_repair_exhausted", "measurement_decision_required", "measurement_focus_requested", "measurement_focus_applied", "measurement_focus_failed", "measurement_evidence_selected", "measurement_evidence_discarded", "measurement_evidence_used", "assembly_validation_failure", "review_started", "review_completed", "review_repair_required", "review_failed", "review_gate_required", "review_gate_updated", "generated_chart_published", "generated_chart_rejected"}:
             projected, value_truncated, value_redacted = self._safe_projection(payload)
             entry["details"] = projected
             truncated |= value_truncated
@@ -1086,7 +1086,7 @@ class EvaluationReader:
             "persistedTruncated": persisted_truncated,
             "projectionTruncated": projection_truncated,
             "detailUnavailable": bool(entry.get("detailUnavailable")),
-            "reason": "legacy_persisted_truncation" if entry.get("detailUnavailable") else "persisted_event_limit" if persisted_truncated else "safe_projection_limit" if projection_truncated else "sensitive_field_hidden" if redacted else None,
+            "reason": "persisted_detail_unavailable" if entry.get("detailUnavailable") else "persisted_event_limit" if persisted_truncated else "safe_projection_limit" if projection_truncated else "sensitive_field_hidden" if redacted else None,
         }
         return entry
 
@@ -1203,7 +1203,7 @@ class EvaluationReader:
             safe["detailResource"] = detail_resource
         elif persisted_truncated:
             safe["detailUnavailable"] = True
-            safe["detailUnavailableReason"] = "legacy_bundle_no_detail_resource"
+            safe["detailUnavailableReason"] = "detail_resource_unavailable"
         if row[2] == "visual_observation":
             safe["observations"] = self._safe_observations(root, evaluation_id, case_id, payload.get("observations"))
         if row[2] == "generated_chart":
@@ -1218,7 +1218,7 @@ class EvaluationReader:
             "persistedTruncated": persisted_truncated,
             "projectionTruncated": projection_truncated,
             "detailUnavailable": bool(safe.get("detailUnavailable")),
-            "reason": "legacy_persisted_truncation" if safe.get("detailUnavailable") else "persisted_event_limit" if persisted_truncated else "safe_projection_limit" if projection_truncated else "sensitive_field_hidden" if redacted else None,
+            "reason": "persisted_detail_unavailable" if safe.get("detailUnavailable") else "persisted_event_limit" if persisted_truncated else "safe_projection_limit" if projection_truncated else "sensitive_field_hidden" if redacted else None,
         }
         return {
             "runId": run_id,

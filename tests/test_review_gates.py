@@ -1,6 +1,8 @@
 import json
 from types import SimpleNamespace
 
+import pytest
+
 from chartagent.review.gates import (
     GateState,
     ReviewCoordinator,
@@ -8,8 +10,8 @@ from chartagent.review.gates import (
     ReviewGateBlocked,
     ReviewState,
     ReviewType,
-    normalize_review_event,
 )
+from chartagent.decision_timeline import TimelineProtocolError, enrich_event_payload
 from chartagent.review import (
     ChartReviewManager,
     GeneratedChartReviewAdapter,
@@ -227,22 +229,29 @@ def test_review_state_round_trips_through_checkpoint_projection():
     assert restored.to_state("run_1")["executionGate"]["blocking"] is True
 
 
-def test_legacy_review_events_have_one_frontend_projection():
-    required = normalize_review_event(
-        "measurement_repair_required",
-        {"review_id": "review_1", "attempt": 1, "repair": {"action": "remeasure"}},
+def test_review_event_contract_uses_one_canonical_lifecycle():
+    payload = enrich_event_payload(
+        "review_completed",
+        {
+            "unit_id": "review:review_1",
+            "unit_type": "review",
+            "phase": "review",
+            "actor": "system",
+            "role": "review",
+            "transition_id": "review:review_1:completed",
+            "review_id": "review_1",
+            "review_type": "generated_chart",
+            "state": "passed",
+        },
+        run_id="run-1",
+        sequence=1,
     )
-    assert required["reviewType"] == "measurement"
-    assert required["state"] == "repair_required"
-    assert required["blocking"] is True
+    assert payload["unit_id"] == "review:review_1"
+    assert payload["review_id"] == "review_1"
+    assert payload["state"] == "passed"
 
-    published = normalize_review_event(
-        "generated_chart_published",
-        {"review_id": "review_2", "publication_status": "published_with_warning"},
-    )
-    assert published["reviewType"] == "generated_chart"
-    assert published["state"] == "passed_with_warning"
-    assert published["blocking"] is False
+    with pytest.raises(TimelineProtocolError, match="已废弃"):
+        enrich_event_payload("chart_review_completed", {}, run_id="run-1", sequence=2)
 
 
 def test_measurement_observation_does_not_create_shared_blocking_gate():
@@ -439,12 +448,8 @@ def test_generated_review_blocks_then_releases_only_after_controlled_redraw(tmp_
         for event in events
         if event.kind == "review_started"
     }
-    compatibility_starts = {
-        event.payload["transition_id"]
-        for event in events
-        if event.kind == "chart_review_started"
-    }
-    assert canonical_starts == compatibility_starts
+    assert canonical_starts
+    assert not any(event.kind.startswith("chart_review_") for event in events)
     assert {event.payload["check_type"] for event in events if event.kind == "review_subcheck"} >= {
         "deterministic_quality_audit",
         "semantic_vlm",

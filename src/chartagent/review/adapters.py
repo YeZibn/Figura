@@ -159,7 +159,7 @@ class GeneratedChartReviewAdapter:
                     "candidate_status": candidate.status.value,
                     "review_status": candidate.review_status.value,
                     "publication_status": candidate.publication_status.value,
-                    "review_mode": review.review_mode if review is not None else "unknown",
+                    "review_mode": review.review_mode if review is not None else "not_run",
                 },
                 repair_kind=review.repair_kind if review is not None else "none",
                 repair_target=review.repair_target if review is not None else None,

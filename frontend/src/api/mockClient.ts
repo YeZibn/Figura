@@ -152,10 +152,14 @@ export const mockClient: ChartAgentClient = {
     schedule(20, () => emit('run_started', 1, { status: 'running', provider, model }))
     schedule(130, () => emit('model_started', 2, { turn: 1, provider, model }))
     const measurementUnit = { correlation_version: 1, unit_id: 'measurement:mock-attempt-1', unit_type: 'measurement', phase: 'observe', actor: 'tool', role: 'observation', transition_id: 'measurement:mock-attempt-1:observed' }
-    schedule(260, () => emit('tool_call', 3, { ...measurementUnit, tool_name: 'measure_bars', call_id: 'mock-call-1', arguments: { attachment_id: 'selected' } }))
+    schedule(260, () => emit('tool_call', 3, { ...measurementUnit, phase: 'action', state: 'running', transition_id: 'measurement:mock-attempt-1:started', tool_name: 'measure_bars', call_id: 'mock-call-1', arguments: { attachment_id: 'selected' } }))
     schedule(430, () => emit('tool_result', 4, { ...measurementUnit, tool_name: 'measure_bars', call_id: 'mock-call-1', status: 'success', result: { bars: 3, evidence: { coordinate_system: 'cartesian_2d', frame: null, confidence: { overall: 0.5 }, warnings: [] } } }))
     schedule(560, () => emit('visual_observation', 5, {
       ...measurementUnit,
+      state: 'observed',
+      phase: 'observe',
+      role: 'observation',
+      transition_id: 'measurement:mock-attempt-1:observed',
       tool_name: 'measure_bars',
       call_id: 'mock-call-1',
       observations: [{ observationId: 'mock-observation', mediaType: 'image/svg+xml', caption: '模拟柱状图测量结果', byteCount: mockImage.length, imageUrl: mockImage }],
@@ -168,6 +172,7 @@ export const mockClient: ChartAgentClient = {
       actor: 'tool',
       role: 'action',
       transition_id: 'generation:mock-candidate-1:rendered',
+      state: 'available',
       tool_name: 'render_chart',
       call_id: 'mock-render-1',
       artifacts: [{ artifactKind: 'generated_chart', artifactId: `artifact_${runId}`, mediaType: 'image/png', caption: '生成图表：分析结果重绘', byteCount: mockImage.length, chartType: 'bar', title: '分析结果重绘', width: 640, height: 360, status: 'available', imageUrl: mockImage, downloadUrl: mockImage }],

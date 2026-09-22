@@ -145,7 +145,7 @@ def test_legacy_direct_chart_spec_stays_source_free() -> None:
     assert rebuilt.validate() == []
 
 
-def test_source_linked_candidate_without_context_is_marked_legacy_unknown() -> None:
+def test_source_linked_candidate_without_context_is_marked_unbound() -> None:
     manager = ChartReviewManager()
     image = GeneratedImage(content=b"png", media_type="image/png", caption="candidate")
     candidate = manager.create_candidate(
@@ -159,9 +159,9 @@ def test_source_linked_candidate_without_context_is_marked_legacy_unknown() -> N
         source_attachment_ids=("att_scope",),
     )
 
-    assert candidate.context_status == "legacy_unknown"
+    assert candidate.context_status == "unbound"
     assert candidate.generation_context is None
-    assert candidate.safe_metadata()["contextStatus"] == "legacy_unknown"
+    assert candidate.safe_metadata()["contextStatus"] == "unbound"
 
 
 class _PanelStore:

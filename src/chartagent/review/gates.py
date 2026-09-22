@@ -714,45 +714,6 @@ class ReviewCoordinator:
         }
 
 
-def normalize_review_event(kind: str, payload: Mapping[str, Any] | None = None) -> dict[str, Any]:
-    """Normalize legacy domain events for trace/evaluation consumers."""
-    raw = dict(payload or {})
-    legacy_kind = str(kind or "")
-    review_type = "measurement" if legacy_kind.startswith("measurement_repair") else "generated_chart" if legacy_kind.startswith("chart_review") or legacy_kind.startswith("generated_chart") else str(raw.get("reviewType") or "unknown")
-    if legacy_kind in {"measurement_repair_required", "chart_review_repair_required"}:
-        state = ReviewState.REPAIR_REQUIRED.value
-    elif legacy_kind in {"measurement_repair_exhausted", "generated_chart_rejected"}:
-        state = ReviewState.EXHAUSTED.value if legacy_kind == "measurement_repair_exhausted" else ReviewState.FAILED.value
-    elif legacy_kind in {"chart_review_started", "chart_review_required"}:
-        state = ReviewState.REVIEWING.value
-    elif legacy_kind == "chart_review_completed":
-        state = ReviewState.PASSED.value if raw.get("publication_status") in {"published", "published_with_warning"} else ReviewState.FAILED.value
-    elif legacy_kind == "generated_chart_published":
-        state = ReviewState.PASSED_WITH_WARNING.value if raw.get("publication_status") == "published_with_warning" else ReviewState.PASSED.value
-    else:
-        state = str(raw.get("state") or ReviewState.REVIEWING.value)
-    result = {
-        "reviewType": review_type,
-        "state": state,
-        "blocking": state not in {ReviewState.PASSED.value, ReviewState.PASSED_WITH_WARNING.value},
-    }
-    for source, target in (
-        ("review_id", "reviewId"),
-        ("candidate_id", "subjectId"),
-        ("subject_id", "subjectId"),
-        ("attempt", "attempt"),
-        ("max_attempts", "maxAttempts"),
-        ("next_action", "nextAction"),
-    ):
-        if source in raw and raw[source] is not None:
-            result[target] = raw[source]
-    if isinstance(raw.get("repair"), Mapping):
-        result["repairAction"] = _safe_mapping(raw["repair"])
-    if isinstance(raw.get("issues"), list):
-        result["issues"] = [issue.to_dict() for issue in _issues(raw["issues"])]
-    return result
-
-
 __all__ = [
     "ExecutionGate",
     "GateState",
@@ -763,6 +724,5 @@ __all__ = [
     "ReviewState",
     "ReviewType",
     "ReviewGateBlocked",
-    "normalize_review_event",
     "review_idempotency_key",
 ]

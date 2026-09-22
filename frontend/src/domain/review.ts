@@ -1,7 +1,7 @@
 import type { AgentRunEvent } from '../types/protocol'
 import { eventPayload, recordValue } from './records'
 
-export const reviewEventKinds = new Set(['review_started', 'review_completed', 'review_repair_required', 'review_failed', 'review_gate_required', 'review_gate_updated', 'chart_review_started', 'chart_review_required', 'chart_review_repair_required', 'chart_review_completed', 'generated_chart_published', 'generated_chart_rejected'])
+export const reviewEventKinds = new Set(['review_started', 'review_completed', 'review_repair_required', 'review_failed', 'review_gate_required', 'review_gate_updated', 'review_subcheck', 'generated_chart_published', 'generated_chart_rejected'])
 
 export function isReviewEvent(event: AgentRunEvent): boolean {
   return reviewEventKinds.has(event.kind)
@@ -19,7 +19,6 @@ export function reviewIssues(payload: Record<string, unknown>, gate: Record<stri
 export function reviewTypeLabel(value: unknown): string {
   if (value === 'measurement') return '测量审核'
   if (value === 'generated_chart') return '生成图审核'
-  if (typeof value === 'string' && value) return value
   return '审核'
 }
 

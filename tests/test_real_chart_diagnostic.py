@@ -100,8 +100,8 @@ def test_timeline_projects_complete_multi_panel_chain_without_false_repeated_spl
             _tool_result(2 + index, "measure_bars", panel_id=f"panel_{index}")
             for index in range(1, 5)
         ],
-        _event(7, "chart_review_started", {"review_id": "review_1"}),
-        _event(8, "chart_review_completed", {"review_id": "review_1", "review_status": "passed"}),
+        _event(7, "review_started", {"review_id": "review_1", "review_type": "generated_chart", "state": "reviewing"}),
+        _event(8, "review_completed", {"review_id": "review_1", "review_type": "generated_chart", "state": "passed"}),
         _tool_result(
             9,
             "assemble_spec",
@@ -163,7 +163,7 @@ def test_timeline_flags_repeated_split_and_review_failure_without_repair():
         _event(1, "run_started"),
         _tool_result(2, "decompose_chart_image", result={"data": {"panels": [{"id": "panel_1"}]}}),
         _tool_result(3, "decompose_chart_image", result={"data": {"panels": [{"id": "panel_1"}]}}),
-        _event(4, "chart_review_completed", {"review_status": "failed", "reason": "缺少右侧图"}),
+        _event(4, "review_failed", {"review_id": "review_1", "review_type": "generated_chart", "state": "failed", "reason": "缺少右侧图"}),
     ]
 
     timeline = build_timeline(

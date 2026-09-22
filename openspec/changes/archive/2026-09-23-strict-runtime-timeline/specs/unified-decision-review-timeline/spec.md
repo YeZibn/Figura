@@ -1,10 +1,4 @@
-# unified-decision-review-timeline Specification
-
-## Purpose
-
-为图表 Agent 建立一条可重建、可展开且跨普通运行与评测运行复用的决策时间线，统一表达观察、模型决策、工具动作、审核门禁、修复和发布，而不替换原始执行事件或削弱模型的证据选择权。
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Decision units have a canonical bounded identity
 
@@ -19,7 +13,7 @@ decision unit 关联。关联 SHALL 在适用时包含 `unit_id`、`unit_type`�
 
 - **WHEN** 一个 run 先完成测量证据决策，再生成并审核候选图
 - **THEN** 时间线可以将测量 unit、生成 candidate attempt 和 review cycle 关联到同一 run
-- **AND** 工具观察、Agent 决策、VLM 审核和 publication status 不会被合并成一个无类型的成功事件
+- **AND** 工具观察、Agent 决策、审核和 publication status 不会被合并成一个无类型的成功事件
 
 #### Scenario: Every visible unit is fully classified
 
@@ -56,7 +50,7 @@ decision unit 关联。关联 SHALL 在适用时包含 `unit_id`、`unit_type`�
 
 #### Scenario: Technical lifecycle events are retained but not presented
 
-- **WHEN** history contains model-start、model-completion、operation-save 或 run lifecycle 事件
+- **WHEN** history contains model-start、model-completion、operation-save 或原始审核事件
 - **THEN** 这些事件继续作为事实来源参与状态和失败判断，并保留在技术详情中
 - **AND** 默认用户时间线只显示统一节点的中文标题、阶段、状态和业务结果
 
@@ -66,8 +60,7 @@ decision unit 关联。关联 SHALL 在适用时包含 `unit_id`、`unit_type`�
 cycle 只能使用一个 review identity。内部 deterministic audit、semantic VLM
 review、状态更新和修复分类 SHALL 保持可追踪，但不得生成第二套
 `chart_review_*` 生命周期事件。默认用户时间线 SHALL 只显示审核中状态和一个
-最终审核结果；失败结果 SHALL 展示简体中文原因，内部 subcheck 不作为独立可见
-步骤。
+最终审核结果；失败结果 SHALL 展示简体中文原因，内部 subcheck 不作为独立可见步骤。
 
 #### Scenario: Candidate review is summarized once
 
@@ -97,60 +90,20 @@ transition、model turn、operation save 或内部 review subcheck 等控制事�
 
 #### Scenario: Evidence use remains auditable without a visible decision card
 
-- **WHEN** Agent使用一次 measurement observation 中的部分 refs 完成装配
+- **WHEN** Agent 使用一次 measurement observation 中的部分 refs 完成装配
 - **THEN** 内部 trace 可以关联 observation、实际使用 refs 和 assemble
 - **AND** 默认时间线不创建“测量决策”步骤或待处理卡片
 
 #### Scenario: Detail is unavailable
 
 - **WHEN** 原始工具结果因历史保留、大小或权限原因不可完整读取
-- **THEN** 时间线保留工具或审核步骤并显示 detail unavailable/truncated 原因
+- **THEN** 时间线保留对应节点并显示 detail unavailable/truncated 原因
 - **AND** 不伪造内容或成功状态
 
-### Requirement: Runtime facts do not become visible decision gates
+## REMOVED Requirements
 
-内部运行状态 MAY 记录 scope、issues、repair hint、预算和下一次实际动作，但默认前端 SHALL NOT 将这些状态投影为要求用户或模型关闭的 measurement decision unit。只有工具执行、候选生成、最终审核和终态错误形成普通用户可见步骤。
+### Requirement: Runtime lifecycle events use a bounded compatibility projection
 
-#### Scenario: Measurement warning remains inside the tool result
+**Reason**: 新协议要求所有进入时间线的事件具有完整语义关联；legacy/unknown 容器和客户端猜测会重新引入英文、重复步骤和错误完成状态。
 
-- **WHEN** 测量返回 warning 或局部补充建议
-- **THEN** 用户可在测量工具结果中查看该信息
-- **AND** 时间线不额外显示 measurement decision pending
-
-#### Scenario: Review failure remains actionable and concise
-
-- **WHEN** 生成审核失败
-- **THEN** 时间线显示审核失败和原因
-- **AND** 模型后续选择的实际工具调用按正常工具步骤展示
-
-### Requirement: Timeline transitions are idempotent and lineage-safe
-
-相同 run、unit、attempt、phase 和 transition 的重复事件 SHALL 只产生一个可见状态转换。修复或重试产生新 attempt 时 SHALL 保留父 unit 和失败原因；旧 attempt 不得被覆盖为新 attempt 的状态。
-
-#### Scenario: Duplicate review snapshot is replayed
-
-- **WHEN** shared review 更新和 tool result snapshot 描述同一个 candidate review transition
-- **THEN** 时间线只显示一次对应的状态转换
-- **AND** 原始事件仍可在展开详情中按 sequence 查看
-
-#### Scenario: Repair creates a new attempt
-
-- **WHEN** evidence-needed 或 spec-only 修复重新组装并渲染候选
-- **THEN** 新 attempt 关联父 attempt 和 repair kind
-- **AND** 父 attempt 的失败、证据和不可发布状态保持可读
-
-### Requirement: Projected failures preserve actionable error context
-
-时间线投影 SHALL 保留错误类别、稳定错误码、provider 状态（如存在）、安全的用户可读原因、是否可重试以及第一失败事件引用。摘要可以截断正文，但不得只保留无上下文的通用“运行失败”文本。
-
-#### Scenario: Provider rejection remains diagnosable
-
-- **WHEN** provider 返回确定性的拒绝并导致 run 终止
-- **THEN** 时间线显示 provider 拒绝类别、状态或错误码和脱敏后的原因
-- **AND** 用户可以区分它与远端结果未知的网络或超时失败
-
-#### Scenario: Replay does not lose failure details
-
-- **WHEN** 用户刷新、重连或在评测工作台读取同一 run 的历史事件
-- **THEN** 投影仍显示相同的错误类别、原因和失败引用
-- **AND** 重建不会重新调用 provider 或创建新的 decision unit
+**Migration**: 清理旧事件夹具和旧评测记录，使用新的严格事件生产协议重新生成运行历史；不提供运行时兼容读取路径。

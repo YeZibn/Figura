@@ -202,10 +202,6 @@ class GenerationContext:
     def source_linked(self) -> bool:
         return self.mode is not GenerationMode.SYNTHESIZE or self.source_scope is not None
 
-    @property
-    def legacy_unknown(self) -> bool:
-        return False
-
     def to_dict(self) -> dict[str, Any]:
         result = {
             "version": max(1, min(int(self.version), MAX_CONTEXT_VERSION)),

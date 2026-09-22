@@ -35,7 +35,6 @@ from .gates import (
     ReviewGateBlocked,
     ReviewState,
     ReviewType,
-    normalize_review_event,
     review_idempotency_key,
 )
 from .adapters import GeneratedChartReviewAdapter, MeasurementReviewAdapter
@@ -69,7 +68,6 @@ __all__ = [
     "ReviewGateBlocked",
     "ReviewState",
     "ReviewType",
-    "normalize_review_event",
     "review_idempotency_key",
     "MeasurementReviewAdapter",
     "GeneratedChartReviewAdapter",

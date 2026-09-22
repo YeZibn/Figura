@@ -29,7 +29,10 @@ def test_test4_replay_reconstructs_closed_units_and_collection_lineage():
     assert all(event["unit_type"] == "measurement" for event in events[:4])
 
     generation_events = events[4:7]
-    assert {event["unit_id"] for event in generation_events} == {"generation:candidate-test4"}
+    assert {event["unit_id"] for event in generation_events} == {
+        "generation:assemble-test4",
+        "generation:candidate-test4",
+    }
     assert all(event["unit_type"] == "generation" for event in generation_events)
 
     review_events = [
@@ -49,7 +52,10 @@ def test_test4_replay_reconstructs_closed_units_and_collection_lineage():
     assert "next_action" not in repair_measurement_events[0]
 
     retry_generation_events = events[15:18]
-    assert {event["unit_id"] for event in retry_generation_events} == {"generation:candidate-test4-retry"}
+    assert {event["unit_id"] for event in retry_generation_events} == {
+        "generation:assemble-test4-repair",
+        "generation:candidate-test4-retry",
+    }
     assert all(event["unit_type"] == "generation" for event in retry_generation_events)
 
     publication = events[-1]

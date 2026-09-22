@@ -69,19 +69,24 @@ reordering events.
 
 The system SHALL preserve one canonical run identifier across Gateway run
 acceptance, Agent execution, durable memory records, execution events,
-conversation projection, attachments, visual observations, and generated
-chart artifacts. It SHALL preserve enough call, observation, and artifact
-identifiers for clients to associate a tool call with its result, error,
-visual evidence, and generated chart output. The grouping SHALL retain
-intermediate evidence when the final answer is available, while allowing
-generated chart artifacts to be displayed as final Run results instead of
-duplicated as ordinary tool-step content.
+conversation projection, attachments, visual observations, and generated chart
+artifacts. Every measurement, generation, review, and publication event that
+participates in the decision timeline SHALL contain a complete `unit_id`,
+`unit_type`, `phase`, `actor`, `role`, and `transition_id`. A tool call and its
+result SHALL use the same `unit_id` and `call_id`; a review cycle SHALL use one
+canonical `review_id` for its candidate attempt. The producer SHALL reject a
+timeline event that is missing required identity or state fields instead of
+creating a legacy or unknown association.
+
+The grouping SHALL retain intermediate evidence when the final answer is
+available, while allowing generated chart artifacts to be displayed as final
+Run results instead of duplicated as ordinary tool-step content.
 
 Each tool-result event SHALL keep its bounded `tool_name`, `call_id`, execution
-status, and turn/run correlation in the outer event envelope even when the
-structured result body is truncated. Truncation SHALL apply to the diagnostic
-result payload rather than replacing the identity needed for client
-correlation.
+status, unit correlation, and turn/run correlation in the outer event envelope
+even when the structured result body is truncated. Truncation SHALL apply to
+the diagnostic result payload rather than replacing the identity needed for
+client correlation.
 
 #### Scenario: One canonical identity is used across a Run
 
@@ -89,26 +94,33 @@ correlation.
 - **THEN** the Run summary, durable Agent records, emitted events, projected
   messages, and managed artifacts all identify that operation with the same
   canonical run identifier
-- **AND** no second local Run identifier causes the conversation projection
-  and execution history to describe separate runs
+- **AND** every timeline event has a complete semantic unit envelope
 
 #### Scenario: Tool call and result form one inspectable step
 
 - **WHEN** a tool call emits a later result with the same call identifier
 - **THEN** the client can render one step with running, success, or error state
   and expandable arguments and result details
-- **AND** the step remains associated with its parent canonical Run
+- **AND** both events belong to the same canonical unit without tool-name or
+  sequence guessing
+
+#### Scenario: Missing timeline identity is rejected
+
+- **WHEN** a producer attempts to persist a measurement, generation, review, or
+  publication event without its required unit identity or state
+- **THEN** the producer records a bounded protocol error and does not publish
+  the malformed event to the user timeline
+- **AND** the client does not synthesize a legacy, unknown, or orphan business
+  step
 
 #### Scenario: Oversized result preserves tool identity
 
 - **WHEN** a tool result contains a trace, polyline, OCR collection, or other
   diagnostic payload larger than the event body limit
-- **THEN** the event retains its bounded tool name, call identifier, status,
-  turn, and run correlation
+- **THEN** the event retains its bounded tool name, call identifier, unit
+  identity, status, turn, and run correlation
 - **AND** only the oversized result content is represented as truncated or
   summarized data
-- **AND** clients do not create an unknown or orphan tool step solely because
-  the result body was truncated
 
 #### Scenario: Visual evidence remains attached to its tool context
 
@@ -116,7 +128,7 @@ correlation.
 - **THEN** the observation can be displayed inside or alongside that tool step
   with its caption and authorized resource reference
 - **AND** the event history keeps the observation order relative to the call
-  and result under the same Run
+  and result under the same unit
 
 #### Scenario: Generated chart remains available as Run output
 
@@ -167,7 +179,16 @@ without exposing unsanitized HTML or replacing the original answer text.
 
 ### Requirement: Lifecycle events separate execution, review, and publication state
 
-Lifecycle events SHALL 保持工具执行、measurement observation、evidence decision、生成图审核和 publication status 的独立字段。`measurement_observed`、`measurement_evidence_selected`、`measurement_evidence_discarded` 和 `measurement_repair_exhausted` 等事件不得被解释为生成图审核通过或失败；`chart_review_started` 仅表示生成候选进入审核。Run lifecycle events SHALL 继续区分 active、completed、failed 和 interrupted。
+Lifecycle events SHALL keep tool execution, measurement observation, evidence
+decision, canonical review, and publication status in independent fields.
+`measurement_observed`, `measurement_evidence_selected`,
+`measurement_evidence_discarded`, and `measurement_repair_exhausted` SHALL NOT
+be interpreted as generated-chart review outcomes. `review_started` and
+`review_completed` SHALL be the only public review lifecycle events for both
+measurement and generated-chart review types; `chart_review_started` and
+`chart_review_completed` SHALL NOT be emitted. Run lifecycle events SHALL
+continue to distinguish active, completed, failed, interrupted, and history-gap
+states.
 
 #### Scenario: Tool result reports observation state only
 
@@ -181,19 +202,23 @@ Lifecycle events SHALL 保持工具执行、measurement observation、evidence d
 - **THEN** trace 记录对应 attempt、selected/discarded refs、语义映射和 decision 来源
 - **AND** 原始工具结果仍保持可追溯
 
-#### Scenario: Generated review has accurate semantics
+#### Scenario: Generated review has one authoritative lifecycle
 
-- **WHEN** 生成候选进入审核、修复或发布
-- **THEN** trace 使用独立的 chart review 和 publication 状态
-- **AND** 客户端不会把测量 observation 或 assemble 成功显示为已发布
+- **WHEN** a generated candidate enters review, repair, or publication
+- **THEN** the trace contains one canonical `review_started` transition, one
+  final `review_completed` or `review_failed` transition, and an explicit
+  publication transition when applicable
+- **AND** internal deterministic and VLM checks remain diagnostic details
+  rather than parallel review lifecycles
 
 ### Requirement: Lifecycle events have stable Chinese presentation labels
 
 The execution protocol SHALL provide a bounded Simplified Chinese label for
-each supported lifecycle event, with the stable English event kind preserved as
-the machine identifier. Unknown event kinds SHALL remain renderable using a
-safe English fallback. Supported run terminal and interruption reason codes
-SHALL also have bounded Simplified Chinese presentation labels.
+each supported user-facing lifecycle event, with the stable English event kind
+preserved only as a machine identifier and technical detail. The user-facing
+projection SHALL never use an unsupported event kind, `unknown`, or `legacy` as
+visible fallback text. Unsupported or malformed event kinds SHALL remain
+technical protocol errors and SHALL NOT create a business timeline item.
 
 #### Scenario: Known lifecycle event is localized
 
@@ -201,11 +226,13 @@ SHALL also have bounded Simplified Chinese presentation labels.
 - **THEN** it displays the corresponding Simplified Chinese label and retains
   the original event kind for technical inspection
 
-#### Scenario: Unknown lifecycle event remains visible
+#### Scenario: Malformed lifecycle event is not shown as a business step
 
-- **WHEN** a client receives an event kind absent from the label catalog
-- **THEN** it displays the stable event kind as fallback text
-- **AND** it does not discard or misclassify the event
+- **WHEN** a client receives an event that is absent from the supported event
+  contract or lacks its required semantic envelope
+- **THEN** it displays a bounded protocol or history error state
+- **AND** it does not display the raw English kind as a completed user-facing
+  step
 
 #### Scenario: Interruption reason is localized
 
@@ -382,7 +409,7 @@ work.
 
 #### Scenario: Measurement and review are not displayed as one status
 
-- **WHEN** 一个候选经历 measurement_observed、evidence_selected、chart_review_started
+- **WHEN** 一个候选经历 measurement_observed、evidence_selected、review_started
   和 generated_chart_rejected
 - **THEN** trace 保留每种事件的独立 kind 和状态
 - **AND** 关联字段允许客户端把它们归入同一 candidate attempt

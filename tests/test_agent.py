@@ -129,7 +129,7 @@ def test_review_gate_context_is_bounded_structured_json():
         "failed": [],
         "published": [],
     }))
-    assert context["type"] == "chart_review_gate"
+    assert context["type"] == "execution_review_gate"
     assert context["status"] == "reviewing"
     assert context["publication_blocked"] is True
     assert "required_action" not in context

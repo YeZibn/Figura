@@ -60,7 +60,6 @@ from .review_gate import (
     _BUDGET_MSG,
     _REVIEW_FAILED_MSG,
     _REVIEW_REQUIRED_MSG,
-    review_gate_context,
 )
 from .observations import observation_status
 from .artifacts import (
@@ -110,6 +109,17 @@ _LAYOUT_TOOL_NAME = "inspect_chart_layout"
 _DECOMPOSE_TOOL_NAME = "decompose_chart_image"
 _MAX_LAYOUT_CONTEXTS = _MAX_LAYOUT_CONTEXTS_CANONICAL
 _RENDER_TOOL_NAMES = frozenset({"render_chart", "generate_chart"})
+
+
+def _tool_trace_identity(tool_name: str, call_id: str) -> tuple[str, str]:
+    """Return the explicit timeline unit shared by one tool call and result."""
+    if tool_name in MEASUREMENT_TOOLS:
+        unit_type = "measurement"
+    elif tool_name == "assemble_spec" or tool_name in _RENDER_TOOL_NAMES:
+        unit_type = "generation"
+    else:
+        unit_type = "observation"
+    return f"{unit_type}:{str(call_id)[:128]}", unit_type
 
 
 class Agent:
@@ -382,54 +392,6 @@ class Agent:
             if not result.tool_calls:
                 self._raise_if_interrupted(run)
                 assistant_message = assistant_entry(result)
-                gate = self._review_manager.gate(run.id)
-                if gate["pending"]:
-                    # Preserve the attempted answer as model context, but do
-                    # not turn it into a terminal record or trace event.
-                    self._current_messages.append(assistant_message)
-                    self._messages.append(assistant_message)
-                    self.memory.append(run, "assistant", {"message": assistant_message})
-                    gate_message = {"role": "user", "content": review_gate_context(gate)}
-                    self._current_messages.append(gate_message)  # type: ignore[arg-type]
-                    self._messages.append(gate_message)  # type: ignore[arg-type]
-                    self.memory.append(run, "review_gate", {"state": gate})
-                    if emitter is not None:
-                        emitter.emit("chart_review_required", turn=turn, state=gate)
-                    continue
-                if gate["failed"]:
-                    self._current_messages.append(assistant_message)
-                    self._messages.append(assistant_message)
-                    self.memory.append(run, "assistant", {"message": assistant_message})
-                    gate_message = {"role": "user", "content": review_gate_context(gate)}
-                    self.memory.append(run, "review_gate", {"state": gate})
-                    if gate.get("retryable") and turn < self.max_steps:
-                        self._current_messages.append(gate_message)  # type: ignore[arg-type]
-                        self._messages.append(gate_message)  # type: ignore[arg-type]
-                        self._checkpoint(
-                            run,
-                            phase="review",
-                            next_action=str((gate.get("recoveryActions") or [{}])[0].get("action", "correct_chart_spec")),
-                            state=self._checkpoint_state(
-                                user_input,
-                                self._current_messages,
-                                layout_contexts,
-                                run_attachment_ids,
-                                turn,
-                                pending_tool_calls=(),
-                                visual_references=checkpoint_references,
-                                artifact_records=artifact_records,
-                                measurement_sessions=measurement_sessions,
-                                pending_measurement_repairs=pending_measurement_repairs,
-                            ),
-                        )
-                        if emitter is not None:
-                            emitter.emit("chart_review_repair_required", turn=turn, state=gate)
-                        continue
-                    if emitter is not None:
-                        emitter.emit("generated_chart_rejected", turn=turn, state=gate, reason="review_failed")
-                    self.memory.append(run, "terminal", {"answer": _REVIEW_FAILED_MSG, "review_gate": gate})
-                    self.memory.finish(run, RunStatus.FAILED, "review_failed")
-                    return _REVIEW_FAILED_MSG
                 shared_gate = self._review_coordinator.gate(run.id)
                 if shared_gate.blocking:
                     self._current_messages.append(assistant_message)
@@ -582,6 +544,7 @@ class Agent:
                     selected_panel_id = call_arguments["panel_id"]
                 operation_kind = "render" if call.name in _RENDER_TOOL_NAMES else "tool"
                 operation_id = f"{operation_kind}:{turn}:{call.id}"
+                tool_unit_id, tool_unit_type = _tool_trace_identity(call.name, call.id)
                 operation = self._begin_work_unit(operation_id, operation_kind)
                 if isinstance(recovery, dict) and operation.get("state") in {"in_flight", "uncertain"}:
                     self._uncertain_work_unit(operation_id, "operation_outcome_uncertain")
@@ -595,6 +558,13 @@ class Agent:
                         tool_display_name=presentation.display_name,
                         tool_label=presentation.label,
                         call_id=call.id,
+                        unit_id=tool_unit_id,
+                        unit_type=tool_unit_type,
+                        phase="action",
+                        actor="tool",
+                        role="action",
+                        state="running",
+                        transition_id=f"{tool_unit_id}:started",
                         arguments=summarize_arguments(call.arguments),
                     )
                 dispatch = prepare_and_dispatch_tool_call(
@@ -611,7 +581,7 @@ class Agent:
                 raw_observation_scope = dispatch.raw_observation_scope
                 prepared_target = dispatch.prepared_target
                 observation = dispatch.observation
-                focus_unit_id = None
+                focus_unit_id = tool_unit_id if call.name in MEASUREMENT_TOOLS else None
                 required_focus = False
                 if isinstance(prepared_target, Mapping):
                     focus_identity = str(
@@ -619,7 +589,7 @@ class Agent:
                         or prepared_target.get("target_id")
                         or call.id
                     )[:160]
-                    focus_unit_id = f"measurement:focus:{focus_identity}"
+                    focus_unit_id = tool_unit_id
                     active_gate = self._review_coordinator.gate(run.id)
                     required_focus = bool(
                         active_gate.blocking
@@ -691,6 +661,13 @@ class Agent:
                             turn=turn,
                             tool_name=call.name,
                             call_id=call.id,
+                            unit_id=tool_unit_id,
+                            unit_type=tool_unit_type,
+                            phase="assemble",
+                            actor="tool",
+                            role="action",
+                            state="failed",
+                            transition_id=f"{tool_unit_id}:assembly_validation_failed",
                             error=str(assembly_payload.get("error"))[:240],
                             issues=[str(item)[:160] for item in issues[:12]] if isinstance(issues, list) else [],
                             blocking=False,
@@ -703,6 +680,12 @@ class Agent:
                             tool_name=call.name,
                             call_id=call.id,
                             unit_id=focus_unit_id,
+                            unit_type="measurement",
+                            phase="observe",
+                            actor="agent",
+                            role="action",
+                            state="requested",
+                            transition_id=f"{focus_unit_id}:focus_requested",
                             parent_unit_id=(
                                 f"review:{self._review_coordinator.gate(run.id).review_id}"
                                 if required_focus and self._review_coordinator.gate(run.id).review_id
@@ -741,6 +724,12 @@ class Agent:
                                     tool_name=call.name,
                                     call_id=call.id,
                                     unit_id=focus_unit_id,
+                                    unit_type="measurement",
+                                    phase="observe",
+                                    actor="tool",
+                                    role="observation",
+                                    state="observed",
+                                    transition_id=f"{focus_unit_id}:observed",
                                     parent_unit_id=(
                                         f"review:{self._review_coordinator.gate(run.id).review_id}"
                                         if required_focus and self._review_coordinator.gate(run.id).review_id
@@ -763,6 +752,13 @@ class Agent:
                                         turn=turn,
                                         tool_name=call.name,
                                         call_id=call.id,
+                                        unit_id=focus_unit_id,
+                                        unit_type="measurement",
+                                        phase="repair",
+                                        actor="system",
+                                        role="gate",
+                                        state="exhausted",
+                                        transition_id=f"{focus_unit_id}:repair_exhausted",
                                         session_id=measurement_session.session_id,
                                         attempt_id=measurement_session.current_attempt_id,
                                         budget_remaining=0,
@@ -782,6 +778,11 @@ class Agent:
                             tool_name=call.name,
                             call_id=call.id,
                             unit_id=focus_unit_id,
+                            unit_type="measurement",
+                            phase="observe",
+                            actor="tool",
+                            role="observation",
+                            transition_id=f"{focus_unit_id}:focus_failed",
                             parent_unit_id=(
                                 f"review:{self._review_coordinator.gate(run.id).review_id}"
                                 if required_focus and self._review_coordinator.gate(run.id).review_id
@@ -829,6 +830,13 @@ class Agent:
                             turn=turn,
                             tool_name=call.name,
                             call_id=call.id,
+                            unit_id=tool_unit_id,
+                            unit_type="measurement",
+                            phase="decide",
+                            actor="agent",
+                            role="decision",
+                            state="pending",
+                            transition_id=f"{tool_unit_id}:decision_required",
                             required=False,
                             diagnostic_only=True,
                             decision=repair_context,
@@ -843,6 +851,12 @@ class Agent:
                                 tool_name=call.name,
                                 call_id=call.id,
                                 unit_id=focus_unit_id,
+                                unit_type="measurement",
+                                phase="observe",
+                                actor="tool",
+                                role="observation",
+                                state="applied" if focus.get("applied") and focus.get("status") == "applied" else "failed",
+                                transition_id=f"{focus_unit_id}:focus_" + ("applied" if focus.get("applied") and focus.get("status") == "applied" else "failed"),
                                 required=required_focus,
                                 focus={
                                     key: focus.get(key)
@@ -941,6 +955,13 @@ class Agent:
                         tool_display_name=presentation.display_name,
                         tool_label=presentation.label,
                         call_id=call.id,
+                        unit_id=tool_unit_id,
+                        unit_type=tool_unit_type,
+                        phase="action",
+                        actor="tool",
+                        role="action",
+                        state=observation_status(observation.content),
+                        transition_id=f"{tool_unit_id}:completed",
                         status=observation_status(observation.content),
                         tool_status=observation_status(observation.content),
                         result=_trace_result_summary(observation.content),
@@ -948,69 +969,24 @@ class Agent:
                         **_lifecycle_trace_fields(observation.content),
                         **_measurement_trace_fields(observation.content),
                     )
-                    review_items = self._review_items(observation.content)
-                    for item in review_items:
-                        review_status = item.get("reviewStatus")
-                        candidate_status = item.get("candidateStatus")
-                        publication_status = item.get("publicationStatus")
-                        common_review_fields = {
-                            "tool_name": call.name,
-                            "tool_display_name": presentation.display_name,
-                            "tool_label": presentation.label,
-                            "call_id": call.id,
-                            "candidate_id": item.get("candidateId"),
-                            "review_id": item.get("reviewId"),
-                            "candidate_status": candidate_status,
-                            "review_status": review_status,
-                            "publication_status": publication_status,
-                            "review_mode": item.get("reviewMode"),
-                            "internal_review": item.get("reviewMode") == "vlm",
-                            "attempt": item.get("candidateAttempt") or item.get("lineageAttempt") or item.get("attempt"),
-                            "parent_attempt": item.get("parentAttempt") or item.get("parentCandidateId"),
-                            "repair_kind": (item.get("review") or {}).get("repairKind") if isinstance(item.get("review"), Mapping) else item.get("repairKind"),
-                            "collection_id": item.get("collectionId") or item.get("collection_id"),
-                        }
-                        generation_context = item.get("generationContext") or item.get("generation_context")
-                        if isinstance(generation_context, Mapping):
-                            if isinstance(generation_context.get("source_scope"), Mapping):
-                                common_review_fields["source_scope"] = dict(generation_context["source_scope"])
-                            if isinstance(generation_context.get("coverage"), Mapping):
-                                common_review_fields["coverage"] = dict(generation_context["coverage"])
-                        if item.get("reviewStatus") == "completed":
-                            review_state = "passed" if publication_status in {"published", "published_with_warning"} else "failed"
-                            review_transition = f"review:{item.get('reviewId') or item.get('review_id')}:{item.get('candidateAttempt') or item.get('lineageAttempt') or item.get('attempt') or 1}:{review_state}"
-                            emitter.emit(
-                                "chart_review_completed",
-                                turn=turn,
-                                unit_id=f"review:{item.get('reviewId') or item.get('review_id')}",
-                                transition_id=review_transition,
-                                state=review_state,
-                                subject_id=item.get("candidateId"),
-                                **common_review_fields,
-                            )
-                            if item.get("publicationStatus") in {"published", "published_with_warning"}:
-                                emitter.emit(
-                                    "generated_chart_published",
-                                    turn=turn,
-                                    **common_review_fields,
-                                )
-                            if item.get("publicationStatus") == "rejected":
-                                emitter.emit(
-                                    "generated_chart_rejected",
-                                    turn=turn,
-                                    **common_review_fields,
-                                    reason="review_failed",
-                                )
                     if observation.images:
-                        emitter.emit(
-                            "generated_chart" if any(
+                        visual_kind = "generated_chart" if any(
                                 image.metadata.get("kind") == "generated_chart"
                                 for image in observation.images
                                 if hasattr(image.metadata, "get")
-                            ) else "visual_observation",
+                            ) else "visual_observation"
+                        emitter.emit(
+                            visual_kind,
                             turn=turn,
                             tool_name=call.name,
                             call_id=call.id,
+                            unit_id=tool_unit_id,
+                            unit_type=tool_unit_type,
+                            phase="render" if visual_kind == "generated_chart" else "observe",
+                            actor="tool",
+                            role="action" if visual_kind == "generated_chart" else "observation",
+                            state="available" if visual_kind == "generated_chart" else "observed",
+                            transition_id=f"{tool_unit_id}:" + ("generated" if visual_kind == "generated_chart" else "observed"),
                             **image_payload,
                             **_lifecycle_trace_fields(observation.content),
                         )
@@ -1060,23 +1036,19 @@ class Agent:
             )
         self._raise_if_interrupted(run)
         terminal_answer = _BUDGET_MSG
-        terminal_gate = self._review_manager.gate(run.id)
         shared_terminal_gate = self._review_coordinator.gate(run.id)
         if shared_terminal_gate.blocking:
             terminal_answer = _REVIEW_FAILED_MSG if shared_terminal_gate.state.value in {"failed", "exhausted"} else _REVIEW_REQUIRED_MSG
-        elif terminal_gate["pending"] or terminal_gate["failed"]:
-            terminal_answer = _REVIEW_REQUIRED_MSG if terminal_gate["pending"] else _REVIEW_FAILED_MSG
         if emitter is not None:
             emitter.emit(
                 "budget_exhausted",
                 turn=self.max_steps,
                 max_steps=self.max_steps,
                 answer=terminal_answer,
-                review_gate=terminal_gate,
                 execution_gate=shared_terminal_gate.to_dict(),
             )
-        review_blocked = shared_terminal_gate.blocking or terminal_gate["pending"] or terminal_gate["failed"]
-        self.memory.append(run, "terminal", {"answer": terminal_answer, "max_steps": self.max_steps, "review_gate": terminal_gate, "execution_gate": shared_terminal_gate.to_dict()})
+        review_blocked = shared_terminal_gate.blocking
+        self.memory.append(run, "terminal", {"answer": terminal_answer, "max_steps": self.max_steps, "execution_gate": shared_terminal_gate.to_dict()})
         self.memory.finish(run, RunStatus.FAILED if review_blocked else RunStatus.COMPLETED, "review_failed" if review_blocked else "budget")
         return terminal_answer
 
@@ -1184,8 +1156,32 @@ class Agent:
         payload["collection_id"] = subject_ref.get("collection_id")
         payload["figure_id"] = subject_ref.get("figure_id")
         payload["parent_candidate_id"] = subject_ref.get("parent_candidate_id")
+        if payload["collection_id"]:
+            payload["parent_unit_id"] = f"review:collection:{payload['collection_id']}"
         payload["unit_id"] = f"review:{record.review_id}"
+        payload["unit_type"] = "review"
+        payload["phase"] = "repair" if record.state.value == "repair_required" else "review"
+        payload["actor"] = "system"
+        payload["role"] = "review"
+        payload["review_id"] = record.review_id
+        payload["review_type"] = record.review_type.value
+        payload["subject_id"] = record.subject_id
+        payload["review_status"] = record.state.value
         payload["transition_id"] = f"review:{record.review_id}:{record.attempt}:{record.state.value}"
+        details = payload.get("details")
+        if isinstance(details, Mapping) and details.get("publication_status"):
+            payload["publication_status"] = details.get("publication_status")
+        if isinstance(details, Mapping) and details.get("candidate_status"):
+            payload["candidate_status"] = details.get("candidate_status")
+        if isinstance(details, Mapping) and details.get("review_status"):
+            payload["review_status"] = details.get("review_status")
+        if isinstance(details, Mapping) and details.get("review_mode"):
+            payload["review_mode"] = details.get("review_mode")
+        payload.setdefault(
+            "review_mode",
+            "vlm" if record.review_type.value == "generated_chart" else "safety",
+        )
+        payload = {"review_mode": payload["review_mode"], **payload}
         self.memory.append(run, "review", {"state": payload})
         if self._execution_gate_sink is not None:
             try:
@@ -1204,6 +1200,11 @@ class Agent:
                 unit_id=payload["unit_id"],
                 transition_id=payload["transition_id"],
                 state=record.state.value,
+                unit_type="review",
+                phase="review",
+                actor="system",
+                role="review",
+                parent_unit_id=payload.get("parent_unit_id"),
                 attempt=record.attempt,
                 blocking=True,
                 tool_name=tool_name,
@@ -1222,6 +1223,11 @@ class Agent:
                 unit_id=payload["unit_id"],
                 transition_id=f"review:{record.review_id}:{record.attempt}:reviewing",
                 state="reviewing",
+                unit_type="review",
+                phase="review",
+                actor="system",
+                role="review",
+                parent_unit_id=payload.get("parent_unit_id"),
                 attempt=record.attempt,
                 blocking=True,
                 tool_name=tool_name,
@@ -1235,6 +1241,35 @@ class Agent:
             emitter.emit("review_repair_required", turn=turn, **payload)
         else:
             emitter.emit("review_failed", turn=turn, **payload)
+        if record.review_type.value != "generated_chart":
+            return
+        publication_status = str(payload.get("publication_status") or "")
+        publication_kind = (
+            "generated_chart_published"
+            if publication_status in {"published", "published_with_warning"}
+            else "generated_chart_rejected"
+        )
+        candidate_id = str(payload.get("candidate_id") or record.subject_id)
+        emitter.emit(
+            publication_kind,
+            turn=turn,
+            unit_id=f"publication:{candidate_id}",
+            unit_type="publication",
+            phase="publish",
+            actor="system",
+            role="publication",
+            parent_unit_id=payload["unit_id"],
+            review_id=record.review_id,
+            candidate_id=candidate_id,
+            subject_id=record.subject_id,
+            attempt=record.attempt,
+            publication_status=publication_status or "rejected",
+            state=publication_status or "rejected",
+            transition_id=f"publication:{candidate_id}:{record.attempt}:{publication_status or 'rejected'}",
+            tool_name=tool_name,
+            call_id=call_id,
+            reason=("review_failed" if publication_kind == "generated_chart_rejected" else None),
+        )
 
     def _record_measurement_decision_events(
         self,
@@ -1246,7 +1281,7 @@ class Agent:
         call_id: str,
         seen: set[str] | None = None,
     ) -> None:
-        """Record actual evidence use and retain legacy decisions diagnostically."""
+        """Record actual evidence use as diagnostic lineage."""
         for evidence_use in _measurement_evidence_uses_from_content(content):
             evidence_key = json.dumps(evidence_use, ensure_ascii=False, sort_keys=True, default=str)
             if seen is not None:
@@ -1258,6 +1293,13 @@ class Agent:
                 "turn": turn,
                 "tool_name": "assemble_spec",
                 "call_id": call_id,
+                "unit_id": f"measurement:{str(evidence_use.get('attempt_id') or evidence_use.get('session_id') or call_id)[:128]}",
+                "unit_type": "measurement",
+                "phase": "decide",
+                "actor": "agent",
+                "role": "decision",
+                "state": "used",
+                "transition_id": f"measurement:{str(evidence_use.get('attempt_id') or evidence_use.get('session_id') or call_id)[:128]}:evidence_used",
                 **evidence_use,
                 "blocking": False,
                 "diagnostic_only": False,
@@ -1290,6 +1332,13 @@ class Agent:
                 "turn": turn,
                 "tool_name": "assemble_spec",
                 "call_id": call_id,
+                "unit_id": f"measurement:{attempt_id[:128]}",
+                "unit_type": "measurement",
+                "phase": "decide",
+                "actor": "agent",
+                "role": "decision",
+                "state": str(decision.get("decision_status") or decision.get("status") or "selected")[:32],
+                "transition_id": f"measurement:{attempt_id[:128]}:evidence_decision",
                 "session_id": decision.get("session_id"),
                 "attempt_id": attempt_id,
                 "selected_refs": list(decision.get("selected_refs") or [])[:64],
@@ -1329,6 +1378,7 @@ class Agent:
             ensure_ascii=False,
         )
         for call in calls:
+            unit_id, unit_type = _tool_trace_identity(call.name, call.id)
             message = tool_entry(call, content)
             self._current_messages.append(message)
             self._messages.append(message)
@@ -1352,6 +1402,13 @@ class Agent:
                     tool_display_name=presentation.display_name,
                     tool_label=presentation.label,
                     call_id=call.id,
+                    unit_id=unit_id,
+                    unit_type=unit_type,
+                    phase="action",
+                    actor="system",
+                    role="action",
+                    state="not_started",
+                    transition_id=f"{unit_id}:skipped",
                     status="not_started",
                     reason="review_gate_blocked",
                     review_gate=gate.to_dict(),
@@ -1471,20 +1528,6 @@ class Agent:
         layout_contexts: dict[str, dict[str, Any]],
     ) -> None:
         remember_layout_context(content, arguments, layout_contexts)
-    @staticmethod
-    def _review_items(content: str) -> list[dict[str, Any]]:
-        try:
-            payload = json.loads(content)
-            data = payload.get("data") if isinstance(payload, dict) else None
-            items = data.get("review") if isinstance(data, dict) else None
-            if not isinstance(items, list):
-                items = payload.get("review") if isinstance(payload, dict) else None
-            if not isinstance(items, list) and isinstance(payload, dict) and isinstance(payload.get("candidate"), dict):
-                items = [payload["candidate"]]
-            return [item for item in items if isinstance(item, dict)] if isinstance(items, list) else []
-        except (TypeError, json.JSONDecodeError):
-            return []
-
     def _apply_generation_review(
         self,
         observation: Any,
@@ -1564,25 +1607,6 @@ class Agent:
                     tool_name="generated_chart_review",
                     call_id=call_id,
                 )
-            if emitter is not None and initial_shared_review.state.value == "reviewing":
-                # Compatibility alias for older consumers.  It deliberately
-                # carries the same unit and transition as review_started, so
-                # the shared projector renders only one visible start.
-                emitter.emit(
-                    "chart_review_started",
-                    turn=turn,
-                    unit_id=f"review:{initial_shared_review.review_id}",
-                    transition_id=f"review:{initial_shared_review.review_id}:{initial_shared_review.attempt}:reviewing",
-                    state="reviewing",
-                    internal_review=True,
-                    tool_count=0,
-                    candidate_id=candidate.candidate_id,
-                    subject_id=candidate.candidate_id,
-                    review_id=candidate.review_id,
-                    attempt=candidate.lineage_attempt,
-                    review_mode="vlm" if candidate.policy.semantic_required else "safety",
-                    collection_id=candidate.collection_id,
-                )
             if candidate.review_status is ReviewStatus.PENDING:
                 semantic_result: ReviewResult | None = None
                 from ..review.evaluator import review_candidate_bytes
@@ -1608,6 +1632,11 @@ class Agent:
                         parent_unit_id=collection_parent,
                         candidate_id=candidate.candidate_id,
                         review_id=candidate.review_id,
+                        unit_type="review",
+                        phase="review",
+                        actor="system",
+                        role="review",
+                        transition_id=f"{review_unit}:{candidate.lineage_attempt}:deterministic",
                         attempt=candidate.lineage_attempt,
                         check_type="deterministic_quality_audit",
                         state="failed" if deterministic_result.blocking else "passed",
@@ -1627,6 +1656,11 @@ class Agent:
                                 parent_unit_id=collection_parent,
                                 candidate_id=candidate.candidate_id,
                                 review_id=candidate.review_id,
+                                unit_type="review",
+                                phase="review",
+                                actor="system",
+                                role="review",
+                                transition_id=f"{review_unit}:{candidate.lineage_attempt}:semantic_not_run",
                                 attempt=candidate.lineage_attempt,
                                 check_type="semantic_vlm",
                                 state="not_run",
@@ -1642,6 +1676,11 @@ class Agent:
                                 parent_unit_id=collection_parent,
                                 candidate_id=candidate.candidate_id,
                                 review_id=candidate.review_id,
+                                unit_type="review",
+                                phase="review",
+                                actor="vlm",
+                                role="review",
+                                transition_id=f"{review_unit}:{candidate.lineage_attempt}:semantic_started",
                                 attempt=candidate.lineage_attempt,
                                 check_type="semantic_vlm",
                                 state="running",
@@ -1698,6 +1737,11 @@ class Agent:
                             parent_unit_id=collection_parent,
                             candidate_id=candidate.candidate_id,
                             review_id=candidate.review_id,
+                            unit_type="review",
+                            phase="review",
+                            actor="vlm",
+                            role="review",
+                            transition_id=f"{review_unit}:{candidate.lineage_attempt}:semantic_completed",
                             attempt=candidate.lineage_attempt,
                             check_type="semantic_vlm",
                             state=semantic_result.status.value,

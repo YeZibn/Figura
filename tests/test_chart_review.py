@@ -864,11 +864,12 @@ def test_failed_vlm_review_trace_has_independent_lifecycle_fields(tmp_path):
 
     assert result == "*stopped: generated chart review failed; no artifact published*"
     assert any(call.get("tools") is None for call in client.calls)
-    started = next(event for event in events if event.kind == "chart_review_started")
-    assert started.payload["internal_review"] is True
-    assert started.payload["tool_count"] == 0
-    completed = next(event for event in events if event.kind == "chart_review_completed")
-    assert completed.payload["review_mode"] == "vlm"
+    started = next(event for event in events if event.kind == "review_started")
+    assert started.payload["review_type"] == "generated_chart"
+    assert started.payload["unit_type"] == "review"
+    completed = next(event for event in events if event.kind in {"review_failed", "review_repair_required"})
+    assert completed.payload.get("review_mode") == "vlm", completed.payload
+    assert not any(event.kind.startswith("chart_review_") for event in events)
 
 
 def test_gateway_publishes_only_after_direct_candidate_review(tmp_path):
