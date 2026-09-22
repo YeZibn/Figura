@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 from ...attachments import AttachmentRegistry
+from ...spec import normalize_generation_context
 from ..core.definition import Tool
 from ..core.result import GeneratedImage, ToolResult
 
@@ -27,6 +28,42 @@ def authorized_chart_tool(tool: Tool, attachments: AttachmentRegistry) -> Tool:
         )
 
         panel_id = kwargs.pop("panel_id", None)
+        raw_generation_context = kwargs.pop("generation_context", None)
+        candidate_id = kwargs.pop("candidate_id", None)
+        candidate_attempt = kwargs.pop("candidate_attempt", None)
+        generation_context = normalize_generation_context(raw_generation_context)
+        if raw_generation_context is not None and generation_context is None:
+            return {
+                "error": "generation_context must contain a valid mode, coverage, selection_basis and goal_summary",
+                "issues": [{"location": "generation_context", "message": "generation_context is malformed"}],
+            }
+        if generation_context is not None:
+            context_issues = generation_context.validate()
+            if context_issues:
+                return {
+                    "error": "generation_context failed validation",
+                    "issues": context_issues[:8],
+                    "action_hint": "修正 mode、source_scope、coverage 和 goal_summary 后重试",
+                }
+        if generation_context is not None and generation_context.source_scope is not None:
+            scoped_attachment = generation_context.source_scope.attachment_id
+            if scoped_attachment and scoped_attachment != attachment_id:
+                return {
+                    "error": "generation_context source scope does not match attachment_id",
+                    "issues": [{"location": "generation_context.source_scope.attachment_id", "message": "source scope attachment differs from the authorized attachment"}],
+                    "action_hint": "使用当前工具调用的 attachment_id 重新提交 context",
+                }
+        source_scope_resolution = None
+        if generation_context is not None and generation_context.source_scope is not None:
+            from ...source_scope import resolve_generation_scope
+
+            source_scope_resolution = resolve_generation_scope(attachments, generation_context)
+            if not source_scope_resolution.resolved:
+                return {
+                    "error": "generation_context source scope could not be resolved",
+                    "source_scope": source_scope_resolution.to_dict(),
+                    "action_hint": source_scope_resolution.action_hint or "重新绑定 active panel handoff",
+                }
         measurement_target = kwargs.get("measurement_target")
         observation_scope = kwargs.get("observation_scope")
         if not isinstance(panel_id, str) and isinstance(measurement_target, Mapping):
@@ -37,10 +74,35 @@ def authorized_chart_tool(tool: Tool, attachments: AttachmentRegistry) -> Tool:
             candidate_panel_id = observation_scope.get("panel_id")
             if isinstance(candidate_panel_id, str) and candidate_panel_id.strip():
                 panel_id = candidate_panel_id
+        if not isinstance(panel_id, str) and generation_context is not None and generation_context.source_scope is not None:
+            context_panels = generation_context.source_scope.panel_ids
+            if len(context_panels) == 1:
+                panel_id = context_panels[0]
         if not isinstance(panel_id, str):
             layout_context = kwargs.get("layout_context")
             panel_summary = layout_context.get("panel") if isinstance(layout_context, Mapping) else None
             panel_id = panel_summary.get("id") if isinstance(panel_summary, Mapping) else None
+        scoped_tool_names = {
+            "extract_text",
+            "measure_bars",
+            "extract_line_series",
+            "extract_pie_slices",
+            "extract_scatter_points",
+        }
+        if source_scope_resolution is not None and tool.name in scoped_tool_names:
+            context_panels = set(generation_context.source_scope.panel_ids) if generation_context and generation_context.source_scope else set()
+            if isinstance(panel_id, str) and panel_id not in context_panels:
+                return {
+                    "error": "panel_id is outside generation_context source scope",
+                    "source_scope": source_scope_resolution.to_dict(),
+                    "action_hint": "只使用 generation_context.source_scope.panel_ids 中的 panel_id",
+                }
+            if len(context_panels) > 1 and not isinstance(panel_id, str):
+                return {
+                    "error": "measurement scope is ambiguous across multiple panels",
+                    "source_scope": source_scope_resolution.to_dict(),
+                    "action_hint": "为本次观察明确指定一个 panel_id",
+                }
         item, error = attachments.validate(attachment_id)
         if error or item is None:
             return {"error": error or "attachment is not authorized"}
@@ -100,8 +162,17 @@ def authorized_chart_tool(tool: Tool, attachments: AttachmentRegistry) -> Tool:
                 scope,
                 measurement_target=kwargs.get("measurement_target"),
                 observation_scope=kwargs.get("observation_scope"),
+                generation_context=generation_context,
+                candidate_id=candidate_id,
+                candidate_attempt=candidate_attempt,
             )
 
+        if tool.name in scoped_tool_names and panel_store is not None and hasattr(panel_store, "list_panel_handoffs"):
+            existing = panel_store.list_panel_handoffs(attachment_id)
+            if len(existing) > 1:
+                return _reject_unscoped(
+                    [item.panel_id for item in existing if getattr(item, "panel_id", None)],
+                )
         result = original(image_path=item.canonical_path, **kwargs)
         if tool.name == "decompose_chart_image" and panel_store is not None:
             return stabilize_decomposition_result(
@@ -112,11 +183,12 @@ def authorized_chart_tool(tool: Tool, attachments: AttachmentRegistry) -> Tool:
                 origin_run_id=item.run_id,
                 panel_store=panel_store,
             )
-        if tool.name in {"extract_text", "measure_bars", "extract_line_series", "extract_pie_slices", "extract_scatter_points"} and panel_store is not None:
-            existing = panel_store.list_panel_handoffs(attachment_id)
-            if len(existing) > 1:
-                return _mark_unscoped(result)
-        return result
+        return _decorate_context_result(
+            result,
+            generation_context=generation_context,
+            candidate_id=candidate_id,
+            candidate_attempt=candidate_attempt,
+        )
 
     schema = dict(tool.parameters)
     schema["properties"] = dict(schema.get("properties", {}))
@@ -136,34 +208,9 @@ def authorized_chart_tool(tool: Tool, attachments: AttachmentRegistry) -> Tool:
             "description": "Optional stable panel ID returned by decompose_chart_image; selects the scoped panel measurement context.",
         }
         if tool.name in {"measure_bars", "extract_line_series", "extract_pie_slices", "extract_scatter_points"}:
-            schema["properties"]["measurement_target"] = {
-                "type": "object",
-                "description": "可选的当前 panel 内定向补充测量目标。优先使用当前 measurement.evidence.refs 中的 B1、S1、P1、C1、L1 等引用；运行时负责补全来源和父 attempt。",
-                "properties": {
-                    "refs": {"type": "array", "items": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9]{0,15}$"}, "minItems": 1, "maxItems": 16, "description": "当前 attempt 中需要包含或排除的证据引用。"},
-                    "mode": {"type": "string", "enum": ["include", "exclude"], "description": "include 只在引用区域内测量；exclude 排除引用区域后测量。"},
-                    "fields": {"type": "array", "items": {"type": "string"}, "description": "本次重测需要解决的字段路径。"},
-                    "bbox_source_px": {"type": "array", "items": {"type": "number"}, "minItems": 4, "maxItems": 4, "description": "没有可用 ref 时才使用的有界源图像像素区域 [left, top, width, height]。"},
-                    "polygon_source_px": {"type": "array", "items": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2}, "minItems": 3, "maxItems": 32, "description": "没有可用 ref 时才使用的有界源图像多边形。"},
-                    "reason": {"type": "string", "description": "为什么要复查该区域。"},
-                },
-                "additionalProperties": False,
-            }
-            schema["properties"]["observation_scope"] = {
-                "type": "object",
-                "description": "首次观察的当前 panel 有界范围。主模型先给出粗略 include/exclude 区域；运行时会校验其属于 panel，再交给传感器执行。它不同于 measurement_target，后者仅用于已有 attempt 的定向补充测量。",
-                "properties": {
-                    "panel_id": {"type": "string", "description": "可选；通常与外层 panel_id 一致。"},
-                    "attachment_id": {"type": "string", "description": "可选；必须与当前 attachment_id 一致。"},
-                    "coordinate_space": {"type": "string", "enum": ["panel_norm", "panel_px", "source_px"], "description": "范围坐标系；默认 panel_norm。"},
-                    "include": {"type": "array", "maxItems": 16, "items": {"type": "object", "additionalProperties": True}, "description": "要搜索的一个或多个区域，至少提供 bbox；也可提供 polygon。"},
-                    "exclude": {"type": "array", "maxItems": 16, "items": {"type": "object", "additionalProperties": True}, "description": "在搜索范围内明确排除的区域。"},
-                    "objectives": {"type": "array", "maxItems": 8, "items": {"type": "string"}, "description": "本次观察要确认的少量目标。"},
-                    "reason": {"type": "string", "description": "选择该范围的简短理由。"},
-                    "scope_id": {"type": "string", "description": "可选稳定范围 ID。"},
-                },
-                "additionalProperties": False,
-            }
+            from ..chart.observation.contracts import measurement_contract_properties
+
+            schema["properties"].update(measurement_contract_properties())
     schema["properties"]["attachment_id"] = {
         "type": "string",
         "description": "Opaque authorized attachment ID from the user turn; never a local filesystem path or URL.",
@@ -205,6 +252,9 @@ def _decorate_scoped_result(
     *,
     measurement_target: Mapping | None = None,
     observation_scope: Mapping | None = None,
+    generation_context: object = None,
+    candidate_id: object = None,
+    candidate_attempt: object = None,
 ) -> object:
     from ..chart.observation.scope import add_scope_metadata
 
@@ -214,40 +264,78 @@ def _decorate_scoped_result(
             payload["scope"] = scope.envelope()
             if isinstance(observation_scope, Mapping):
                 payload["observation_scope"] = dict(observation_scope)
-            return payload
+            return _decorate_context_result(
+                payload,
+                generation_context=generation_context,
+                candidate_id=candidate_id,
+                candidate_attempt=candidate_attempt,
+            )
         return result
     data = add_scope_metadata(result.data, scope)
     if isinstance(data, dict) and isinstance(measurement_target, Mapping):
         data["measurement_target"] = dict(measurement_target)
     if isinstance(data, dict) and isinstance(observation_scope, Mapping):
         data["observation_scope"] = dict(observation_scope)
+    data = _context_data(data, generation_context, candidate_id, candidate_attempt)
     images = []
     for image in result.images:
         metadata = dict(image.metadata) if isinstance(image.metadata, Mapping) else {}
         metadata.update({"panel_id": scope.panel.panel_id, "scope_mode": "panel", "source_origin_x": scope.origin[0], "source_origin_y": scope.origin[1], "source_width": scope.source_size[0], "source_height": scope.source_size[1]})
+        if generation_context is not None:
+            metadata["generation_context"] = generation_context.to_dict() if hasattr(generation_context, "to_dict") else generation_context
+        if isinstance(candidate_id, str) and candidate_id.strip():
+            metadata["candidate_id"] = candidate_id[:160]
+        if isinstance(candidate_attempt, int) and candidate_attempt > 0:
+            metadata["candidate_attempt"] = min(candidate_attempt, 8)
         images.append(GeneratedImage(image.content, image.media_type, f"{image.caption}（局部面板）", metadata))
     evidence = dict(result.evidence or {})
     evidence["scope"] = scope.envelope()
     return ToolResult(data, images=tuple(images), warnings=result.warnings, evidence=evidence)
 
 
-def _mark_unscoped(result: object) -> object:
-    warning = "multi-panel attachment was analyzed without panel_id; evidence is unscoped"
-    if not isinstance(result, ToolResult):
-        if isinstance(result, dict):
-            payload = dict(result)
-            payload.setdefault("warnings", []).append(warning)
-            payload["scope"] = {"mode": "unscoped"}
-            return payload
-        return result
-    warnings = tuple(result.warnings) + (warning,)
-    if isinstance(result.data, dict):
-        data = dict(result.data)
-        data["scope"] = {"mode": "unscoped"}
-        data["unscoped"] = True
-    else:
-        data = result.data
-    return ToolResult(data, images=result.images, warnings=warnings, evidence=result.evidence)
+def _context_data(data: object, context: object, candidate_id: object, candidate_attempt: object) -> object:
+    if not isinstance(data, Mapping):
+        return data
+    result = dict(data)
+    if context is not None:
+        result["generation_context"] = context.to_dict() if hasattr(context, "to_dict") else context
+    if isinstance(candidate_id, str) and candidate_id.strip():
+        result["candidate_id"] = candidate_id[:160]
+    if isinstance(candidate_attempt, int) and candidate_attempt > 0:
+        result["candidate_attempt"] = min(candidate_attempt, 8)
+    return result
+
+
+def _decorate_context_result(result: object, *, generation_context: object, candidate_id: object, candidate_attempt: object) -> object:
+    if isinstance(result, ToolResult):
+        data = _context_data(result.data, generation_context, candidate_id, candidate_attempt)
+        images = []
+        for image in result.images:
+            metadata = dict(image.metadata) if isinstance(image.metadata, Mapping) else {}
+            if generation_context is not None:
+                metadata["generation_context"] = generation_context.to_dict() if hasattr(generation_context, "to_dict") else generation_context
+            if isinstance(candidate_id, str) and candidate_id.strip():
+                metadata["candidate_id"] = candidate_id[:160]
+            if isinstance(candidate_attempt, int) and candidate_attempt > 0:
+                metadata["candidate_attempt"] = min(candidate_attempt, 8)
+            images.append(GeneratedImage(image.content, image.media_type, image.caption, metadata))
+        return ToolResult(data, images=tuple(images), warnings=result.warnings, evidence=result.evidence)
+    if isinstance(result, Mapping):
+        return _context_data(result, generation_context, candidate_id, candidate_attempt)
+    return result
+
+
+def _reject_unscoped(panel_ids: list[str]) -> dict[str, object]:
+    """Reject a multi-panel full-image scan before invoking the sensor."""
+    return {
+        "error": "panel_id is required when an attachment has multiple active panels",
+        "scope": {
+            "mode": "unscoped",
+            "status": "rejected",
+            "available_panel_ids": list(dict.fromkeys(panel_ids))[:16],
+        },
+        "action_hint": "复用拆解结果中的 panel_id，并在同一 panel 范围内观察或测量",
+    }
 
 
 __all__ = ["authorized_chart_tool"]

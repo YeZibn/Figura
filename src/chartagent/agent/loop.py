@@ -65,6 +65,7 @@ from .observations import observation_status
 from .artifacts import (
     _artifact_records_from_observation,
     _attach_visual_observation_refs,
+    _lifecycle_trace_fields,
     _trace_result_summary,
 )
 from .measurement_flow import (
@@ -291,6 +292,13 @@ class Agent:
                     (item for item in panel_inventory if item.get("panel_id") == selected_panel_id),
                     None,
                 )
+                active_generation_context = None
+                for candidate_item in (
+                    list(review_gate.get("pending") or []) + list(review_gate.get("failed") or [])
+                ):
+                    if isinstance(candidate_item, Mapping) and isinstance(candidate_item.get("generationContext"), Mapping):
+                        active_generation_context = candidate_item["generationContext"]
+                        break
                 prompt_context = assemble_prompt_context(
                     tools=self.registry.list(),
                     artifacts=artifact_records,
@@ -314,6 +322,7 @@ class Agent:
                         "retry_budget": self.max_steps,
                         "publication_status": "published" if review_gate.get("published") else "not_published",
                         "execution_gate": self._review_coordinator.gate(run.id).to_dict(),
+                        "generation_context": active_generation_context,
                     },
                     panel_inventory=panel_inventory,
                     review_gate=review_gate,
@@ -595,6 +604,16 @@ class Agent:
                         call.arguments,
                         layout_contexts,
                     )
+                    # A source-rebind gate must complete its handoff step
+                    # before the model can assemble a new candidate.  The
+                    # resolver remains the authority for the actual scope;
+                    # this transition only advances the execution phase.
+                    try:
+                        handoff_payload = json.loads(observation.content)
+                    except (TypeError, json.JSONDecodeError):
+                        handoff_payload = None
+                    if isinstance(handoff_payload, Mapping) and not handoff_payload.get("error"):
+                        self._advance_generated_repair_phase(run.id, "assemble")
                 review_operation_id = None
                 if any(
                     isinstance(getattr(image, "metadata", None), dict)
@@ -685,7 +704,6 @@ class Agent:
                                     tool_name=call.name,
                                     call_id=call.id,
                                     session_id=measurement_session.session_id,
-                                    attempt_id=measurement_session.current_attempt_id,
                                     attachment_id=measurement_session.attachment_id,
                                     panel_id=measurement_session.panel_id,
                                     measurement_status=measurement_session.current_attempt().status
@@ -694,6 +712,7 @@ class Agent:
                                     decision_status=measurement_session.decision_status,
                                     observation_scope=(measurement_data.get("observation_scope") if isinstance(measurement_data.get("observation_scope"), Mapping) else None),
                                     blocking=False,
+                                    **_lifecycle_trace_fields(observation.content),
                                 )
                                 if measurement_session.repair_budget_remaining <= 0 and measurement_session.decision_status == "pending":
                                     emitter.emit(
@@ -710,6 +729,7 @@ class Agent:
                                 pending_measurement_repairs = _measurement_repair_contexts_from_sessions(
                                     measurement_sessions
                                 )
+                                self._advance_generated_repair_phase(run.id, "assemble")
                     except (TypeError, json.JSONDecodeError):
                         pass
                 if call.name == "assemble_spec":
@@ -720,6 +740,12 @@ class Agent:
                         turn=turn,
                         call_id=call.id,
                     )
+                    try:
+                        assembled_payload = json.loads(observation.content)
+                    except (TypeError, json.JSONDecodeError):
+                        assembled_payload = None
+                    if isinstance(assembled_payload, Mapping) and not assembled_payload.get("error"):
+                        self._advance_generated_repair_phase(run.id, "render")
                 repair_context = _measurement_repair_context_from_content(observation.content)
                 if repair_context is not None:
                     pending_measurement_repairs = _merge_measurement_repair_contexts(
@@ -846,6 +872,7 @@ class Agent:
                         tool_status=observation_status(observation.content),
                         result=_trace_result_summary(observation.content),
                         image_count=len(observation.images),
+                        **_lifecycle_trace_fields(observation.content),
                         **_measurement_trace_fields(observation.content),
                     )
                     review_items = self._review_items(observation.content)
@@ -865,7 +892,16 @@ class Agent:
                             "publication_status": publication_status,
                             "review_mode": item.get("reviewMode"),
                             "internal_review": item.get("reviewMode") == "vlm",
+                            "attempt": item.get("candidateAttempt") or item.get("lineageAttempt") or item.get("attempt"),
+                            "parent_attempt": item.get("parentAttempt") or item.get("parentCandidateId"),
+                            "repair_kind": (item.get("review") or {}).get("repairKind") if isinstance(item.get("review"), Mapping) else item.get("repairKind"),
                         }
+                        generation_context = item.get("generationContext") or item.get("generation_context")
+                        if isinstance(generation_context, Mapping):
+                            if isinstance(generation_context.get("source_scope"), Mapping):
+                                common_review_fields["source_scope"] = dict(generation_context["source_scope"])
+                            if isinstance(generation_context.get("coverage"), Mapping):
+                                common_review_fields["coverage"] = dict(generation_context["coverage"])
                         if candidate_status == "review_pending" and review_status in {"pending", "requires_model_decision"}:
                             emitter.emit(
                                 "chart_review_started",
@@ -902,6 +938,7 @@ class Agent:
                             tool_name=call.name,
                             call_id=call.id,
                             **image_payload,
+                            **_lifecycle_trace_fields(observation.content),
                         )
                 visual_evidence.extend(
                     ToolVisualEvidence(call.name, call.id, generated)
@@ -979,8 +1016,61 @@ class Agent:
         if gate.state.value in {"failed", "exhausted"}:
             return False
         if gate.review_type.value == "generated_chart":
-            return call_name in _RENDER_TOOL_NAMES or call_name == "assemble_spec"
+            repair_kind = gate.repair_kind
+            generation_tools = _RENDER_TOOL_NAMES | {"assemble_spec"}
+            measurement_tools = set(MEASUREMENT_TOOLS)
+            if repair_kind == "spec_only":
+                if gate.repair_phase == "assemble":
+                    return call_name == "assemble_spec"
+                if gate.repair_phase == "render":
+                    return call_name in _RENDER_TOOL_NAMES
+                return False
+            if repair_kind == "evidence_needed":
+                if gate.repair_phase == "evidence":
+                    if call_name not in measurement_tools:
+                        return False
+                elif gate.repair_phase == "assemble":
+                    return call_name == "assemble_spec"
+                elif gate.repair_phase == "render":
+                    return call_name in _RENDER_TOOL_NAMES
+                else:
+                    return False
+                if call_name not in measurement_tools:
+                    return False
+                candidate = self._review_manager.get(gate.subject_id or "")
+                if candidate is None or candidate.generation_context is None:
+                    return False
+                from ..spec import context_digest, normalize_generation_context
+
+                requested_context = normalize_generation_context(arguments.get("generation_context"))
+                if requested_context is None or context_digest(requested_context) != candidate.context_digest:
+                    return False
+                requested_candidate = arguments.get("candidate_id")
+                return requested_candidate in {None, candidate.candidate_id}
+            if repair_kind == "source_rebind":
+                if gate.repair_phase == "rebind":
+                    return call_name in {_DECOMPOSE_TOOL_NAME, _LAYOUT_TOOL_NAME}
+                if gate.repair_phase == "assemble":
+                    return call_name == "assemble_spec"
+                if gate.repair_phase == "render":
+                    return call_name in _RENDER_TOOL_NAMES
+                return False
+            return False
         return False
+
+    def _advance_generated_repair_phase(self, run_id: str, phase: str) -> None:
+        """Move the active generated-chart repair sub-loop to its next phase."""
+        gate = self._review_coordinator.gate(run_id)
+        if (
+            gate.blocking
+            and gate.review_type is not None
+            and gate.review_type.value == "generated_chart"
+            and gate.review_id
+        ):
+            try:
+                self._review_coordinator.mark_repair_phase(gate.review_id, phase)
+            except (KeyError, ValueError):
+                return
 
     def _record_shared_review(
         self,
@@ -997,6 +1087,19 @@ class Agent:
         payload = record.to_dict()
         payload["execution_gate"] = self._review_coordinator.gate(record.run_id).to_dict()
         payload.update({"tool_name": tool_name, "call_id": call_id})
+        subject_ref = record.subject_ref if isinstance(record.subject_ref, Mapping) else {}
+        generation_context = subject_ref.get("generation_context")
+        if isinstance(generation_context, Mapping):
+            source_scope = generation_context.get("source_scope") or generation_context.get("sourceScope")
+            coverage = generation_context.get("coverage")
+            if isinstance(source_scope, Mapping):
+                payload["source_scope"] = dict(source_scope)
+            if isinstance(coverage, Mapping):
+                payload["coverage"] = dict(coverage)
+        payload["candidate_id"] = record.subject_id if record.review_type.value == "generated_chart" else None
+        payload["attempt"] = record.attempt
+        payload["parent_attempt"] = record.parent_id
+        payload["repair_kind"] = record.repair_kind
         self.memory.append(run, "review", {"state": payload})
         if self._execution_gate_sink is not None:
             try:
@@ -1064,6 +1167,7 @@ class Agent:
                 "evidence_basis": str(decision.get("evidence_basis") or "")[:80] or None,
                 "blocking": False,
             }
+            payload.update(_lifecycle_trace_fields(content))
             self.memory.append(run, "measurement_decision", {"state": payload})
             if emitter is not None:
                 if payload["selected_refs"]:
@@ -1331,21 +1435,29 @@ class Agent:
             if candidate.review_status is ReviewStatus.PENDING:
                 semantic_result: ReviewResult | None = None
                 if candidate.policy.semantic_required:
-                    source_payload = self._review_manager.source_payload(candidate)
+                    source_resolution = self._review_manager.source_resolution(candidate)
+                    source_payload = (
+                        (source_resolution.content, source_resolution.media_type)
+                        if source_resolution.resolved
+                        else None
+                    )
                     if source_payload is None:
+                        resolution_hint = source_resolution.action_hint or "重新绑定有效的 source_scope"
+                        resolution_status = source_resolution.status
                         semantic_result = ReviewResult(
                             status=ReviewStatus.FAILED,
-                            checks={"source_evidence": "failed"},
+                            checks={"source_evidence": resolution_status},
                             issues=(ReviewIssue(
                                 "source_binding_failure",
-                                "source_attachment_ids",
-                                "authorized source attachment is unavailable; bind an active source before retrying",
+                                "generation_context.source_scope",
+                                f"source scope is {resolution_status}; {resolution_hint}",
                             ),),
                             decision="fail",
                             confidence=0.0,
                             review_mode="vlm",
                             suggested_action="rebind_source",
                             recovery_classification="source_binding_failure",
+                            repair_kind="source_rebind",
                         )
                     else:
                         if emitter is not None:

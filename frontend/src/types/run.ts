@@ -110,6 +110,17 @@ export type GeneratedChartReference = {
   source?: { attachment_id?: string; panel_id?: string }
   layout?: { type?: string; columns?: number }
   coverage?: { source_series?: string[]; represented_series?: string[]; omitted_series?: string[]; status?: string }
+  generationContext?: Record<string, unknown>
+  generationContextDigest?: string
+  contextStatus?: string
+  candidateAttempt?: number
+  reviewAttempts?: number
+  lineageAttempt?: number
+  parentCandidateId?: string
+  parentAttempt?: number
+  panelIds?: string[]
+  sourceAttachmentIds?: string[]
+  repairKind?: string
   review?: {
     decision?: string
     confidence?: number

@@ -18,15 +18,50 @@ from chartagent.review import (
     PublicationStatus,
 )
 from chartagent.attachments import AttachmentRegistry
-from chartagent.spec import Axes, Axis, ChartMetadata, ChartSpec, ChartType, DataPoint
+from chartagent.panels import PanelHandoff
+from chartagent.spec import (
+    Axes,
+    Axis,
+    ChartMetadata,
+    ChartSpec,
+    ChartType,
+    CoverageBasis,
+    CoverageStatus,
+    DataPoint,
+    GenerationContext,
+    GenerationCoverage,
+    GenerationMode,
+    GenerationSourceScope,
+    SelectionBasis,
+)
 from chartagent.tools.chart.rendering import render_chart
 from chartagent.tools.chart.catalog import register_chart_tools
 from chartagent.agent import Agent
 from chartagent.client.models import NormalizedResult, ToolCall
 from chartagent.tools.core import GeneratedImage, Tool, ToolRegistry, ToolResult
+from chartagent.tools.adapters.chart import authorized_chart_tool
+from chartagent.tools.chart.rendering import RENDER_CHART
+from chartagent.tools.chart.specification import ASSEMBLE_SPEC
 from chartagent.gateway.history import GatewayHistoryStore
 from chartagent.gateway.protocol import RunStatus as GatewayRunStatus
 from chartagent.memory.sqlite import SQLiteAgentMemory
+
+
+class _PanelStore:
+    def __init__(self, handoffs):
+        self.handoffs = handoffs
+
+    def list_panel_handoffs(self, attachment_id):
+        return [item for item in self.handoffs if item.attachment_id == attachment_id]
+
+    def get_panel_handoff(self, panel_id, *, attachment_id=None, revision=None):
+        for handoff in self.handoffs:
+            if handoff.panel_id != panel_id or handoff.attachment_id != attachment_id:
+                continue
+            if revision is not None and handoff.revision != revision:
+                continue
+            return handoff if handoff.status == "active" else None
+        return None
 
 
 def test_review_coordinator_blocks_until_explicit_pass():
@@ -78,6 +113,31 @@ def test_repair_decision_keeps_gate_closed_and_preserves_diagnostics():
     assert gate.blocking is True
     assert gate.repair_action == {"action": "correct_chart_spec", "fields": ["axes.y"]}
     assert gate.issues[0].severity == "error"
+    assert gate.repair_kind == "spec_only"
+    assert gate.repair_phase == "assemble"
+
+
+def test_evidence_and_source_rebind_repair_phases_are_ordered():
+    coordinator = ReviewCoordinator()
+    evidence = coordinator.begin("run-evidence", "generated_chart", "candidate-evidence", max_attempts=3)
+    evidence = coordinator.apply(
+        evidence.review_id,
+        {"decision": "repair_required", "repair_kind": "evidence_needed", "next_action": "补充同范围证据"},
+    )
+    assert coordinator.gate("run-evidence").repair_phase == "evidence"
+    coordinator.mark_repair_phase(evidence.review_id, "assemble")
+    assert coordinator.gate("run-evidence").repair_phase == "assemble"
+    coordinator.mark_repair_phase(evidence.review_id, "render")
+    assert coordinator.gate("run-evidence").repair_phase == "render"
+
+    rebind = coordinator.begin("run-rebind", "generated_chart", "candidate-rebind", max_attempts=3)
+    rebind = coordinator.apply(
+        rebind.review_id,
+        {"decision": "repair_required", "repair_kind": "source_rebind", "next_action": "重新绑定 panel"},
+    )
+    assert coordinator.gate("run-rebind").repair_phase == "rebind"
+    coordinator.mark_repair_phase(rebind.review_id, "assemble")
+    assert coordinator.gate("run-rebind").repair_phase == "assemble"
 
 
 def test_exhausted_review_cannot_be_released_by_a_later_decision():
@@ -195,14 +255,44 @@ def test_generated_review_blocks_then_releases_only_after_controlled_redraw(tmp_
         dataset=[DataPoint(category="Q1", value=10), DataPoint(category="Q2", value=20)],
     )
     source_path = tmp_path / "source.png"
-    source_path.write_bytes(render_chart(spec.to_dict()).images[0].content)
-    attachments = AttachmentRegistry()
+    source_rendered = render_chart(spec.to_dict())
+    source_path.write_bytes(source_rendered.images[0].content)
+    attachments = AttachmentRegistry(session_id="session-review")
     attachment = attachments.register(str(source_path))
+    image_size = (source_rendered.data["width"], source_rendered.data["height"])
+    attachments.panel_store = _PanelStore([
+        PanelHandoff(
+            session_id="session-review",
+            attachment_id=attachment.id,
+            attachment_sha256=attachment.sha256,
+            panel_id="panel_sales",
+            revision=1,
+            name="销售图表",
+            slug="sales",
+            role="chart",
+            chart_type="bar",
+            source_bbox=(0, 0, image_size[0], image_size[1]),
+            analysis_scope=(0, 0, image_size[0], image_size[1]),
+        ),
+    ])
+    spec.generation_context = GenerationContext(
+        mode=GenerationMode.TRANSFORM,
+        source_scope=GenerationSourceScope(attachment.id, ("panel_sales",), revision=1),
+        coverage=GenerationCoverage(
+            basis=CoverageBasis.FULL_SOURCE,
+            source_series=("Q1", "Q2"),
+            represented_series=("Q1", "Q2"),
+            status=CoverageStatus.COMPLETE,
+        ),
+        selection_basis=SelectionBasis.AGENT_RESOLVED,
+        goal_summary="重绘来源图表并校验柱状图布局",
+    )
 
     class Client:
         def __init__(self):
             self.calls = []
             self.render_count = 0
+            self.assemble_count = 0
 
         def chat(self, _messages, **kwargs):
             self.calls.append(kwargs)
@@ -229,6 +319,27 @@ def test_generated_review_blocks_then_releases_only_after_controlled_redraw(tmp_
                         }, ensure_ascii=False),
                     )
                 return NormalizedResult(content='{"decision":"pass","confidence":0.95,"checks":{"chart_type":"pass","orientation":"pass","layout":"pass","data_mapping":"pass","labels":"pass","readability":"pass"},"issues":[]}')
+            if self.render_count == 1 and self.assemble_count == 0:
+                self.assemble_count += 1
+                return NormalizedResult(
+                    tool_calls=[
+                        ToolCall(
+                            "assemble-repair",
+                            "assemble_spec",
+                            json.dumps({
+                                "chart_type": "bar",
+                                "points": [
+                                    {"category": "Q1", "value": 10},
+                                    {"category": "Q2", "value": 20},
+                                ],
+                                "x_label": "季度",
+                                "y_label": "金额",
+                                "generation_context": spec.generation_context.to_dict(),
+                            }, ensure_ascii=False),
+                        )
+                    ],
+                    finish_reason="tool_calls",
+                )
             if self.render_count >= 2:
                 return NormalizedResult(content="图表已通过审核", finish_reason="stop")
             self.render_count += 1
@@ -269,6 +380,177 @@ def test_generated_review_blocks_then_releases_only_after_controlled_redraw(tmp_
         event.kind == "review_completed" and event.payload["execution_gate"]["blocking"] is False
         for event in events
     )
+
+
+def test_evidence_needed_repair_runs_same_scope_evidence_assemble_render_review(tmp_path):
+    initial_spec = ChartSpec(
+        metadata=ChartMetadata(chart_type=ChartType.BAR, title="销售"),
+        axes=Axes(x=Axis(label="季度", categories=["Q1", "Q2", "Q3"]), y=Axis(label="金额")),
+        dataset=[
+            DataPoint(category="Q1", value=10),
+            DataPoint(category="Q2", value=20),
+            DataPoint(category="Q3", value=30),
+        ],
+    )
+    rendered = render_chart(initial_spec.to_dict())
+    source_path = tmp_path / "evidence-source.png"
+    source_path.write_bytes(rendered.images[0].content)
+    attachments = AttachmentRegistry(session_id="session-evidence-repair")
+    attachment = attachments.register(str(source_path))
+    image_size = (rendered.data["width"], rendered.data["height"])
+    attachments.panel_store = _PanelStore([
+        PanelHandoff(
+            session_id="session-evidence-repair",
+            attachment_id=attachment.id,
+            attachment_sha256=attachment.sha256,
+            panel_id="panel_sales",
+            revision=1,
+            name="销售图表",
+            slug="sales",
+            role="chart",
+            chart_type="bar",
+            source_bbox=(0, 0, image_size[0], image_size[1]),
+            analysis_scope=(0, 0, image_size[0], image_size[1]),
+        ),
+    ])
+    context = GenerationContext(
+        mode=GenerationMode.TRANSFORM,
+        source_scope=GenerationSourceScope(attachment.id, ("panel_sales",), revision=1),
+        coverage=GenerationCoverage(
+            basis=CoverageBasis.FULL_SOURCE,
+            source_series=("Q1", "Q2", "Q3"),
+            represented_series=("Q1", "Q2", "Q3"),
+            status=CoverageStatus.COMPLETE,
+        ),
+        selection_basis=SelectionBasis.AGENT_RESOLVED,
+        goal_summary="在同一 panel 内确认柱体数值后重绘",
+    )
+    spec_payload = initial_spec.to_dict()
+    spec_payload["generation_context"] = context.to_dict()
+    calls: list[dict] = []
+
+    def sensor(image_path: str, **_kwargs):
+        assert image_path
+        return ToolResult(
+            {
+                "image_size": [image_size[0], image_size[1]],
+                "plot_area": {"bbox": [40, 20, image_size[0] - 80, image_size[1] - 80]},
+                "baseline": {"slope": 0.0, "intercept": image_size[1] - 80},
+                "bars": [{"id": "B1", "geometry": {"bbox_px": [40, 80, 40, 100]}, "measure": {"value": 10}}],
+                "confidence": {"overall": 0.9},
+                "warnings": [],
+            },
+            (GeneratedImage(b"overlay", "image/png", "bar overlay"),),
+        )
+
+    measurement_tool = authorized_chart_tool(
+        Tool(
+            "measure_bars",
+            "在授权 panel 内测量柱体并返回 evidence。",
+            {
+                "type": "object",
+                "properties": {"image_path": {"type": "string"}},
+                "required": ["image_path"],
+                "additionalProperties": False,
+            },
+            sensor,
+        ),
+        attachments,
+    )
+
+    class Client:
+        def __init__(self):
+            self.outer_turn = 0
+            self.review_calls = 0
+
+        def chat(self, _messages, **kwargs):
+            calls.append(kwargs)
+            if kwargs.get("tools") is None:
+                self.review_calls += 1
+                if self.review_calls == 1:
+                    return NormalizedResult(content=json.dumps({
+                        "decision": "fail",
+                        "confidence": 0.9,
+                        "checks": {
+                            "chart_type": "pass",
+                            "orientation": "pass",
+                            "layout": "pass",
+                            "data_mapping": "fail",
+                            "labels": "pass",
+                            "readability": "pass",
+                        },
+                        "issues": [{
+                            "code": "value_uncertain",
+                            "location": "dataset[0].value",
+                            "severity": "error",
+                            "message": "需要同 panel 的数值证据",
+                        }],
+                        "repair_kind": "evidence_needed",
+                        "target": {"panel_id": "panel_sales", "refs": ["B1"], "fields": ["value"], "reason": "确认柱体数值"},
+                    }, ensure_ascii=False))
+                return NormalizedResult(content=json.dumps({
+                    "decision": "pass",
+                    "confidence": 0.95,
+                    "checks": {name: "pass" for name in ("chart_type", "orientation", "layout", "data_mapping", "labels", "readability")},
+                    "issues": [],
+                }))
+
+            self.outer_turn += 1
+            if self.outer_turn == 1:
+                return NormalizedResult(tool_calls=[
+                    ToolCall("measure-initial", "measure_bars", json.dumps({
+                        "attachment_id": attachment.id,
+                        "panel_id": "panel_sales",
+                        "generation_context": context.to_dict(),
+                    }, ensure_ascii=False)),
+                    ToolCall("render-1", "render_chart", json.dumps({"spec": spec_payload}, ensure_ascii=False)),
+                ])
+            if self.outer_turn == 2:
+                return NormalizedResult(tool_calls=[ToolCall("measure-1", "measure_bars", json.dumps({
+                    "attachment_id": attachment.id,
+                    "panel_id": "panel_sales",
+                    "generation_context": context.to_dict(),
+                    "candidate_attempt": 1,
+                    "measurement_target": {
+                        "target_id": "value-B1",
+                        "panel_id": "panel_sales",
+                        "refs": ["B1"],
+                        "fields": ["value"],
+                        "reason": "确认柱体数值",
+                    },
+                }, ensure_ascii=False))])
+            if self.outer_turn == 3:
+                return NormalizedResult(tool_calls=[ToolCall("assemble-1", "assemble_spec", json.dumps({
+                    "chart_type": "bar",
+                    "points": [{"category": "Q1", "value": 10}, {"category": "Q2", "value": 20}, {"category": "Q3", "value": 30}],
+                    "title": "销售",
+                    "x_label": "季度",
+                    "y_label": "金额",
+                    "generation_context": context.to_dict(),
+                }, ensure_ascii=False))])
+            if self.outer_turn == 4:
+                return NormalizedResult(tool_calls=[ToolCall("render-2", "render_chart", json.dumps({"spec": spec_payload}, ensure_ascii=False))])
+            return NormalizedResult(content="证据已补充，图表审核通过", finish_reason="stop")
+
+    registry = ToolRegistry()
+    registry.register(measurement_tool)
+    registry.register(ASSEMBLE_SPEC)
+    registry.register(RENDER_CHART)
+    events = []
+    answer = Agent(
+        Client(),
+        registry,
+        attachments=attachments,
+        max_steps=8,
+        trace=events.append,
+    ).run(f"请处理 {attachment.id}")
+
+    assert answer == "证据已补充，图表审核通过"
+    assert len([item for item in calls if item.get("tools") is None]) == 2
+    assert [event.payload["call_id"] for event in events if event.kind == "measurement_observed"] == ["measure-initial", "measure-1"]
+    assert not any(event.kind == "tool_skipped" for event in events)
+    assert any(event.kind == "review_repair_required" and event.payload["repair_kind"] == "evidence_needed" for event in events)
+    assert any(event.kind == "review_completed" and event.payload["execution_gate"]["blocking"] is False for event in events)
 
 
 def test_generated_candidate_review_uses_shared_gate_and_lineage():

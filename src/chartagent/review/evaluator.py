@@ -140,6 +140,9 @@ def merge_review_results(safety: ReviewResult, semantic: ReviewResult) -> Review
         chart_spec_digest=semantic.chart_spec_digest,
         suggested_action=semantic.suggested_action,
         recovery_classification=semantic.recovery_classification,
+        repair_kind=semantic.repair_kind,
+        repair_target=semantic.repair_target,
+        candidate_attempt=semantic.candidate_attempt,
     )
 
 

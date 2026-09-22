@@ -47,6 +47,7 @@ def _repair_limit(value: object) -> int:
 
 def _source_scope(data: Mapping[str, Any]) -> dict[str, object] | None:
     candidates = (
+        data.get("effective_scope"),
         data.get("scope"),
         data.get("plot_area"),
         data.get("plot_frame"),
@@ -291,6 +292,9 @@ def audit_measurement(
     session_id = measurement_session_id(source_run_id, attachment, panel)
     attempt_id = new_attempt_id()
     scope = _source_scope(chart_data)
+    effective_scope = _json_safe(chart_data.get("effective_scope")) if isinstance(chart_data.get("effective_scope"), Mapping) else scope
+    if not isinstance(effective_scope, dict):
+        effective_scope = scope
     target = normalize_measurement_target(measurement_target)
     if isinstance(observation_scope, Mapping) and (
         observation_scope.get("applied") is not None
@@ -321,6 +325,7 @@ def audit_measurement(
     captions: list[str] = []
     return {
         "status": status,
+        "effective_scope": effective_scope,
         "reference": {
             "session_id": session_id,
             "attempt_id": attempt_id,
@@ -334,6 +339,7 @@ def audit_measurement(
             "parent_attempt_id": None,
             "tool": _text(source_tool, 80),
             "scope": scope,
+            "effective_scope": effective_scope,
             "observation_scope": requested_scope,
             "target": target,
             "target_fingerprint": measurement_target_fingerprint(target, tool=source_tool),
@@ -345,6 +351,7 @@ def audit_measurement(
             "attachment_id": attachment,
             "panel_id": panel,
             "scope": scope,
+            "effective_scope": effective_scope,
             "observation_scope": requested_scope,
         },
         "quality": {
@@ -361,6 +368,7 @@ def audit_measurement(
             "captions": captions,
             "refs": evidence_refs,
             "focus": focus_payload,
+            "effective_scope": effective_scope,
         },
         "decision": {
             "status": "pending",

@@ -33,6 +33,7 @@ from .ocr import extract_text
 from .overlays import render_scatter_overlay
 from .layout import context_for_evidence, context_scope, filter_snippets_to_scope
 from .scope import apply_measurement_focus, measurement_focus_context, observation_scope_focus_context
+from .contracts import measurement_contract_properties
 
 _COLOR_TOLERANCE = 34
 _MAX_MARKER_SIDE_RATIO = 0.12
@@ -591,6 +592,7 @@ EXTRACT_SCATTER_POINTS = Tool(
     description=(
         "用于清晰的二维散点图：提取源图证据、推断绘图区和方向，并返回稳定 series/point ID、标记几何、"
         "可选的有证据支持的 x/y 标定、重叠/密度/离群点证据、置信度、警告和源尺寸叠加图。标定不足时仍保留仅像素点。"
+        "返回 effective_scope、evidence refs 和质量 warning；warning 不会自动触发重测，系列与点的选择由主 Agent 记录。"
         "只应结合其他证据使用；不要把强透视、3D、密集且无法解析或非散点图形当成精确语义真值。"
     ),
     parameters={
@@ -605,16 +607,7 @@ EXTRACT_SCATTER_POINTS = Tool(
                 "description": "Optional validated chart layout context; model hints remain advisory.",
                 "additionalProperties": True,
             },
-            "measurement_target": {
-                "type": "object",
-                "description": "Optional bounded source-coordinate focus target for a remeasurement.",
-                "additionalProperties": True,
-            },
-            "observation_scope": {
-                "type": "object",
-                "description": "首次观察使用的当前 panel 有界范围；coordinate_space 可为 panel_norm、panel_px 或 source_px，包含 include/exclude 区域。",
-                "additionalProperties": True,
-            },
+            **measurement_contract_properties(),
         },
         "required": ["image_path"],
         "additionalProperties": False,

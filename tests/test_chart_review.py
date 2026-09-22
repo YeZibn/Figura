@@ -6,6 +6,8 @@ from chartagent.review import (
     CandidateStatus,
     ChartReviewManager,
     PublicationStatus,
+    ReviewIssue,
+    ReviewResult,
     ReviewStatus,
     chart_spec_digest,
     select_review_policy,
@@ -16,6 +18,7 @@ from chartagent.review import (
 )
 from chartagent.review.vlm import review_candidate_with_vlm
 from chartagent.attachments import AttachmentRegistry
+from chartagent.panels import PanelHandoff
 from dataclasses import replace
 import pytest
 from chartagent.spec import (
@@ -30,6 +33,13 @@ from chartagent.spec import (
     DataPoint,
     FigureLayout,
     FigureSource,
+    CoverageBasis,
+    CoverageStatus,
+    GenerationContext,
+    GenerationCoverage,
+    GenerationMode,
+    GenerationSourceScope,
+    SelectionBasis,
 )
 from chartagent.tools.chart.rendering import render_chart
 from chartagent.agent import Agent
@@ -41,6 +51,53 @@ from chartagent.runtime import AgentRuntime
 from chartagent.gateway.history import GatewayHistoryStore
 from chartagent.memory.sqlite import SQLiteAgentMemory
 from tests.chart_fixtures import line_chart
+
+
+class _PanelStore:
+    def __init__(self, handoffs):
+        self.handoffs = handoffs
+
+    def get_panel_handoff(self, panel_id, *, attachment_id=None, revision=None):
+        for handoff in self.handoffs:
+            if handoff.panel_id != panel_id or handoff.attachment_id != attachment_id:
+                continue
+            if revision is not None and handoff.revision != revision:
+                continue
+            return handoff if handoff.status == "active" else None
+        return None
+
+
+def _bind_full_image_scope(attachments, attachment, *, panel_id, image_size):
+    attachments.panel_store = _PanelStore([
+        PanelHandoff(
+            session_id=attachments.session_id or "session-review",
+            attachment_id=attachment.id,
+            attachment_sha256=attachment.sha256,
+            panel_id=panel_id,
+            revision=1,
+            name="测试图表",
+            slug="test-chart",
+            role="chart",
+            chart_type="composite",
+            source_bbox=(0, 0, image_size[0], image_size[1]),
+            analysis_scope=(0, 0, image_size[0], image_size[1]),
+        ),
+    ])
+
+
+def _full_source_context(attachment_id, panel_id, *, series=()):
+    return GenerationContext(
+        mode=GenerationMode.TRANSFORM,
+        source_scope=GenerationSourceScope(attachment_id, (panel_id,), revision=1),
+        coverage=GenerationCoverage(
+            basis=CoverageBasis.FULL_SOURCE,
+            source_series=tuple(series),
+            represented_series=tuple(series),
+            status=CoverageStatus.COMPLETE,
+        ),
+        selection_basis=SelectionBasis.AGENT_RESOLVED,
+        goal_summary="基于当前 panel 重绘并审核图表",
+    )
 
 
 def _bar_spec() -> ChartSpec:
@@ -319,10 +376,54 @@ def test_vlm_review_blocks_a_chartspec_value_mismatch():
     assert result.issues[0].code == "value_mismatch"
 
 
+def test_vlm_review_returns_bounded_evidence_repair_target():
+    result = parse_vlm_review(json.dumps({
+        "decision": "fail",
+        "confidence": 0.88,
+        "checks": {
+            "chart_type": "pass",
+            "orientation": "pass",
+            "layout": "warning",
+            "data_mapping": "fail",
+            "labels": "pass",
+            "readability": "pass",
+        },
+        "issues": [{
+            "code": "value_uncertain",
+            "location": "dataset[0].value",
+            "severity": "error",
+            "message": "当前 selected 值需要同范围证据",
+        }],
+        "repair_kind": "evidence_needed",
+        "target": {
+            "panel_id": "panel_left",
+            "refs": ["B1"],
+            "fields": ["value"],
+            "bbox_source_px": [10, 20, 30, 40],
+            "reason": "确认当前柱体数值",
+        },
+    }, ensure_ascii=False))
+
+    assert result.status is ReviewStatus.COMPLETED
+    assert result.repair_kind == "evidence_needed"
+    assert result.repair_target == {
+        "panel_id": "panel_left",
+        "refs": ["B1"],
+        "fields": ["value"],
+        "bbox_source_px": [10, 20, 30, 40],
+        "reason": "确认当前柱体数值",
+    }
+
+
 def test_vlm_review_prompt_describes_staged_checks_and_exact_contract():
     assert "整张画布是否发生旋转" in VLM_REVIEW_SYSTEM_PROMPT
     assert "零基线" in VLM_REVIEW_SYSTEM_PROMPT
     assert "bar：" in VLM_REVIEW_SYSTEM_PROMPT
+    assert "`reconstruct`" in VLM_REVIEW_SYSTEM_PROMPT
+    assert "`transform`" in VLM_REVIEW_SYSTEM_PROMPT
+    assert "evidence_needed" in VLM_REVIEW_SYSTEM_PROMPT
+    assert "source_rebind" in VLM_REVIEW_SYSTEM_PROMPT
+    assert "不要调用工具" in VLM_REVIEW_SYSTEM_PROMPT
     assert '"decision": "pass | pass_with_warning | fail"' in VLM_REVIEW_SYSTEM_PROMPT
     assert "顶层字段必须且只能是" in VLM_REVIEW_SYSTEM_PROMPT
 
@@ -525,6 +626,69 @@ def test_gateway_persists_composite_figure_metadata(tmp_path):
         memory.close()
 
 
+def test_gateway_replays_candidate_context_lineage_and_repair_metadata(tmp_path):
+    database = tmp_path / "candidate-context.db"
+    memory = SQLiteAgentMemory("candidate-context-session", database=database)
+    try:
+        store = GatewayHistoryStore(database, artifact_root=tmp_path / "artifacts")
+        run_id = "run-candidate-context"
+        store.create_run(run_id, memory.session.id)
+        spec = _bar_spec()
+        context = _full_source_context(
+            "att_source",
+            "panel_sales",
+            series=("Q1", "Q2", "Q3"),
+        )
+        spec.generation_context = context
+        rendered = render_chart(spec.to_dict())
+        manager = ChartReviewManager()
+        candidate = manager.create_candidate(
+            run_id,
+            "call-context",
+            rendered.images[0],
+            spec,
+            source_attachment_ids=("att_source",),
+            generation_context=context,
+        )
+        failed = manager.process(
+            candidate,
+            semantic_result=ReviewResult(
+                status=ReviewStatus.FAILED,
+                checks={"data_mapping": "fail"},
+                issues=(ReviewIssue("data_mapping", "dataset", "需要补充同范围证据"),),
+                decision="fail",
+                confidence=0.2,
+                review_mode="vlm",
+                candidate_id=candidate.candidate_id,
+                review_id=candidate.review_id,
+                chart_spec_digest=candidate.chart_spec_digest,
+                repair_kind="evidence_needed",
+            ),
+        )
+        image = manager.decorate_image(rendered.images[0], failed)
+        stored = store.add_candidate(run_id, memory.session.id, image)
+
+        assert stored is not None
+        assert stored["generationContext"]["mode"] == "transform"
+        assert stored["generationContext"]["source_scope"]["panel_ids"] == ["panel_sales"]
+        assert stored["generationContextDigest"] == candidate.context_digest
+        assert stored["contextStatus"] == "bound"
+        assert stored["candidateAttempt"] == 1
+        assert stored["lineageAttempt"] == 1
+        assert stored["panelIds"] == ["panel_sales"]
+        assert stored["sourceAttachmentIds"] == ["att_source"]
+        assert stored["repairKind"] == "evidence_needed"
+
+        reopened = GatewayHistoryStore(database, artifact_root=tmp_path / "artifacts")
+        replayed = reopened.add_candidate(run_id, memory.session.id, image)
+        assert replayed is not None
+        assert replayed["generationContext"] == stored["generationContext"]
+        assert replayed["candidateAttempt"] == stored["candidateAttempt"]
+        assert replayed["repairKind"] == "evidence_needed"
+    finally:
+        memory.close()
+
+
 def test_agent_final_answer_is_rejected_while_source_linked_candidate_is_pending():
     spec = _bar_spec().to_dict()
 
@@ -552,10 +716,21 @@ def test_agent_reviews_composite_figure_once_with_tool_free_vlm(tmp_path):
     rendered = render_chart(figure.to_dict())
     source_path = tmp_path / "source-composite.png"
     source_path.write_bytes(rendered.images[0].content)
-    attachments = AttachmentRegistry()
+    attachments = AttachmentRegistry(session_id="session-composite")
     attachment = attachments.register(str(source_path))
+    _bind_full_image_scope(
+        attachments,
+        attachment,
+        panel_id="panel_sales",
+        image_size=(rendered.data["width"], rendered.data["height"]),
+    )
     figure_payload = figure.to_dict()
     figure_payload["source"]["attachment_id"] = attachment.id
+    figure_payload["generation_context"] = _full_source_context(
+        attachment.id,
+        "panel_sales",
+        series=("Q1", "Q2"),
+    ).to_dict()
 
     class Client:
         def __init__(self):
@@ -590,8 +765,19 @@ def test_failed_vlm_review_trace_has_independent_lifecycle_fields(tmp_path):
 
     source_path = tmp_path / "source.png"
     source_path.write_bytes(render_chart(spec).images[0].content)
-    attachments = AttachmentRegistry()
+    attachments = AttachmentRegistry(session_id="session-review")
     attachment = attachments.register(str(source_path))
+    _bind_full_image_scope(
+        attachments,
+        attachment,
+        panel_id="panel_sales",
+        image_size=(1200, 800),
+    )
+    spec["generation_context"] = _full_source_context(
+        attachment.id,
+        "panel_sales",
+        series=("Q1", "Q2", "Q3"),
+    ).to_dict()
 
     class Client:
         def __init__(self):

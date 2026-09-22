@@ -10,13 +10,21 @@ from __future__ import annotations
 
 import time
 from dataclasses import replace
-from pathlib import Path
 from threading import RLock
 from typing import Any, Mapping, Sequence
 from uuid import uuid4
 
 from ..attachments import AttachmentRegistry
-from ..spec import ChartFigure, chart_figure_digest, chart_spec_digest
+from ..spec import (
+    ChartFigure,
+    ChartSpec,
+    GenerationContext,
+    chart_figure_digest,
+    chart_spec_digest,
+    context_digest,
+    normalize_generation_context,
+)
+from ..source_scope import SourceScopeResolution, resolve_generation_scope
 from ..tools.core.result import GeneratedImage
 from .evaluator import merge_review_results, review_candidate_bytes
 from .models import (
@@ -28,6 +36,7 @@ from .models import (
     ReviewIssue,
     ReviewResult,
     ReviewStatus,
+    REPAIR_KINDS,
 )
 from .policy import ReviewPolicy, select_review_policy
 
@@ -50,6 +59,7 @@ class ChartReviewManager:
         *,
         source_attachment_ids: Sequence[str] = (),
         explicit_review: bool = False,
+        generation_context: GenerationContext | Mapping[str, Any] | None = None,
     ) -> ChartCandidate:
         digest = chart_figure_digest(spec) if isinstance(spec, ChartFigure) else chart_spec_digest(spec)
         key = (run_id, call_id, digest)
@@ -58,8 +68,15 @@ class ChartReviewManager:
             if existing_id is not None:
                 return self._items[existing_id][0]
             metadata = image.metadata if isinstance(image.metadata, Mapping) else {}
+            context = normalize_generation_context(generation_context)
+            if context is None:
+                context = getattr(spec, "generation_context", None)
+            if context is None:
+                raw_context = metadata.get("generation_context") or metadata.get("generationContext")
+                context = normalize_generation_context(raw_context)
             policy = select_review_policy(spec, source_attachment_ids=source_attachment_ids, explicit_review=explicit_review)
             parent_candidate_id: str | None = None
+            parent_attempt: int | None = None
             lineage_attempt = 1
             for prior_id, (prior, prior_spec) in tuple(self._items.items()):
                 if (
@@ -71,6 +88,7 @@ class ChartReviewManager:
                 ):
                     if parent_candidate_id is None or prior.lineage_attempt > lineage_attempt:
                         parent_candidate_id = prior.candidate_id
+                        parent_attempt = prior.lineage_attempt
                         lineage_attempt = prior.lineage_attempt + 1
                     self._items[prior_id] = (replace(prior, superseded=True), prior_spec)
             semantic_source_ids = (
@@ -78,15 +96,39 @@ class ChartReviewManager:
                 if isinstance(spec, ChartFigure) and spec.source.attachment_id.strip()
                 else ()
             )
-            effective_source_attachment_ids = tuple(dict.fromkeys(tuple(source_attachment_ids) + semantic_source_ids))[:16]
+            context_source_ids = (
+                (context.source_scope.attachment_id,)
+                if context is not None and context.source_scope is not None
+                else ()
+            )
+            effective_source_attachment_ids = tuple(
+                dict.fromkeys(tuple(source_attachment_ids) + semantic_source_ids + context_source_ids)
+            )[:16]
             panel_values = metadata.get("panelIds", metadata.get("panel_ids", ()))
             if isinstance(spec, ChartFigure) and spec.source.panel_id:
                 panel_values = tuple(panel_values) + (spec.source.panel_id,) if isinstance(panel_values, (list, tuple)) else (spec.source.panel_id,)
+            if context is not None and context.source_scope is not None:
+                context_panel_ids = context.source_scope.panel_ids
+                panel_values = tuple(panel_values) + tuple(context_panel_ids) if isinstance(panel_values, (list, tuple)) else tuple(context_panel_ids)
             panel_ids = tuple(
                 item[:160]
                 for item in panel_values
                 if isinstance(item, str) and item.strip()
             )[:16] if isinstance(panel_values, (list, tuple)) else ()
+            context_status = "bound" if context is not None else "absent"
+            source_linked_without_context = bool(
+                source_attachment_ids
+                or panel_ids
+                or (isinstance(spec, ChartFigure) and spec.source.attachment_id.strip())
+                or (
+                    isinstance(spec, ChartSpec)
+                    and isinstance(spec.metadata.source, str)
+                    and spec.metadata.source.strip()
+                )
+            )
+            if context is None and source_linked_without_context:
+                context_status = "legacy_unknown"
+            context_hash = context_digest(context)
             if lineage_attempt > policy.max_attempts:
                 exhausted = ReviewResult(
                     status=ReviewStatus.FAILED,
@@ -101,6 +143,7 @@ class ChartReviewManager:
                     review_mode="vlm" if policy.semantic_required else "safety",
                     suggested_action="stop_and_keep_unpublished",
                     recovery_classification="retry_exhausted",
+                    repair_kind="terminal",
                 )
                 candidate = ChartCandidate(
                     candidate_id=f"cand_{uuid4().hex}",
@@ -130,6 +173,10 @@ class ChartReviewManager:
                     child_chart_ids=tuple(item.chart_id for item in spec.charts) if isinstance(spec, ChartFigure) else (),
                     figure_source=spec.source.to_dict() if isinstance(spec, ChartFigure) else None,
                     coverage=spec.coverage.to_dict() if isinstance(spec, ChartFigure) else None,
+                    generation_context=context,
+                    context_digest=context_hash,
+                    context_status=context_status,
+                    parent_attempt=parent_attempt,
                 )
                 self._items[candidate.candidate_id] = (candidate, spec)
                 self._keys[key] = candidate.candidate_id
@@ -158,6 +205,10 @@ class ChartReviewManager:
                 child_chart_ids=tuple(item.chart_id for item in spec.charts) if isinstance(spec, ChartFigure) else (),
                 figure_source=spec.source.to_dict() if isinstance(spec, ChartFigure) else None,
                 coverage=spec.coverage.to_dict() if isinstance(spec, ChartFigure) else None,
+                generation_context=context,
+                context_digest=context_hash,
+                context_status=context_status,
+                parent_attempt=parent_attempt,
             )
             self._items[candidate.candidate_id] = (candidate, spec)
             self._keys[key] = candidate.candidate_id
@@ -193,17 +244,35 @@ class ChartReviewManager:
                 return None
             return item[1]
 
+    def source_resolution(self, candidate: ChartCandidate) -> SourceScopeResolution:
+        """Resolve the candidate's exact source scope for internal consumers.
+
+        Source-linked candidates without a bound context are deliberately not
+        allowed to fall back to the whole attachment.  They remain
+        ``legacy_unknown`` until the caller rebinds a panel scope.
+        """
+        if candidate.generation_context is None:
+            if candidate.source_attachment_ids:
+                return SourceScopeResolution(
+                    status="source_scope_unavailable",
+                    attachment_id=candidate.source_attachment_ids[0],
+                    issues=(
+                        {
+                            "location": "generation_context.source_scope",
+                            "message": "source-linked candidate has no bound generation context",
+                        },
+                    ),
+                    action_hint="重新绑定当前 attachment 的 active panel handoff",
+                )
+            return SourceScopeResolution(status="not_applicable")
+        return resolve_generation_scope(self.attachments, candidate.generation_context)
+
     def source_payload(self, candidate: ChartCandidate) -> tuple[bytes, str] | None:
-        """Load one authorized source image for an internal reviewer."""
-        if self.attachments is None or not candidate.source_attachment_ids:
+        """Return only the authorized panel crop for an internal reviewer."""
+        resolution = self.source_resolution(candidate)
+        if not resolution.resolved:
             return None
-        item, error = self.attachments.validate(candidate.source_attachment_ids[0])
-        if error or item is None:
-            return None
-        try:
-            return Path(item.canonical_path).read_bytes(), item.media_type
-        except OSError:
-            return None
+        return resolution.content, resolution.media_type
 
     def process(
         self,
@@ -258,6 +327,7 @@ class ChartReviewManager:
                         decision="fail",
                         confidence=0.0,
                         review_mode="vlm",
+                        repair_kind="terminal",
                     )
                 else:
                     result = merge_review_results(safety_result, semantic_result)
@@ -269,13 +339,25 @@ class ChartReviewManager:
 
     def _apply_result(self, candidate: ChartCandidate, result: ReviewResult) -> ChartCandidate:
         if result.blocking:
-            if result.recovery_classification is None:
-                source_failure = any(issue.code == "source_binding_failure" for issue in result.issues)
-                result = replace(
-                    result,
-                    suggested_action="rebind_source" if source_failure else "correct_chart_spec",
-                    recovery_classification="source_binding_failure" if source_failure else "semantic_rejection",
-                )
+            source_failure = any(
+                issue.code in {"source_binding_failure", "source_scope_unavailable", "stale_source_scope"}
+                for issue in result.issues
+            )
+            repair_kind = result.repair_kind if result.repair_kind in REPAIR_KINDS else None
+            if repair_kind in {None, "none"}:
+                repair_kind = "source_rebind" if source_failure else "spec_only"
+            action = {
+                "evidence_needed": "request_same_scope_evidence",
+                "source_rebind": "rebind_source",
+                "spec_only": "correct_chart_spec",
+                "terminal": "stop_and_keep_unpublished",
+            }.get(repair_kind, "stop_and_keep_unpublished")
+            result = replace(
+                result,
+                suggested_action=result.suggested_action or action,
+                recovery_classification=result.recovery_classification or repair_kind,
+                repair_kind=repair_kind,
+            )
             return replace(candidate, status=CandidateStatus.REVIEW_FAILED, review_status=result.status, publication_status=PublicationStatus.REJECTED, review=result)
         if result.warning:
             if candidate.policy.allow_warnings:
@@ -297,6 +379,9 @@ class ChartReviewManager:
                     "candidateId": item.candidate_id,
                     "classification": recovery or "review_failure",
                     "action": action or "correct_chart_spec",
+                    "repairKind": item.review.repair_kind if item.review is not None else "terminal",
+                    "target": dict(item.review.repair_target) if item.review is not None and isinstance(item.review.repair_target, Mapping) else None,
+                    "parentAttempt": item.parent_attempt,
                 })
         retryable = bool(failed) and not any(item.status is CandidateStatus.RETRY_EXHAUSTED for item in failed)
         return {

@@ -85,8 +85,28 @@ def test_four_layers_are_explicit_and_dynamic_values_do_not_enter_static_layer()
                 "decision_status": "pending",
                 "focus_suggestion": {"tool": "measure_bars", "fields": ["baseline"], "mode": "include"},
             }],
+            "generation_context": {
+                "version": "context-v1",
+                "mode": "transform",
+                "source_scope": {"attachment_id": "att-1", "panel_ids": ["panel-1"], "revision": 2},
+                "coverage": {
+                    "basis": "requested_subset",
+                    "source_series": ["Actual", "Target"],
+                    "represented_series": ["Actual"],
+                    "intentionally_omitted_series": ["Target"],
+                    "status": "complete",
+                },
+                "selection_basis": "agent_resolved",
+                "goal_summary": "转换当前 panel",
+            },
         },
         panel_inventory=[{"panel_id": "panel-1", "status": "accepted"}],
+        review_gate={
+            "state": "repair_required",
+            "blocking": True,
+            "repairKind": "evidence_needed",
+            "repairPhase": "evidence",
+        },
     )
 
     assert tuple(context["metadata"]["layers"]) == PROMPT_LAYERS
@@ -99,6 +119,9 @@ def test_four_layers_are_explicit_and_dynamic_values_do_not_enter_static_layer()
     assert "measurement_evidence_refs" in context["artifacts"]
     assert "B1" in context["runtime"]
     assert "focus_suggestion" in context["runtime"]
+    assert '"mode":"transform"' in context["runtime"]
+    assert '"repairKind":"evidence_needed"' in context["runtime"]
+    assert '"repairPhase":"evidence"' in context["runtime"]
     assert "inspect_fixture" in context["tools"]
     assert "当前没有可调用工具" in assemble_prompt_context()["tools"]
     assert "[]" in assemble_prompt_context()["artifacts"]

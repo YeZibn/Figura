@@ -124,10 +124,10 @@ def test_authorized_chart_tools_keep_identity_and_hide_local_paths():
         "extract_text": {"attachment_id", "panel_id"},
         "decompose_chart_image": {"attachment_id", "regions", "segmentation_mode", "max_panels", "crop_padding"},
         "inspect_chart_layout": {"attachment_id", "layout_hint", "chart_type"},
-        "measure_bars": {"attachment_id", "panel_id", "measurement_target", "observation_scope"},
-        "extract_line_series": {"attachment_id", "panel_id", "measurement_target", "observation_scope"},
-        "extract_pie_slices": {"attachment_id", "panel_id", "measurement_target", "observation_scope"},
-        "extract_scatter_points": {"attachment_id", "panel_id", "measurement_target", "observation_scope"},
+        "measure_bars": {"attachment_id", "panel_id", "measurement_target", "observation_scope", "generation_context", "candidate_id", "candidate_attempt"},
+        "extract_line_series": {"attachment_id", "panel_id", "measurement_target", "observation_scope", "generation_context", "candidate_id", "candidate_attempt"},
+        "extract_pie_slices": {"attachment_id", "panel_id", "measurement_target", "observation_scope", "generation_context", "candidate_id", "candidate_attempt"},
+        "extract_scatter_points": {"attachment_id", "panel_id", "measurement_target", "observation_scope", "generation_context", "candidate_id", "candidate_attempt"},
     }
     for name, fields in expected_fields.items():
         public = registry.get(name)

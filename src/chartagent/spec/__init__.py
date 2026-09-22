@@ -20,6 +20,18 @@ from .chartspec import (
     MAX_FIGURE_ID_LENGTH,
     ValidationIssue,
 )
+from .context import (
+    CoverageBasis,
+    CoverageStatus,
+    GenerationContext,
+    GenerationCoverage,
+    GenerationMode,
+    GenerationSourceScope,
+    SelectionBasis,
+    context_digest,
+    generation_context_schema,
+    normalize_generation_context,
+)
 from .identity import chart_collection_digest, chart_figure_digest, chart_spec_digest
 
 __all__ = [
@@ -43,4 +55,14 @@ __all__ = [
     "MAX_FIGURE_CHARTS",
     "MAX_FIGURE_COLUMNS",
     "MAX_FIGURE_ID_LENGTH",
+    "CoverageBasis",
+    "CoverageStatus",
+    "GenerationContext",
+    "GenerationCoverage",
+    "GenerationMode",
+    "GenerationSourceScope",
+    "SelectionBasis",
+    "context_digest",
+    "generation_context_schema",
+    "normalize_generation_context",
 ]

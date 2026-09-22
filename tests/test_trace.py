@@ -18,6 +18,7 @@ from chartagent import (
 )
 from chartagent.client.models import NormalizedResult, ToolCall
 from chartagent.trace import TraceEmitter, TraceEvent, TraceLimits
+from chartagent.agent.artifacts import lifecycle_trace_fields
 
 
 class _ScriptedClient:
@@ -104,6 +105,36 @@ def test_trace_redacts_local_paths_inside_measurement_arguments():
     encoded = event.to_json()
     assert "/Users/yezibin/Project/Figura" not in encoded
     assert "[PATH_OMITTED]" in encoded
+
+
+def test_lifecycle_trace_fields_keep_candidate_and_measurement_scope_identity():
+    content = json.dumps({
+        "data": {
+            "generation_context": {
+                "source_scope": {"attachment_id": "att_1", "panel_ids": ["panel_left"]},
+                "coverage": {"basis": "requested_subset", "represented_series": ["Actual"]},
+            },
+            "measurement": {
+                "reference": {"attachment_id": "att_1", "panel_id": "panel_left", "attempt_id": "matt_2"},
+                "attempt": {"parent_attempt_id": "matt_1"},
+            },
+            "review": [{
+                "candidateId": "cand_2",
+                "candidateAttempt": 2,
+                "parentAttempt": "cand_1",
+                "review": {"repairKind": "evidence_needed"},
+            }],
+        }
+    }, ensure_ascii=False)
+
+    fields = lifecycle_trace_fields(content)
+
+    assert fields["candidate_id"] == "cand_2"
+    assert fields["attempt"] == 2
+    assert fields["parent_attempt"] == "cand_1"
+    assert fields["source_scope"] == {"attachment_id": "att_1", "panel_ids": ["panel_left"]}
+    assert fields["coverage"]["basis"] == "requested_subset"
+    assert fields["repair_kind"] == "evidence_needed"
 
 
 def test_trace_event_direct_payload_is_json_safe():

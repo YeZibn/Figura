@@ -284,6 +284,38 @@ def _bounded_measurement_target(value: Mapping[str, Any]) -> dict[str, Any]:
     return safe_target
 
 
+def _bounded_generation_context(value: object) -> dict[str, Any] | None:
+    """Keep one task contract visible without duplicating raw tool payloads."""
+    if not isinstance(value, Mapping):
+        return None
+    result: dict[str, Any] = {}
+    for key in ("version", "mode", "selection_basis"):
+        if value.get(key) is not None:
+            result[key] = _bounded_text(value.get(key), 48)
+    if value.get("goal_summary") is not None:
+        result["goal_summary"] = _bounded_text(value.get("goal_summary"), 240)
+    scope = value.get("source_scope")
+    if isinstance(scope, Mapping):
+        result["source_scope"] = {
+            "attachment_id": _bounded_text(scope.get("attachment_id"), 96),
+            "panel_ids": [_bounded_text(item, 96) for item in _bounded_list(scope.get("panel_ids"), 16)],
+            "revision": scope.get("revision"),
+        }
+    coverage = value.get("coverage")
+    if isinstance(coverage, Mapping):
+        omitted = coverage.get("intentionally_omitted_series")
+        if omitted is None:
+            omitted = coverage.get("omitted_series")
+        result["coverage"] = {
+            "basis": _bounded_text(coverage.get("basis"), 48),
+            "source_series": [_bounded_text(item, 120) for item in _bounded_list(coverage.get("source_series"), 64)],
+            "represented_series": [_bounded_text(item, 120) for item in _bounded_list(coverage.get("represented_series"), 64)],
+            "intentionally_omitted_series": [_bounded_text(item, 120) for item in _bounded_list(omitted, 64)],
+            "status": _bounded_text(coverage.get("status"), 32),
+        }
+    return result or None
+
+
 def _tool_record(tool: Any) -> dict[str, Any]:
     if isinstance(tool, Mapping):
         if isinstance(tool.get("function"), Mapping):
@@ -409,6 +441,7 @@ def build_runtime_context(
         "measurement_evidence": _bounded_measurement_evidence(
             state.get("measurement_evidence", state.get("measurement_repair"))
         ),
+        "generation_context": _bounded_generation_context(state.get("generation_context")),
     }
     inventory = [dict(item) for item in list(panel_inventory)[:_MAX_PANEL_COUNT] if isinstance(item, Mapping)]
     payload = {
@@ -429,6 +462,15 @@ def build_artifact_index(records: Iterable[Mapping[str, Any]] = ()) -> str:
             "artifact_id": _bounded_text(record.get("artifact_id"), 128),
             "kind": _bounded_text(record.get("kind"), 48) or "unknown",
             "status": _bounded_text(record.get("status"), 64) or "unknown",
+            "candidate_id": _bounded_text(record.get("candidate_id"), 160) or None,
+            "candidate_attempt": record.get("candidate_attempt"),
+            "parent_attempt": record.get("parent_attempt"),
+            "generation_context": _bounded_generation_context(record.get("generation_context")),
+            "coverage": _bounded_generation_context({"coverage": record.get("coverage")}).get("coverage")
+            if isinstance(record.get("coverage"), Mapping)
+            else None,
+            "repair_kind": _bounded_text(record.get("repair_kind"), 32) or None,
+            "repair_phase": _bounded_text(record.get("repair_phase"), 32) or None,
             "source_attachment_ids": [_bounded_text(value, 96) for value in _bounded_list(record.get("source_attachment_ids"))],
             "panel_ids": [_bounded_text(value, 96) for value in _bounded_list(record.get("panel_ids"), 32)],
             "lineage": [_bounded_text(value, 128) for value in _bounded_list(record.get("lineage"))],
@@ -461,6 +503,11 @@ def build_artifact_index(records: Iterable[Mapping[str, Any]] = ()) -> str:
                 _bounded_text(value, 32) for value in _bounded_list(record.get("measurement_discarded_refs"), 64)
             ],
             "measurement_decision_status": _bounded_text(record.get("measurement_decision_status"), 32) or None,
+            "measurement_effective_scope": (
+                dict(record.get("measurement_effective_scope"))
+                if isinstance(record.get("measurement_effective_scope"), Mapping)
+                else None
+            ),
             "measurement_focus": (
                 {
                     key: record.get("measurement_focus").get(key)

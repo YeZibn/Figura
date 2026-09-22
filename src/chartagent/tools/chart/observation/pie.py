@@ -25,6 +25,7 @@ from .ocr import extract_text
 from .overlays import render_pie_overlay
 from .layout import context_for_evidence, context_frame, context_scope
 from .scope import apply_measurement_focus, measurement_focus_context, observation_scope_focus_context
+from .contracts import measurement_contract_properties
 
 _ANGLE_SAMPLES = 720
 _RADII = (0.58, 0.70, 0.82, 0.91, 0.97)
@@ -917,7 +918,7 @@ EXTRACT_PIE_SLICES = Tool(
     description=(
         "测量普通的二维饼图并返回源图绘图区几何、稳定扇区证据、经过门控的角度和比例、图例/OCR 关联、"
         "置信度、警告及源尺寸叠加图。用于可识别的圆形饼图；不要把 donut、爆炸、嵌套、3D、透视或含义不明的圆形图形当成完整的平面饼图数据。"
-        "将比例用于 ChartSpec 恢复前必须检查证据和 warnings。"
+        "返回 effective_scope、evidence refs 和质量 warning；warning 不会自动触发重测，将比例用于 ChartSpec 恢复前必须由主 Agent 检查证据并记录选择。"
     ),
     parameters={
         "type": "object",
@@ -931,16 +932,7 @@ EXTRACT_PIE_SLICES = Tool(
                 "description": "Optional validated chart layout context; model hints remain advisory.",
                 "additionalProperties": True,
             },
-            "measurement_target": {
-                "type": "object",
-                "description": "Optional bounded source-coordinate focus target for a remeasurement.",
-                "additionalProperties": True,
-            },
-            "observation_scope": {
-                "type": "object",
-                "description": "首次观察使用的当前 panel 有界范围；coordinate_space 可为 panel_norm、panel_px 或 source_px，包含 include/exclude 区域。",
-                "additionalProperties": True,
-            },
+            **measurement_contract_properties(),
         },
         "required": ["image_path"],
         "additionalProperties": False,

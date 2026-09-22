@@ -35,6 +35,10 @@ def measurement_repair_context_from_content(content: str) -> dict[str, Any] | No
     if decision_status in {"selected", "discarded", "abandoned"}:
         return None
     focus_suggestion = quality.get("focus_suggestion") or quality.get("repair_action")
+    attempt = measurement.get("attempt") if isinstance(measurement.get("attempt"), Mapping) else {}
+    effective_scope = measurement.get("effective_scope")
+    if not isinstance(effective_scope, Mapping):
+        effective_scope = attempt.get("effective_scope")
     return {
         "session_id": reference.get("session_id"),
         "attempt_id": reference.get("attempt_id"),
@@ -45,6 +49,7 @@ def measurement_repair_context_from_content(content: str) -> dict[str, Any] | No
         "warnings": list(quality.get("warnings") or [])[:12] if isinstance(quality.get("warnings"), list) else [],
         "issues": list(quality.get("issues") or [])[:8] if isinstance(quality.get("issues"), list) else [],
         "focus": evidence.get("focus") if isinstance(evidence.get("focus"), Mapping) else None,
+        "effective_scope": dict(effective_scope) if isinstance(effective_scope, Mapping) else None,
         "observation_scope": measurement.get("observation_scope") if isinstance(measurement.get("observation_scope"), Mapping) else None,
         "series_map": dict(decision.get("series_map") or {}) if isinstance(decision.get("series_map"), Mapping) else {},
         "evidence_basis": str(decision.get("evidence_basis") or "")[:80] or None,
@@ -285,6 +290,12 @@ def measurement_trace_fields(content: str) -> dict[str, Any]:
         },
     }
     result["measurement_evidence_refs"] = list(evidence.get("refs") or [])[:64]
+    effective_scope = measurement.get("effective_scope")
+    if not isinstance(effective_scope, Mapping):
+        attempt = measurement.get("attempt")
+        effective_scope = attempt.get("effective_scope") if isinstance(attempt, Mapping) else None
+    if isinstance(effective_scope, Mapping):
+        result["measurement_effective_scope"] = dict(effective_scope)
     focus = evidence.get("focus")
     if isinstance(focus, Mapping):
         result["measurement_focus"] = {

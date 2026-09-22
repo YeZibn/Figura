@@ -845,6 +845,11 @@ def add_scope_metadata(data: Any, scope: ResolvedPanelScope) -> Any:
     result = visit(data)
     if isinstance(result, dict):
         result["scope"] = scope.envelope()
+        # Keep the applied range under an explicit, shared name.  ``scope`` is
+        # retained for backwards compatibility, while measurement quality and
+        # trace projections consume ``effective_scope`` consistently across all
+        # four sensors.
+        result["effective_scope"] = scope.envelope()
         result["source_image_size"] = list(scope.source_size)
         result["local_image_size"] = list(scope.local_size)
     return result

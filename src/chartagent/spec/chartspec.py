@@ -22,6 +22,8 @@ import math
 import re
 from typing import Any, Dict, List, Mapping, Optional
 
+from .context import GenerationContext, normalize_generation_context
+
 
 class ChartType(str, Enum):
     """Closed set of chart kinds the IR can express (design D2)."""
@@ -42,6 +44,7 @@ MAX_FIGURE_ID_LENGTH = 128
 MAX_FIGURE_SOURCE_LENGTH = 160
 _FIGURE_LAYOUT_TYPES = frozenset({"grid"})
 _COVERAGE_STATUSES = frozenset({"complete", "incomplete", "unknown"})
+_COVERAGE_BASES = frozenset({"full_source", "requested_subset", "not_applicable"})
 _PROVENANCE_FIELDS = (
     "status",
     "session_id",
@@ -182,6 +185,7 @@ class ChartSpec:
     dataset: List[DataPoint]
     axes: Optional[Axes] = None
     provenance: Optional[Dict[str, Any]] = None
+    generation_context: Optional[GenerationContext] = None
 
     # -- serialization ------------------------------------------------------ #
     def to_dict(self) -> Dict[str, Any]:
@@ -192,6 +196,8 @@ class ChartSpec:
         }
         if self.provenance is not None:
             result["provenance"] = _bounded_provenance(self.provenance)
+        if self.generation_context is not None:
+            result["generation_context"] = self.generation_context.to_dict()
         return result
 
     @classmethod
@@ -204,7 +210,16 @@ class ChartSpec:
         axes = Axes.from_dict(axes_raw) if axes_raw else None
         dataset = [DataPoint.from_dict(item) for item in (data.get("dataset") or [])]
         provenance = _bounded_provenance(data.get("provenance"))
-        return cls(metadata=metadata, axes=axes, dataset=dataset, provenance=provenance)
+        generation_context = normalize_generation_context(
+            data.get("generation_context") or data.get("generationContext")
+        )
+        return cls(
+            metadata=metadata,
+            axes=axes,
+            dataset=dataset,
+            provenance=provenance,
+            generation_context=generation_context,
+        )
 
     # -- validation --------------------------------------------------------- #
     def validate(self) -> List[ValidationIssue]:
@@ -250,6 +265,12 @@ class ChartSpec:
                 status = self.provenance.get("status")
                 if status not in {"accepted", "selected", "discarded", "abandoned", "provisional", "partial"}:
                     issues.append(ValidationIssue("provenance.status", "measurement provenance has an unsupported status"))
+
+        if self.generation_context is not None:
+            issues.extend(
+                ValidationIssue(item["location"], item["message"])
+                for item in self.generation_context.validate()
+            )
 
         return issues
 
@@ -355,6 +376,12 @@ class ChartCoverage:
     represented_series: List[str]
     omitted_series: List[str]
     status: str = "unknown"
+    basis: str = "full_source"
+
+    @property
+    def intentionally_omitted_series(self) -> List[str]:
+        """Canonical semantic alias while preserving the legacy field name."""
+        return self.omitted_series
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -362,6 +389,7 @@ class ChartCoverage:
             "represented_series": list(self.represented_series),
             "omitted_series": list(self.omitted_series),
             "status": self.status,
+            "basis": self.basis,
         }
 
     @classmethod
@@ -372,8 +400,9 @@ class ChartCoverage:
         return cls(
             source_series=_strings(data.get("source_series")),
             represented_series=_strings(data.get("represented_series")),
-            omitted_series=_strings(data.get("omitted_series")),
+            omitted_series=_strings(data.get("omitted_series") or data.get("intentionally_omitted_series")),
             status=str(data.get("status") or "unknown"),
+            basis=str(data.get("basis") or "full_source"),
         )
 
     def validate(self, location: str = "coverage") -> List[ValidationIssue]:
@@ -390,13 +419,22 @@ class ChartCoverage:
                     issues.append(ValidationIssue(f"{location}.{field_name}[{index}]", "series name exceeds the configured length limit"))
         if self.status not in _COVERAGE_STATUSES:
             issues.append(ValidationIssue(f"{location}.status", "coverage status is invalid"))
+        if self.basis not in _COVERAGE_BASES:
+            issues.append(ValidationIssue(f"{location}.basis", "coverage basis is invalid"))
         source = set(self.source_series)
         represented = set(self.represented_series)
         omitted = set(self.omitted_series)
         if not omitted.issubset(source):
             issues.append(ValidationIssue(f"{location}.omitted_series", "omitted series must come from source_series"))
-        if self.status == "complete" and (omitted or not source.issubset(represented)):
-            issues.append(ValidationIssue(f"{location}.status", "complete coverage cannot contain omitted source series"))
+        if self.basis == "full_source" and self.status == "complete" and (omitted or not source.issubset(represented)):
+            issues.append(ValidationIssue(f"{location}.status", "complete full_source coverage cannot contain omitted source series"))
+        if self.basis == "requested_subset" and self.status == "complete":
+            if omitted & represented:
+                issues.append(ValidationIssue(f"{location}.omitted_series", "requested subset cannot represent and omit the same series"))
+            if source and (represented | omitted) != source:
+                issues.append(ValidationIssue(f"{location}.status", "complete requested_subset coverage must account for every known source series"))
+        if self.basis == "not_applicable" and (source or represented or omitted):
+            issues.append(ValidationIssue(f"{location}.basis", "not_applicable coverage cannot list source series"))
         return issues
 
 
@@ -433,9 +471,10 @@ class ChartFigure:
     layout: FigureLayout
     charts: List[ChartFigureItem]
     coverage: ChartCoverage
+    generation_context: Optional[GenerationContext] = None
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        result = {
             "kind": "chart_figure",
             "figure_id": self.figure_id,
             "source": self.source.to_dict(),
@@ -443,6 +482,9 @@ class ChartFigure:
             "charts": [chart.to_dict() for chart in self.charts],
             "coverage": self.coverage.to_dict(),
         }
+        if self.generation_context is not None:
+            result["generation_context"] = self.generation_context.to_dict()
+        return result
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "ChartFigure":
@@ -452,6 +494,9 @@ class ChartFigure:
             layout=FigureLayout.from_dict(data.get("layout") or {}),
             charts=[ChartFigureItem.from_dict(item) for item in (data.get("charts") or []) if isinstance(item, Mapping)],
             coverage=ChartCoverage.from_dict(data.get("coverage") or {}),
+            generation_context=normalize_generation_context(
+                data.get("generation_context") or data.get("generationContext")
+            ),
         )
 
     def validate(self) -> List[ValidationIssue]:
@@ -479,6 +524,11 @@ class ChartFigure:
                 issues.append(ValidationIssue(f"{location}.spec.{issue.location}", issue.message))
         issues.extend(self.layout.validate(len(self.charts)))
         issues.extend(self.coverage.validate())
+        if self.generation_context is not None:
+            issues.extend(
+                ValidationIssue(item["location"], item["message"])
+                for item in self.generation_context.validate()
+            )
         return issues
 
 

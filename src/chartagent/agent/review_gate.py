@@ -27,6 +27,11 @@ def review_gate_context(gate: Mapping[str, Any]) -> str:
         "retryable": retryable,
         "recovery_actions": list(gate.get("recoveryActions", ()))[:16] if isinstance(gate.get("recoveryActions"), list) else [],
     }
+    if isinstance(gate.get("recoveryActions"), list) and gate.get("recoveryActions"):
+        first_action = gate["recoveryActions"][0]
+        if isinstance(first_action, Mapping):
+            payload["repair_kind"] = str(first_action.get("repairKind") or "terminal")[:32]
+            payload["repair_target"] = first_action.get("target") if isinstance(first_action.get("target"), Mapping) else None
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 __all__ = [

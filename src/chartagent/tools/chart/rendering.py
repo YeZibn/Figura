@@ -31,6 +31,7 @@ from ...spec import (
     chart_collection_digest,
     chart_figure_digest,
     chart_spec_digest,
+    context_digest,
 )
 from ..core.result import GeneratedImage, ToolResult
 from ..core.definition import Tool
@@ -706,6 +707,8 @@ def _render_figure_image(
         "source": figure.source.to_dict(),
         "layout": figure.layout.to_dict(),
         "coverage": figure.coverage.to_dict(),
+        "generation_context": figure.generation_context.to_dict() if figure.generation_context is not None else None,
+        "generation_context_digest": context_digest(figure.generation_context),
         "child_chart_ids": [item["chart_id"] for item in child_summaries],
         "children": child_summaries,
         "media_type": "image/png",
@@ -732,6 +735,8 @@ def _render_figure_image(
         "source": figure.source.to_dict(),
         "layout": figure.layout.to_dict(),
         "coverage": figure.coverage.to_dict(),
+        "generation_context": figure.generation_context.to_dict() if figure.generation_context is not None else None,
+        "generation_context_digest": context_digest(figure.generation_context),
         "child_chart_ids": [item["chart_id"] for item in child_summaries],
         "children": child_summaries,
         "width": width,
@@ -917,6 +922,8 @@ def render_chart(
             "height": actual_height,
             "point_count": len(chart_spec.dataset),
             "series": _unique(_series_name(point) for point in chart_spec.dataset),
+            "generation_context": chart_spec.generation_context.to_dict() if chart_spec.generation_context is not None else None,
+            "generation_context_digest": context_digest(chart_spec.generation_context),
             "font": {
                 "status": font.status,
                 "source": font.source,
@@ -946,6 +953,8 @@ def render_chart(
                         "font_status": font.status,
                         "font_source": font.source,
                         "font_family": font.family,
+                        "generation_context": chart_spec.generation_context.to_dict() if chart_spec.generation_context is not None else None,
+                        "generation_context_digest": context_digest(chart_spec.generation_context),
                     },
                 ),
             ),

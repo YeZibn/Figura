@@ -24,6 +24,8 @@ MAX_REVIEW_TEXT = 240
 MAX_REVIEW_FIELDS = 24
 MAX_REVIEW_ATTEMPTS = 8
 MAX_REVIEW_ACTIONS = 16
+REPAIR_KINDS = frozenset({"none", "spec_only", "evidence_needed", "source_rebind", "terminal"})
+REPAIR_PHASES = frozenset({"none", "evidence", "assemble", "render", "rebind", "terminal"})
 
 
 class ReviewGateBlocked(RuntimeError):
@@ -85,6 +87,27 @@ def _safe_mapping(value: object, *, limit: int = MAX_REVIEW_FIELDS) -> dict[str,
     return {str(key)[:96]: item for key, item in list(sanitized.items())[:limit]}
 
 
+def _repair_kind(value: object, *, decision: str) -> str:
+    if isinstance(value, str) and value in REPAIR_KINDS:
+        return value
+    if decision in {"pass", "pass_with_warning"}:
+        return "none"
+    return "terminal" if value is not None else "spec_only"
+
+
+def _repair_phase(value: object, *, repair_kind: str, decision: str) -> str:
+    if isinstance(value, str) and value in REPAIR_PHASES:
+        return value
+    if decision in {"pass", "pass_with_warning"}:
+        return "none"
+    return {
+        "evidence_needed": "evidence",
+        "spec_only": "assemble",
+        "source_rebind": "rebind",
+        "terminal": "terminal",
+    }.get(repair_kind, "terminal")
+
+
 @dataclass(frozen=True)
 class ReviewIssue:
     """Domain-neutral bounded issue used by the shared gate projection."""
@@ -141,6 +164,8 @@ class ReviewDecision:
     confidence: float | None = None
     next_action: str | None = None
     repair_action: Mapping[str, Any] | None = None
+    repair_kind: str = "none"
+    repair_target: Mapping[str, Any] | None = None
     evidence: tuple[Mapping[str, Any], ...] = ()
     details: Mapping[str, Any] = field(default_factory=dict)
 
@@ -176,6 +201,8 @@ class ReviewDecision:
             confidence=_confidence(payload.get("confidence")),
             next_action=_text(payload.get("next_action") or payload.get("nextAction"), 240) or None,
             repair_action=_safe_mapping(payload.get("repair_action") or payload.get("repairAction")) or None,
+            repair_kind=_repair_kind(payload.get("repair_kind") or payload.get("repairKind"), decision=decision),
+            repair_target=_safe_mapping(payload.get("repair_target") or payload.get("repairTarget")) or None,
             evidence=evidence,
             details=_safe_mapping(payload.get("details")),
         )
@@ -191,6 +218,9 @@ class ReviewDecision:
             result["nextAction"] = _text(self.next_action, 240)
         if self.repair_action:
             result["repairAction"] = _safe_mapping(self.repair_action)
+        result["repairKind"] = _repair_kind(self.repair_kind, decision=self.decision)
+        if self.repair_target:
+            result["repairTarget"] = _safe_mapping(self.repair_target)
         if self.evidence:
             result["evidence"] = [_safe_mapping(item) for item in self.evidence[:MAX_REVIEW_ACTIONS]]
         if self.details:
@@ -214,6 +244,9 @@ class ReviewRecord:
     issues: tuple[ReviewIssue, ...] = ()
     next_action: str | None = None
     repair_action: Mapping[str, Any] | None = None
+    repair_kind: str = "none"
+    repair_target: Mapping[str, Any] | None = None
+    repair_phase: str = "none"
     evidence: tuple[Mapping[str, Any], ...] = ()
     decision: str | None = None
     confidence: float | None = None
@@ -253,6 +286,14 @@ class ReviewRecord:
             result["nextAction"] = _text(self.next_action, 240)
         if self.repair_action:
             result["repairAction"] = _safe_mapping(self.repair_action)
+        result["repairKind"] = _repair_kind(self.repair_kind, decision=self.decision or "reviewing")
+        result["repairPhase"] = _repair_phase(
+            self.repair_phase,
+            repair_kind=self.repair_kind,
+            decision=self.decision or "reviewing",
+        )
+        if self.repair_target:
+            result["repairTarget"] = _safe_mapping(self.repair_target)
         if self.decision:
             result["decision"] = _text(self.decision, 32)
         if self.confidence is not None:
@@ -292,6 +333,13 @@ class ReviewRecord:
             issues=_issues(value.get("issues")),
             next_action=_text(value.get("nextAction") or value.get("next_action"), 240) or None,
             repair_action=_safe_mapping(value.get("repairAction") or value.get("repair_action")) or None,
+            repair_kind=_repair_kind(value.get("repairKind") or value.get("repair_kind"), decision=str(value.get("decision") or "reviewing")),
+            repair_target=_safe_mapping(value.get("repairTarget") or value.get("repair_target")) or None,
+            repair_phase=_repair_phase(
+                value.get("repairPhase") or value.get("repair_phase"),
+                repair_kind=_repair_kind(value.get("repairKind") or value.get("repair_kind"), decision=str(value.get("decision") or "reviewing")),
+                decision=str(value.get("decision") or "reviewing"),
+            ),
             evidence=evidence,
             decision=_text(value.get("decision"), 32) or None,
             confidence=_confidence(value.get("confidence")),
@@ -316,6 +364,9 @@ class ExecutionGate:
     next_action: str | None = None
     issues: tuple[ReviewIssue, ...] = ()
     repair_action: Mapping[str, Any] | None = None
+    repair_kind: str = "none"
+    repair_target: Mapping[str, Any] | None = None
+    repair_phase: str = "none"
     updated_at: str = field(default_factory=_now)
 
     def to_dict(self) -> dict[str, Any]:
@@ -339,6 +390,14 @@ class ExecutionGate:
             result["nextAction"] = _text(self.next_action, 240)
         if self.repair_action:
             result["repairAction"] = _safe_mapping(self.repair_action)
+        result["repairKind"] = _repair_kind(self.repair_kind, decision="pass" if not self.blocking else "fail")
+        result["repairPhase"] = _repair_phase(
+            self.repair_phase,
+            repair_kind=self.repair_kind,
+            decision="pass" if not self.blocking else "fail",
+        )
+        if self.repair_target:
+            result["repairTarget"] = _safe_mapping(self.repair_target)
         return result
 
     @classmethod
@@ -365,6 +424,13 @@ class ExecutionGate:
             next_action=_text(value.get("nextAction") or value.get("next_action"), 240) or None,
             issues=_issues(value.get("issues")),
             repair_action=_safe_mapping(value.get("repairAction") or value.get("repair_action")) or None,
+            repair_kind=_repair_kind(value.get("repairKind") or value.get("repair_kind"), decision="fail" if bool(value.get("blocking", state is not GateState.OPEN)) else "pass"),
+            repair_target=_safe_mapping(value.get("repairTarget") or value.get("repair_target")) or None,
+            repair_phase=_repair_phase(
+                value.get("repairPhase") or value.get("repair_phase"),
+                repair_kind=_repair_kind(value.get("repairKind") or value.get("repair_kind"), decision="fail" if bool(value.get("blocking", state is not GateState.OPEN)) else "pass"),
+                decision="fail" if bool(value.get("blocking", state is not GateState.OPEN)) else "pass",
+            ),
             updated_at=_text(value.get("updatedAt") or value.get("updated_at"), 64) or _now(),
         )
 
@@ -392,6 +458,7 @@ def _gate_for(record: ReviewRecord) -> ExecutionGate:
             subject_id=record.subject_id,
             attempt=record.attempt,
             max_attempts=record.max_attempts,
+            repair_phase="none",
         )
     gate_state = {
         ReviewState.REVIEWING: GateState.REVIEWING,
@@ -411,6 +478,9 @@ def _gate_for(record: ReviewRecord) -> ExecutionGate:
         next_action=record.next_action,
         issues=record.issues,
         repair_action=record.repair_action,
+        repair_kind=record.repair_kind,
+        repair_target=record.repair_target,
+        repair_phase=record.repair_phase,
     )
 
 
@@ -515,12 +585,35 @@ class ReviewCoordinator:
                 issues=normalized.issues,
                 next_action=normalized.next_action,
                 repair_action=normalized.repair_action,
+                repair_kind=normalized.repair_kind,
+                repair_target=normalized.repair_target,
+                repair_phase=_repair_phase(
+                    None,
+                    repair_kind=normalized.repair_kind,
+                    decision=normalized.decision,
+                ),
                 evidence=normalized.evidence or current.evidence,
                 decision=normalized.decision,
                 confidence=normalized.confidence,
                 details=normalized.details,
                 updated_at=_now(),
             )
+            self._records[record.review_id] = record
+            self._gates[record.run_id] = _gate_for(record)
+            return record
+
+    def mark_repair_phase(self, review_id: str, phase: str) -> ReviewRecord:
+        """Advance a blocking repair gate without creating a new review."""
+        normalized_phase = str(phase or "").strip().lower()
+        if normalized_phase not in REPAIR_PHASES:
+            raise ValueError(f"unknown repair phase: {phase}")
+        with self._lock:
+            current = self._records.get(str(review_id))
+            if current is None:
+                raise KeyError(f"unknown review_id: {review_id}")
+            if current.state is not ReviewState.REPAIR_REQUIRED:
+                return current
+            record = replace(current, repair_phase=normalized_phase, updated_at=_now())
             self._records[record.review_id] = record
             self._gates[record.run_id] = _gate_for(record)
             return record
@@ -534,6 +627,8 @@ class ReviewCoordinator:
         if decision.decision == "exhausted":
             return ReviewState.EXHAUSTED
         if decision.decision == "repair_required":
+            if decision.repair_kind == "terminal":
+                return ReviewState.EXHAUSTED
             return ReviewState.REPAIR_REQUIRED if record.attempt < record.max_attempts else ReviewState.EXHAUSTED
         return ReviewState.FAILED
 

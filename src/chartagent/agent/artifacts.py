@@ -129,7 +129,17 @@ def artifact_records_from_observation(
                 "measurement_series_map": dict(measurement_decision.get("series_map") or {}) if isinstance(measurement_decision.get("series_map"), Mapping) else {},
                 "measurement_evidence_basis": str(measurement_decision.get("evidence_basis") or "")[:80] or None,
                 "measurement_observation_scope": dict(measurement.get("observation_scope") or {}) if isinstance(measurement.get("observation_scope"), Mapping) else None,
+                "measurement_effective_scope": dict(measurement.get("effective_scope") or {}) if isinstance(measurement.get("effective_scope"), Mapping) else None,
                 "measurement_focus": dict(measurement_evidence.get("focus") or {}) if isinstance(measurement_evidence.get("focus"), dict) else None,
+            }
+        )
+    lifecycle = lifecycle_trace_fields(content)
+    if lifecycle:
+        records[0].update(
+            {
+                key: lifecycle[key]
+                for key in ("candidate_id", "attempt", "parent_attempt", "source_scope", "coverage", "repair_kind")
+                if key in lifecycle
             }
         )
     if tool_name == "assemble_spec" and not payload.get("error"):
@@ -146,6 +156,9 @@ def artifact_records_from_observation(
                     "warnings": warnings,
                     "provenance": data.get("provenance"),
                     "coverage": data.get("coverage"),
+                    "generation_context": data.get("generation_context"),
+                    "source_scope": lifecycle.get("source_scope"),
+                    "repair_kind": lifecycle.get("repair_kind"),
                     "child_chart_ids": [item.get("chart_id") for item in data.get("charts", []) if isinstance(item, dict)],
                 }
             )
@@ -160,6 +173,9 @@ def artifact_records_from_observation(
                     "lineage": [f"observation:{call_id}"],
                     "warnings": warnings,
                     "provenance": data.get("provenance"),
+                    "generation_context": data.get("generation_context"),
+                    "source_scope": lifecycle.get("source_scope"),
+                    "coverage": data.get("coverage"),
                     "figure_count": len(data.get("figures", [])) if isinstance(data.get("figures"), list) else 0,
                 }
             )
@@ -174,6 +190,9 @@ def artifact_records_from_observation(
                     "lineage": [f"observation:{call_id}"],
                     "warnings": warnings,
                     "provenance": data.get("provenance"),
+                    "generation_context": data.get("generation_context"),
+                    "source_scope": lifecycle.get("source_scope"),
+                    "coverage": data.get("coverage"),
                 }
             )
     for item in panels or []:
@@ -213,6 +232,12 @@ def artifact_records_from_observation(
                     "lineage": [f"observation:{call_id}"],
                     "warnings": warnings,
                     "resource_refs": list(references),
+                    "candidate_id": candidate_id,
+                    "attempt": item.get("candidateAttempt") or item.get("lineageAttempt"),
+                    "parent_attempt": item.get("parentAttempt") or item.get("parentCandidateId"),
+                    "source_scope": (item.get("generationContext") or {}).get("source_scope") if isinstance(item.get("generationContext"), Mapping) else None,
+                    "coverage": item.get("coverage") or ((item.get("generationContext") or {}).get("coverage") if isinstance(item.get("generationContext"), Mapping) else None),
+                    "repair_kind": (item.get("review") or {}).get("repairKind") if isinstance(item.get("review"), Mapping) else item.get("repairKind"),
                 }
             )
             review = item.get("review")
@@ -248,8 +273,106 @@ def trace_result_summary(content: str) -> Any:
     return summarize_result(content)
 
 
+def lifecycle_trace_fields(content: str) -> dict[str, Any]:
+    """Project stable candidate/scope identity beside bounded result summaries."""
+    try:
+        payload = json.loads(content)
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    if not isinstance(payload, Mapping):
+        return {}
+    data = payload.get("data") if isinstance(payload.get("data"), Mapping) else payload
+    if not isinstance(data, Mapping):
+        return {}
+    fields: dict[str, Any] = {}
+    context = data.get("generation_context") or data.get("generationContext")
+    if isinstance(context, Mapping):
+        source_scope = context.get("source_scope") or context.get("sourceScope")
+        coverage = context.get("coverage")
+        if isinstance(source_scope, Mapping):
+            fields["source_scope"] = {
+                key: source_scope.get(key)
+                for key in ("attachment_id", "attachmentId", "panel_ids", "panelIds", "revision")
+                if source_scope.get(key) is not None
+            }
+        if isinstance(coverage, Mapping):
+            fields["coverage"] = {
+                key: coverage.get(key)
+                for key in (
+                    "basis",
+                    "source_series",
+                    "sourceSeries",
+                    "represented_series",
+                    "representedSeries",
+                    "intentionally_omitted_series",
+                    "intentionallyOmittedSeries",
+                    "status",
+                )
+                if coverage.get(key) is not None
+            }
+    measurement = data.get("measurement")
+    if isinstance(measurement, Mapping):
+        reference = measurement.get("reference") if isinstance(measurement.get("reference"), Mapping) else {}
+        attempt = measurement.get("attempt") if isinstance(measurement.get("attempt"), Mapping) else {}
+        measurement_scope = {
+            "attachment_id": reference.get("attachment_id"),
+            "panel_ids": [reference.get("panel_id")] if reference.get("panel_id") else [],
+        }
+        if measurement_scope["attachment_id"] or measurement_scope["panel_ids"]:
+            fields.setdefault("source_scope", measurement_scope)
+        attempt_id = reference.get("attempt_id") or attempt.get("attempt_id")
+        parent_attempt = attempt.get("parent_attempt_id")
+        if attempt_id:
+            fields["attempt_id"] = str(attempt_id)[:160]
+        if parent_attempt:
+            fields["parent_attempt"] = str(parent_attempt)[:160]
+        target = measurement.get("target")
+        if parent_attempt is None and isinstance(target, Mapping) and target.get("parent_attempt_id"):
+            fields["parent_attempt"] = str(target["parent_attempt_id"])[:160]
+    candidate_items = data.get("review")
+    if not isinstance(candidate_items, list) and isinstance(data.get("candidate"), Mapping):
+        candidate_items = [data.get("candidate")]
+    if isinstance(candidate_items, list):
+        item = next((value for value in candidate_items if isinstance(value, Mapping)), None)
+        if item is not None:
+            candidate_id = item.get("candidateId") or item.get("candidate_id")
+            if candidate_id:
+                fields["candidate_id"] = str(candidate_id)[:160]
+            attempt_value = item.get("candidateAttempt") or item.get("lineageAttempt") or item.get("attempt")
+            if attempt_value is not None:
+                try:
+                    fields["attempt"] = max(1, min(int(attempt_value), 8))
+                except (TypeError, ValueError):
+                    pass
+            parent_attempt = item.get("parentAttempt") or item.get("parent_attempt") or item.get("parentCandidateId")
+            if parent_attempt:
+                fields["parent_attempt"] = str(parent_attempt)[:160]
+            candidate_context = item.get("generationContext") or item.get("generation_context")
+            if isinstance(candidate_context, Mapping):
+                candidate_scope = candidate_context.get("source_scope") or candidate_context.get("sourceScope")
+                candidate_coverage = candidate_context.get("coverage")
+                if isinstance(candidate_scope, Mapping):
+                    fields["source_scope"] = dict(candidate_scope)
+                if isinstance(candidate_coverage, Mapping):
+                    fields["coverage"] = dict(candidate_coverage)
+            review = item.get("review")
+            if isinstance(review, Mapping) and review.get("repairKind"):
+                fields["repair_kind"] = str(review["repairKind"])[:32]
+            elif item.get("repairKind"):
+                fields["repair_kind"] = str(item["repairKind"])[:32]
+    direct_repair = data.get("repair_kind") or data.get("repairKind")
+    if direct_repair:
+        fields["repair_kind"] = str(direct_repair)[:32]
+    return {
+        key: value
+        for key, value in fields.items()
+        if value not in (None, {}, [], "")
+    }
+
+
 # Private aliases preserve the historical internal names for callers that
 # imported them from ``agent.loop`` during the migration.
 _attach_visual_observation_refs = attach_visual_observation_refs
 _artifact_records_from_observation = artifact_records_from_observation
 _trace_result_summary = trace_result_summary
+_lifecycle_trace_fields = lifecycle_trace_fields

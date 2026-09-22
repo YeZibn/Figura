@@ -108,6 +108,29 @@ def test_measurement_quality_acceptance_and_lineage_round_trip():
     assert accepted["attempt_id"] == restored_session.current_attempt_id
 
 
+def test_measurement_result_exposes_the_effective_scope_used_by_the_sensor():
+    effective_scope = {
+        "mode": "panel",
+        "attachment_id": "att_chart",
+        "panel_id": "panel_bars",
+        "source_bbox_px": [12, 18, 240, 180],
+        "local_image_size": [240, 180],
+    }
+    result = attach_measurement_quality(
+        _bar_data() | {"effective_scope": effective_scope},
+        source_tool="measure_bars",
+        image_count=1,
+        source_attachment_id="att_chart",
+        source_panel_id="panel_bars",
+        source_run_id="run_1",
+    )
+
+    measurement = result["measurement"]
+    assert measurement["effective_scope"] == effective_scope
+    assert measurement["attempt"]["effective_scope"] == effective_scope
+    assert measurement["evidence"]["effective_scope"] == effective_scope
+
+
 def test_measurement_session_deduplicates_attempt_and_rejects_cross_panel():
     data = attach_measurement_quality(
         _bar_data(),

@@ -33,6 +33,7 @@ from .layout import (
     filter_snippets_to_scope,
 )
 from .scope import apply_measurement_focus, measurement_focus_context, observation_scope_focus_context
+from .contracts import measurement_contract_properties
 
 _TRACE_TOLERANCE = 30
 
@@ -727,7 +728,8 @@ EXTRACT_LINE_SERIES = Tool(
     description=(
         "用于清晰的二维折线图：从授权的单系列或多系列图表中提取源图轨迹和有证据支持的点。"
         "返回绘图区、坐标标定、稳定 series ID、轨迹几何、标记或刻度采样点、置信度、警告和源尺寸叠加图；"
-        "语义标定不足时仍保留像素证据。不要用于填充区域、强透视、3D，或在坐标轴/采样锚点无法标定时声称精确语义值。"
+        "语义标定不足时仍保留像素证据，并返回 effective_scope、evidence refs 和质量 warning；warning 不会自动触发重测，系列选择由主 Agent 记录。"
+        "不要用于填充区域、强透视、3D，或在坐标轴/采样锚点无法标定时声称精确语义值。"
     ),
     parameters={
         "type": "object",
@@ -741,16 +743,7 @@ EXTRACT_LINE_SERIES = Tool(
                 "description": "Optional validated chart layout context; model hints remain advisory.",
                 "additionalProperties": True,
             },
-            "measurement_target": {
-                "type": "object",
-                "description": "Optional bounded source-coordinate focus target for a remeasurement.",
-                "additionalProperties": True,
-            },
-            "observation_scope": {
-                "type": "object",
-                "description": "首次观察使用的当前 panel 有界范围；coordinate_space 可为 panel_norm、panel_px 或 source_px，包含 include/exclude 区域。",
-                "additionalProperties": True,
-            },
+            **measurement_contract_properties(),
         },
         "required": ["image_path"],
         "additionalProperties": False,

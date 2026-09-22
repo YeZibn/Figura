@@ -276,6 +276,17 @@ class GeneratedChartReference:
     layout: Mapping[str, Any] | None = None
     coverage: Mapping[str, Any] | None = None
     chart_types: tuple[str, ...] = ()
+    generation_context: Mapping[str, Any] | None = None
+    generation_context_digest: str | None = None
+    context_status: str | None = None
+    candidate_attempt: int | None = None
+    review_attempts: int | None = None
+    lineage_attempt: int | None = None
+    parent_candidate_id: str | None = None
+    parent_attempt: int | None = None
+    panel_ids: tuple[str, ...] = ()
+    source_attachment_ids: tuple[str, ...] = ()
+    repair_kind: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         result: dict[str, Any] = {
@@ -316,6 +327,28 @@ class GeneratedChartReference:
         for key, value in (("source", self.source), ("layout", self.layout), ("coverage", self.coverage)):
             if isinstance(value, Mapping):
                 result[key] = sanitize_payload(value)
+        if isinstance(self.generation_context, Mapping):
+            result["generationContext"] = sanitize_payload(self.generation_context)
+        if self.generation_context_digest:
+            result["generationContextDigest"] = truncate_text(self.generation_context_digest, 128)
+        if self.context_status:
+            result["contextStatus"] = truncate_text(self.context_status, 32)
+        if self.candidate_attempt is not None:
+            result["candidateAttempt"] = max(1, min(int(self.candidate_attempt), 8))
+        if self.review_attempts is not None:
+            result["reviewAttempts"] = max(0, min(int(self.review_attempts), 16))
+        if self.lineage_attempt is not None:
+            result["lineageAttempt"] = max(1, min(int(self.lineage_attempt), 8))
+        if self.parent_candidate_id:
+            result["parentCandidateId"] = truncate_text(self.parent_candidate_id, 128)
+        if self.parent_attempt is not None:
+            result["parentAttempt"] = max(0, min(int(self.parent_attempt), 8))
+        if self.panel_ids:
+            result["panelIds"] = [truncate_text(item, 160) for item in self.panel_ids[:16]]
+        if self.source_attachment_ids:
+            result["sourceAttachmentIds"] = [truncate_text(item, 128) for item in self.source_attachment_ids[:16]]
+        if self.repair_kind:
+            result["repairKind"] = truncate_text(self.repair_kind, 32)
         if isinstance(self.review, Mapping):
             result["review"] = sanitize_payload(self.review)
         if self.reason:

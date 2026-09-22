@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Mapping
 
-from ..spec import ChartFigure, ChartSpec
+from ..spec import ChartFigure, ChartSpec, GenerationContext, context_digest
 
 if TYPE_CHECKING:
     from .policy import ReviewPolicy
@@ -16,6 +16,7 @@ MAX_REVIEW_ISSUES = 32
 MAX_REVIEW_EVIDENCE = 16
 MAX_REVIEW_TEXT = 240
 ChartSemantic = ChartSpec | ChartFigure
+REPAIR_KINDS = frozenset({"none", "spec_only", "evidence_needed", "source_rebind", "terminal"})
 
 
 class CandidateStatus(str, Enum):
@@ -75,6 +76,9 @@ class ReviewResult:
     chart_spec_digest: str | None = None
     suggested_action: str | None = None
     recovery_classification: str | None = None
+    repair_kind: str | None = None
+    repair_target: Mapping[str, Any] | None = None
+    candidate_attempt: int | None = None
 
     @property
     def blocking(self) -> bool:
@@ -110,6 +114,12 @@ class ReviewResult:
             result["suggestedAction"] = self.suggested_action
         if self.recovery_classification is not None:
             result["recoveryClassification"] = self.recovery_classification
+        if self.repair_kind is not None:
+            result["repairKind"] = self.repair_kind if self.repair_kind in REPAIR_KINDS else "terminal"
+        if isinstance(self.repair_target, Mapping):
+            result["repairTarget"] = dict(self.repair_target)
+        if self.candidate_attempt is not None:
+            result["candidateAttempt"] = max(1, min(int(self.candidate_attempt), 8))
         return result
 
 
@@ -144,6 +154,10 @@ class ChartCandidate:
     child_chart_ids: tuple[str, ...] = ()
     figure_source: Mapping[str, str] | None = None
     coverage: Mapping[str, Any] | None = None
+    generation_context: GenerationContext | None = None
+    context_digest: str | None = None
+    context_status: str = "absent"
+    parent_attempt: int | None = None
 
     def safe_metadata(self) -> dict[str, Any]:
         result: dict[str, Any] = {
@@ -164,10 +178,21 @@ class ChartCandidate:
             "reviewMode": "vlm" if self.policy.semantic_required else "safety",
             "policy": self.policy.to_dict(),
             "attempts": self.attempts,
+            # Candidate lineage is distinct from the number of deterministic /
+            # VLM checks made against this candidate.  Keep an explicit alias
+            # so durable projections do not have to infer it from attempts.
+            "candidateAttempt": self.lineage_attempt,
             "lineageAttempt": self.lineage_attempt,
+            "contextStatus": self.context_status[:32],
         }
         if self.parent_candidate_id:
             result["parentCandidateId"] = self.parent_candidate_id
+        if self.parent_attempt is not None:
+            result["parentAttempt"] = max(0, int(self.parent_attempt))
+        if self.context_digest:
+            result["generationContextDigest"] = self.context_digest
+        if self.generation_context is not None:
+            result["generationContext"] = self.generation_context.to_dict()
         if self.panel_ids:
             result["panelIds"] = list(self.panel_ids[:16])
         if self.source_attachment_ids:
@@ -190,6 +215,7 @@ class ChartCandidate:
                 "representedSeries": [str(item)[:160] for item in self.coverage.get("represented_series", [])[:16]],
                 "omittedSeries": [str(item)[:160] for item in self.coverage.get("omitted_series", [])[:16]],
                 "status": str(self.coverage.get("status", "unknown"))[:32],
+                "basis": str(self.coverage.get("basis", "full_source"))[:32],
             }
         if self.superseded:
             result["superseded"] = True
@@ -206,6 +232,7 @@ __all__ = [
     "MAX_REVIEW_ISSUES",
     "MAX_REVIEW_TEXT",
     "PublicationStatus",
+    "REPAIR_KINDS",
     "ReviewIssue",
     "ReviewResult",
     "ReviewStatus",

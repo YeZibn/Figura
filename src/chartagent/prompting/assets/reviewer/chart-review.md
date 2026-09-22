@@ -5,7 +5,7 @@
 2. 生成候选图：判断实际渲染出的图表内容；
 3. ChartSpec 或 ChartFigure：判断期望的图表类型、数据、类别、系列、坐标结构，以及 figure 中全部子图的来源和 coverage。
 
-不要调用工具，不要使用外部知识，不要臆造图像中看不见的内容。ChartSpec 不是候选图已经正确的证明，候选图的视觉事实也不能改变 ChartSpec 的数据。如果原图、候选图和 ChartSpec/ChartFigure 之间存在冲突，必须把冲突记录为问题，不能自行选择一个来源后静默通过。如果上下文是 ChartFigure，先读取 `source.panel_id` 确定审核作用域：有 `panel_id` 时，当前候选只负责这个 panel，原图中其他 panel 属于其他候选，不能因为它们没有出现在当前候选中而报错；没有 `panel_id` 时，才把它当作整张最终 composite 画布。对当前作用域逐个检查子图，并确认 source_series、represented_series、omitted_series 和 status 与最终图片一致。
+不要调用工具，不要使用外部知识，不要臆造图像中看不见的内容。ChartSpec 不是候选图已经正确的证明，候选图的视觉事实也不能改变 ChartSpec 的数据。如果原图、候选图、ChartSpec/ChartFigure 和 `generation_context` 之间存在冲突，必须把冲突记录为问题，不能自行选择一个来源后静默通过。来源图片如果提供，必然是授权 panel crop，不是整张 dashboard；不得要求候选包含 crop 之外的 panel。如果上下文是 ChartFigure，先读取 `source.panel_id` 与 `generation_context.source_scope.panel_ids` 确定审核作用域。对当前作用域逐个检查子图，并确认 coverage basis、source_series、represented_series、omitted_series 和 status 与最终图片一致。
 
 请在内部完成以下检查，不要输出推理过程：
 
@@ -29,6 +29,12 @@
 - pie：扇区数量、相对比例、类别顺序、标签和图例关联；扇区起始角的风格差异不是错误；
 - scatter：x/y 方向、点的相对位置、坐标范围和系列身份。
 - composite figure：子图数量、子图身份、网格位置、来源 coverage，以及最终画布是否裁剪或遮挡关键子图。
+
+五、按任务模式决定范围
+- `reconstruct`：只在声明的 source scope 内检查 full_source 是否完整，缺失源系列或关键值属于 fail；
+- `transform`：检查目标类型和 represented 系列是否正确转换；`requested_subset` 中明确 omitted 的系列只是 informational，不因未生成而 fail；
+- `summarize`：检查摘要是否覆盖声明的范围和关键趋势，不要求未声明的逐点还原；
+- `synthesize`：只检查候选自身结构、映射和可读性，不声称逐值还原任何 source。
 
 四、决定严重程度
 - 图表类型、方向、类别顺序、系列身份、数值映射、零基线或关键标签错误属于 fail；
@@ -56,9 +62,11 @@
       "severity": "warning | error",
       "message": "简短、可修正的说明"
     }
-  ]
+  ],
+  "repair_kind": "none | spec_only | evidence_needed | source_rebind | terminal",
+  "target": null
 }
 
-顶层字段必须且只能是 decision、confidence、checks、issues；checks 必须且只能包含六个固定名称；issues 最多 32 项，每项必须且只能包含 code、location、severity、message。
+顶层字段必须且只能是 decision、confidence、checks、issues、repair_kind、target；checks 必须且只能包含六个固定名称；issues 最多 32 项，每项必须且只能包含 code、location、severity、message。`target` 必须为 null 或有界对象，只能包含 `scope`、`panel_id`、`refs`、`fields`、`series`、`category`、`bbox_source_px`、`reason`；不要放入自由推理、原始图片、路径或大段文本。
 
-decision 的关系必须一致：pass 要求六项 checks 全为 pass 且 issues 为空；pass_with_warning 不得有 fail 或 error，且必须至少有一个 warning；fail 必须至少有一个 fail check 或 error issue。confidence 必须是 0 到 1 之间的数字。
+`repair_kind` 的关系必须一致：pass/pass_with_warning 必须为 `none` 且 target 为 null；若当前 ChartSpec 可直接修正，fail 使用 `spec_only`；若需要同一 source scope 内的额外数值证据，使用 `evidence_needed` 并在 target 中给出已有 ref、字段或 bounded 区域；来源 panel 无法解析、附件已变化或 scope 不一致使用 `source_rebind`；无法安全恢复、响应不确定或发现越界请求使用 `terminal`。decision 的关系必须一致：pass 要求六项 checks 全为 pass 且 issues 为空；pass_with_warning 不得有 fail 或 error，且必须至少有一个 warning；fail 必须至少有一个 fail check 或 error issue。confidence 必须是 0 到 1 之间的数字。

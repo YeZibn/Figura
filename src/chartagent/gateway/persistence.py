@@ -647,6 +647,15 @@ class GatewayHistoryStore(RunPersistenceMixin, OperationJournalMixin):
                     figure_metadata = parsed_figure
             except (TypeError, json.JSONDecodeError):
                 figure_metadata = {}
+        generation_context = figure_metadata.get("generation_context")
+        if not isinstance(generation_context, Mapping):
+            generation_context = None
+        coverage = figure_metadata.get("coverage")
+        if not isinstance(coverage, Mapping) and generation_context is not None:
+            context_coverage = generation_context.get("coverage")
+            coverage = context_coverage if isinstance(context_coverage, Mapping) else None
+        review_repair_kind = review.get("repairKind") if isinstance(review, Mapping) else None
+        repair_kind = figure_metadata.get("repair_kind") or review_repair_kind
         reference = GeneratedChartReference(
             artifact_id=artifact_id,
             media_type=row["media_type"],
@@ -671,10 +680,56 @@ class GatewayHistoryStore(RunPersistenceMixin, OperationJournalMixin):
             child_chart_ids=tuple(item for item in figure_metadata.get("child_chart_ids", []) if isinstance(item, str)),
             source=figure_metadata.get("source") if isinstance(figure_metadata.get("source"), Mapping) else None,
             layout=figure_metadata.get("layout") if isinstance(figure_metadata.get("layout"), Mapping) else None,
-            coverage=figure_metadata.get("coverage") if isinstance(figure_metadata.get("coverage"), Mapping) else None,
+            coverage=coverage,
             chart_types=tuple(item for item in figure_metadata.get("chart_types", []) if isinstance(item, str)),
+            generation_context=generation_context,
+            generation_context_digest=figure_metadata.get("generation_context_digest"),
+            context_status=figure_metadata.get("context_status"),
+            candidate_attempt=figure_metadata.get("candidate_attempt"),
+            review_attempts=figure_metadata.get("review_attempts"),
+            lineage_attempt=figure_metadata.get("lineage_attempt"),
+            parent_candidate_id=figure_metadata.get("parent_candidate_id"),
+            parent_attempt=figure_metadata.get("parent_attempt"),
+            panel_ids=tuple(item for item in figure_metadata.get("panel_ids", []) if isinstance(item, str)),
+            source_attachment_ids=tuple(item for item in figure_metadata.get("source_attachment_ids", []) if isinstance(item, str)),
+            repair_kind=repair_kind if isinstance(repair_kind, str) else None,
         )
         return reference.to_dict()
+
+    @staticmethod
+    def _chart_figure_metadata(metadata: Mapping[str, Any]) -> dict[str, Any]:
+        """Project bounded candidate context into the durable artifact row."""
+        raw_context = metadata.get("generationContext") or metadata.get("generation_context")
+        generation_context = sanitize_payload(raw_context) if isinstance(raw_context, Mapping) else None
+        raw_review = metadata.get("review")
+        repair_kind = metadata.get("repairKind") or metadata.get("repair_kind")
+        if not repair_kind and isinstance(raw_review, Mapping):
+            repair_kind = raw_review.get("repairKind") or raw_review.get("repair_kind")
+        figure_metadata: dict[str, Any] = {
+            "figure_id": metadata.get("figureId") or metadata.get("figure_id"),
+            "collection_id": metadata.get("collectionId") or metadata.get("collection_id"),
+            "child_chart_ids": metadata.get("childChartIds") or metadata.get("child_chart_ids") or [],
+            "source": metadata.get("source") if isinstance(metadata.get("source"), Mapping) else None,
+            "layout": metadata.get("layout") if isinstance(metadata.get("layout"), Mapping) else None,
+            "coverage": metadata.get("coverage") if isinstance(metadata.get("coverage"), Mapping) else None,
+            "chart_types": metadata.get("chartTypes") or metadata.get("chart_types") or [],
+            "generation_context": generation_context,
+            "generation_context_digest": metadata.get("generationContextDigest") or metadata.get("context_digest"),
+            "context_status": metadata.get("contextStatus") or metadata.get("context_status"),
+            "candidate_attempt": metadata.get("candidateAttempt") or metadata.get("candidate_attempt"),
+            "review_attempts": metadata.get("attempts") or metadata.get("review_attempts"),
+            "lineage_attempt": metadata.get("lineageAttempt") or metadata.get("lineage_attempt"),
+            "parent_candidate_id": metadata.get("parentCandidateId") or metadata.get("parent_candidate_id"),
+            "parent_attempt": metadata.get("parentAttempt") or metadata.get("parent_attempt"),
+            "panel_ids": metadata.get("panelIds") or metadata.get("panel_ids") or [],
+            "source_attachment_ids": metadata.get("sourceAttachmentIds") or metadata.get("source_attachment_ids") or [],
+            "repair_kind": repair_kind,
+        }
+        return {
+            key: value
+            for key, value in figure_metadata.items()
+            if value not in (None, "", [], {})
+        }
 
     def add_candidate(self, run_id: str, session_id: str, image: Any) -> dict[str, Any] | None:
         """Persist a generated candidate without exposing it as a final artifact."""
@@ -712,20 +767,7 @@ class GatewayHistoryStore(RunPersistenceMixin, OperationJournalMixin):
             return None
         if not chart_type or not title or width <= 0 or height <= 0:
             return None
-        figure_metadata = {
-            "figure_id": metadata.get("figureId") or metadata.get("figure_id"),
-            "collection_id": metadata.get("collectionId") or metadata.get("collection_id"),
-            "child_chart_ids": metadata.get("childChartIds") or metadata.get("child_chart_ids") or [],
-            "source": metadata.get("source") if isinstance(metadata.get("source"), Mapping) else None,
-            "layout": metadata.get("layout") if isinstance(metadata.get("layout"), Mapping) else None,
-            "coverage": metadata.get("coverage") if isinstance(metadata.get("coverage"), Mapping) else None,
-            "chart_types": metadata.get("chartTypes") or metadata.get("chart_types") or [],
-        }
-        figure_metadata = {
-            key: value
-            for key, value in figure_metadata.items()
-            if value not in (None, "", [])
-        }
+        figure_metadata = self._chart_figure_metadata(metadata)
         candidate_root = self.artifact_root / session_id
         candidate_root.mkdir(mode=0o700, parents=True, exist_ok=True)
         self._restrict_permissions(candidate_root, 0o700)
@@ -926,16 +968,7 @@ class GatewayHistoryStore(RunPersistenceMixin, OperationJournalMixin):
             return None
         if generated and (not chart_type or not title or not width or not height):
             return None
-        figure_metadata = {
-            "figure_id": metadata.get("figureId") or metadata.get("figure_id"),
-            "collection_id": metadata.get("collectionId") or metadata.get("collection_id"),
-            "child_chart_ids": metadata.get("childChartIds") or metadata.get("child_chart_ids") or [],
-            "source": metadata.get("source") if isinstance(metadata.get("source"), Mapping) else None,
-            "layout": metadata.get("layout") if isinstance(metadata.get("layout"), Mapping) else None,
-            "coverage": metadata.get("coverage") if isinstance(metadata.get("coverage"), Mapping) else None,
-            "chart_types": metadata.get("chartTypes") or metadata.get("chart_types") or [],
-        }
-        figure_metadata = {key: value for key, value in figure_metadata.items() if value not in (None, "", [])}
+        figure_metadata = self._chart_figure_metadata(metadata)
         session_root = self.artifact_root / session_id
         session_root.mkdir(mode=0o700, parents=True, exist_ok=True)
         self._restrict_permissions(session_root, 0o700)
@@ -963,8 +996,23 @@ class GatewayHistoryStore(RunPersistenceMixin, OperationJournalMixin):
                 child_chart_ids=tuple(item for item in figure_metadata.get("child_chart_ids", []) if isinstance(item, str)),
                 source=figure_metadata.get("source"),
                 layout=figure_metadata.get("layout"),
-                coverage=figure_metadata.get("coverage"),
+                coverage=figure_metadata.get("coverage") or (
+                    figure_metadata.get("generation_context", {}).get("coverage")
+                    if isinstance(figure_metadata.get("generation_context"), Mapping)
+                    else None
+                ),
                 chart_types=tuple(item for item in figure_metadata.get("chart_types", []) if isinstance(item, str)),
+                generation_context=figure_metadata.get("generation_context"),
+                generation_context_digest=figure_metadata.get("generation_context_digest"),
+                context_status=figure_metadata.get("context_status"),
+                candidate_attempt=figure_metadata.get("candidate_attempt"),
+                review_attempts=figure_metadata.get("review_attempts"),
+                lineage_attempt=figure_metadata.get("lineage_attempt"),
+                parent_candidate_id=figure_metadata.get("parent_candidate_id"),
+                parent_attempt=figure_metadata.get("parent_attempt"),
+                panel_ids=tuple(item for item in figure_metadata.get("panel_ids", []) if isinstance(item, str)),
+                source_attachment_ids=tuple(item for item in figure_metadata.get("source_attachment_ids", []) if isinstance(item, str)),
+                repair_kind=figure_metadata.get("repair_kind"),
             ).to_dict()
         else:
             reference = {

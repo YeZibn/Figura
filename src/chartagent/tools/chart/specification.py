@@ -20,10 +20,12 @@ from ...spec import (
     DataPoint,
     FigureLayout,
     FigureSource,
+    GenerationContext,
     MAX_COLLECTION_FIGURES,
     MAX_FIGURE_CHARTS,
     MAX_FIGURE_COLUMNS,
     ValidationIssue,
+    generation_context_schema,
 )
 from ...measurement import MeasurementSession, measurement_gate, normalize_evidence_refs
 from ..core.definition import Tool
@@ -70,6 +72,67 @@ def _measurement_gate_error(gate: Mapping[str, Any], location: str) -> dict[str,
         "measurement_gate": bounded,
         "validation": {"status": "blocked", "checks": {"measurement": "blocked"}},
     }
+
+
+def _generation_context_error(value: object, location: str) -> dict[str, Any] | None:
+    """Normalize and validate one model-provided generation context."""
+    if value is None:
+        return None
+    context = value if isinstance(value, GenerationContext) else GenerationContext.from_dict(value)
+    if context is None:
+        return _assembly_error("generation_context must be a structured object", location)
+    issues = context.validate(location)
+    if issues:
+        return {
+            "error": "generation_context validation failed",
+            "issues": [
+                {"location": item["location"], "message": item["message"]}
+                for item in issues[:16]
+            ],
+        }
+    return None
+
+
+def _normalized_generation_context(value: object) -> GenerationContext | None:
+    if isinstance(value, GenerationContext):
+        return value
+    return GenerationContext.from_dict(value)
+
+
+def _context_scope_mismatch(
+    context: GenerationContext,
+    *,
+    expected_source: FigureSource | None = None,
+    measurement_ref: Mapping[str, Any] | None = None,
+    location: str,
+) -> dict[str, Any] | None:
+    scope = context.source_scope
+    if scope is None:
+        return None
+    if expected_source is not None:
+        if scope.attachment_id != expected_source.attachment_id:
+            return _assembly_error(
+                "generation_context attachment does not match figure source",
+                f"{location}.source_scope.attachment_id",
+            )
+        if expected_source.panel_id not in scope.panel_ids:
+            return _assembly_error(
+                "generation_context panel does not match figure source",
+                f"{location}.source_scope.panel_ids",
+            )
+    if measurement_ref is not None:
+        if measurement_ref.get("attachment_id") != scope.attachment_id:
+            return _assembly_error(
+                "measurement reference attachment does not match generation_context",
+                f"{location}.attachment_id",
+            )
+        ref_panel = measurement_ref.get("panel_id")
+        if ref_panel and ref_panel not in scope.panel_ids:
+            return _assembly_error(
+                "measurement reference panel is outside generation_context source scope",
+                f"{location}.panel_id",
+            )
+    return None
 
 
 def _record_measurement_decision(
@@ -191,6 +254,7 @@ def _assemble_single_spec(
     measurement_ref: Mapping[str, Any] | None = None,
     measurement_decision: Mapping[str, Any] | None = None,
     measurement_context: Mapping[str, Any] | None = None,
+    generation_context: GenerationContext | Mapping[str, Any] | None = None,
     expected_source: FigureSource | None = None,
     location: str = "measurement_ref",
 ) -> dict:
@@ -199,6 +263,20 @@ def _assemble_single_spec(
         kind = ChartType(chart_type)
     except (TypeError, ValueError):
         return _assembly_error(f"unknown chart_type: {chart_type!r}", "chart_type")
+
+    context_error = _generation_context_error(generation_context, "generation_context")
+    if context_error is not None:
+        return context_error
+    context = _normalized_generation_context(generation_context)
+    if context is not None:
+        scope_error = _context_scope_mismatch(
+            context,
+            expected_source=expected_source,
+            measurement_ref=measurement_ref,
+            location=location,
+        )
+        if scope_error is not None:
+            return scope_error
 
     if not isinstance(points, list) or not points:
         return _assembly_error("points must be a non-empty array", "points")
@@ -217,7 +295,13 @@ def _assemble_single_spec(
             measurement_ref,
             measurement_context,
             expected_attachment_id=expected_source.attachment_id if expected_source else None,
-            expected_panel_id=expected_source.panel_id if expected_source else None,
+            expected_panel_id=(
+                expected_source.panel_id
+                if expected_source
+                else context.source_scope.panel_ids[0]
+                if context is not None and context.source_scope is not None and len(context.source_scope.panel_ids) == 1
+                else None
+            ),
             location=location,
         )
         if gate_error is not None:
@@ -271,6 +355,7 @@ def _assemble_single_spec(
         axes=axes,
         dataset=data_points,
         provenance=provenance,
+        generation_context=context,
     )
     if decision_payload is not None and isinstance(chart_spec.provenance, dict):
         chart_spec.provenance["selected_refs"] = decision_payload["selected_refs"]
@@ -314,7 +399,10 @@ def _collection_error(message: str, location: str, *, validation: dict | None = 
     return result
 
 
-def _figure_child_input(child: Mapping[str, Any]) -> dict[str, Any]:
+def _figure_child_input(
+    child: Mapping[str, Any],
+    inherited_context: GenerationContext | None = None,
+) -> dict[str, Any]:
     """Translate semantic child input to the legacy single-chart assembler."""
     return {
         "chart_type": child.get("chart_type"),
@@ -326,6 +414,7 @@ def _figure_child_input(child: Mapping[str, Any]) -> dict[str, Any]:
         "source": child.get("source"),
         "measurement_ref": child.get("measurement_ref"),
         "measurement_decision": child.get("measurement_decision"),
+        "generation_context": child.get("generation_context", inherited_context),
     }
 
 
@@ -393,6 +482,19 @@ def _assemble_figure(
     if not isinstance(source_raw, Mapping):
         return _collection_error("figure source must include attachment_id and panel_id", f"{location}.source")
     source = FigureSource.from_dict(source_raw)
+    raw_context = figure.get("generation_context")
+    context_error = _generation_context_error(raw_context, f"{location}.generation_context")
+    if context_error is not None:
+        return context_error
+    generation_context = _normalized_generation_context(raw_context)
+    if generation_context is not None:
+        scope_error = _context_scope_mismatch(
+            generation_context,
+            expected_source=source,
+            location=f"{location}.generation_context",
+        )
+        if scope_error is not None:
+            return scope_error
     raw_charts = figure.get("charts")
     if not isinstance(raw_charts, list) or not raw_charts:
         return _collection_error("figure charts must be a non-empty array", f"{location}.charts")
@@ -407,7 +509,7 @@ def _assemble_figure(
         if not isinstance(chart_id, str) or not chart_id.strip():
             return _collection_error("chart_id must be a non-empty string", f"{child_location}.chart_id")
         child_result = _assemble_single_spec(
-            **_figure_child_input(raw_child),
+            **_figure_child_input(raw_child, generation_context),
             measurement_context=measurement_context,
             expected_source=source,
             location=f"{child_location}.measurement_ref",
@@ -447,6 +549,29 @@ def _assemble_figure(
     if not isinstance(coverage_raw, Mapping):
         return _collection_error("figure coverage is required", f"{location}.coverage")
     coverage = ChartCoverage.from_dict(coverage_raw)
+    if generation_context is not None:
+        expected_basis = generation_context.coverage.basis.value
+        if "basis" not in coverage_raw:
+            return _collection_error(
+                "generation_context and figure coverage must explicitly declare the same basis",
+                f"{location}.coverage.basis",
+            )
+        if coverage.basis != expected_basis:
+            return _collection_error(
+                "figure coverage basis does not match generation_context",
+                f"{location}.coverage.basis",
+            )
+        context_coverage = generation_context.coverage
+        if context_coverage.represented_series and set(context_coverage.represented_series) != set(coverage.represented_series):
+            return _collection_error(
+                "figure represented_series does not match generation_context",
+                f"{location}.coverage.represented_series",
+            )
+        if context_coverage.intentionally_omitted_series and set(context_coverage.intentionally_omitted_series) != set(coverage.omitted_series):
+            return _collection_error(
+                "figure omitted_series does not match generation_context",
+                f"{location}.coverage.omitted_series",
+            )
     figure_id = figure.get("figure_id")
     if not isinstance(figure_id, str) or not figure_id.strip():
         return _collection_error("figure_id must be a non-empty string", f"{location}.figure_id")
@@ -456,6 +581,7 @@ def _assemble_figure(
         layout=layout,
         charts=charts,
         coverage=coverage,
+        generation_context=generation_context,
     )
     issues = result.validate()
     if not issues and result.coverage.status != "complete":
@@ -479,6 +605,7 @@ def assemble_spec(
     x_categories: list[str] | None = None,
     measurement_ref: dict[str, Any] | None = None,
     measurement_decision: dict[str, Any] | None = None,
+    generation_context: dict[str, Any] | None = None,
     *,
     figure: dict[str, Any] | None = None,
     figures: list[dict[str, Any]] | None = None,
@@ -544,6 +671,7 @@ def assemble_spec(
         measurement_ref=measurement_ref,
         measurement_decision=measurement_decision,
         measurement_context=_measurement_context,
+        generation_context=generation_context,
     )
 
 
@@ -672,6 +800,7 @@ CHART_SPEC_SCHEMA = {
         "axes": {"oneOf": [AXES_SCHEMA, {"type": "null"}], "description": "Cartesian x/y axes; omit or use null only for pie charts."},
         "dataset": {"type": "array", "items": POINT_SCHEMA, "minItems": 1, "maxItems": MAX_GENERATION_POINTS, "description": "Ordered typed data points; point shape must match the selected chart type."},
         "provenance": {**MEASUREMENT_PROVENANCE_SCHEMA, "description": "Optional code-owned measurement provenance and model decision."},
+        "generation_context": generation_context_schema(),
     },
     "required": ["metadata", "dataset"],
     "additionalProperties": False,
@@ -693,6 +822,7 @@ FIGURE_COVERAGE_SCHEMA = {
         "source_series": {"type": "array", "items": {"type": "string"}, "maxItems": MAX_FIGURE_CHARTS, "description": "Series known to exist in the source panel."},
         "represented_series": {"type": "array", "items": {"type": "string"}, "maxItems": MAX_FIGURE_CHARTS, "description": "Series represented by child charts."},
         "omitted_series": {"type": "array", "items": {"type": "string"}, "maxItems": MAX_FIGURE_CHARTS, "description": "Series not represented; cannot be empty when coverage is incomplete."},
+        "basis": {"type": "string", "enum": ["full_source", "requested_subset", "not_applicable"], "description": "Coverage basis; requested_subset permits an explicit intentional omission for the current task."},
         "status": {"type": "string", "enum": ["complete", "incomplete", "unknown"], "description": "Source coverage status."},
     },
     "required": ["source_series", "represented_series", "omitted_series", "status"],
@@ -713,6 +843,7 @@ FIGURE_CHILD_INPUT_SCHEMA = {
         "source": {"type": ["string", "null"], "maxLength": MAX_GENERATION_LABEL_LENGTH, "description": "Optional child provenance label."},
         "measurement_ref": {**MEASUREMENT_REF_SCHEMA, "description": "Optional server-issued measurement reference for this child chart."},
         "measurement_decision": {**MEASUREMENT_DECISION_SCHEMA, "description": "主 Agent 对当前 child 的证据选择；可以选择、舍弃或放弃当前 attempt。"},
+        "generation_context": generation_context_schema(),
     },
     "required": ["chart_id", "chart_type", "points"],
     "additionalProperties": False,
@@ -733,6 +864,7 @@ FIGURE_INPUT_SCHEMA = {
             "additionalProperties": False,
         },
         "coverage": FIGURE_COVERAGE_SCHEMA,
+        "generation_context": generation_context_schema(),
         "charts": {"type": "array", "items": FIGURE_CHILD_INPUT_SCHEMA, "minItems": 1, "maxItems": MAX_FIGURE_CHARTS, "description": "Independent child chart descriptions."},
     },
     "required": ["figure_id", "source", "coverage", "charts"],
@@ -744,6 +876,7 @@ ASSEMBLE_SPEC = Tool(
     description=(
         "根据已收集的证据原子地组装并校验 ChartSpec、同源 ChartFigure 或多来源 ChartSpecCollection。"
         "单图使用 chart_type 和 points；同源多子图使用 figure，必须提供 attachment_id、panel_id、coverage 和独立 charts；不同来源使用 figures。"
+        "source-linked 任务应同时传入 generation_context，明确 mode、source_scope、coverage basis、represented/omitted series 和 selection_basis；服务端会拒绝跨 panel 或静默省略。"
         "若使用测量结果，必须原样传入当前观察返回的 measurement_ref，并在有 evidence.refs 时提供 measurement_decision.selected_refs；服务端会校验来源、attempt 和引用选择。不要把 S1、series_1 等证据引用当成最终系列名称。"
     ),
     parameters={
@@ -760,9 +893,10 @@ ASSEMBLE_SPEC = Tool(
             "points": {"type": "array", "items": POINT_SCHEMA, "minItems": 1, "maxItems": MAX_GENERATION_POINTS, "description": "单图数据点；bar/pie 使用 category/value，line/scatter 使用 x/y。figure 模式填写到 charts 子项。"},
             "source": {"type": ["string", "null"], "maxLength": MAX_GENERATION_LABEL_LENGTH, "description": "单图可选来源标签；不授权访问本地路径。"},
             "x_categories": {"type": "array", "items": {"type": "string"}, "maxItems": MAX_GENERATION_POINTS, "description": "可选的有序横轴类别标签；line/scatter 必须保留源 panel 中已确认的类别文本，例如 Jan、Feb、Mar。"},
-            "measurement_ref": {**MEASUREMENT_REF_SCHEMA, "description": "可选的服务端测量引用；服务端校验其来源、attempt 和当前 run 的证据状态。"},
-            "measurement_decision": {**MEASUREMENT_DECISION_SCHEMA, "description": "根据当前 attempt 的 overlay 与 evidence.refs 做出的选择；可以 selected、discarded 或 abandoned。"},
-            "figure": {**FIGURE_INPUT_SCHEMA, "description": "同一 attachment_id + panel_id 下的多个独立子图及其 coverage。"},
+        "measurement_ref": {**MEASUREMENT_REF_SCHEMA, "description": "可选的服务端测量引用；服务端校验其来源、attempt 和当前 run 的证据状态。"},
+        "measurement_decision": {**MEASUREMENT_DECISION_SCHEMA, "description": "根据当前 attempt 的 overlay 与 evidence.refs 做出的选择；可以 selected、discarded 或 abandoned。"},
+        "generation_context": {**generation_context_schema(), "description": "source-linked 单图的任务合同；必须与 measurement_ref 的 attachment/panel 和 coverage 语义一致。"},
+        "figure": {**FIGURE_INPUT_SCHEMA, "description": "同一 attachment_id + panel_id 下的多个独立子图及其 coverage。"},
             "figures": {"type": "array", "items": FIGURE_INPUT_SCHEMA, "minItems": 1, "maxItems": MAX_COLLECTION_FIGURES, "description": "来自多个 panel 的有序 figure 列表；不同来源不会自动合并。"},
             "collection_id": {"type": "string", "maxLength": 128, "description": "可选的稳定集合 ID。"},
         },

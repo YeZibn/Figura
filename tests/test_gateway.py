@@ -1514,6 +1514,41 @@ def test_gateway_history_survives_in_memory_run_expiry_and_scopes_artifacts(tmp_
     service.close()
 
 
+def test_gateway_replays_scope_lifecycle_fields_without_merging_event_kinds(tmp_path):
+    database = tmp_path / "scope-history.db"
+    service = GatewayService(database=database)
+    session_id = service.create_session("scope-history")['session']['id']
+    store = GatewayHistoryStore(database, artifact_root=tmp_path / "run-artifacts")
+    run_id = "run_scope_history"
+    store.create_run(run_id, session_id)
+    scope = {"attachment_id": "att_source", "panel_ids": ["panel_left"], "revision": 3}
+    common = {
+        "candidate_id": "cand_scope",
+        "attempt": 2,
+        "parent_attempt": "cand_parent",
+        "source_scope": scope,
+    }
+    store.append_event(RunEvent(run_id, 1, "measurement_observed", {**common, "status": "partial"}))
+    store.append_event(RunEvent(run_id, 2, "measurement_evidence_selected", {**common, "refs": ["B1"]}))
+    store.append_event(RunEvent(run_id, 3, "chart_review_started", {**common, "repair_kind": "evidence_needed"}))
+    store.append_event(RunEvent(run_id, 4, "generated_chart_rejected", {**common, "repair_kind": "evidence_needed"}))
+    store.update_run(run_id, RunStatus.COMPLETED, answer_source="已完成")
+
+    reopened = GatewayHistoryStore(database, artifact_root=tmp_path / "run-artifacts")
+    history = reopened.history(session_id, run_id)
+    assert history is not None
+    assert [event["kind"] for event in history["events"]] == [
+        "measurement_observed",
+        "measurement_evidence_selected",
+        "chart_review_started",
+        "generated_chart_rejected",
+    ]
+    assert history["events"][2]["payload"]["source_scope"] == scope
+    assert history["events"][2]["payload"]["repair_kind"] == "evidence_needed"
+    assert history["events"][3]["payload"]["parent_attempt"] == "cand_parent"
+    service.close()
+
+
 def test_gateway_history_routes_return_runs_and_cursor_replay(tmp_path):
     database = tmp_path / "sessions.db"
 

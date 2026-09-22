@@ -102,7 +102,12 @@ class GeneratedChartReviewAdapter:
         elif candidate.status is CandidateStatus.RETRY_EXHAUSTED:
             decision = "exhausted"
         elif candidate.status is CandidateStatus.REVIEW_FAILED:
-            decision = "repair_required" if candidate.lineage_attempt < candidate.policy.max_attempts else "exhausted"
+            decision = (
+                "exhausted"
+                if (review is not None and review.repair_kind == "terminal")
+                or candidate.lineage_attempt >= candidate.policy.max_attempts
+                else "repair_required"
+            )
         elif candidate.review_status in {ReviewStatus.PENDING, ReviewStatus.REQUIRES_MODEL_DECISION}:
             decision = "reviewing"
         else:
@@ -120,13 +125,17 @@ class GeneratedChartReviewAdapter:
                 "chart_spec_digest": candidate.chart_spec_digest,
                 "source_attachment_ids": list(candidate.source_attachment_ids[:16]),
                 "panel_ids": list(candidate.panel_ids[:16]),
+                "generation_context": candidate.generation_context.to_dict() if candidate.generation_context is not None else None,
+                "context_status": candidate.context_status,
             },
             evidence=(
                 {
                     "candidate_id": candidate.candidate_id,
-                    "review_id": candidate.review_id,
-                    "chart_spec_digest": candidate.chart_spec_digest,
-                },
+                "review_id": candidate.review_id,
+                "chart_spec_digest": candidate.chart_spec_digest,
+                "repair_kind": review.repair_kind if review is not None else "none",
+                "repair_target": dict(review.repair_target) if review is not None and isinstance(review.repair_target, Mapping) else None,
+            },
             ),
             next_action=(review.suggested_action if review is not None else None),
         )
@@ -145,6 +154,8 @@ class GeneratedChartReviewAdapter:
                     "publication_status": candidate.publication_status.value,
                     "review_mode": review.review_mode if review is not None else "unknown",
                 },
+                repair_kind=review.repair_kind if review is not None else "none",
+                repair_target=review.repair_target if review is not None else None,
             ),
         )
 
