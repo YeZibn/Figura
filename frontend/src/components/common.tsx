@@ -39,7 +39,7 @@ export function EvaluationDetailResourceView({ resource, evaluationId, caseId }:
 
 export function traceEventDetail(event: AgentRunEvent): string {
   const payload = eventPayload(event)
-  const failure = failureContext(payload)
+  const failure = failureContext(payload, event.kind)
   if (failure) {
     const details = [
       failure.safeMessage || payload.message,
@@ -53,7 +53,8 @@ export function traceEventDetail(event: AgentRunEvent): string {
     ].filter(Boolean).map(String)
     if (details.length > 0) return details.join(' · ')
   }
-  return textDetail(payload.message || payload.status || payload.publication_status || payload.reason || (event.kind === 'generated_chart' ? '生成图表结果已移至最终结果区域' : ''))
+  const statusField = event.kind === 'tool_result' ? payload.status : payload.state
+  return textDetail(payload.message || statusField || payload.reason || (event.kind === 'generated_chart' ? '生成图表结果已移至最终结果区域' : ''))
 }
 
 function isSafeLink(value: string): boolean {

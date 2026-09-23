@@ -95,6 +95,7 @@ class DiagnosticTimeline:
     first_failure: dict[str, Any] | None = None
     final_references: dict[str, list[str]] = field(default_factory=dict)
     history_gap: bool = False
+    protocol_status: str = "supported"
 
     def to_dict(self) -> dict[str, Any]:
         result: dict[str, Any] = {
@@ -104,6 +105,7 @@ class DiagnosticTimeline:
                 key: list(values[:32]) for key, values in self.final_references.items()
             },
             "history_gap": self.history_gap,
+            "protocol_status": self.protocol_status,
         }
         if self.first_failure is not None:
             result["first_failure"] = sanitize_payload(self.first_failure)

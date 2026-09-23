@@ -113,6 +113,7 @@ export type EvaluationTimeline = {
   stages: EvaluationStage[]
   anomalies: Array<{ code?: string; category?: string; stage?: string; sequence?: number; message?: string }>
   historyGap: boolean
+  protocolStatus?: 'supported' | 'unsupported_version' | 'malformed' | 'unavailable'
   firstFailure?: EvaluationFailure | null
 }
 

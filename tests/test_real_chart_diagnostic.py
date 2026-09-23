@@ -10,6 +10,7 @@ from chartagent.evaluation.gateway import DiagnosticGatewayError, GatewayDiagnos
 from chartagent.evaluation.manifest import DiagnosticManifestError, load_manifest
 from chartagent.evaluation.report import build_report
 from chartagent.evaluation.timeline import build_timeline
+from chartagent.decision_timeline import enrich_event_payload
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -17,7 +18,43 @@ MANIFEST = ROOT / "tests" / "fixtures" / "real_chart_diagnostic_manifest.json"
 
 
 def _event(sequence: int, kind: str, payload: dict | None = None) -> dict:
-    return {"runId": "run_eval", "sequence": sequence, "kind": kind, "payload": payload or {}}
+    event_payload = dict(payload or {})
+    unit_type, phase, actor, role = "observation", "action", "tool", "action"
+    strict_kinds = {
+        "review_started", "review_completed", "review_repair_required", "review_failed", "review_subcheck",
+        "generated_chart_published", "generated_chart_rejected", "tool_call", "tool_result", "tool_skipped",
+        "visual_observation", "generated_chart", "assembly_validation_failure",
+    }
+    if kind in strict_kinds:
+        tool_name = event_payload.get("tool_name")
+        if kind.startswith("review_"):
+            unit_type, phase, actor, role = "review", "review", "system", "review"
+            event_payload.setdefault("review_id", f"review_{sequence}")
+        elif kind.startswith("generated_chart_"):
+            unit_type, phase, actor, role = "publication", "publish", "system", "publication"
+        elif kind == "assembly_validation_failure":
+            unit_type, phase, actor, role = "generation", "assemble", "agent", "decision"
+        elif kind == "generated_chart":
+            unit_type, phase = "generation", "render"
+        elif kind == "visual_observation":
+            unit_type, phase, role = "observation", "observe", "observation"
+        else:
+            unit_type = "measurement" if tool_name in {
+                "extract_text", "measure_bars", "extract_line_series", "extract_pie_slices", "extract_scatter_points",
+            } else "generation" if tool_name in {"assemble_spec", "render_chart"} else "observation"
+            event_payload.setdefault("call_id", f"call_{sequence}")
+        state_field = "status" if kind == "tool_result" else "state"
+        event_payload.setdefault("unit_type", unit_type)
+        event_payload.setdefault("phase", phase)
+        event_payload.setdefault("actor", actor)
+        event_payload.setdefault("role", role)
+        event_payload.setdefault("transition_id", f"{kind}:{sequence}")
+        unit_identity = event_payload.get("call_id") or f"event_{sequence}"
+        event_payload.setdefault("unit_id", f"{unit_type}:{unit_identity}")
+        default_state = "success" if kind == "tool_result" else "failed" if kind in {"review_failed", "generated_chart_rejected", "assembly_validation_failure"} else "passed" if kind == "review_completed" else "published" if kind == "generated_chart_published" else "available" if kind == "generated_chart" else "completed"
+        event_payload.setdefault(state_field, default_state)
+        event_payload = enrich_event_payload(kind, event_payload, run_id="run_eval", sequence=sequence)
+    return {"runId": "run_eval", "sequence": sequence, "kind": kind, "payload": event_payload}
 
 
 def _tool_result(sequence: int, tool_name: str, *, status: str = "success", **payload: object) -> dict:
@@ -175,6 +212,40 @@ def test_timeline_flags_repeated_split_and_review_failure_without_repair():
     assert "repeated_decomposition" in codes
     assert "review_failed_without_repair" in codes
     assert timeline.first_failure["category"] == "decomposition"
+
+
+@pytest.mark.parametrize(
+    ("mutations", "expected"),
+    [
+        ({"correlation_version": 1}, "unsupported_version"),
+        ({"state": "completed"}, "malformed"),
+    ],
+)
+def test_timeline_does_not_infer_status_from_unsupported_or_malformed_history(mutations, expected):
+    event = _tool_result(2, "measure_bars")
+    event["payload"].update(mutations)
+
+    timeline = build_timeline(_history([event]))
+
+    assert timeline.protocol_status == expected
+    assert timeline.stages == ()
+    assert timeline.anomalies == []
+    assert timeline.first_failure is None
+
+
+def test_timeline_uses_only_canonical_outer_status_for_diagnostics():
+    event = _tool_result(
+        2,
+        "measure_bars",
+        result={"status": "failed", "tool_status": "error", "data": {"measurement": {"status": "partial"}}},
+    )
+    event["payload"]["review_status"] = "failed"
+
+    timeline = build_timeline(_history([event]))
+    stages = {stage.name: stage for stage in timeline.stages}
+
+    assert stages["measurement"].status == "completed"
+    assert stages["measurement"].failure_sequences == []
 
 
 def test_timeline_flags_assembly_omission_after_successful_measurements():

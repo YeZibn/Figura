@@ -29,12 +29,7 @@ decision unit 关联。关联 SHALL 在适用时包含 `unit_id`、`unit_type`�
 
 ### Requirement: Timeline projection is derived from canonical execution events
 
-系统 SHALL 从同一份有序、持久化的 execution events 生成一个确定性的时间线
-投影，普通运行和评测运行 SHALL 复用该投影。该投影 SHALL 以一个统一的
-时间线节点模型承载工具调用、工具结果、视觉观察、生成候选、审核结果和
-发布状态；不得再维护互相独立且可能产生不同状态的 ToolStep 与 DecisionUnit
-用户投影。技术生命周期事件可以参与节点状态归约，但默认用户时间线只显示
-可读业务步骤和终态错误。
+系统 SHALL 从同一份有序、持久化的 canonical execution events 生成确定性的用户时间线投影，普通运行和评测运行 SHALL 使用相同的投影规则。投影 SHALL 根据已声明的事件类型、unit identity、transition identity 及其 canonical 状态字段归并工具调用、工具结果、视觉观察、生成候选、审核和发布过程；不得从自由文本、同义字段、Gate 快照或旧字段别名猜测业务状态。Gateway 运行摘要中的派生状态只能作为查询投影，不得成为恢复或修改领域状态的权威来源。Evaluation 可以增加只读阶段诊断，但不得另建审核、测量或发布状态解释。原始受限事件详情 SHALL 仍可查看。
 
 #### Scenario: Ordinary and evaluation views use one projection
 
@@ -42,11 +37,11 @@ decision unit 关联。关联 SHALL 在适用时包含 `unit_id`、`unit_type`�
 - **THEN** 两个界面使用相同的用户时间线步骤、工具合并规则、状态标签、错误摘要和展开内容
 - **AND** 评测工作台不会重新解释或压缩普通运行已经保存的审核事件
 
-#### Scenario: Tool status is promoted by the authoritative result
+#### Scenario: Tool status comes from its canonical result
 
-- **WHEN** 一个生成或测量工具先产生调用事件，随后产生 `tool_result.success`
-- **THEN** 对应时间线节点从运行中变为已完成
-- **AND** 不会同时保留一个“状态未知”的生成节点
+- **WHEN** 一个生成或测量工具先产生调用事件，随后产生符合该事件类型契约的成功或失败结果
+- **THEN** 对应时间线节点按该工具结果的 canonical 执行状态更新
+- **AND** 不从 `state/status` 别名、Gate 快照或嵌套自由文本推断第二种状态
 
 #### Scenario: Timeline rebuilds after reload
 
@@ -54,11 +49,17 @@ decision unit 关联。关联 SHALL 在适用时包含 `unit_id`、`unit_type`�
 - **THEN** 客户端可以从历史事件重新得到相同的内部关联和用户时间线
 - **AND** 重建不会重新调用模型、工具、审核或发布动作
 
-#### Scenario: Technical lifecycle events are retained but not presented
+#### Scenario: Technical lifecycle events remain details, not duplicate steps
 
-- **WHEN** history contains model-start、model-completion、operation-save 或 run lifecycle 事件
-- **THEN** 这些事件继续作为事实来源参与状态和失败判断，并保留在技术详情中
-- **AND** 默认用户时间线只显示统一节点的中文标题、阶段、状态和业务结果
+- **WHEN** 历史中包含模型轮次、operation 或运行生命周期事件
+- **THEN** 这些记录按协议保留并可在受限技术详情中查看
+- **AND** 默认用户时间线只呈现可解释的业务步骤及必要的终态错误
+
+#### Scenario: Unsupported event history is not guessed
+
+- **WHEN** Run 或评测 case 的事件版本/字段形状不受当前投影支持
+- **THEN** 客户端显示明确的历史不可用或协议不支持状态
+- **AND** 不创建 legacy/unknown 业务节点，也不推断审核通过或图表已发布
 
 ### Requirement: One candidate attempt has one visible review cycle
 

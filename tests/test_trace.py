@@ -21,7 +21,13 @@ from chartagent import (
 from chartagent.client.models import NormalizedResult, ToolCall
 from chartagent.trace import TraceEmitter, TraceEvent, TraceLimits
 from chartagent.agent.artifacts import lifecycle_trace_fields
-from chartagent.decision_timeline import TimelineProtocolError, enrich_event_payload
+from chartagent.decision_timeline import (
+    CORRELATION_VERSION,
+    EVENT_STATUS_FIELD_BY_KIND,
+    TimelineProtocolError,
+    enrich_event_payload,
+    validate_timeline_event,
+)
 
 
 class _ScriptedClient:
@@ -197,6 +203,102 @@ def test_measurement_tool_events_get_stable_execution_correlation():
     assert duplicate == first
 
 
+def test_timeline_v2_defines_one_status_field_per_event_kind():
+    assert CORRELATION_VERSION == 2
+    assert EVENT_STATUS_FIELD_BY_KIND["tool_result"] == "status"
+    assert all(
+        field == "state"
+        for kind, field in EVENT_STATUS_FIELD_BY_KIND.items()
+        if kind != "tool_result"
+    )
+
+
+def test_timeline_v2_rejects_status_aliases_and_old_envelope_versions():
+    common = {
+        "unit_id": "generation:call-1",
+        "unit_type": "generation",
+        "phase": "action",
+        "actor": "tool",
+        "role": "action",
+        "transition_id": "generation:call-1:completed",
+        "call_id": "call-1",
+    }
+    valid = enrich_event_payload("tool_result", {**common, "status": "success"})
+    assert valid["correlation_version"] == 2
+    assert valid["status"] == "success"
+    assert "state" not in valid
+    assert "tool_status" not in valid
+
+    for aliases in (
+        {"state": "completed"},
+        {"tool_status": "success"},
+        {"correlation_version": 1},
+        {"correlationVersion": 2},
+        {"callId": "call-1"},
+    ):
+        with pytest.raises(TimelineProtocolError):
+            enrich_event_payload("tool_result", {**common, "status": "success", **aliases})
+
+    review = {
+        "unit_id": "review:review-1",
+        "unit_type": "review",
+        "phase": "review",
+        "actor": "system",
+        "role": "review",
+        "transition_id": "review:review-1:1:passed",
+        "review_id": "review-1",
+        "state": "passed",
+        "review_status": "completed",
+    }
+    assert enrich_event_payload("review_completed", review)["review_status"] == "completed"
+    with pytest.raises(TimelineProtocolError, match="只能使用 state"):
+        enrich_event_payload("review_completed", {**review, "status": "passed"})
+
+
+def test_persisted_timeline_validator_requires_v2_without_enriching_old_events():
+    common = {
+        "correlation_version": 2,
+        "unit_id": "measurement:call-1",
+        "unit_type": "measurement",
+        "phase": "action",
+        "actor": "tool",
+        "role": "action",
+        "transition_id": "measurement:call-1:completed",
+        "call_id": "call-1",
+        "status": "success",
+    }
+    assert validate_timeline_event("tool_result", common) is None
+
+    with pytest.raises(TimelineProtocolError):
+        validate_timeline_event("tool_result", {**common, "correlation_version": 1})
+    with pytest.raises(TimelineProtocolError):
+        validate_timeline_event("tool_result", {**common, "execution_gate": {"blocking": True}})
+
+
+def test_trace_emitter_drops_invalid_timeline_event_without_sequence_gap():
+    events = []
+    emitter = TraceEmitter(events.append, run_id="run-v2")
+    common = {
+        "unit_id": "generation:call-1",
+        "unit_type": "generation",
+        "phase": "action",
+        "actor": "tool",
+        "role": "action",
+        "transition_id": "generation:call-1:completed",
+        "call_id": "call-1",
+    }
+
+    assert emitter.emit(
+        "tool_result",
+        payload={**common, "status": "success", "state": "completed"},
+    ) is None
+    accepted = emitter.emit("tool_result", payload={**common, "status": "success"})
+
+    assert len(events) == 1
+    assert accepted is not None and accepted.sequence == 1
+    assert events[0].payload["correlation_version"] == 2
+
+
 def test_malformed_timeline_event_is_rejected_without_fallback_identity():
     with pytest.raises(TimelineProtocolError, match="缺少 unit_id"):
         enrich_event_payload(
@@ -356,7 +458,7 @@ def test_trace_preserves_multi_tool_order_and_structured_errors():
         ("tool_call", "ok-1", None),
         ("tool_result", "ok-1", "success"),
     ]
-    assert all(event.payload.get("tool_status") == event.payload.get("status") for event in events if event.kind == "tool_result")
+    assert all("tool_status" not in event.payload for event in events if event.kind == "tool_result")
 
 
 def test_trace_records_structured_tool_error_and_budget_termination():

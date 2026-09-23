@@ -1,9 +1,9 @@
 import { useState } from 'react'
 import { ChevronDown, ChevronRight, Terminal } from 'lucide-react'
 import { eventLabel, providerLabel, timestampLabel, toolResultIntegrityDetail } from '../domain/display'
-import { eventPayload, recordValue, textDetail } from '../domain/records'
-import { reviewGateFromPayload, reviewIssues, reviewStateLabel, reviewTypeLabel } from '../domain/review'
-import { executionGateValue, projectUserTimeline, type DecisionPhase, type TimelineNodeStatus, type RunTimeline as RunTimelineModel, type UserTimelineItem } from '../domain/run/timeline'
+import { eventPayload, textDetail } from '../domain/records'
+import { reviewIssues, reviewStateLabel, reviewTypeLabel } from '../domain/review'
+import { executionGateValue, projectUserTimeline, timelineProtocolStatus, type DecisionPhase, type TimelineNodeStatus, type RunTimeline as RunTimelineModel, type UserTimelineItem } from '../domain/run/timeline'
 import type { AgentRunEvent, GeneratedChartReference } from '../types/protocol'
 import type { PreviewResourceLoader } from '../previewResources'
 import type { PreviewOpener } from './types'
@@ -12,22 +12,19 @@ import { GeneratedChartView, ObservationView } from './preview'
 
 export function ReviewTimelineItem({ event }: { event: AgentRunEvent }) {
   const payload = eventPayload(event)
-  const domain = recordValue(payload.repair) || payload
-  const gate = reviewGateFromPayload(payload)
-  const state = payload.state || gate?.state || (event.kind === 'review_started' ? 'reviewing' : undefined)
-  const blocking = typeof gate?.blocking === 'boolean' ? gate.blocking : typeof payload.blocking === 'boolean' ? payload.blocking : !['passed', 'passed_with_warning'].includes(String(state || ''))
-  const subject = domain.subjectId || domain.subject_id || domain.candidateId || domain.candidate_id || domain.attemptId || domain.attempt_id || gate?.subjectId || gate?.subject_id
-  const attempt = domain.attempt || gate?.attempt
-  const maxAttempts = domain.maxAttempts || domain.max_attempts || gate?.maxAttempts || gate?.max_attempts
-  const issues = reviewIssues(domain, gate)
-  const type = payload.review_type || gate?.reviewType || gate?.review_type
+  const state = payload.state
+  const blocking = payload.blocking === true
+  const subject = payload.subject_id || payload.candidate_id
+  const attempt = payload.attempt
+  const issues = reviewIssues(payload)
+  const type = payload.review_type
   const subjectText = subject === undefined || subject === null ? '' : String(subject)
-  const details = { event: event.kind, payload, executionGate: gate }
+  const details = { event: event.kind, payload }
   return <div className={'review-timeline-item ' + (blocking ? 'blocking' : 'released')}>
     <span className="trace-event-dot" />
     <div className="review-timeline-card">
       <div className="review-timeline-heading"><div><strong>{reviewTypeLabel(type)}</strong><small>{timestampLabel(event.timestamp)} · {reviewStateLabel(state, blocking)}</small></div>{blocking && <span className="review-blocking-badge">主链路已暂停</span>}</div>
-      {(subjectText || attempt !== undefined) && <div className="review-timeline-meta">{subjectText && <span>对象：<code>{subjectText}</code></span>}{attempt !== undefined && <span>第 {String(attempt)} / {maxAttempts !== undefined ? String(maxAttempts) : '—'} 次</span>}</div>}
+      {(subjectText || attempt !== undefined) && <div className="review-timeline-meta">{subjectText && <span>对象：<code>{subjectText}</code></span>}{attempt !== undefined && <span>第 {String(attempt)} 次</span>}</div>}
       {issues.length > 0 && <div className="review-timeline-issues">{issues.map((issue, index) => <span key={`${String(issue.code || 'issue')}-${index}`}>{String(issue.message || issue.code || '审核问题')}</span>)}</div>}
       <details className="review-timeline-details"><summary>查看审核详情</summary><CopyDetailButton value={details} /><pre>{textDetail(details)}</pre></details>
     </div>
@@ -68,6 +65,7 @@ function UserTimelineItemView({ item, previewLoader, onPreview, evaluationId, ca
 }
 
 export function RunTimeline({ timeline, expanded, onToggle, previewLoader, onPreview, onInterrupt, onRetry, onResume, showSummary = true, evaluationId, caseId }: { timeline: RunTimelineModel; expanded: boolean; onToggle: () => void; previewLoader: PreviewResourceLoader | null; onPreview?: PreviewOpener; onInterrupt?: () => void; onRetry?: () => void; onResume?: () => void; showSummary?: boolean; evaluationId?: string; caseId?: string }) {
+  const protocolStatus = timelineProtocolStatus(timeline.events)
   const userItems = projectUserTimeline(timeline.events)
   const summary = timeline.summary
   const status = summary.status
@@ -86,9 +84,11 @@ export function RunTimeline({ timeline, expanded, onToggle, previewLoader, onPre
       {summary.historyWarning && <div className="trace-warning" role="status">部分执行记录未能持久化，当前显示的过程可能不完整。</div>}
       {timeline.historyGap && <div className="trace-warning" role="status">历史记录存在缺口，未显示缺失的执行步骤。</div>}
       {timeline.integrity && timeline.integrity.status !== 'complete' && <div className="trace-warning" role="status">{timeline.integrity.status === 'unavailable' ? '部分大结果只有摘要，旧 bundle 没有可恢复的完整安全资源。' : timeline.integrity.status === 'redacted' ? '部分字段已按安全边界隐藏；可见内容仍来自脱敏事件。' : '部分事件达到展示上限；可用时可加载完整安全结果。'}</div>}
+      {protocolStatus.status === 'unsupported_version' && <div className="trace-warning" role="status">此运行记录使用了当前客户端不支持的时间线版本；摘要和独立产物仍保留，但不会推断或展示执行步骤。</div>}
+      {protocolStatus.status === 'malformed' && <div className="trace-warning" role="status">此运行记录包含不符合当前事件协议的内容；为避免误报状态，执行步骤暂不可用。</div>}
       {gateBlocking && <div className="trace-warning review-gate-banner" role="status"><strong>审核阻塞生成发布</strong><span>{reviewTypeLabel(executionGate?.reviewType)} · {reviewStateLabel(executionGate?.state, true)}</span></div>}
-      {userItems.length === 0 && <div className="trace-empty">没有可展示的业务执行步骤。</div>}
-      {userItems.map((item) => <UserTimelineItemView key={item.id} item={item} previewLoader={previewLoader} onPreview={onPreview} evaluationId={evaluationId} caseId={caseId} />)}
+      {protocolStatus.status === 'supported' && userItems.length === 0 && <div className="trace-empty">没有可展示的业务执行步骤。</div>}
+      {protocolStatus.status === 'supported' && userItems.map((item) => <UserTimelineItemView key={item.id} item={item} previewLoader={previewLoader} onPreview={onPreview} evaluationId={evaluationId} caseId={caseId} />)}
     </div>}
   </section>
 }

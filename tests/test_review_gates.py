@@ -13,6 +13,7 @@ from chartagent.client.models import NormalizedResult, ToolCall
 from chartagent.decision_timeline import TimelineProtocolError, enrich_event_payload
 from chartagent.gateway.history import GatewayHistoryStore
 from chartagent.gateway.protocol import RunStatus as GatewayRunStatus
+from chartagent.gateway.run_lifecycle import ManagedRun
 from chartagent.memory.sqlite import SQLiteAgentMemory
 from chartagent.panels import PanelHandoff
 from chartagent.review import (
@@ -199,12 +200,12 @@ def test_model_selected_repair_tools_remain_bound_to_failed_candidate_context():
         registry.register(Tool(name, name, {"type": "object", "properties": {}}, lambda **_: {}))
     agent = Agent(type("Client", (), {})(), registry, review_manager=manager)
 
-    assert agent._review_gate_allows_call("run-repair-tools", "inspect_chart_layout", {}) is True
-    assert agent._review_gate_allows_call("run-repair-tools", "measure_bars", {"generation_context": context.to_dict()}) is True
+    assert agent._review_flow.allows_tool_call("run-repair-tools", "inspect_chart_layout", {}) is True
+    assert agent._review_flow.allows_tool_call("run-repair-tools", "measure_bars", {"generation_context": context.to_dict()}) is True
     wrong_context = context.to_dict()
     wrong_context["source_scope"] = {"attachment_id": "att_other", "panel_ids": ["panel_other"], "revision": 1}
-    assert agent._review_gate_allows_call("run-repair-tools", "measure_bars", {"generation_context": wrong_context}) is False
-    assert agent._review_gate_allows_call("run-repair-tools", "publish_chart", {}) is False
+    assert agent._review_flow.allows_tool_call("run-repair-tools", "measure_bars", {"generation_context": wrong_context}) is False
+    assert agent._review_flow.allows_tool_call("run-repair-tools", "publish_chart", {}) is False
 
 
 def test_collection_children_keep_independent_pass_and_failure_results():
@@ -328,10 +329,88 @@ def test_agent_repairs_failed_candidate_then_publishes_the_redraw(tmp_path):
     assert any(event.kind == "review_repair_required" for event in events)
     assert any(event.kind == "review_completed" for event in events)
     assert any(
-        event.kind == "review_completed" and event.payload["execution_gate"]["blocking"] is False
+        event.kind == "review_completed" and event.payload["blocking"] is False
         for event in events
     )
     assert not any(event.kind.startswith("chart_review_") for event in events)
+
+
+def test_agent_resumes_pending_review_before_returning_to_model():
+    run_id = "run-review-resume"
+    spec = _spec()
+    image = render_chart(spec.to_dict()).images[0]
+    original_manager = ChartReviewManager()
+    candidate = original_manager.create_candidate(
+        run_id,
+        "render-resume",
+        image,
+        spec,
+        explicit_review=True,
+        tool_name="render_chart",
+        turn=1,
+    )
+    candidate = _safety(original_manager, candidate)
+    assert candidate.status is CandidateStatus.REVIEW_PENDING
+    assert original_manager.execution_gate(run_id).blocking is True
+    semantic = _semantic(candidate)
+    original_manager.remember_semantic_result(candidate, semantic)
+    state = original_manager.to_state(run_id)
+    private_inputs = {
+        (run_id, candidate.candidate_id, candidate.review_id, candidate.chart_spec_digest): {
+            "content": candidate.content,
+            "media_type": candidate.media_type,
+            "chart_spec": spec.to_dict(),
+        }
+    }
+
+    class Client:
+        def __init__(self):
+            self.calls = 0
+
+        def chat(self, _messages, **_kwargs):
+            self.calls += 1
+            return NormalizedResult(content="审核恢复完成", finish_reason="stop")
+
+    restored_manager = ChartReviewManager(
+        candidate_input_resolver=lambda *key: private_inputs.get(tuple(key)),
+    )
+    staged_inputs = []
+
+    def stage_candidate(restored_image, chart_spec):
+        staged_inputs.append((restored_image, chart_spec))
+        return {"candidate_id": candidate.candidate_id}
+
+    events = []
+    client = Client()
+    answer = Agent(
+        client,
+        ToolRegistry(),
+        run_id=run_id,
+        max_steps=2,
+        review_manager=restored_manager,
+        candidate_input_sink=stage_candidate,
+        recovery_context={
+            "nextAction": "review",
+            "reviewState": state,
+            "pendingReview": {
+                "callId": "render-resume",
+                "toolName": "render_chart",
+                "turn": 1,
+                "candidateIds": [candidate.candidate_id],
+            },
+        },
+        trace=events.append,
+    ).run("继续审核")
+
+    resumed = restored_manager.get(candidate.candidate_id)
+    assert answer == "审核恢复完成"
+    assert client.calls == 1
+    assert len(staged_inputs) == 2
+    assert resumed is not None
+    assert resumed.semantic_result == semantic
+    assert resumed.publication_status is PublicationStatus.PUBLISHED
+    assert restored_manager.execution_gate(run_id).blocking is False
+    assert any(event.kind == "review_completed" for event in events)
 
 
 def test_versioned_snapshot_restores_all_review_children_from_private_inputs():
@@ -426,6 +505,8 @@ def test_review_events_keep_one_canonical_lifecycle():
 
     with pytest.raises(TimelineProtocolError, match="已废弃"):
         enrich_event_payload("chart_review_completed", {}, run_id="run-1", sequence=2)
+    with pytest.raises(TimelineProtocolError, match="已废弃"):
+        enrich_event_payload("review_gate_updated", {}, run_id="run-1", sequence=3)
 
 
 def test_review_snapshot_parser_rejects_malformed_result_instead_of_dropping_issues():
@@ -519,3 +600,32 @@ def test_gateway_run_summary_keeps_the_derived_gate_projection(tmp_path):
     assert summary is not None
     assert summary["executionGate"]["state"] == "repair_required"
     assert summary["executionGate"]["subjectId"] == "cand_1"
+
+
+def test_execution_gate_is_a_summary_projection_not_review_state():
+    gate = {"state": "repair_required", "blocking": True, "subjectId": "projection-only"}
+    run = ManagedRun("session-gate-projection", run_id="run-gate-projection")
+    run.update_execution_gate(gate)
+
+    assert run.accepted.to_dict()["executionGate"] == gate
+    assert run._next_sequence == 0
+
+    class Client:
+        def chat(self, _messages, **_kwargs):
+            return NormalizedResult(content="继续完成", finish_reason="stop")
+
+    manager = ChartReviewManager()
+    recovery = {
+        "reviewState": {"version": 1, "candidates": []},
+        "executionGate": gate,
+    }
+    answer = Agent(
+        Client(),
+        ToolRegistry(),
+        run_id="run-gate-projection",
+        review_manager=manager,
+        recovery_context=recovery,
+    ).run("继续")
+
+    assert answer == "继续完成"
+    assert manager.execution_gate("run-gate-projection").blocking is False

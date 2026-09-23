@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-CORRELATION_VERSION = 1
+CORRELATION_VERSION = 2
 MAX_ID = 160
 MAX_ACTION_TEXT = 240
 MAX_ACTION_ITEMS = 16
@@ -27,6 +27,12 @@ class TimelineProtocolError(ValueError):
     """Raised when a timeline event cannot satisfy the strict event contract."""
 
     code = "invalid_timeline_event"
+
+
+class UnsupportedTimelineVersion(TimelineProtocolError):
+    """Raised when an event belongs to a retired or unsupported protocol."""
+
+    code = "unsupported_timeline_version"
 
 _REVIEW_KINDS = frozenset(
     {
@@ -51,14 +57,78 @@ _STRICT_KINDS = frozenset(
         "assembly_validation_failure",
     }
 )
+
+# Every participating event kind has exactly one execution-state field. Tool
+# results describe the outcome of a tool call with `status`; lifecycle and
+# review transitions use `state`. Other domain dimensions (for example
+# `review_status` or `publication_status`) remain distinct fields.
+EVENT_STATUS_FIELD_BY_KIND = {
+    kind: "status" if kind == "tool_result" else "state"
+    for kind in _STRICT_KINDS
+}
+
+_STRICT_CAMEL_ALIASES = frozenset(
+    {
+        "correlationVersion",
+        "unitId",
+        "unitType",
+        "parentUnitId",
+        "transitionId",
+        "callId",
+        "reviewId",
+        "reviewType",
+        "candidateId",
+        "subjectId",
+        "toolName",
+        "runId",
+        "processId",
+        "operationId",
+        "nextAction",
+        "failureCategory",
+        "failureCode",
+        "safeMessage",
+        "fieldLocation",
+        "actionHint",
+        "firstFailureRef",
+        "providerStatus",
+        "outcomeKnown",
+        "chartSpecDigest",
+        "sourceScope",
+        "sourceAttachmentIds",
+        "panelIds",
+        "parentCandidateId",
+        "parentAttempt",
+        "collectionId",
+        "figureId",
+        "candidateStatus",
+        "reviewStatus",
+        "publicationStatus",
+        "repairKind",
+        "repairPhase",
+        "maxAttempts",
+        "remainingAttempts",
+        "createdAt",
+        "updatedAt",
+        "subjectRef",
+        "generationContext",
+        "contextStatus",
+        "traceSequence",
+    }
+)
 _RETIRED_KINDS = frozenset(
     {
         "chart_review_started",
         "chart_review_required",
         "chart_review_repair_required",
         "chart_review_completed",
+        "review_gate_required",
+        "review_gate_updated",
     }
 )
+
+
+def is_strict_timeline_event_kind(kind: str) -> bool:
+    return kind in _STRICT_KINDS
 
 def _text(value: object, limit: int = MAX_ID) -> str:
     return str(value or "").strip()[:limit]
@@ -113,10 +183,16 @@ def _strict_identity(kind: str, payload: Mapping[str, Any]) -> tuple[str, str, s
 
 
 def _state(payload: Mapping[str, Any], kind: str) -> str:
-    value = _first(payload, "state", "status")
-    if value not in (None, ""):
+    field = EVENT_STATUS_FIELD_BY_KIND[kind]
+    alias = "state" if field == "status" else "status"
+    if alias in payload:
+        raise TimelineProtocolError(f"事件 {kind} 只能使用 {field}")
+    if kind == "tool_result" and "tool_status" in payload:
+        raise TimelineProtocolError("事件 tool_result 不允许重复字段 tool_status")
+    value = payload.get(field)
+    if isinstance(value, str) and value.strip():
         return _text(value, 64)
-    raise TimelineProtocolError(f"事件 {kind} 缺少 state/status")
+    raise TimelineProtocolError(f"事件 {kind} 缺少有效 {field}")
 
 
 def _bounded_action(value: object, *, default_required: bool = False) -> dict[str, Any] | None:
@@ -139,7 +215,7 @@ def _bounded_action(value: object, *, default_required: bool = False) -> dict[st
 
 
 def _next_action(kind: str, payload: Mapping[str, Any], phase: str, state: str) -> dict[str, Any] | None:
-    explicit = _first(payload, "next_action", "nextAction")
+    explicit = payload.get("next_action")
     normalized = _bounded_action(explicit, default_required=bool(payload.get("blocking") or payload.get("required")))
     if normalized is not None:
         return normalized
@@ -151,8 +227,8 @@ def _next_action(kind: str, payload: Mapping[str, Any], phase: str, state: str) 
 def _process_context(kind: str, payload: Mapping[str, Any], *, sequence: int | None) -> dict[str, Any]:
     """Return only deterministic process/operation fields for lifecycle events."""
     result: dict[str, Any] = {}
-    process_id = _text(_first(payload, "process_id", "processId"), MAX_ID)
-    operation_id = _text(_first(payload, "operation_id", "operationId"), MAX_ID)
+    process_id = _text(payload.get("process_id"), MAX_ID)
+    operation_id = _text(payload.get("operation_id"), MAX_ID)
     turn = payload.get("turn")
     try:
         turn_value = max(1, int(turn)) if turn is not None else None
@@ -175,12 +251,12 @@ def _failure_context(payload: Mapping[str, Any]) -> dict[str, Any]:
     """Normalize already-classified failure fields without inferring errors."""
     fields: dict[str, Any] = {}
     aliases = {
-        "failure_category": ("failure_category", "failureCategory"),
-        "failure_code": ("failure_code", "failureCode"),
-        "safe_message": ("safe_message", "safeMessage"),
-        "location": ("location", "field_location", "fieldLocation"),
-        "action_hint": ("action_hint", "actionHint"),
-        "first_failure_ref": ("first_failure_ref", "firstFailureRef"),
+        "failure_category": ("failure_category",),
+        "failure_code": ("failure_code",),
+        "safe_message": ("safe_message",),
+        "location": ("location",),
+        "action_hint": ("action_hint",),
+        "first_failure_ref": ("first_failure_ref",),
     }
     for target, keys in aliases.items():
         value = _first(payload, *keys)
@@ -193,7 +269,7 @@ def _failure_context(payload: Mapping[str, Any]) -> dict[str, Any]:
                 }
             else:
                 fields[target] = _text(value, MAX_FAILURE_MESSAGE if target == "safe_message" else MAX_FAILURE_CODE)
-    provider_status = _first(payload, "provider_status", "providerStatus")
+    provider_status = payload.get("provider_status")
     if provider_status is not None:
         try:
             fields["provider_status"] = int(provider_status)
@@ -201,8 +277,8 @@ def _failure_context(payload: Mapping[str, Any]) -> dict[str, Any]:
             pass
     if "retryable" in payload:
         fields["retryable"] = bool(payload["retryable"])
-    if "outcome_known" in payload or "outcomeKnown" in payload:
-        fields["outcome_known"] = bool(_first(payload, "outcome_known", "outcomeKnown"))
+    if "outcome_known" in payload:
+        fields["outcome_known"] = bool(payload["outcome_known"])
     return fields
 
 
@@ -211,6 +287,39 @@ def _transition_id(kind: str, payload: Mapping[str, Any]) -> str:
     if not explicit:
         raise TimelineProtocolError(f"事件 {kind} 缺少 transition_id")
     return explicit
+
+
+def _validate_v2_fields(kind: str, payload: Mapping[str, Any]) -> None:
+    aliases = _STRICT_CAMEL_ALIASES.intersection(payload)
+    if aliases:
+        alias = sorted(aliases)[0]
+        raise TimelineProtocolError(f"事件 {kind} 不允许非 canonical 字段 {alias}")
+    if "correlation_version" in payload and (
+        type(payload["correlation_version"]) is not int
+        or payload["correlation_version"] != CORRELATION_VERSION
+    ):
+        raise UnsupportedTimelineVersion(f"事件 {kind} 的 timeline 版本不受支持")
+
+
+def validate_timeline_event(kind: str, payload: Mapping[str, Any]) -> None:
+    """Validate a persisted event without enriching or rewriting its payload."""
+    event_kind = str(kind or "")
+    if event_kind in _RETIRED_KINDS:
+        raise UnsupportedTimelineVersion(f"事件 {event_kind} 已从当前 timeline 协议退役")
+    if event_kind not in _STRICT_KINDS:
+        return
+    version = payload.get("correlation_version")
+    if type(version) is not int or version != CORRELATION_VERSION:
+        raise UnsupportedTimelineVersion(f"事件 {event_kind} 的 timeline 版本不受支持")
+    _validate_v2_fields(event_kind, payload)
+    if any(field in payload for field in ("execution_gate", "executionGate", "gate")):
+        raise TimelineProtocolError(f"事件 {event_kind} 不允许嵌入 Gate 快照")
+    _strict_identity(event_kind, payload)
+    _phase(event_kind, payload)
+    _actor(event_kind, payload)
+    _role(event_kind, payload)
+    _state(payload, event_kind)
+    _transition_id(event_kind, payload)
 
 
 def enrich_event_payload(
@@ -230,13 +339,14 @@ def enrich_event_payload(
     source = dict(payload or {})
     event_kind = str(kind or "")
     if event_kind in _RETIRED_KINDS:
-        raise TimelineProtocolError(f"事件 {event_kind} 已废弃，请使用 canonical review 生命周期")
+        raise UnsupportedTimelineVersion(f"事件 {event_kind} 已废弃，请使用 canonical review 生命周期")
     if event_kind not in _STRICT_KINDS:
         process = _process_context(event_kind, source, sequence=sequence)
         failure = _failure_context(source)
         source.update(process)
         source.update(failure)
         return source
+    _validate_v2_fields(event_kind, source)
     unit_id, unit_type, parent_unit_id = _strict_identity(event_kind, source)
     phase = _phase(event_kind, source)
     actor = _actor(event_kind, source)
@@ -251,25 +361,27 @@ def enrich_event_payload(
         "parent_unit_id": parent_unit_id,
         "transition_id": _transition_id(event_kind, source),
     }
-    if "state" not in source and event_kind != "tool_result":
-        envelope["state"] = state
-    if event_kind == "tool_result" and "status" not in source:
-        envelope["status"] = state
+    envelope[EVENT_STATUS_FIELD_BY_KIND[event_kind]] = state
     action = _next_action(event_kind, source, phase, state)
     if action is not None:
         envelope["next_action"] = action
     envelope.update(_process_context(event_kind, source, sequence=sequence))
     envelope.update(_failure_context(source))
     source.update(envelope)
+    validate_timeline_event(event_kind, source)
     return source
 
 
 __all__ = [
     "ACTORS",
     "CORRELATION_VERSION",
+    "EVENT_STATUS_FIELD_BY_KIND",
     "PHASES",
     "ROLES",
     "UNIT_TYPES",
     "TimelineProtocolError",
+    "UnsupportedTimelineVersion",
     "enrich_event_payload",
+    "is_strict_timeline_event_kind",
+    "validate_timeline_event",
 ]

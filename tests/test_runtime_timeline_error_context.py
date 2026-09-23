@@ -37,6 +37,26 @@ def test_runtime_lifecycle_envelope_uses_bounded_process_identity() -> None:
     assert "sequence" not in events[5]["process_id"]
 
 
+def test_process_events_do_not_normalize_legacy_camel_case_fields() -> None:
+    operation = enrich_event_payload(
+        "operation_completed",
+        {"operationId": "model:1", "state": "completed"},
+        run_id="run-1",
+        sequence=1,
+    )
+    failure = enrich_event_payload(
+        "run_failed",
+        {"failureCategory": "provider_balance", "safeMessage": "request failed"},
+        run_id="run-1",
+        sequence=2,
+    )
+
+    assert "process_id" not in operation
+    assert "operation_id" not in operation
+    assert "failure_category" not in failure
+    assert "safe_message" not in failure
+
+
 def test_provider_failure_classification_separates_rejection_and_uncertain() -> None:
     balance = classify_provider_error(ProviderError(402, "Insufficient Balance"))
     timeout = classify_provider_error(ProviderError(None, "connection reset"))

@@ -23,6 +23,7 @@ from chartagent.gateway.projection import project_completed_runs
 from chartagent.gateway.server import GatewayHTTPServer, serve
 from chartagent.gateway.service import GatewayService
 from chartagent.gateway.runs import ObservationStore, RunManager
+from chartagent.gateway.run_lifecycle import ManagedRun
 from chartagent.memory import SQLiteAgentMemory, RunStatus
 from chartagent.memory.models import Record, Run
 from chartagent.runtime import AgentRuntime
@@ -44,6 +45,32 @@ def _completed_run(run_id: str, text: str = "问题", answer: str = "答案") ->
         Record("final", {"answer": answer}, created_at="2026-09-10T10:00:01+00:00"),
     ]
     return run
+
+
+def test_managed_run_drops_invalid_timeline_event_without_changing_completion():
+    run = ManagedRun("session-protocol", run_id="run-protocol")
+    invalid = run.publish(
+        "tool_result",
+        {
+            "unit_id": "generation:call-1",
+            "unit_type": "generation",
+            "phase": "action",
+            "actor": "tool",
+            "role": "action",
+            "transition_id": "generation:call-1:completed",
+            "call_id": "call-1",
+            "status": "success",
+            "state": "completed",
+        },
+    )
+
+    assert invalid is None
+    assert run._next_sequence == 0
+    run.complete("answer")
+
+    events = list(run.iter_events())
+    assert run.answer == "answer"
+    assert events == []
 
 
 def _png_bytes() -> bytes:
@@ -1327,9 +1354,8 @@ def test_oversized_tool_result_retains_outer_call_identity():
             "tool_name": "extract_line_series",
             "call_id": "line-call-7",
             "status": "success",
-            "tool_status": "success",
             "turn": 3,
-            "correlation_version": 1,
+            "correlation_version": 2,
             "unit_id": "observation:line-call-7",
             "unit_type": "observation",
             "phase": "action",
@@ -1591,6 +1617,7 @@ def test_gateway_replays_scope_lifecycle_fields_without_merging_event_kinds(tmp_
     store.create_run(run_id, session_id)
     scope = {"attachment_id": "att_source", "panel_ids": ["panel_left"], "revision": 3}
     common = {
+        "correlation_version": 2,
         "candidate_id": "cand_scope",
         "attempt": 2,
         "parent_attempt": "cand_parent",
@@ -1598,10 +1625,18 @@ def test_gateway_replays_scope_lifecycle_fields_without_merging_event_kinds(tmp_
     }
     measurement_unit = {"unit_id": "measurement:call_scope", "unit_type": "measurement", "phase": "action", "actor": "tool", "role": "action", "tool_name": "measure_bars", "call_id": "call_scope"}
     store.append_event(RunEvent(run_id, 1, "tool_call", {**common, **measurement_unit, "state": "running", "transition_id": "measurement:call_scope:started", "arguments": {"panel_id": "panel_left"}}))
-    store.append_event(RunEvent(run_id, 2, "tool_result", {**common, **measurement_unit, "state": "completed", "status": "success", "transition_id": "measurement:call_scope:completed", "result": {"measurement": {"status": "partial", "evidence": {"refs": [{"ref": "B1"}]}}}}))
+    store.append_event(RunEvent(run_id, 2, "tool_result", {**common, **measurement_unit, "status": "success", "transition_id": "measurement:call_scope:completed", "result": {"measurement": {"status": "partial", "evidence": {"refs": [{"ref": "B1"}]}}}}))
     store.append_event(RunEvent(run_id, 3, "review_started", {**common, "unit_id": "review:review_scope", "unit_type": "review", "phase": "review", "actor": "system", "role": "review", "review_id": "review_scope", "review_type": "generated_chart", "state": "reviewing", "transition_id": "review:review_scope:started", "repair_kind": "evidence_needed"}))
     store.append_event(RunEvent(run_id, 4, "generated_chart_rejected", {**common, "unit_id": "publication:cand_scope", "unit_type": "publication", "phase": "publish", "actor": "system", "role": "publication", "review_id": "review_scope", "state": "rejected", "publication_status": "rejected", "transition_id": "publication:cand_scope:rejected", "repair_kind": "evidence_needed"}))
     store.update_run(run_id, RunStatus.COMPLETED, answer_source="已完成")
+    legacy_run_id = "run_legacy_timeline"
+    store.create_run(legacy_run_id, session_id)
+    store.append_event(RunEvent(
+        legacy_run_id,
+        1,
+        "tool_result",
+        {"correlation_version": 1, "status": "success", "state": "completed"},
+    ))
 
     reopened = GatewayHistoryStore(database, artifact_root=tmp_path / "run-artifacts")
     history = reopened.history(session_id, run_id)
@@ -1613,8 +1648,17 @@ def test_gateway_replays_scope_lifecycle_fields_without_merging_event_kinds(tmp_
         "generated_chart_rejected",
     ]
     assert history["events"][0]["payload"]["source_scope"] == scope
+    assert history["events"][1]["payload"]["correlation_version"] == 2
+    assert "state" not in history["events"][1]["payload"]
     assert history["events"][2]["payload"]["repair_kind"] == "evidence_needed"
     assert history["events"][3]["payload"]["parent_attempt"] == "cand_parent"
+    legacy = reopened.history(session_id, legacy_run_id)
+    assert legacy is not None
+    assert legacy["events"][0]["payload"] == {
+        "correlation_version": 1,
+        "status": "success",
+        "state": "completed",
+    }
     service.close()
 
 
@@ -1906,7 +1950,7 @@ def test_async_gateway_orders_generated_chart_event_after_tool_result(tmp_path):
                 metadata={"kind": "generated_chart", "chart_type": "line", "title": "趋势", "width": 1200, "height": 800},
             )
             self.trace_sink(TraceEvent("tool_call", run_id="agent", turn=1, payload={"unit_id": "generation:c1", "unit_type": "generation", "phase": "action", "actor": "tool", "role": "action", "transition_id": "generation:c1:started", "state": "running", "tool_name": "render_chart", "call_id": "c1"}))
-            self.trace_sink(TraceEvent("tool_result", run_id="agent", turn=1, payload={"unit_id": "generation:c1", "unit_type": "generation", "phase": "action", "actor": "tool", "role": "action", "transition_id": "generation:c1:completed", "state": "completed", "tool_name": "render_chart", "call_id": "c1", "status": "success"}))
+            self.trace_sink(TraceEvent("tool_result", run_id="agent", turn=1, payload={"unit_id": "generation:c1", "unit_type": "generation", "phase": "action", "actor": "tool", "role": "action", "transition_id": "generation:c1:completed", "tool_name": "render_chart", "call_id": "c1", "status": "success"}))
             refs = self.visual_observation_sink("render_chart", "c1", [image])
             self.trace_sink(TraceEvent("generated_chart", run_id="agent", turn=1, payload={"unit_id": "generation:c1", "unit_type": "generation", "phase": "render", "actor": "tool", "role": "action", "transition_id": "generation:c1:generated", "state": "available", "tool_name": "render_chart", "call_id": "c1", "artifacts": refs}))
             self.memory.append(run, "final", {"answer": "已重绘"})

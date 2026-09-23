@@ -15,6 +15,7 @@ from chartagent.measurement import (
 from chartagent.tools.core import GeneratedImage, Tool, ToolRegistry, ToolResult, dispatch_observation
 from chartagent.tools.chart.specification import assemble_spec
 from chartagent.agent import Agent
+from chartagent.agent.recovery import checkpoint_state
 from chartagent.client.models import NormalizedResult, ToolCall
 
 
@@ -747,7 +748,7 @@ def test_measurement_sessions_are_included_in_checkpoint_recovery_state():
     )
     sessions: dict[str, MeasurementSession] = {}
     register_measurement(sessions, data)
-    state = Agent._checkpoint_state(
+    state = checkpoint_state(
         "读取图表",
         [],
         {},
@@ -781,7 +782,7 @@ def test_checkpoint_keeps_only_one_current_measurement_attempt_per_panel():
             ),
         )
 
-    state = Agent._checkpoint_state(
+    state = checkpoint_state(
         "检查多个 panel",
         [],
         {},

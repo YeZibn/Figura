@@ -8,6 +8,7 @@ from collections.abc import Iterable, Mapping
 from typing import Any
 
 from ..trace import truncate_text
+from ..decision_timeline import EVENT_STATUS_FIELD_BY_KIND
 from .timeline_model import (
     FAILURE_STATUSES,
     MEASUREMENT_TOOLS,
@@ -38,8 +39,6 @@ def _event_stages(kind: str, payload: Mapping[str, Any]) -> list[str]:
         "review_completed",
         "review_repair_required",
         "review_failed",
-        "review_gate_required",
-        "review_gate_updated",
     }:
         stages.append("quality_review")
     if kind in {
@@ -242,24 +241,16 @@ def _find_scope(payload: Mapping[str, Any]) -> Mapping[str, Any] | None:
 
 
 def _tool_name(payload: Mapping[str, Any]) -> str | None:
-    for candidate in _mapping_candidates(payload):
-        for key in ("tool_name", "toolName", "name"):
-            value = candidate.get(key)
-            if isinstance(value, str) and value:
-                return value
-    for text in _preview_texts(payload):
-        match = re.search(r'"tool_name"\s*:\s*"([^"]+)"', text)
-        if match:
-            return match.group(1)
-    return None
+    value = payload.get("tool_name")
+    return value if isinstance(value, str) and value else None
 
 
 def _event_is_failure(kind: str, payload: Mapping[str, Any]) -> bool:
     if kind in {"run_failed", "run_interrupted", "generated_chart_rejected", "assembly_validation_failure", "review_failed"}:
         return True
-    if kind in {"review_repair_required", "review_gate_required", "recovery_blocked"}:
+    if kind in {"review_repair_required", "recovery_blocked"}:
         return True
-    statuses = _statuses(payload)
+    statuses = _statuses(kind, payload)
     return any(status in FAILURE_STATUSES for status in statuses)
 
 
@@ -274,19 +265,21 @@ def _event_is_success(kind: str, payload: Mapping[str, Any]) -> bool:
     if kind in {"run_started", "resume_started", "generated_chart", "generated_chart_published", "operation_completed", "review_completed"}:
         return not _event_is_failure(kind, payload)
     if kind == "tool_result":
-        statuses = _statuses(payload)
+        statuses = _statuses(kind, payload)
         return not statuses or any(status in SUCCESS_STATUSES for status in statuses)
-    return any(status in SUCCESS_STATUSES for status in _statuses(payload))
+    return any(status in SUCCESS_STATUSES for status in _statuses(kind, payload))
 
 
-def _statuses(payload: Mapping[str, Any]) -> set[str]:
-    values: set[str] = set()
-    for candidate in _mapping_candidates(payload):
-        for key in ("status", "state", "tool_status", "review_status", "candidate_status", "publication_status"):
-            value = candidate.get(key)
-            if isinstance(value, str):
-                values.add(value.strip().lower())
-    return values
+_NON_CORRELATED_STATUS_FIELDS = {
+    "model_completed": "status",
+}
+
+
+def _statuses(kind: str, payload: Mapping[str, Any]) -> set[str]:
+    """Read only the event kind's declared execution status, never nested aliases."""
+    field = EVENT_STATUS_FIELD_BY_KIND.get(kind) or _NON_CORRELATED_STATUS_FIELDS.get(kind)
+    value = payload.get(field) if field else None
+    return {value.strip().lower()} if isinstance(value, str) else set()
 
 
 def _event_error(kind: str, payload: Mapping[str, Any]) -> str:
@@ -311,7 +304,7 @@ def _event_error(kind: str, payload: Mapping[str, Any]) -> str:
                 message = issue.get("message")
                 if isinstance(message, str) and message:
                     return truncate_text(message, 240)
-    statuses = sorted(_statuses(payload) & FAILURE_STATUSES)
+    statuses = sorted(_statuses(kind, payload) & FAILURE_STATUSES)
     return f"{kind}: {', '.join(statuses) if statuses else 'failed'}"
 
 

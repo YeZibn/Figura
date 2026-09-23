@@ -78,8 +78,6 @@ export function eventLabel(event: AgentRunEvent): string {
     review_completed: '审核已通过',
     review_repair_required: '审核要求修复',
     review_failed: '审核未通过',
-    review_gate_required: '主链路已暂停',
-    review_gate_updated: '审核状态已更新',
     review_subcheck: '审核诊断信息',
     tool_skipped: '工具未执行',
     final_answer: '最终回答已生成',

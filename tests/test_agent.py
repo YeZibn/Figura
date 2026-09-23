@@ -19,8 +19,9 @@ from chartagent import (
     ToolResult,
     register_builtins,
 )
-from chartagent.agent import AgentInterrupted, _assistant_entry, registry_tools
+from chartagent.agent import AgentInterrupted, registry_tools
 from chartagent.client.models import NormalizedResult, ToolCall
+from chartagent.agent.messages import assistant_entry
 from chartagent.agent.review_gate import review_gate_context
 from chartagent.tools.chart.observation.layout_tool import INSPECT_CHART_LAYOUT
 from chartagent.tools.chart.specification import ASSEMBLE_SPEC
@@ -313,7 +314,7 @@ def test_assistant_history_keeps_tool_calls_strips_reasoning():
         reasoning="SECRET_THOUGHT",
         tool_calls=[ToolCall(id="c1", name="read_file", arguments='{"path":"x"}')],
     )
-    entry = _assistant_entry(result)
+    entry = assistant_entry(result)
     assert entry["content"] == "hi"
     assert "SECRET_THOUGHT" not in entry
     assert entry["tool_calls"][0]["id"] == "c1"

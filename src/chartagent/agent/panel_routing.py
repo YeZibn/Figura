@@ -175,10 +175,3 @@ def remember_layout_context(
     layout_contexts[attachment_id] = cached
     while len(layout_contexts) > MAX_LAYOUT_CONTEXTS:
         layout_contexts.pop(next(iter(layout_contexts)))
-
-
-# Compatibility names used while the Agent delegates to this module.
-_layout_arguments = layout_arguments
-_panel_routing_error = panel_routing_error
-_hydrate_persisted_panel_contexts = hydrate_persisted_panel_contexts
-_remember_layout_context = remember_layout_context

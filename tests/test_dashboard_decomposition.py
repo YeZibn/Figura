@@ -6,7 +6,8 @@ from pathlib import Path
 
 from PIL import Image
 
-from chartagent.agent.loop import Agent, _attach_visual_observation_refs
+from chartagent.agent.artifacts import attach_visual_observation_refs
+from chartagent.agent.panel_routing import layout_arguments, panel_routing_error, remember_layout_context
 from chartagent.attachments import AttachmentRegistry
 from chartagent.tools import ToolResult, ToolRegistry, dispatch_observation, get_tool_presentation
 from chartagent.tools.chart import register_chart_tools
@@ -282,7 +283,7 @@ def test_managed_crop_references_are_attached_to_panel_records():
             for index in range(1, 5)
         ],
     ]
-    attached = _attach_visual_observation_refs(dispatched, references)
+    attached = attach_visual_observation_refs(dispatched, references)
     payload = json.loads(attached.content)
     crops = [panel["crop"] for panel in payload["data"]["panels"]]
     assert [crop["resource_ref"]["observationId"] for crop in crops] == [
@@ -330,7 +331,7 @@ def test_panel_id_selects_the_matching_scoped_layout_context():
             "measurement_frame": {"bbox_px": [900, 200, 300, 300]},
         },
     }
-    arguments = Agent._layout_arguments(
+    arguments = layout_arguments(
         "extract_pie_slices",
         json.dumps({"attachment_id": "att_dashboard", "panel_id": "panel_4"}),
         contexts,
@@ -341,7 +342,7 @@ def test_panel_id_selects_the_matching_scoped_layout_context():
 
 
 def test_unresolved_panel_route_is_bounded_before_sensor_dispatch():
-    error = Agent._panel_routing_error(
+    error = panel_routing_error(
         "measure_bars",
         json.dumps({"attachment_id": "att_dashboard", "panel_id": "missing_panel"}),
         {
@@ -356,7 +357,7 @@ def test_unresolved_panel_route_is_bounded_before_sensor_dispatch():
 
 
 def test_resolved_panel_route_requires_an_analysis_scope():
-    error = Agent._panel_routing_error(
+    error = panel_routing_error(
         "extract_pie_slices",
         json.dumps({"attachment_id": "att_dashboard", "panel_id": "panel_4"}),
         {"att_dashboard::panel_4": {"measurement_frame": {"bbox_px": [1, 2, 3, 4]}}},
@@ -368,7 +369,7 @@ def test_resolved_panel_route_requires_an_analysis_scope():
 
 def test_decomposition_contexts_are_cached_per_attachment_and_panel():
     contexts = {}
-    Agent._remember_layout_context(
+    remember_layout_context(
         json.dumps(
             {
                 "data": {

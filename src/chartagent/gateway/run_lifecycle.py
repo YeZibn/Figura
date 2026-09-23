@@ -10,7 +10,7 @@ from typing import Iterable
 from dataclasses import dataclass
 from uuid import uuid4
 
-from ..decision_timeline import enrich_event_payload
+from ..decision_timeline import TimelineProtocolError, enrich_event_payload
 from ..trace import TraceEvent, sanitize_payload
 from .history import GatewayHistoryStore
 from .protocol import (
@@ -159,24 +159,31 @@ class ManagedRun:
                 return None
             return self._publish_locked(kind, payload)
 
-    def _publish_locked(self, kind: str, payload: dict | None = None) -> RunEvent:
+    def _publish_locked(self, kind: str, payload: dict | None = None) -> RunEvent | None:
         """Append one event while the run condition lock is held."""
-        self._next_sequence += 1
+        sequence = self._next_sequence + 1
         event_payload = dict(payload or {})
         if kind in _RUN_PROCESS_KINDS and not any(
-            event_payload.get(key) for key in ("process_id", "processId", "operation_id", "operationId", "turn")
+            event_payload.get(key) for key in ("process_id", "operation_id", "turn")
         ):
             event_payload["process_id"] = "run"
-        event = RunEvent(
-            run_id=self.run_id,
-            sequence=self._next_sequence,
-            kind=kind,
-            payload=enrich_event_payload(
+        try:
+            event_payload = enrich_event_payload(
                 kind,
                 event_payload,
                 run_id=self.run_id,
-                sequence=self._next_sequence,
-            ),
+                sequence=sequence,
+            )
+        except TimelineProtocolError:
+            # Invalid timeline diagnostics are dropped; a malformed event must
+            # not alter Run state, sequence identity, or the caller's outcome.
+            return None
+        self._next_sequence = sequence
+        event = RunEvent(
+            run_id=self.run_id,
+            sequence=sequence,
+            kind=kind,
+            payload=event_payload,
         )
         if self.history_store is not None:
             try:
@@ -195,7 +202,7 @@ class ManagedRun:
         payload = dict(event.detail_payload or event.payload)
         if event.turn is not None:
             payload.setdefault("turn", event.turn)
-        payload["traceSequence"] = event.sequence
+        payload["trace_sequence"] = event.sequence
         self.publish(event.kind, payload)
 
     def update_execution_gate(self, gate: Mapping[str, object]) -> dict[str, object]:
@@ -205,18 +212,6 @@ class ManagedRun:
             if clean == self.execution_gate:
                 return dict(self.execution_gate)
             self.execution_gate = clean
-            if not self.terminal:
-                self._publish_locked(
-                    "review_gate_updated",
-                    {
-                        "execution_gate": clean,
-                        "review_id": clean.get("reviewId") or clean.get("review_id"),
-                        "candidate_id": clean.get("subjectId") or clean.get("subject_id"),
-                        "attempt": clean.get("attempt"),
-                        "repair_kind": clean.get("repairKind") or clean.get("repair_kind"),
-                        "blocking": clean.get("blocking"),
-                    },
-                )
             self._condition.notify_all()
         self._update_history(self.status, execution_gate=clean)
         return dict(clean)

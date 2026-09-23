@@ -7,7 +7,7 @@ const terminalEventKinds = new Set(['final_answer', 'run_failed', 'run_interrupt
 const streamEventKinds = [
   'run_started', 'resume_started', 'model_started', 'model_completed', 'tool_call', 'tool_result', 'visual_observation', 'generated_chart',
   'generated_chart_rejected', 'generated_chart_published',
-  'review_started', 'review_completed', 'review_repair_required', 'review_failed', 'review_gate_required', 'review_gate_updated', 'review_subcheck',
+  'review_started', 'review_completed', 'review_repair_required', 'review_failed', 'review_subcheck',
   'reasoning', 'budget_exhausted', 'final_answer', 'run_failed', 'run_interrupted', 'recovery_blocked',
   'operation_completed', 'history_gap',
 ]

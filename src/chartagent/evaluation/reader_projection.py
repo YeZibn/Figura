@@ -471,12 +471,23 @@ class EvaluationReader:
         report = raw_case.get("report")
         report_path = self._relative_file(root, report.get("json") if isinstance(report, Mapping) else None)
         if report_path is None:
-            return {"stages": [], "anomalies": [], "historyGap": False, "firstFailure": self._first_failure(raw_case.get("first_failure"))}
+            return {"stages": [], "anomalies": [], "historyGap": False, "firstFailure": None, "protocolStatus": "unavailable"}
         try:
             payload = self._read_json(report_path, "evaluation_report_unavailable")
         except EvaluationReaderError:
-            return {"stages": [], "anomalies": [], "historyGap": False, "firstFailure": self._first_failure(raw_case.get("first_failure"))}
+            return {"stages": [], "anomalies": [], "historyGap": False, "firstFailure": None, "protocolStatus": "unavailable"}
         timeline = payload.get("timeline") if isinstance(payload.get("timeline"), Mapping) else {}
+        protocol_status = timeline.get("protocol_status")
+        if protocol_status not in {"supported", "unsupported_version", "malformed"}:
+            protocol_status = "unavailable"
+        if protocol_status != "supported":
+            return {
+                "stages": [],
+                "anomalies": [],
+                "historyGap": bool(timeline.get("history_gap")),
+                "firstFailure": None,
+                "protocolStatus": protocol_status,
+            }
         stages: list[dict[str, Any]] = []
         raw_stages = timeline.get("stages") if isinstance(timeline, Mapping) else []
         if isinstance(raw_stages, list):
@@ -514,6 +525,7 @@ class EvaluationReader:
             "anomalies": anomalies,
             "historyGap": bool(timeline.get("history_gap")),
             "firstFailure": self._first_failure(timeline.get("first_failure")) or self._first_failure(raw_case.get("first_failure")),
+            "protocolStatus": protocol_status,
         }
 
     def _evaluation_report(self, root: Path) -> dict[str, Any]:
@@ -1068,7 +1080,7 @@ class EvaluationReader:
         elif persisted_truncated:
             entry["detailUnavailable"] = True
             entry["detailUnavailableReason"] = "detail_resource_unavailable"
-        if kind in {"assembly_validation_failure", "review_started", "review_completed", "review_repair_required", "review_failed", "review_gate_required", "review_gate_updated", "generated_chart_published", "generated_chart_rejected"}:
+        if kind in {"assembly_validation_failure", "review_started", "review_completed", "review_repair_required", "review_failed", "generated_chart_published", "generated_chart_rejected"}:
             projected, value_truncated, value_redacted = self._safe_projection(payload)
             entry["details"] = projected
             truncated |= value_truncated

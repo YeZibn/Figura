@@ -392,11 +392,3 @@ def lifecycle_trace_fields(content: str) -> dict[str, Any]:
         for key, value in fields.items()
         if value not in (None, {}, [], "")
     }
-
-
-# Private aliases preserve the historical internal names for callers that
-# imported them from ``agent.loop`` during the migration.
-_attach_visual_observation_refs = attach_visual_observation_refs
-_artifact_records_from_observation = artifact_records_from_observation
-_trace_result_summary = trace_result_summary
-_lifecycle_trace_fields = lifecycle_trace_fields

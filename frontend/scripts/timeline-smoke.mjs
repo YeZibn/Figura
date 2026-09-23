@@ -4,6 +4,11 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
 const root = resolve(import.meta.dirname, '..')
+const versionedEventKinds = new Set([
+  'review_started', 'review_completed', 'review_repair_required', 'review_failed', 'review_subcheck',
+  'generated_chart_published', 'generated_chart_rejected', 'tool_call', 'tool_result', 'tool_skipped',
+  'visual_observation', 'generated_chart', 'assembly_validation_failure',
+])
 const bundle = await build({
   entryPoints: [resolve(root, 'src/domain/run/timeline.ts')],
   bundle: true,
@@ -21,7 +26,9 @@ const event = (runId, sequence, kind, payload = {}) => ({
   sequence,
   kind,
   timestamp: '2026-09-22T00:00:00.000Z',
-  payload,
+  payload: versionedEventKinds.has(kind) && payload.correlation_version === undefined
+    ? { correlation_version: 2, ...payload }
+    : payload,
 })
 
 const events = [
@@ -42,6 +49,60 @@ assert.equal(units[0].label, '柱体测量')
 assert.deepEqual(units[0].call?.payload.arguments, { panel_id: 'panel-1' })
 assert.equal(units[0].result?.payload.result.measurement.status, 'partial')
 
+const legacyHistory = [event('legacy-v1', 1, 'tool_result', {
+  correlation_version: 1,
+  unit_id: 'measurement:legacy',
+  unit_type: 'measurement',
+  phase: 'action',
+  actor: 'tool',
+  role: 'action',
+  transition_id: 'measurement:legacy:completed',
+  call_id: 'legacy',
+  status: 'success',
+})]
+assert.equal(timeline.timelineProtocolStatus(legacyHistory).status, 'unsupported_version')
+assert.deepEqual(timeline.projectUserTimeline(legacyHistory), [])
+const preservedArtifacts = timeline.generatedArtifacts([
+  event('legacy-v1', 2, 'generated_chart', {
+    correlation_version: 1,
+    artifacts: [{ artifactKind: 'generated_chart', artifactId: 'artifact-legacy', title: '已保存结果' }],
+  }),
+])
+assert.equal(preservedArtifacts.length, 1)
+assert.equal(preservedArtifacts[0].artifactId, 'artifact-legacy')
+
+const malformedHistory = [event('malformed-v2', 1, 'tool_result', {
+  unit_id: 'measurement:malformed',
+  unit_type: 'measurement',
+  phase: 'action',
+  actor: 'tool',
+  role: 'action',
+  transition_id: 'measurement:malformed:completed',
+  call_id: 'malformed',
+  state: 'completed',
+  status: 'success',
+})]
+assert.equal(timeline.timelineProtocolStatus(malformedHistory).status, 'malformed')
+assert.deepEqual(timeline.projectUserTimeline(malformedHistory), [])
+
+const reviewState = timeline.projectDecisionTimeline([
+  event('review-fields', 1, 'review_completed', {
+    unit_id: 'review:review-fields',
+    unit_type: 'review',
+    phase: 'review',
+    actor: 'system',
+    role: 'review',
+    transition_id: 'review:review-fields:passed',
+    review_id: 'review-fields',
+    state: 'passed',
+    review_status: 'failed',
+  }),
+])
+assert.equal(reviewState[0].status, 'passed')
+assert.equal(timeline.executionGateValue({ summary: { runId: 'review-fields' }, events: [
+  event('review-fields', 2, 'review_completed', { execution_gate: { state: 'failed', blocking: true } }),
+], historyGap: false }), null)
+
 const replay = timeline.mergeEvents(events.slice(0, 3), [events[2], events[3], events[1]])
 assert.deepEqual(replay.map((item) => item.sequence), [1, 2, 3, 4])
 
@@ -55,6 +116,7 @@ const fixtureEvents = fixture.events.map((item) => ({
 }))
 const visible = timeline.projectUserTimeline(fixtureEvents)
 assert.deepEqual(visible.map((item) => item.itemType), ['measurement', 'generation', 'review', 'error'])
+assert.equal(visible.filter((item) => item.itemType === 'review').length, 1)
 assert.deepEqual(visible.map((item) => item.firstSequence), [5, 9, 10, 16])
 assert.equal(visible[0].observations.length, 1)
 assert.equal(visible[2].visibleEvents.length, 2)
@@ -84,26 +146,19 @@ const noisyEvents = [
     review_id: 'review:test5',
     state: 'completed',
     check_type: 'deterministic_audit',
-    status: 'completed',
-  }),
-  event('test5-human-timeline', 21, 'review_gate_updated', {
-    unit_id: 'review:test5',
-    unit_type: 'review',
-    phase: 'review',
-    actor: 'system',
-    role: 'review',
-    transition_id: 'review:test5:gate',
-    review_id: 'review:test5',
-    state: 'failed',
-    blocking: true,
-    next_action: 'repair',
   }),
 ]
 const noisyVisible = timeline.projectUserTimeline(noisyEvents)
 assert.deepEqual(noisyVisible.map((item) => item.itemType), ['measurement', 'generation', 'review', 'error'])
 assert.equal(noisyVisible.find((item) => item.itemType === 'review').visibleEvents.length, 2)
 assert.ok(!noisyVisible.some((item) => item.label === '测量决策' || item.label === '等待主 Agent 选择测量证据'))
-assert.ok(!noisyVisible.flatMap((item) => item.visibleEvents).some((item) => item.kind === 'review_subcheck' || item.kind === 'review_gate_updated'))
+assert.ok(!noisyVisible.flatMap((item) => item.visibleEvents).some((item) => item.kind === 'review_subcheck'))
+
+const ordinaryWorkspaceSource = readFileSync(resolve(root, 'src/components/workspace.tsx'), 'utf8')
+const evaluationSource = readFileSync(resolve(root, 'src/components/evaluation.tsx'), 'utf8')
+assert.match(ordinaryWorkspaceSource, /import \{ RunTimeline \} from '\.\/run'/)
+assert.match(evaluationSource, /import \{ RunTimeline \} from '\.\/run'/)
+assert.match(evaluationSource, /events: props\.history\.events/)
 
 const collectionVisible = timeline.projectUserTimeline([
   event('collection-run', 1, 'generated_chart', { unit_id: 'generation:candidate-collection', unit_type: 'generation', phase: 'render', actor: 'tool', role: 'action', transition_id: 'generation:candidate-collection:rendered', state: 'available', candidate_id: 'candidate-collection' }),
@@ -120,8 +175,8 @@ const duplicateSequence = timeline.projectUserTimeline(timeline.mergeEvents([
   event('strict-tool', 1, 'tool_call', { unit_id: 'observation:strict-call', unit_type: 'observation', phase: 'action', actor: 'tool', role: 'action', transition_id: 'observation:strict-call:started', call_id: 'strict-call', state: 'running' }),
 ], [
   event('strict-tool', 2, 'visual_observation', { unit_id: 'observation:strict-call', unit_type: 'observation', phase: 'observe', actor: 'tool', role: 'observation', transition_id: 'observation:strict-call:observed', call_id: 'strict-call', state: 'observed', observations: [{ observationId: 'obs-1' }] }),
-  event('strict-tool', 3, 'tool_result', { unit_id: 'observation:strict-call', unit_type: 'observation', phase: 'action', actor: 'tool', role: 'action', transition_id: 'observation:strict-call:completed', call_id: 'strict-call', state: 'completed', status: 'success', result: { bars: 2 } }),
-  event('strict-tool', 3, 'tool_result', { unit_id: 'observation:strict-call', unit_type: 'observation', phase: 'action', actor: 'tool', role: 'action', transition_id: 'observation:strict-call:completed', call_id: 'strict-call', state: 'completed', status: 'success', result: { bars: 99 } }),
+  event('strict-tool', 3, 'tool_result', { unit_id: 'observation:strict-call', unit_type: 'observation', phase: 'action', actor: 'tool', role: 'action', transition_id: 'observation:strict-call:completed', call_id: 'strict-call', status: 'success', result: { bars: 2 } }),
+  event('strict-tool', 3, 'tool_result', { unit_id: 'observation:strict-call', unit_type: 'observation', phase: 'action', actor: 'tool', role: 'action', transition_id: 'observation:strict-call:completed', call_id: 'strict-call', status: 'success', result: { bars: 99 } }),
 ]))
 assert.equal(duplicateSequence.length, 1)
 assert.equal(duplicateSequence[0].itemType, 'observation')

@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from ..decision_timeline import TimelineProtocolError, UnsupportedTimelineVersion, validate_timeline_event
 from .manifest import DiagnosticSample
 from .timeline_attribution import (
     _apply_stage_statuses,
@@ -34,6 +35,20 @@ from .timeline_model import (
 )
 
 
+def _protocol_status(events: list[Mapping[str, Any]]) -> str:
+    for event in events:
+        kind = _kind(event)
+        payload = event.get("payload")
+        payload = payload if isinstance(payload, Mapping) else {}
+        try:
+            validate_timeline_event(kind, payload)
+        except UnsupportedTimelineVersion:
+            return "unsupported_version"
+        except TimelineProtocolError:
+            return "malformed"
+    return "supported"
+
+
 def build_timeline(
     history: Mapping[str, Any],
     *,
@@ -44,13 +59,20 @@ def build_timeline(
 
     raw_events = history.get("events")
     events = [event for event in raw_events if isinstance(event, Mapping)] if isinstance(raw_events, list) else []
+    protocol_status = _protocol_status(events)
+    history_gap = bool(history.get("historyGap"))
+    if protocol_status != "supported":
+        return DiagnosticTimeline(
+            stages=(),
+            history_gap=history_gap,
+            protocol_status=protocol_status,
+        )
     buckets = {name: [] for name in STAGE_NAMES}
     stage_evidence = {name: StageEvidence(name) for name in STAGE_NAMES}
     decomposition_results: list[tuple[int, Mapping[str, Any]]] = []
     measurement_events: list[tuple[int, Mapping[str, Any]]] = []
     final_events: list[tuple[int, Mapping[str, Any]]] = []
     hard_failure_events: list[tuple[int, str, str]] = []
-    history_gap = bool(history.get("historyGap"))
     if history_gap:
         hard_failure_events.append((0, "transport_runtime", "history_gap"))
 
@@ -127,6 +149,7 @@ def build_timeline(
         first_failure=first_failure,
         final_references=final_references,
         history_gap=history_gap,
+        protocol_status=protocol_status,
     )
 
 

@@ -151,7 +151,7 @@ export const mockClient: ChartAgentClient = {
     const model = target?.runs.find((item) => item.runId === runId)?.model || (provider === 'qwen' ? 'qwen3.8-flash' : provider === 'deepseek' ? 'deepseek-flash' : 'gpt-4o-mini')
     schedule(20, () => emit('run_started', 1, { status: 'running', provider, model }))
     schedule(130, () => emit('model_started', 2, { turn: 1, provider, model }))
-    const measurementUnit = { correlation_version: 1, unit_id: 'measurement:mock-attempt-1', unit_type: 'measurement', phase: 'observe', actor: 'tool', role: 'observation', transition_id: 'measurement:mock-attempt-1:observed' }
+    const measurementUnit = { correlation_version: 2, unit_id: 'measurement:mock-attempt-1', unit_type: 'measurement', phase: 'observe', actor: 'tool', role: 'observation', transition_id: 'measurement:mock-attempt-1:observed' }
     schedule(260, () => emit('tool_call', 3, { ...measurementUnit, phase: 'action', state: 'running', transition_id: 'measurement:mock-attempt-1:started', tool_name: 'measure_bars', call_id: 'mock-call-1', arguments: { attachment_id: 'selected' } }))
     schedule(430, () => emit('tool_result', 4, { ...measurementUnit, tool_name: 'measure_bars', call_id: 'mock-call-1', status: 'success', result: { bars: 3, evidence: { coordinate_system: 'cartesian_2d', frame: null, confidence: { overall: 0.5 }, warnings: [] } } }))
     schedule(560, () => emit('visual_observation', 5, {
@@ -165,7 +165,7 @@ export const mockClient: ChartAgentClient = {
       observations: [{ observationId: 'mock-observation', mediaType: 'image/svg+xml', caption: '模拟柱状图测量结果', byteCount: mockImage.length, imageUrl: mockImage }],
     }))
     schedule(650, () => emit('generated_chart', 6, {
-      correlation_version: 1,
+      correlation_version: 2,
       unit_id: 'generation:mock-candidate-1',
       unit_type: 'generation',
       phase: 'render',

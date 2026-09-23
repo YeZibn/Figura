@@ -1,7 +1,8 @@
-"""Agent orchestration and compatibility exports."""
+"""Public Agent API and stable tool-schema helpers."""
 
-from .loop import Agent, AgentInterrupted, AgentRecoveryBlocked, VisualObservationSink, _assistant_entry, _observation_status, _tool_entry
+from .loop import Agent, VisualObservationSink
 from .observations import observation_status
+from .recovery import AgentInterrupted, AgentRecoveryBlocked
 from .review_gate import REVIEW_INCOMPLETE_MESSAGE
 from .tool_schema import registry_tools, tool_to_openai_schema
 

@@ -1,19 +1,16 @@
 import type { AgentRunEvent } from '../types/protocol'
 import { eventPayload, recordValue } from './records'
 
-export const reviewEventKinds = new Set(['review_started', 'review_completed', 'review_repair_required', 'review_failed', 'review_gate_required', 'review_gate_updated', 'review_subcheck', 'generated_chart_published', 'generated_chart_rejected'])
+export const reviewEventKinds = new Set(['review_started', 'review_completed', 'review_repair_required', 'review_failed', 'review_subcheck', 'generated_chart_published', 'generated_chart_rejected'])
 
 export function isReviewEvent(event: AgentRunEvent): boolean {
   return reviewEventKinds.has(event.kind)
 }
 
-export function reviewGateFromPayload(payload: Record<string, unknown>): Record<string, unknown> | null {
-  return recordValue(payload.execution_gate) || recordValue(payload.executionGate) || recordValue(payload.gate)
-}
-
-export function reviewIssues(payload: Record<string, unknown>, gate: Record<string, unknown> | null): Record<string, unknown>[] {
-  const values = Array.isArray(payload.issues) ? payload.issues : gate && Array.isArray(gate.issues) ? gate.issues : []
-  return values.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object')).slice(0, 4)
+export function reviewIssues(payload: Record<string, unknown>): Record<string, unknown>[] {
+  return Array.isArray(payload.issues)
+    ? payload.issues.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object')).slice(0, 4)
+    : []
 }
 
 export function reviewTypeLabel(value: unknown): string {
@@ -33,7 +30,7 @@ export function reviewStateLabel(value: unknown, blocking: boolean): string {
   return blocking ? '主链路已暂停' : '审核状态已更新'
 }
 
-export function reviewEventState(event: AgentRunEvent): { payload: Record<string, unknown>; gate: Record<string, unknown> | null; domain: Record<string, unknown> } {
+export function reviewEventState(event: AgentRunEvent): { payload: Record<string, unknown>; domain: Record<string, unknown> } {
   const payload = eventPayload(event)
-  return { payload, gate: reviewGateFromPayload(payload), domain: recordValue(payload.repair) || payload }
+  return { payload, domain: recordValue(payload.repair) || payload }
 }

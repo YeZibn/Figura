@@ -15,7 +15,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable, IO, Mapping, Optional
 
-from .decision_timeline import enrich_event_payload
+from .decision_timeline import TimelineProtocolError, enrich_event_payload
 
 
 @dataclass(frozen=True)
@@ -237,16 +237,22 @@ class TraceEmitter:
         turn: Optional[int] = None,
         payload: Optional[Mapping[str, Any]] = None,
         **fields: Any,
-    ) -> TraceEvent:
+    ) -> TraceEvent | None:
         event_payload = dict(payload or {})
         event_payload.update(fields)
-        self.sequence += 1
-        event_payload = enrich_event_payload(
-            kind,
-            event_payload,
-            run_id=self.run_id,
-            sequence=self.sequence,
-        )
+        sequence = self.sequence + 1
+        try:
+            event_payload = enrich_event_payload(
+                kind,
+                event_payload,
+                run_id=self.run_id,
+                sequence=sequence,
+            )
+        except TimelineProtocolError:
+            # Timeline diagnostics are a side channel; malformed records are
+            # dropped without consuming a sequence or changing Agent behavior.
+            return None
+        self.sequence = sequence
         event = TraceEvent(
             kind=kind,
             run_id=self.run_id,

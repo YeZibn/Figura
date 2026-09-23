@@ -8,13 +8,12 @@ export function eventPayload(event: AgentRunEvent): Record<string, unknown> {
   return event.payload || {}
 }
 
-export function failureContext(payload: Record<string, unknown>): FailureContext | null {
+export function failureContext(payload: Record<string, unknown>, eventKind?: string): FailureContext | null {
   const nested = [
     recordValue(payload.result),
     recordValue(payload.data),
     recordValue(payload.error),
     recordValue(payload.source_scope_resolution),
-    recordValue(payload.sourceScopeResolution),
     recordValue(payload.measurement_validation),
   ].filter((item): item is Record<string, unknown> => Boolean(item))
   const candidates = [payload, ...nested]
@@ -26,17 +25,20 @@ export function failureContext(payload: Record<string, unknown>): FailureContext
   }
   const issues = candidates.flatMap((candidate) => Array.isArray(candidate.issues) ? candidate.issues.map(recordValue).filter((item): item is Record<string, unknown> => Boolean(item)) : [])
   const issue = issues[0]
-  const hasErrorShape = candidates.some((candidate) => candidate.error !== undefined || candidate.status === 'error' || candidate.state === 'error') || issues.length > 0
-  const category = first('failure_category', 'failureCategory') || (hasErrorShape ? 'tool_rejected' : undefined)
-  const code = first('failure_code', 'failureCode', 'error_code', 'errorCode', 'code')
-  const safeMessage = first('safe_message', 'safeMessage', 'message') || (hasErrorShape ? first('error') : undefined) || issue?.message
-  const location = first('location', 'field_location', 'fieldLocation') || issue?.location
-  const providerStatus = first('provider_status', 'providerStatus')
-  const actionHintValue = first('action_hint', 'actionHint', 'next_action', 'nextAction')
+  const eventState = eventKind === 'tool_result' ? payload.status : payload.state
+  const hasErrorShape = candidates.some((candidate, index) => candidate.error !== undefined
+    || index === 0 && eventState === 'error'
+    || index > 0 && (candidate.status === 'error' || candidate.state === 'error')) || issues.length > 0
+  const category = first('failure_category') || (hasErrorShape ? 'tool_rejected' : undefined)
+  const code = first('failure_code', 'error_code', 'code')
+  const safeMessage = first('safe_message', 'message') || (hasErrorShape ? first('error') : undefined) || issue?.message
+  const location = first('location', 'field_location') || issue?.location
+  const providerStatus = first('provider_status')
+  const actionHintValue = first('action_hint', 'next_action')
   const actionHint = typeof actionHintValue === 'string' ? actionHintValue : undefined
   const retryable = first('retryable')
-  const outcomeKnown = first('outcome_known', 'outcomeKnown')
-  const firstFailureRef = first('first_failure_ref', 'firstFailureRef')
+  const outcomeKnown = first('outcome_known')
+  const firstFailureRef = first('first_failure_ref')
   if (category === undefined && code === undefined && safeMessage === undefined && location === undefined && providerStatus === undefined && actionHint === undefined) return null
   return {
     ...(category !== undefined ? { category: String(category) } : {}),

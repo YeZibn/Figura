@@ -879,7 +879,7 @@ def test_agent_reviews_composite_figure_once_with_tool_free_vlm(tmp_path, monkey
         safety_calls.append(True)
         return original_safety_review(*args, **kwargs)
 
-    monkeypatch.setattr("chartagent.agent.loop.review_candidate_bytes", count_safety_review)
+    monkeypatch.setattr("chartagent.agent.review_flow.review_candidate_bytes", count_safety_review)
     figure = _figure_spec()
     rendered = render_chart(figure.to_dict())
     source_path = tmp_path / "source-composite.png"

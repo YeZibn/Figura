@@ -31,7 +31,6 @@ def test_measurement_call_and_result_share_one_canonical_tool_unit():
             "role": "action",
             "call_id": "call_1",
             "tool_name": "measure_bars",
-            "state": "completed",
             "status": "success",
             "transition_id": "measurement:call_1:completed",
             "result": {
@@ -64,7 +63,6 @@ def test_tool_result_enrichment_is_idempotent():
         "call_id": "call_2",
         "tool_name": "extract_line_series",
         "status": "success",
-        "state": "completed",
         "transition_id": "measurement:call_2:completed",
         "result": {"measurement": {"status": "complete", "evidence": {"refs": []}}},
     }

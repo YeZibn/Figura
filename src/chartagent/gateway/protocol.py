@@ -411,7 +411,6 @@ def _truncate_tool_result_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
         "tool_label",
         "call_id",
         "status",
-        "tool_status",
         "turn",
         "correlation_version",
         "unit_id",

@@ -69,6 +69,7 @@ def _write_bundle(data_root: Path, *, evaluation_id: str = "eval_20260920T000000
     (root / "summary.md").write_text("# summary\n", encoding="utf-8")
     (root / "diagnostics/bar_line_dashboard.json").write_text(json.dumps({
         "timeline": {
+            "protocol_status": "supported",
             "stages": [{"name": "decomposition", "status": "completed", "sequences": [2], "panel_ids": ["panel_1"]}],
             "anomalies": [],
             "history_gap": False,
@@ -94,10 +95,34 @@ def _write_history(root: Path, *, include_records: bool = True, large_result: bo
         "run_fixture", 1, "run_started", {"provider": "deepseek", "model": "deepseek-flash", "authorization": "secret"}, "2026-09-20T00:00:01Z"
     ))
     store.append_event(RunEvent(
-        "run_fixture", 2, "tool_call", {"tool_name": "measure_bars", "call_id": "call_1", "arguments": {"path": "/Users/private/chart.png"}}, "2026-09-20T00:00:02Z"
+        "run_fixture", 2, "tool_call", {
+            "correlation_version": 2,
+            "unit_id": "measurement:call_1",
+            "unit_type": "measurement",
+            "phase": "action",
+            "actor": "tool",
+            "role": "action",
+            "transition_id": "measurement:call_1:started",
+            "state": "running",
+            "tool_name": "measure_bars",
+            "call_id": "call_1",
+            "arguments": {"path": "/Users/private/chart.png"},
+        }, "2026-09-20T00:00:02Z"
     ))
     store.append_event(RunEvent(
-        "run_fixture", 3, "tool_result", {"tool_name": "measure_bars", "call_id": "call_1", "status": "success", "result": {"data": {"bars": 2, "api_key": "secret"}, "warnings": []}}, "2026-09-20T00:00:03Z"
+        "run_fixture", 3, "tool_result", {
+            "correlation_version": 2,
+            "unit_id": "measurement:call_1",
+            "unit_type": "measurement",
+            "phase": "action",
+            "actor": "tool",
+            "role": "action",
+            "transition_id": "measurement:call_1:completed",
+            "tool_name": "measure_bars",
+            "call_id": "call_1",
+            "status": "success",
+            "result": {"data": {"bars": 2, "api_key": "secret"}, "warnings": []},
+        }, "2026-09-20T00:00:03Z"
     ))
     if large_result:
         store.append_event(RunEvent(
@@ -107,6 +132,13 @@ def _write_history(root: Path, *, include_records: bool = True, large_result: bo
             {
                 "tool_name": "measure_bars",
                 "call_id": "call_large",
+                "correlation_version": 2,
+                "unit_id": "measurement:call_large",
+                "unit_type": "measurement",
+                "phase": "action",
+                "actor": "tool",
+                "role": "action",
+                "transition_id": "measurement:call_large:completed",
                 "status": "success",
                 "result": {"data": {"points": [{"bbox_px": [1, 2, 3, 4], "note": "safe measurement detail " + ("x" * 180)} for _ in range(100)]}},
             },
@@ -167,6 +199,36 @@ def test_reader_rejects_cross_case_and_sensitive_resources(tmp_path):
         assert getattr(exc, "code", None) == "evaluation_resource_not_found"
     else:
         raise AssertionError("path traversal unexpectedly succeeded")
+
+
+def test_reader_marks_unversioned_diagnostic_snapshots_unavailable(tmp_path):
+    root = _write_bundle(tmp_path)
+    report_path = root / "diagnostics" / "bar_line_dashboard.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["timeline"].pop("protocol_status")
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    case = EvaluationReader(tmp_path).get_case(root.name, "bar_line_dashboard")["case"]
+
+    assert case["timeline"]["protocolStatus"] == "unavailable"
+    assert case["timeline"]["stages"] == []
+    assert case["timeline"]["anomalies"] == []
+    assert case["timeline"]["firstFailure"] is None
+
+
+def test_reader_suppresses_stale_stage_projection_for_unsupported_diagnostics(tmp_path):
+    root = _write_bundle(tmp_path)
+    report_path = root / "diagnostics" / "bar_line_dashboard.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["timeline"]["protocol_status"] = "unsupported_version"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    case = EvaluationReader(tmp_path).get_case(root.name, "bar_line_dashboard")["case"]
+
+    assert case["timeline"]["protocolStatus"] == "unsupported_version"
+    assert case["timeline"]["stages"] == []
+    assert case["timeline"]["anomalies"] == []
+    assert case["timeline"]["firstFailure"] is None
 
 
 def test_reader_details_combine_visible_records_and_gateway_events_safely(tmp_path):

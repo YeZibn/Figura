@@ -17,7 +17,6 @@ from .timeline_evidence import (
     _payload_truncated,
     _references,
     _sequence,
-    _statuses,
     _tool_name,
 )
 from .timeline_model import STAGE_NAMES, STAGE_ORDER, StageEvidence
