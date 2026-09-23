@@ -179,37 +179,70 @@ without exposing unsanitized HTML or replacing the original answer text.
 
 ### Requirement: Lifecycle events separate execution, review, and publication state
 
-Lifecycle events SHALL keep tool execution, measurement observation, evidence
-decision, canonical review, and publication status in independent fields.
-`measurement_observed`, `measurement_evidence_selected`,
-`measurement_evidence_discarded`, and `measurement_repair_exhausted` SHALL NOT
-be interpreted as generated-chart review outcomes. `review_started` and
-`review_completed` SHALL be the only public review lifecycle events for both
-measurement and generated-chart review types; `chart_review_started` and
-`chart_review_completed` SHALL NOT be emitted. Run lifecycle events SHALL
-continue to distinguish active, completed, failed, interrupted, and history-gap
-states.
+Lifecycle events SHALL keep tool execution, measurement evidence, canonical
+review, and publication status in independent fields. `tool_call`/`tool_result`
+express measurement invocation and candidate result; new runs SHALL NOT emit
+separate measurement decision, selection, discard, focus, or repair lifecycle
+events. Measurement results SHALL NOT be interpreted as generated-chart review
+outcomes. `review_started` and `review_completed` SHALL be public review
+lifecycle events; Run lifecycle SHALL distinguish active, completed, failed,
+interrupted, and history-gap.
 
-#### Scenario: Tool result reports observation state only
+#### Scenario: Tool result reports candidate evidence facts
 
-- **WHEN** 一个 OCR 或图表测量工具完成
-- **THEN** `tool_result` 和对应 observation 事件独立报告执行状态、scope、refs、质量 warning 和 overlay
-- **AND** 工具成功不会自动产生 accepted、published 或 generated review passed 状态
+- **WHEN** OCR 或图表测量工具完成
+- **THEN** tool result 和适用的 observation 记录独立报告执行状态、scope、refs、质量/系列 metadata 和 overlay
+- **AND** 工具成功不会自动产生 accepted、published 或 generated-review-passed 状态
 
-#### Scenario: Evidence decision records model agency
+#### Scenario: Actual usage is visible in the assembly request
 
-- **WHEN** 主 Agent 选择、舍弃或放弃一次 observation
-- **THEN** trace 记录对应 attempt、selected/discarded refs、语义映射和 decision 来源
-- **AND** 原始工具结果仍保持可追溯
+- **WHEN** 主 Agent 在 assembly 中使用某些 measurement evidence refs
+- **THEN** trace 可以通过同一 run 中的实际工具调用和 assembly 输入关联这些 refs
+- **AND** 不新增选择、舍弃或待决事件
 
 #### Scenario: Generated review has one authoritative lifecycle
 
 - **WHEN** a generated candidate enters review, repair, or publication
-- **THEN** the trace contains one canonical `review_started` transition, one
-  final `review_completed` or `review_failed` transition, and an explicit
-  publication transition when applicable
-- **AND** internal deterministic and VLM checks remain diagnostic details
-  rather than parallel review lifecycles
+- **THEN** the trace contains one canonical `review_started` transition, one final `review_completed` or `review_failed` transition, and an explicit publication transition when applicable
+- **AND** internal deterministic and VLM checks remain diagnostic details rather than parallel review lifecycles
+
+### Requirement: Measurement tool calls are attributable
+
+执行追踪 SHALL 通过实际 measurement tool calls 及其结果保留首次 scope 或后续局部 scope、run/panel/attempt、父 attempt（如适用）、measurement/evidence refs、quality 与必要的结果摘要。局部重测是模型显式发起的下一次普通测量调用，不额外生成 measurement decision、repair-required、repair-rejected、pending-focus 或 repair-budget timeline unit。trace 不得记录原始图片、绝对路径、密钥或 provider 原始 payload。
+
+#### Scenario: A scoped observation is correlated with its panel
+
+- **WHEN** Agent 根据模型提供的 `observation_scope` 发起测量
+- **THEN** trace 可关联 scope、panel、attempt、实际应用区域和工具结果
+- **AND** 观察范围与候选结果属于同一工具调用
+
+#### Scenario: A local remeasurement is an ordinary tool call
+
+- **WHEN** Agent 根据不确定候选显式调用图表测量工具并提交 `measurement_target`
+- **THEN** trace 记录新调用、父 attempt 关联、范围和返回的候选结果
+- **AND** 不需要额外的 repair lifecycle 或 evidence selection event
+
+#### Scenario: A local measurement failure remains a tool result
+
+- **WHEN** 定向范围为空、无法应用或质量不足
+- **THEN** trace 保留该 tool call 的有界失败/质量诊断
+- **AND** 不伪造 pending measurement unit 或将其归类为 generated-chart review failure
+
+### Requirement: Measurement tool results have stable client presentation
+
+执行追踪 SHALL 让 measurement 工具调用与结果通过稳定的 `tool_name`、`call_id`、run sequence 和来源/attempt correlation 关联。客户端 SHALL 使用工具目录的中文名称及 bounded result fields 呈现调用和结果，不需要为 measurement 候选选择、舍弃或 repair 建立额外 event kind。
+
+#### Scenario: Measurement call and result share one presentation identity
+
+- **WHEN** 客户端接收 measurement `tool_call` 与 `tool_result`
+- **THEN** 两者通过稳定的 `call_id` 合并为一个可展开工具步骤
+- **AND** scope、refs、质量信息和 overlay 按授权资源引用读取
+
+#### Scenario: Replay and live delivery share the same presentation
+
+- **WHEN** 同一 measurement tool call/result 通过历史回放和实时/重连流到达
+- **THEN** 客户端使用相同的工具名、字段含义和状态解释
+- **AND** 按 run 与 sequence 去重，不产生重复工具步骤
 
 ### Requirement: Lifecycle events have stable Chinese presentation labels
 
@@ -364,56 +397,15 @@ work.
 - **THEN** the trace records the bounded uncertain or recovery-blocked state
 - **AND** it does not render that operation as a successful completed step
 
-### Requirement: Measurement repair lifecycle is inspectable
-
-执行追踪 SHALL 区分普通 measurement observation、首次 scope、定向重测、证据选择、repair action 被拒绝和修复预算耗尽。相关事件 SHALL 保留 bounded run、panel、attempt、父 attempt、scope/target 类型、selected/discarded 状态和下一动作摘要，但不得记录原始图片、绝对路径、密钥或 provider 原始 payload。
-
-#### Scenario: A scoped observation is correlated with its panel
-
-- **WHEN** Agent 根据模型提供的 observation scope 发起测量
-- **THEN** trace 可以关联 scope、panel、attempt、实际应用区域和结果状态
-- **AND** 客户端能够区分首次范围观察与后续局部重测
-
-#### Scenario: A repair attempt is correlated with its parent
-
-- **WHEN** Agent 根据某次 observation 的问题发起定向重测
-- **THEN** trace 可以关联 repair request、子 attempt、父 attempt、panel 和结果状态
-- **AND** 客户端能够区分修复测量与新的无关观察
-
-#### Scenario: Exhausted repair is explicit
-
-- **WHEN** 定向重测无法收敛或达到预算上限
-- **THEN** trace 发布明确的 repair-exhausted 或等价非发布状态及下一动作
-- **AND** 该状态不被错误归类为 generated chart review failure
-
-### Requirement: Measurement repair events have stable client presentation
-
-执行追踪面向客户端的事件契约 SHALL 支持 measurement observation、`measurement_evidence_selected`、`measurement_repair_required`、`measurement_repair_rejected` 和 `measurement_repair_exhausted` 等事件。客户端 SHALL 保留稳定的英文事件类型，并为 observation、选择、舍弃、需要重测、修复被拒绝和预算耗尽提供有界的简体中文展示标签和诊断摘要。
-
-#### Scenario: Selection event preserves correlation fields
-
-- **WHEN** 客户端接收 measurement evidence selection 事件
-- **THEN** 事件仍可通过 run、panel、attempt、selected refs 和 discarded refs 关联到对应运行
-- **AND** 原始图片、绝对路径、密钥和 provider 原始 payload 不进入用户可见事件正文
-
-#### Scenario: Replay and live delivery share the same presentation
-
-- **WHEN** 同一 observation 或 decision 事件先通过历史回放返回、再通过实时流或重连流到达
-- **THEN** 客户端使用相同的事件类型、标签和字段解释
-- **AND** 按 run 与 sequence 去重，不产生第二条重复的用户可见事件
 ### Requirement: Candidate lifecycle events share stable scope correlation
 
-候选生成、测量 observation、证据决策、审核、修复和 publication 事件 SHALL 共享
-`candidate_id`、`attempt`、`source_scope` 和适用的 `repair_kind`。事件仍 SHALL 保持
-工具执行、measurement evidence、chart review 和 publication status 的语义分离。
+候选生成、measurement tool observation、审核、修复和 publication 事件 SHALL 在适用时共享 `candidate_id`、attempt、source scope 和 repair kind。事件 SHALL 保持工具执行、measurement evidence、chart review 与 publication status 的语义分离；measurement evidence 的是否采用由实际 assembly 输入体现，不形成独立事件种类。
 
-#### Scenario: Measurement and review are not displayed as one status
+#### Scenario: Measurement and generated review are not displayed as one status
 
-- **WHEN** 一个候选经历 measurement_observed、evidence_selected、review_started
-  和 generated_chart_rejected
-- **THEN** trace 保留每种事件的独立 kind 和状态
-- **AND** 关联字段允许客户端把它们归入同一 candidate attempt
-- **AND** 任一 measurement 成功不会被解释成 review passed
+- **WHEN** 一个候选经历 measurement observation、assembly、`review_started` 和 generated-chart rejection
+- **THEN** trace 保留各实际工具调用、审核和发布状态
+- **AND** 关联字段允许客户端把它们归入同一 candidate attempt，但 measurement 成功不被解释为 review passed
 
 ### Requirement: Repair events identify the next permitted phase
 
@@ -445,9 +437,9 @@ candidate_id、attempt、source scope 和 status；截断只影响诊断正文�
 
 #### Scenario: Cross-domain events share a unit lineage
 
-- **WHEN** 一个候选由一次测量决策和一次审核修复产生
+- **WHEN** 一个候选由 measurement tool observation、实际 assembly 输入和一次审核修复产生
 - **THEN** 相关事件可以通过 unit 和 parent unit 关联到同一 candidate lineage
-- **AND** 客户端可以区分 observation、decision、action、gate 和 publication
+- **AND** 客户端可以区分 observation、action、gate 和 publication，而不需要独立 measurement-decision event
 
 #### Scenario: Event without applicable parent remains valid
 
@@ -473,19 +465,19 @@ candidate_id、attempt、source scope 和 status；截断只影响诊断正文�
 
 ### Requirement: Pending transitions are explicit in the execution trace
 
-带有必需下一动作的事件 SHALL 保留 `required`、允许动作、阻塞动作和 bounded reason。事件序列 SHALL 能区分“动作已请求”“动作已应用”“动作已观察”“动作已决策”和“动作已终止”。
+执行追踪 SHALL 仅对确实跨越工具调用且会改变运行可恢复性的动作记录 pending/next-action 状态。一次 measurement tool call SHALL 将请求 scope、实际应用范围与 observation 结果作为同一操作的事实；不存在可独立等待的 measurement focus 或 evidence decision transition。审核等其他实际阻塞操作仍可显式记录其当前状态。
 
-#### Scenario: Applied scope does not imply observed evidence
+#### Scenario: Measurement scope and observation are atomic
 
-- **WHEN** trace 收到 measurement focus applied 但没有对应 observation
-- **THEN** trace 保留 pending next action
-- **AND** run terminal summary 不得把该 focus 当作已完成测量
+- **WHEN** trace 收到一次成功应用 scope 的 measurement tool result
+- **THEN** 当前 measurement attempt 同时包含该 effective scope 和 observation refs
+- **AND** trace 不留下 pending next action 等待第二个 measurement/evidence-decision 事件
 
-#### Scenario: Explicit abandonment is terminally visible
+#### Scenario: A failed tool call does not become a pending evidence unit
 
-- **WHEN** Agent 选择放弃一次可选测量或证据候选
-- **THEN** trace 记录 abandonment reason 和被放弃的 unit
-- **AND** 后续候选不会引用一个未被选择的 evidence ref
+- **WHEN** 局部测量调用没有产生可用 observation
+- **THEN** tool result 保存失败或不充分原因
+- **AND** 主 Agent 可在下一轮自主选择重试、调整 scope、使用其他证据或停止，无需先关闭 abandonment unit
 
 ### Requirement: Equivalent transitions are projected idempotently
 

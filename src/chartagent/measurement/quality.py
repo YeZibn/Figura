@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterable
 
 from .evidence import (
     MAX_MEASUREMENT_CHECKS,
     MAX_MEASUREMENT_ISSUES,
     MAX_MEASUREMENT_REFS,
-    MAX_MEASUREMENT_TARGET_FIELDS,
-    MAX_REPAIR_ATTEMPTS,
     MEASUREMENT_ISSUE_SEVERITIES,
     MEASUREMENT_TOOLS,
     _bounded_confidence,
@@ -26,24 +24,6 @@ from .scope import (
     normalize_measurement_target,
     normalize_observation_scope,
 )
-
-def _repair_error(code: str, message: str, *, status: str = "blocked") -> dict[str, Any]:
-    return {
-        "status": status,
-        "code": _text(code, 80),
-        "location": "measurement_target",
-        "message": _text(message),
-        "next_action": "由主 Agent 根据当前 evidence.refs 决定接受、舍弃或调用同一测量工具做定向补充",
-    }
-
-
-def _repair_limit(value: object) -> int:
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError):
-        parsed = MAX_REPAIR_ATTEMPTS
-    return max(1, min(MAX_REPAIR_ATTEMPTS, parsed))
-
 
 def _source_scope(data: Mapping[str, Any]) -> dict[str, object] | None:
     candidates = (
@@ -124,49 +104,6 @@ def _check(checks: list[dict[str, str]], name: str, status: str, detail: str) ->
     if len(checks) >= MAX_MEASUREMENT_CHECKS:
         return
     checks.append({"name": _text(name, 64), "status": _text(status, 24), "detail": _text(detail)})
-
-
-def _repair_action(
-    *,
-    source_tool: str,
-    source_attachment_id: str | None,
-    source_panel_id: str | None,
-    source_attempt_id: str,
-    issues: Sequence[Mapping[str, Any]],
-    target: dict[str, Any] | None,
-    status: str,
-) -> dict[str, Any] | None:
-    if status not in {"remeasure_required", "partial"}:
-        return None
-    fields: list[str] = []
-    for issue in issues:
-        location = _text(issue.get("location"), 120)
-        if location and location not in fields:
-            fields.append(location)
-        if len(fields) >= MAX_MEASUREMENT_TARGET_FIELDS:
-            break
-    resolved_target = dict(target or {})
-    resolved_target.setdefault("target_id", f"panel-review-{source_attempt_id[:24]}")
-    resolved_target.setdefault("panel_id", source_panel_id)
-    resolved_target.setdefault("parent_attempt_id", source_attempt_id)
-    resolved_target.setdefault("region_kind", "panel")
-    resolved_target.setdefault("fields", fields)
-    if not resolved_target.get("reason"):
-        resolved_target["reason"] = "；".join(
-            _text(issue.get("next_action") or issue.get("message"), 120)
-            for issue in issues[:3]
-        )
-    return {
-        "action": "remeasure",
-        "status": "available",
-        "tool": _text(source_tool, 80),
-        "attachment_id": _text(source_attachment_id, 160) or None,
-        "panel_id": _text(source_panel_id, 160) or None,
-        "parent_attempt_id": source_attempt_id,
-        "fields": fields,
-        "target": normalize_measurement_target(resolved_target) or resolved_target,
-        "next_action": "使用当前 panel 和 parent_attempt_id 发起一次有界的定向重测，然后重新读取 measurement 质量结果",
-    }
 
 
 def audit_measurement(
@@ -278,14 +215,12 @@ def audit_measurement(
     confidence = _confidence_map(chart_data)
     if source_tool not in MEASUREMENT_TOOLS:
         status = "unsupported"
-    elif blocking:
-        status = "remeasure_required"
-    elif partial:
+    elif blocking or partial:
         status = "partial"
     elif not source_run_id:
         status = "provisional"
     else:
-        status = "accepted"
+        status = "complete"
 
     panel = _text(source_panel_id, 160) or None
     attachment = _text(source_attachment_id, 160) or None
@@ -310,15 +245,6 @@ def audit_measurement(
     if target is not None:
         target["panel_id"] = target.get("panel_id") or panel
         target["parent_attempt_id"] = target.get("parent_attempt_id")
-    repair_action = _repair_action(
-        source_tool=source_tool,
-        source_attachment_id=attachment,
-        source_panel_id=panel,
-        source_attempt_id=attempt_id,
-        issues=issues,
-        target=target,
-        status=status,
-    )
     evidence_refs = build_measurement_evidence_refs(chart_data, source_tool=source_tool)
     focus = chart_data.get("focus")
     focus_payload = _json_safe(focus) if isinstance(focus, Mapping) else None
@@ -360,8 +286,6 @@ def audit_measurement(
             "issues": issues[:MAX_MEASUREMENT_ISSUES],
             "warnings": warning_list[:12],
             "blocking": blocking,
-            "focus_suggestion": repair_action,
-            "repair_action": repair_action,
         },
         "evidence": {
             "visual_count": max(0, min(int(image_count), 4)),
@@ -369,13 +293,6 @@ def audit_measurement(
             "refs": evidence_refs,
             "focus": focus_payload,
             "effective_scope": effective_scope,
-        },
-        "decision": {
-            "status": "pending",
-            "selected_refs": [],
-            "discarded_refs": [],
-            "series_map": {},
-            "evidence_basis": None,
         },
         "execution": {
             "status": "completed" if source_tool in MEASUREMENT_TOOLS else "failed",
@@ -426,18 +343,6 @@ def attach_measurement_quality(
             attempt["target"] = target
             attempt["target_fingerprint"] = measurement_target_fingerprint(target, tool=attempt.get("tool"))
             envelope["attempt"] = attempt
-            quality = dict(envelope.get("quality") or {})
-            repair_action = quality.get("repair_action")
-            if isinstance(repair_action, dict):
-                repair_action = dict(repair_action)
-                repair_action["parent_attempt_id"] = parent_attempt_id[:160]
-                repair_target = repair_action.get("target")
-                if isinstance(repair_target, dict):
-                    repair_target = dict(repair_target)
-                    repair_target["parent_attempt_id"] = parent_attempt_id[:160]
-                    repair_action["target"] = repair_target
-                quality["repair_action"] = repair_action
-                envelope["quality"] = quality
     evidence = dict(envelope.get("evidence") or {})
     evidence["captions"] = [_text(item, 160) for item in captions if _text(item, 160)][:4]
     envelope["evidence"] = evidence

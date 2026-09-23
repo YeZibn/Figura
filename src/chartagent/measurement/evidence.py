@@ -29,15 +29,13 @@ MEASUREMENT_TOOLS = frozenset(
 MEASUREMENT_STATUSES = frozenset(
     {
         "provisional",
-        "accepted",
-        "remeasure_required",
+        "complete",
         "partial",
         "unsupported",
         "failed",
     }
 )
 MEASUREMENT_ISSUE_SEVERITIES = frozenset({"blocking", "warning", "info"})
-MAX_MEASUREMENT_ATTEMPTS = 8
 MAX_MEASUREMENT_ISSUES = 16
 MAX_MEASUREMENT_CHECKS = 16
 MAX_MEASUREMENT_TEXT = 240
@@ -48,7 +46,6 @@ MAX_MEASUREMENT_REGION_KIND = 48
 MAX_MEASUREMENT_REFS = 64
 MAX_MEASUREMENT_REF_ID = 24
 MAX_MEASUREMENT_POLYGON_POINTS = 32
-MAX_REPAIR_ATTEMPTS = 3
 _PATH_PATTERN = re.compile(r"(?:/(?:Users|private|tmp|var|home|opt|etc)/|[A-Za-z]:\\)")
 _COMPACT_REF_PATTERN = re.compile(r"^[A-Z][A-Z0-9]{0,15}$")
 _LEGACY_REF_PATTERN = re.compile(

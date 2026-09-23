@@ -11,10 +11,6 @@ from ..measurement import (
     sessions_to_state,
 )
 from ..memory import RunStatus
-from .measurement_flow import (
-    measurement_repair_contexts_from_sessions,
-    merge_measurement_repair_contexts,
-)
 
 
 class AgentInterrupted(RuntimeError):
@@ -110,14 +106,8 @@ def checkpoint_state(
     visual_references: Sequence[dict[str, Any]] = (),
     artifact_records: Sequence[dict[str, Any]] = (),
     measurement_sessions: Mapping[str, MeasurementSession] | None = None,
-    pending_measurement_repairs: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Build the stable JSON-compatible checkpoint projection."""
-    repairs = (
-        merge_measurement_repair_contexts(pending_measurement_repairs)
-        if pending_measurement_repairs is not None
-        else measurement_repair_contexts_from_sessions(measurement_sessions or {})
-    )
     result: dict[str, Any] = {
         "prompt": user_input if isinstance(user_input, str) else "[image attachment turn]",
         "messages": list(messages),
@@ -131,11 +121,6 @@ def checkpoint_state(
         "visualReferences": list(visual_references)[:32],
         "artifactIndex": list(artifact_records)[:48],
         "measurementSessions": sessions_to_state(measurement_sessions or {}),
-        "pendingMeasurementRepairs": repairs,
-        # Keep the old field as a compatibility projection for older
-        # reconnect consumers. Never choose one action when there are
-        # multiple pending panels.
-        "pendingMeasurementRepair": repairs[0] if len(repairs) == 1 else None,
     }
     if pending_answer is not None:
         result["pendingAnswer"] = pending_answer

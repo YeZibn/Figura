@@ -19,7 +19,7 @@ from ..memory import RunStatus
 from ..tools.core import ToolRegistry, dispatch_observation
 from ..tools.core.result import DispatchedObservation
 from .messages import assistant_entry
-from .measurement_flow import repair_target_context
+from .measurement_flow import measurement_target_context
 from .panel_routing import layout_arguments, panel_routing_error
 from .recovery import (
     begin_work_unit,
@@ -172,13 +172,14 @@ def prepare_and_dispatch_tool_call(
     if call.name in MEASUREMENT_TOOLS and isinstance(raw_measurement_target, Mapping):
         for session in reversed(list(measurement_sessions.values())):
             if session.attachment_id == source_attachment_id and session.panel_id in {source_panel_id, None, "__source__"}:
-                parent_attempt_id = session.current_attempt_id
+                current = session.current_attempt()
+                parent_attempt_id = current.attempt_id if current is not None else None
                 break
 
     prepared_target: dict[str, Any] | None = None
-    repair_error: dict[str, Any] | None = None
+    target_error: dict[str, Any] | None = None
     if call.name in MEASUREMENT_TOOLS and raw_measurement_target is not None:
-        prepared_target, repair_error = repair_target_context(
+        prepared_target, target_error = measurement_target_context(
             raw_measurement_target,
             measurement_sessions,
             source_attachment_id=source_attachment_id,
@@ -186,7 +187,7 @@ def prepare_and_dispatch_tool_call(
             source_tool=call.name,
             parent_attempt_id=parent_attempt_id,
         )
-        if repair_error is None and prepared_target is not None and isinstance(call_arguments, dict):
+        if target_error is None and prepared_target is not None and isinstance(call_arguments, dict):
             call_arguments["measurement_target"] = prepared_target
 
     dispatch_arguments = layout_arguments(
@@ -197,12 +198,12 @@ def prepare_and_dispatch_tool_call(
         layout_contexts,
     )
     routing_error = panel_routing_error(call.name, dispatch_arguments, layout_contexts)
-    if repair_error is not None:
+    if target_error is not None:
         observation = DispatchedObservation(
             json.dumps(
                 {
-                    "error": "measurement repair rejected",
-                    "measurement_repair": repair_error,
+                    "error": "measurement target rejected",
+                    "measurement_target_error": target_error,
                 },
                 ensure_ascii=False,
             )

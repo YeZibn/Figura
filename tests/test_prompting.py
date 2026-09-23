@@ -63,13 +63,10 @@ def test_four_layers_are_explicit_and_dynamic_values_do_not_enter_static_layer()
                 "status": "accepted",
                 "panel_ids": ["panel-1"],
                 "warnings": [],
-                "measurement_status": "remeasure_required",
+                "measurement_status": "partial",
                 "measurement_reference": {"session_id": "ms_1", "attempt_id": "matt_1", "attachment_id": "att_1", "panel_id": "panel-1"},
                 "measurement_issues": [{"code": "baseline_uncertain", "location": "baseline", "severity": "blocking", "message": "基准线不确定", "next_action": "重新测量"}],
                 "measurement_evidence_refs": [{"ref": "B1", "kind": "bar", "bbox_px": [10, 20, 30, 80]}],
-                "measurement_selected_refs": [],
-                "measurement_discarded_refs": ["L1"],
-                "measurement_decision_status": "pending",
             }
         ],
         runtime_state={
@@ -78,14 +75,15 @@ def test_four_layers_are_explicit_and_dynamic_values_do_not_enter_static_layer()
             "active_source": ["att-1"],
             "pending_action": "使用 panel-1 进行局部测量",
             "measurement_evidence": [{
-                "session_id": "ms_1",
-                "attempt_id": "matt_1",
+                "measurement_ref": {"session_id": "ms_1", "attempt_id": "matt_1", "attachment_id": "att_1", "panel_id": "panel-1"},
                 "attachment_id": "att_1",
                 "panel_id": "panel-1",
-                "status": "accepted",
-                "refs": [{"ref": "B1", "kind": "bar", "bbox_px": [10, 20, 30, 80]}],
-                "decision_status": "pending",
-                "focus_suggestion": {"tool": "measure_bars", "fields": ["baseline"], "mode": "include"},
+                "tool": "measure_bars",
+                "status": "partial",
+                "scope": {"bbox_px": [0, 0, 100, 100]},
+                "evidence_refs": [{"ref": "B1", "kind": "bar", "bbox_px": [10, 20, 30, 80]}],
+                "series_metadata": [],
+                "issues": [{"code": "baseline_uncertain", "message": "基准线不确定"}],
             }],
             "generation_context": {
                 "version": "context-v1",
@@ -116,11 +114,13 @@ def test_four_layers_are_explicit_and_dynamic_values_do_not_enter_static_layer()
     assert "panel-1" not in context["static"]
     assert "panel-1" in context["runtime"]
     assert "observation:call-1" in context["artifacts"]
-    assert "remeasure_required" in context["artifacts"]
+    assert '"measurement_status":"partial"' in context["artifacts"]
     assert "baseline_uncertain" in context["artifacts"]
     assert "measurement_evidence_refs" in context["artifacts"]
     assert "B1" in context["runtime"]
-    assert "focus_suggestion" in context["runtime"]
+    assert '"measurement_ref"' in context["runtime"]
+    assert "focus_suggestion" not in context["runtime"]
+    assert "measurement_decision_status" not in context["artifacts"]
     assert '"mode":"transform"' in context["runtime"]
     assert '"repairKind":"evidence_needed"' in context["runtime"]
     assert '"repairPhase":"evidence"' in context["runtime"]
@@ -196,12 +196,12 @@ def test_measurement_context_exposes_observation_facts_without_decision_state_ma
     decision = build_decision_context(
         run_id="run-measurement",
         measurement_evidence=[{
-            "session_id": "session-1",
-            "attempt_id": "attempt-1",
+            "measurement_ref": {"session_id": "session-1", "attempt_id": "attempt-1", "attachment_id": "att-1", "panel_id": "panel-left"},
             "attachment_id": "att-1",
             "panel_id": "panel-left",
-            "decision_status": "pending",
-            "focus": {"requested": True, "applied": True, "status": "pending"},
+            "tool": "measure_bars",
+            "status": "partial",
+            "evidence_refs": [{"ref": "B1", "kind": "bar"}],
         }],
         retry_budget=2,
     )
@@ -210,11 +210,12 @@ def test_measurement_context_exposes_observation_facts_without_decision_state_ma
     )
 
     assert '"unit_id":"measurement:attempt-1"' in runtime
-    assert '"status":"available"' in runtime
+    assert '"status":"partial"' in runtime
+    assert '"ref":"B1"' in runtime
     assert '"allowed_actions"' not in runtime
     assert '"blocked_actions"' not in runtime
     assert '"required"' not in runtime
-    assert '"focus applied"' not in runtime.lower()
+    assert '"selected_refs"' not in runtime
 
 
 def test_openai_and_mcp_projections_share_the_same_tool_contract():

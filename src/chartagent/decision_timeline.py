@@ -28,21 +28,6 @@ class TimelineProtocolError(ValueError):
 
     code = "invalid_timeline_event"
 
-_MEASUREMENT_KINDS = frozenset(
-    {
-        "measurement_observed",
-        "measurement_repair_required",
-        "measurement_repair_rejected",
-        "measurement_repair_exhausted",
-        "measurement_decision_required",
-        "measurement_focus_requested",
-        "measurement_focus_applied",
-        "measurement_focus_failed",
-        "measurement_evidence_selected",
-        "measurement_evidence_discarded",
-        "measurement_evidence_used",
-    }
-)
 _REVIEW_KINDS = frozenset(
     {
         "review_started",
@@ -56,7 +41,6 @@ _PUBLICATION_KINDS = frozenset({"generated_chart_published", "generated_chart_re
 
 _STRICT_KINDS = frozenset(
     {
-        *_MEASUREMENT_KINDS,
         *_REVIEW_KINDS,
         *_PUBLICATION_KINDS,
         "tool_call",

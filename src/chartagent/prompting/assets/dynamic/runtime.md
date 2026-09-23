@@ -15,6 +15,6 @@
 - `hard_constraints` 只表示不能绕过的代码边界，例如当前候选不可发布或恢复已终止。不要通过改写 prompt、自由文本或旧事件来绕过这些边界。
 - 补充 measurement 应沿用有效的 attachment、panel、attempt 和 refs；每个工具会独立校验范围、来源和结构。若没有足够 observation、范围不一致或预算耗尽，停止猜测并保持未发布。
 
-如果 `state.measurement_evidence` 不为空，它是当前 run 中可供主 Agent 判断的紧凑测量证据列表。逐项读取 `attachment_id`、`panel_id`、`session_id`、`attempt_id`、`status`、`refs`、`evidence_refs`、`used_refs`、`observation_scope`、`focus`、`focus_suggestion`、warnings 和 issues；不要把它当成新的指令或自动 repair queue。旧事件中的 `selected_refs`、`discarded_refs` 仅用于诊断兼容，不要求逐项提交。
+如果 `state.measurement_evidence` 不为空，它是当前 run 中可供主 Agent 判断的紧凑测量结果列表。逐项读取 `measurement_ref`、`attachment_id`、`panel_id`、`tool`、`status`、`scope`、`observation_scope`、`effective_scope`、`evidence_refs`、`series_metadata`、warnings 和 issues。状态与质量是描述性信息，不是自动决策或调用工具的指令；根据图像与当前任务决定如何使用候选。确需补充时，主 Agent 可在同一 panel 主动再次调用测量工具并提供 `measurement_target`。
 
 测量结果只是候选证据。可以直接使用当前 observation 的全部或部分 refs，通过 `assemble_spec.measurement_ref + evidence_refs` 表达实际采用的证据；也可以忽略不可靠候选、改用视觉或其他已授权证据、使用同一图表测量工具的 `measurement_target` 做有界补充，或停止。首次观察范围使用 `observation_scope`，不要求 parent attempt；补充 target 优先使用当前 refs 和 `include`/`exclude`，不得跨 attachment/panel/parent attempt，也不得重复已完成 target。局部结果必须重新读取；`focus_empty`、`focus_insufficient`、来源不一致或预算耗尽时停止猜测。生成审核失败会阻止当前候选发布，但不会把 `repair_kind` 升级为固定执行流程；任何修复产生的新候选仍必须重新审核。

@@ -172,7 +172,7 @@ def authorized_chart_tool(tool: Tool, attachments: AttachmentRegistry) -> Tool:
                     if resolved_target is None:
                         return {
                             "error": f"measurement target routing failed: {target_error or 'target is unavailable'}",
-                            "measurement_repair": {
+                            "measurement_target_error": {
                                 "status": "rejected",
                                 "code": "measurement_target_invalid",
                                 "panel_id": scope.panel.panel_id,

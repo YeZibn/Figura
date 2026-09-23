@@ -141,6 +141,6 @@ def test_panel_scoped_targeted_measurement_preserves_source_mapping(tmp_path):
             {"attachment_id": item.id, "panel_id": panel_id, "measurement_target": invalid},
         )
         assert "measurement target routing failed" in rejected["error"]
-        assert rejected["measurement_repair"]["code"] == "measurement_target_invalid"
+        assert rejected["measurement_target_error"]["code"] == "measurement_target_invalid"
     finally:
         memory.close()

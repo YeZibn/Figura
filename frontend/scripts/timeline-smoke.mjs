@@ -28,8 +28,8 @@ const events = [
   event('run-runtime', 1, 'run_started', { process_id: 'run' }),
   event('run-runtime', 2, 'model_started', { turn: 1 }),
   event('run-runtime', 3, 'model_completed', { turn: 1, status: 'ok' }),
-  event('run-runtime', 4, 'tool_call', { unit_id: 'measurement:call-1', unit_type: 'measurement', phase: 'action', actor: 'tool', role: 'action', transition_id: 'measurement:call-1:started', operation_id: 'measure:1', call_id: 'call-1', tool_name: 'measure_bars', state: 'running' }),
-  event('run-runtime', 5, 'tool_result', { unit_id: 'measurement:call-1', unit_type: 'measurement', phase: 'action', actor: 'tool', role: 'action', transition_id: 'measurement:call-1:completed', operation_id: 'measure:1', call_id: 'call-1', tool_name: 'measure_bars', status: 'success', result: { bars: 3 } }),
+  event('run-runtime', 4, 'tool_call', { unit_id: 'measurement:call-1', unit_type: 'measurement', phase: 'action', actor: 'tool', role: 'action', transition_id: 'measurement:call-1:started', operation_id: 'measure:1', call_id: 'call-1', tool_name: 'measure_bars', tool_label: '柱体测量', state: 'running', arguments: { panel_id: 'panel-1' } }),
+  event('run-runtime', 5, 'tool_result', { unit_id: 'measurement:call-1', unit_type: 'measurement', phase: 'action', actor: 'tool', role: 'action', transition_id: 'measurement:call-1:completed', operation_id: 'measure:1', call_id: 'call-1', tool_name: 'measure_bars', tool_label: '柱体测量', status: 'success', result: { measurement: { status: 'partial', reference: { session_id: 'session-1', attempt_id: 'attempt-1' }, evidence: { refs: [{ ref: 'B1', kind: 'bar' }] }, quality: { warnings: ['部分柱体缺少标签'] } } } }),
   event('run-runtime', 6, 'run_failed', { process_id: 'run', failure_category: 'provider_balance', failure_code: 'provider_balance_required', outcome_known: true }),
 ]
 
@@ -38,6 +38,9 @@ assert.deepEqual(units.map((unit) => unit.id), ['measurement:call-1', 'event:run
 assert.equal(units[0].status, 'completed')
 assert.equal(units[1].status, 'failed')
 assert.equal(units[0].result?.sequence, 5)
+assert.equal(units[0].label, '柱体测量')
+assert.deepEqual(units[0].call?.payload.arguments, { panel_id: 'panel-1' })
+assert.equal(units[0].result?.payload.result.measurement.status, 'partial')
 
 const replay = timeline.mergeEvents(events.slice(0, 3), [events[2], events[3], events[1]])
 assert.deepEqual(replay.map((item) => item.sequence), [1, 2, 3, 4])
@@ -59,31 +62,18 @@ assert.equal(visible[3].failure.category, 'provider_balance')
 assert.ok(visible.every((item) => !['process', 'legacy', 'unknown', 'tool'].includes(item.itemType)))
 assert.ok(!visible.some((item) => item.label === '模型轮次开始' || item.label === '模型轮次完成' || item.label === '操作结果已保存'))
 
+const targetedCall = [
+  event('targeted-run', 1, 'tool_call', { unit_id: 'measurement:targeted-1', unit_type: 'measurement', phase: 'action', actor: 'tool', role: 'action', transition_id: 'measurement:targeted-1:started', call_id: 'targeted-1', tool_name: 'measure_bars', tool_label: '柱体测量', state: 'running', arguments: { measurement_target: { refs: ['B1'], fields: ['baseline'] } } }),
+  event('targeted-run', 2, 'tool_result', { unit_id: 'measurement:targeted-1', unit_type: 'measurement', phase: 'action', actor: 'tool', role: 'action', transition_id: 'measurement:targeted-1:completed', call_id: 'targeted-1', tool_name: 'measure_bars', status: 'success', result: { measurement: { status: 'complete', reference: { attempt_id: 'attempt-2' } } } }),
+  event('targeted-run', 3, 'tool_call', { unit_id: 'measurement:targeted-2', unit_type: 'measurement', phase: 'action', actor: 'tool', role: 'action', transition_id: 'measurement:targeted-2:started', call_id: 'targeted-2', tool_name: 'measure_bars', tool_label: '柱体测量', state: 'running', arguments: { measurement_target: { refs: ['B2'], fields: ['baseline'] } } }),
+  event('targeted-run', 4, 'tool_result', { unit_id: 'measurement:targeted-2', unit_type: 'measurement', phase: 'action', actor: 'tool', role: 'action', transition_id: 'measurement:targeted-2:completed', call_id: 'targeted-2', tool_name: 'measure_bars', status: 'success', result: { measurement: { status: 'partial', reference: { attempt_id: 'attempt-3' } } } }),
+]
+const targetedVisible = timeline.projectUserTimeline(targetedCall)
+assert.equal(targetedVisible.length, 2)
+assert.deepEqual(targetedVisible.map((item) => item.call?.payload.call_id), ['targeted-1', 'targeted-2'])
+
 const noisyEvents = [
   ...fixtureEvents,
-  event('test5-human-timeline', 18, 'measurement_decision_required', {
-    unit_id: 'measurement:test5',
-    unit_type: 'measurement',
-    phase: 'decide',
-    actor: 'agent',
-    role: 'decision',
-    transition_id: 'measurement:test5:decision_required',
-    state: 'pending',
-    required: true,
-    diagnostic_only: true,
-  }),
-  event('test5-human-timeline', 19, 'measurement_evidence_used', {
-    unit_id: 'measurement:test5',
-    unit_type: 'measurement',
-    phase: 'decide',
-    actor: 'agent',
-    role: 'decision',
-    transition_id: 'measurement:test5:evidence_used',
-    state: 'used',
-    panel_id: 'panel-left',
-    attempt_id: 'attempt-test5',
-    evidence_refs: ['B1', 'B2'],
-  }),
   event('test5-human-timeline', 20, 'review_subcheck', {
     unit_id: 'review:test5',
     unit_type: 'review',

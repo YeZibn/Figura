@@ -7,10 +7,10 @@ import pytest
 from chartagent.measurement import (
     MeasurementSession,
     attach_measurement_quality,
-    measurement_gate,
     register_measurement,
     sessions_from_state,
     sessions_to_state,
+    validate_measurement_evidence,
 )
 from chartagent.tools.core import GeneratedImage, Tool, ToolRegistry, ToolResult, dispatch_observation
 from chartagent.tools.chart.specification import assemble_spec
@@ -76,11 +76,11 @@ def test_all_chart_sensors_share_the_same_quality_envelope(tool, data):
     )
 
     measurement = result["measurement"]
-    assert measurement["status"] == "accepted"
+    assert measurement["status"] == "complete"
     assert set(measurement) >= {"status", "reference", "attempt", "source", "quality", "evidence"}
 
 
-def test_measurement_quality_acceptance_and_lineage_round_trip():
+def test_measurement_quality_provenance_and_lineage_round_trip():
     data = attach_measurement_quality(
         _bar_data(),
         source_tool="measure_bars",
@@ -91,21 +91,21 @@ def test_measurement_quality_acceptance_and_lineage_round_trip():
         captions=["柱状图测量叠加图"],
     )
 
-    assert data["measurement"]["status"] == "accepted"
+    assert data["measurement"]["status"] == "complete"
     assert data["measurement"]["quality"]["blocking"] is False
     sessions: dict[str, MeasurementSession] = {}
     session = register_measurement(sessions, data)
     assert session is not None
-    assert session.accepted_attempt() is not None
+    assert session.current_attempt() is not None
 
     restored = sessions_from_state(sessions_to_state(sessions))
     restored_session = restored[session.session_id]
     reference = data["measurement"]["reference"]
-    accepted, error = measurement_gate(reference, restored)
+    provenance, error = validate_measurement_evidence(reference, restored)
 
     assert error is None
-    assert accepted is not None
-    assert accepted["attempt_id"] == restored_session.current_attempt_id
+    assert provenance is not None
+    assert provenance["attempt_id"] == restored_session.current_attempt().attempt_id
 
 
 def test_measurement_result_exposes_the_effective_scope_used_by_the_sensor():
@@ -144,17 +144,17 @@ def test_measurement_session_deduplicates_attempt_and_rejects_cross_panel():
     session = register_measurement(sessions, data)
     assert session is not None
     register_measurement(sessions, data)
-    assert len(session.attempts) == 1
+    assert session.current_attempt().attempt_id == data["measurement"]["reference"]["attempt_id"]
 
     reference = dict(data["measurement"]["reference"])
     reference["panel_id"] = "panel_other"
-    accepted, error = measurement_gate(reference, sessions, expected_panel_id="panel_other")
-    assert accepted is None
+    provenance, error = validate_measurement_evidence(reference, sessions, expected_panel_id="panel_other")
+    assert provenance is None
     assert error is not None
     assert error["code"] in {"measurement_panel_mismatch", "measurement_lineage_mismatch"}
 
 
-def test_blocking_warning_requires_remeasurement():
+def test_warning_is_diagnostic_and_partial_evidence_remains_a_candidate():
     data = attach_measurement_quality(
         _bar_data(),
         source_tool="measure_bars",
@@ -165,14 +165,25 @@ def test_blocking_warning_requires_remeasurement():
         source_run_id="run_1",
     )
 
-    assert data["measurement"]["status"] == "remeasure_required"
+    assert data["measurement"]["status"] == "partial"
     assert any(
         issue["code"] == "baseline_uncertain"
         for issue in data["measurement"]["quality"]["issues"]
     )
+    sessions: dict[str, MeasurementSession] = {}
+    register_measurement(sessions, data)
+    candidate, error = validate_measurement_evidence(
+        data["measurement"]["reference"],
+        sessions,
+        evidence_refs=["B1"],
+    )
+    assert error is None
+    assert candidate is not None
+    assert candidate["status"] == "candidate"
+    assert candidate["measurement_status"] == "partial"
 
 
-def test_measurement_target_is_bounded_and_round_trips_with_repair_action():
+def test_measurement_target_is_bounded_and_round_trips_with_current_attempt():
     base = attach_measurement_quality(
         _bar_data(),
         source_tool="measure_bars",
@@ -185,11 +196,6 @@ def test_measurement_target_is_bounded_and_round_trips_with_repair_action():
     sessions: dict[str, MeasurementSession] = {}
     session = register_measurement(sessions, base)
     assert session is not None
-    action = base["measurement"]["quality"]["repair_action"]
-    assert action["action"] == "remeasure"
-    assert action["target"]["region_kind"] == "panel"
-    assert action["target"]["parent_attempt_id"] == base["measurement"]["reference"]["attempt_id"]
-
     target = {
         "target_id": "baseline-focus",
         "panel_id": "panel_bars",
@@ -200,9 +206,8 @@ def test_measurement_target_is_bounded_and_round_trips_with_repair_action():
         "source_image_size": [320, 240],
         "reason": "复查柱体底边与零基线",
     }
-    normalized, error = session.validate_repair_target(
+    normalized, error = session.validate_measurement_target(
         target,
-        tool="measure_bars",
         parent_attempt_id=base["measurement"]["reference"]["attempt_id"],
     )
     assert error is None
@@ -219,7 +224,8 @@ def test_measurement_target_is_bounded_and_round_trips_with_repair_action():
     )
     register_measurement(sessions, child)
     restored = sessions_from_state(sessions_to_state(sessions))
-    restored_attempt = restored[session.session_id].attempts[-1]
+    restored_attempt = restored[session.session_id].current_attempt()
+    assert restored_attempt is not None
     assert restored_attempt.parent_attempt_id == base["measurement"]["reference"]["attempt_id"]
     assert restored_attempt.target["bbox_source_px"] == [20.0, 180.0, 260.0, 24.0]
     assert restored_attempt.target_fingerprint
@@ -255,15 +261,14 @@ def test_measurement_target_refs_resolve_to_bounded_focus_regions_and_persist():
     sessions: dict[str, MeasurementSession] = {}
     session = register_measurement(sessions, data)
     assert session is not None
-    normalized, error = session.validate_repair_target(
+    normalized, error = session.validate_measurement_target(
         {
             "refs": ["B1", "L1"],
             "mode": "exclude",
             "fields": ["bars.measure", "baseline"],
             "reason": "排除疑似图例并复查柱体",
         },
-        tool="measure_bars",
-        parent_attempt_id=session.current_attempt_id,
+        parent_attempt_id=session.current_attempt().attempt_id,
     )
     assert error is None
     assert normalized is not None
@@ -275,13 +280,7 @@ def test_measurement_target_refs_resolve_to_bounded_focus_regions_and_persist():
     restored = sessions_from_state(sessions_to_state(sessions))
     restored_session = restored[session.session_id]
     assert restored_session.evidence_refs()[1]["ref"] == "B1"
-    assert restored_session.record_decision(
-        attempt_id=session.current_attempt_id,
-        selected_refs=["S1", "B1"],
-        discarded_refs=["L1"],
-    )
-    assert restored_session.selected_refs == ("S1", "B1")
-    assert restored_session.discarded_refs == ("L1",)
+    assert restored_session.current_attempt().attempt_id == session.current_attempt().attempt_id
 
 
 def test_measurement_target_refs_reject_unknown_or_unbounded_candidates():
@@ -296,24 +295,22 @@ def test_measurement_target_refs_reject_unknown_or_unbounded_candidates():
     sessions: dict[str, MeasurementSession] = {}
     session = register_measurement(sessions, data)
     assert session is not None
-    _, unknown = session.validate_repair_target(
+    _, unknown = session.validate_measurement_target(
         {"refs": ["B1"], "mode": "include"},
-        tool="extract_line_series",
-        parent_attempt_id=session.current_attempt_id,
+        parent_attempt_id=session.current_attempt().attempt_id,
     )
     assert unknown is not None
     assert unknown["code"] == "measurement_target_ref_unknown"
 
-    _, unbounded = session.validate_repair_target(
+    _, unbounded = session.validate_measurement_target(
         {"refs": ["S1"], "mode": "include"},
-        tool="extract_line_series",
-        parent_attempt_id=session.current_attempt_id,
+        parent_attempt_id=session.current_attempt().attempt_id,
     )
     assert unbounded is not None
     assert unbounded["code"] == "measurement_target_ref_unbounded"
 
 
-def test_assemble_uses_actual_evidence_refs_without_requiring_measurement_decision():
+def test_assemble_uses_actual_evidence_refs_and_rejects_unknown_refs():
     from chartagent.tools.chart.specification import assemble_spec
 
     data = attach_measurement_quality(
@@ -354,36 +351,21 @@ def test_assemble_uses_actual_evidence_refs_without_requiring_measurement_decisi
     )
     assert "error" not in assembled
     assert assembled["provenance"]["evidence_refs"] == ["B1"]
-    assert "_measurement_decision" not in assembled
 
-    legacy = assemble_spec(
-        chart_type="bar",
-        points=[{"category": "A", "value": 1, "series": "Q1"}],
-        x_label="类别",
-        y_label="数值",
-        measurement_ref=reference,
-        measurement_decision={
-            "selected_refs": ["B1"],
-            "discarded_refs": ["S1"],
-        },
-        _measurement_context=sessions,
-    )
-    assert "error" not in legacy
-    assert legacy["_measurement_decision"]["selected_refs"] == ["B1"]
-    assert legacy["provenance"]["selected_refs"] == ["B1"]
-
-    conflict = assemble_spec(
+    invalid_ref = assemble_spec(
         chart_type="bar",
         points=[{"category": "A", "value": 1}],
         x_label="类别",
         y_label="数值",
         measurement_ref=reference,
-        evidence_refs=["B1"],
-        measurement_decision={"selected_refs": ["S1"]},
+        evidence_refs=["UNKNOWN"],
         _measurement_context=sessions,
     )
-    assert conflict["issues"][0]["location"].endswith("evidence_refs")
-    assert "conflicts" in conflict["issues"][0]["message"]
+    assert invalid_ref["error"] == "measurement evidence validation failed"
+    assert invalid_ref["measurement_validation"]["code"] == "measurement_evidence_ref_unknown"
+    from chartagent.tools.chart.specification import ASSEMBLE_SPEC
+
+    assert "measurement_decision" not in ASSEMBLE_SPEC.parameters["properties"]
 
     invalid_label = assemble_spec(
         chart_type="bar",
@@ -394,7 +376,7 @@ def test_assemble_uses_actual_evidence_refs_without_requiring_measurement_decisi
     assert invalid_label["issues"][0]["location"] == "points[0].series"
 
 
-def test_measurement_target_rejects_cross_panel_duplicate_and_budget_exhaustion():
+def test_measurement_target_rejects_cross_panel_and_stale_parent():
     base = attach_measurement_quality(
         _bar_data(),
         source_tool="measure_bars",
@@ -415,12 +397,12 @@ def test_measurement_target_rejects_cross_panel_duplicate_and_budget_exhaustion(
         "fields": ["bars"],
         "bbox_source_px": [10, 10, 100, 100],
     }
-    _, error = session.validate_repair_target(target, tool="measure_bars", parent_attempt_id=current)
+    _, error = session.validate_measurement_target(target, parent_attempt_id=current)
     assert error is not None
     assert error["code"] == "measurement_panel_mismatch"
 
     target["panel_id"] = "panel_bars"
-    normalized, error = session.validate_repair_target(target, tool="measure_bars", parent_attempt_id=current)
+    normalized, error = session.validate_measurement_target(target, parent_attempt_id=current)
     assert error is None and normalized is not None
     child = attach_measurement_quality(
         _bar_data(),
@@ -432,55 +414,14 @@ def test_measurement_target_rejects_cross_panel_duplicate_and_budget_exhaustion(
         parent_attempt_id=current,
         measurement_target=normalized,
     )
-    register_measurement(sessions, child)
-    _, duplicate_error = session.validate_repair_target(
-        {**target, "target_id": "same-geometry", "parent_attempt_id": session.current_attempt_id},
-        tool="measure_bars",
-        parent_attempt_id=session.current_attempt_id,
+    assert register_measurement(sessions, child) is session
+    stale, stale_error = session.validate_measurement_target(
+        {**target, "panel_id": "panel_bars"},
+        parent_attempt_id=current,
     )
-    assert duplicate_error is not None
-    assert duplicate_error["code"] == "measurement_target_duplicate"
-
-    for index in range(2, 4):
-        parent = session.current_attempt_id
-        candidate = {
-            "target_id": f"focus-{index}",
-            "panel_id": "panel_bars",
-            "parent_attempt_id": parent,
-            "region_kind": "bars",
-            "fields": [f"bars[{index}]"],
-            "bbox_source_px": [10 + index, 10, 100, 100],
-        }
-        normalized, error = session.validate_repair_target(candidate, tool="measure_bars", parent_attempt_id=parent)
-        assert error is None and normalized is not None
-        register_measurement(
-            sessions,
-            attach_measurement_quality(
-                _bar_data(),
-                source_tool="measure_bars",
-                image_count=1,
-                source_attachment_id="att_chart",
-                source_panel_id="panel_bars",
-                source_run_id="run_1",
-                parent_attempt_id=parent,
-                measurement_target=normalized,
-            ),
-        )
-    assert session.repair_budget_remaining == 0
-    _, exhausted = session.validate_repair_target(
-        {
-            "target_id": "focus-4",
-            "panel_id": "panel_bars",
-            "parent_attempt_id": session.current_attempt_id,
-            "region_kind": "bars",
-            "fields": ["bars[4]"],
-            "bbox_source_px": [20, 20, 100, 100],
-        },
-        tool="measure_bars",
-        parent_attempt_id=session.current_attempt_id,
-    )
-    assert exhausted is not None
-    assert exhausted["code"] == "measurement_repair_budget_exhausted"
+    assert stale is None
+    assert stale_error is not None
+    assert stale_error["code"] == "measurement_parent_mismatch"
 
 
 def test_dispatch_adds_measurement_contract_with_server_context():
@@ -511,13 +452,13 @@ def test_dispatch_adds_measurement_contract_with_server_context():
     payload = json.loads(observation.content)
     measurement = payload["data"]["measurement"]
 
-    assert measurement["status"] == "accepted"
+    assert measurement["status"] == "complete"
     assert measurement["reference"]["attachment_id"] == "att_chart"
     assert measurement["reference"]["panel_id"] == "panel_bars"
     assert measurement["evidence"]["visual_count"] == 1
 
 
-def test_assemble_spec_validates_lineage_without_requiring_attempt_level_acceptance():
+def test_assemble_spec_validates_lineage_and_preserves_quality_diagnostics():
     data = attach_measurement_quality(
         _bar_data(),
         source_tool="measure_bars",
@@ -540,8 +481,8 @@ def test_assemble_spec_validates_lineage_without_requiring_attempt_level_accepta
     )
 
     assert "error" not in result
-    assert result["provenance"]["status"] == "accepted"
     assert result["provenance"]["attempt_id"] == reference["attempt_id"]
+    assert result["provenance"]["quality"]["blocking"] is False
 
     blocked = assemble_spec(
         chart_type="bar",
@@ -551,8 +492,8 @@ def test_assemble_spec_validates_lineage_without_requiring_attempt_level_accepta
         measurement_ref={**reference, "attempt_id": "matt_missing"},
         _measurement_context=sessions,
     )
-    assert blocked["error"] == "measurement evidence gate failed"
-    assert blocked["measurement_gate"]["next_action"]
+    assert blocked["error"] == "measurement evidence validation failed"
+    assert blocked["measurement_validation"]["next_action"]
 
     failed = attach_measurement_quality(
         _bar_data(),
@@ -571,13 +512,15 @@ def test_assemble_spec_validates_lineage_without_requiring_attempt_level_accepta
         x_label="类别",
         y_label="数值",
         measurement_ref=failed["measurement"]["reference"],
+        evidence_refs=["B1"],
         _measurement_context=failed_sessions,
     )
     assert "error" not in assembled_with_warning
-    assert assembled_with_warning["provenance"]["status"] in {"selected", "accepted"}
+    assert assembled_with_warning["provenance"]["quality"]["warnings"]
+    assert assembled_with_warning["provenance"]["evidence_refs"] == ["B1"]
 
 
-def test_agent_passes_run_owned_measurement_session_to_assemble_gate():
+def test_agent_passes_run_owned_measurement_session_to_assembly():
     class Client:
         def __init__(self):
             self.calls = 0
@@ -679,7 +622,6 @@ def test_agent_uses_main_decision_for_a_bounded_targeted_attempt_without_hidden_
     class Client:
         def __init__(self):
             self.calls = 0
-            self.legacy_repair_message_seen = False
             self.evidence_context_seen = False
 
         def chat(self, messages, **kwargs):
@@ -727,8 +669,7 @@ def test_agent_uses_main_decision_for_a_bounded_targeted_attempt_without_hidden_
             if self.calls == 3:
                 tool_message = next(item for item in reversed(messages) if item.get("role") == "tool")
                 measurement = json.loads(tool_message["content"])["data"]["measurement"]
-                evidence_refs = measurement["evidence"]["refs"]
-                selected_refs = [item["ref"] for item in evidence_refs if item.get("ref") != "L1"]
+                evidence_refs = [item["ref"] for item in measurement["evidence"]["refs"] if item.get("ref") != "L1"]
                 return NormalizedResult(
                     tool_calls=[
                         ToolCall(
@@ -741,12 +682,7 @@ def test_agent_uses_main_decision_for_a_bounded_targeted_attempt_without_hidden_
                                     "y_label": "数值",
                                     "points": [{"category": "A", "value": 1}],
                                     "measurement_ref": measurement["reference"],
-                                    "measurement_decision": {
-                                        "session_id": measurement["reference"]["session_id"],
-                                        "attempt_id": measurement["reference"]["attempt_id"],
-                                        "selected_refs": selected_refs,
-                                        "discarded_refs": ["L1"],
-                                    },
+                                        "evidence_refs": evidence_refs,
                                 },
                                 ensure_ascii=False,
                             ),
@@ -754,10 +690,6 @@ def test_agent_uses_main_decision_for_a_bounded_targeted_attempt_without_hidden_
                     ],
                     finish_reason="tool_calls",
                 )
-            self.legacy_repair_message_seen = any(
-                item.get("role") == "user" and "质量门禁返回了测量修复上下文" in str(item.get("content"))
-                for item in messages
-            )
             self.evidence_context_seen = any(
                 item.get("role") == "system" and "measurement_evidence" in str(item.get("content"))
                 for item in messages
@@ -797,15 +729,10 @@ def test_agent_uses_main_decision_for_a_bounded_targeted_attempt_without_hidden_
     assert calls[1]["measurement_target"]["parent_attempt_id"]
     assert calls[1]["measurement_target"]["mode"] == "exclude"
     assert calls[1]["measurement_target"]["resolved_refs"] == ["L1"]
-    assert client.legacy_repair_message_seen is False
     assert client.evidence_context_seen is True
-    assert any(event.kind == "measurement_decision_required" for event in events)
-    assert any(event.kind == "measurement_focus_requested" for event in events)
-    assert any(event.kind == "measurement_evidence_selected" for event in events)
-    focus_request = next(event for event in events if event.kind == "measurement_focus_requested")
-    focused_observation = next(event for event in events if event.kind == "measurement_observed" and event.payload.get("unit_id") == focus_request.payload.get("unit_id"))
-    assert focused_observation.payload["unit_id"] == focus_request.payload["unit_id"]
-    assert focused_observation.payload["phase"] == "observe"
+    assert sum(event.kind == "tool_call" for event in events) == 3
+    assert sum(event.kind == "tool_result" for event in events) == 3
+    assert all(event.kind not in {"measurement_decision_required", "measurement_observed", "measurement_evidence_selected"} for event in events)
     assert all("/Users/" not in event.to_json() for event in events)
 
 
@@ -831,74 +758,14 @@ def test_measurement_sessions_are_included_in_checkpoint_recovery_state():
     )
 
     restored = sessions_from_state(state["measurementSessions"])
-    assert restored[data["measurement"]["reference"]["session_id"]].accepted_attempt() is not None
+    restored_attempt = restored[data["measurement"]["reference"]["session_id"]].current_attempt()
+    assert restored_attempt is not None
+    assert restored_attempt.attempt_id == data["measurement"]["reference"]["attempt_id"]
+    assert "pendingMeasurementRepair" not in state
+    assert "pendingMeasurementRepairs" not in state
 
 
-def test_checkpoint_marks_exhausted_measurement_repair_as_terminal():
-    sessions: dict[str, MeasurementSession] = {}
-    initial = attach_measurement_quality(
-        _bar_data(),
-        source_tool="measure_bars",
-        warnings=["baseline fit is uncertain; measurements may be partial"],
-        image_count=1,
-        source_attachment_id="att_chart",
-        source_panel_id="panel_bars",
-        source_run_id="run_1",
-    )
-    session = register_measurement(sessions, initial)
-    assert session is not None
-
-    for index in range(1, session.max_repair_attempts + 1):
-        parent = session.current_attempt_id
-        target = {
-            "target_id": f"baseline-{index}",
-            "panel_id": "panel_bars",
-            "parent_attempt_id": parent,
-            "region_kind": "baseline",
-            "fields": ["baseline"],
-            "bbox_source_px": [20 + index, 180, 260, 24],
-            "source_image_size": [320, 240],
-        }
-        normalized, error = session.validate_repair_target(
-            target,
-            tool="measure_bars",
-            parent_attempt_id=parent,
-        )
-        assert error is None and normalized is not None
-        register_measurement(
-            sessions,
-            attach_measurement_quality(
-                _bar_data(),
-                source_tool="measure_bars",
-                warnings=["baseline fit is uncertain; measurements may be partial"],
-                image_count=1,
-                source_attachment_id="att_chart",
-                source_panel_id="panel_bars",
-                source_run_id="run_1",
-                parent_attempt_id=parent,
-                measurement_target=normalized,
-            ),
-        )
-
-    assert session.repair_budget_remaining == 0
-    action = session.pending_repair_action()
-    assert action is not None
-    assert action["status"] == "exhausted"
-    assert action["budget_remaining"] == 0
-
-    state = Agent._checkpoint_state(
-        "继续修复",
-        [],
-        {},
-        ["att_chart"],
-        4,
-        pending_tool_calls=(),
-        measurement_sessions=sessions,
-    )
-    assert state["pendingMeasurementRepair"]["status"] == "exhausted"
-
-
-def test_checkpoint_keeps_pending_repairs_for_multiple_panels_without_overwrite():
+def test_checkpoint_keeps_only_one_current_measurement_attempt_per_panel():
     sessions: dict[str, MeasurementSession] = {}
     for panel_id in ("panel_bars", "panel_line"):
         register_measurement(
@@ -924,8 +791,8 @@ def test_checkpoint_keeps_pending_repairs_for_multiple_panels_without_overwrite(
         measurement_sessions=sessions,
     )
 
-    assert [item["panel_id"] for item in state["pendingMeasurementRepairs"]] == [
-        "panel_bars",
-        "panel_line",
-    ]
-    assert state["pendingMeasurementRepair"] is None
+    assert set(state["measurementSessions"]) == {session.session_id for session in sessions.values()}
+    assert all("current_attempt" in value for value in state["measurementSessions"].values())
+    assert all("attempts" not in value for value in state["measurementSessions"].values())
+    assert "pendingMeasurementRepair" not in state
+    assert "pendingMeasurementRepairs" not in state

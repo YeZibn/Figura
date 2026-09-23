@@ -37,12 +37,17 @@ def build_decision_context(
     review_id = _text(gate.get("reviewId") or gate.get("review_id"))
     subject_id = _text(gate.get("subjectId") or gate.get("subject_id"))
     current_evidence = next((item for item in measurement_evidence if isinstance(item, Mapping)), None)
+    measurement_ref = (
+        current_evidence.get("measurement_ref")
+        if isinstance(current_evidence, Mapping) and isinstance(current_evidence.get("measurement_ref"), Mapping)
+        else {}
+    )
     if review_id:
         current_unit = f"review:{review_id}"
         current_phase = _text(phase, 32) or "model"
         status = _text(gate.get("state"), 48) or ("blocked" if blocking else "ready")
     elif current_evidence is not None:
-        attempt_id = _text(current_evidence.get("attempt_id")) or "unknown"
+        attempt_id = _text(measurement_ref.get("attempt_id")) or "unknown"
         current_unit = f"measurement:{attempt_id}"
         current_phase = _text(phase, 32) or "model"
         status = _text(current_evidence.get("status"), 48) or "available"
@@ -55,24 +60,24 @@ def build_decision_context(
         compact_evidence = {
             key: current_evidence.get(key)
             for key in (
+                "measurement_ref",
                 "session_id",
                 "attempt_id",
                 "attachment_id",
                 "panel_id",
+                "tool",
                 "status",
+                "scope",
                 "observation_scope",
                 "effective_scope",
-                "refs",
                 "evidence_refs",
-                "used_refs",
+                "series_metadata",
                 "warnings",
                 "issues",
-                "focus",
-                "budget_remaining",
             )
             if current_evidence.get(key) is not None
         }
-        for key in ("refs", "evidence_refs", "used_refs"):
+        for key in ("evidence_refs", "series_metadata"):
             if isinstance(compact_evidence.get(key), list):
                 compact_evidence[key] = compact_evidence[key][:MAX_DECISION_REFS]
         for key in ("warnings", "issues"):

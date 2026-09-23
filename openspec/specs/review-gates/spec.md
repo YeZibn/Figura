@@ -49,13 +49,13 @@
 
 ### Requirement: Review gates block downstream execution
 
-系统 SHALL 仅对真正需要发布保护的审核阶段建立共享阻塞门禁。生成图审核处于 `reviewing`、`repair_required`、`failed` 或 `exhausted` 时，系统 SHALL 阻止 render 后的 publish 或成功终结；measurement observation 的 warning、`partial` 或 `remeasure_required` SHALL 作为可追踪诊断，不得独占阻塞 OCR、布局观察、其他测量或主 Agent 的候选组装。
+系统 SHALL 仅对真正需要发布保护的审核阶段建立共享阻塞门禁。generated-chart review 处于 `reviewing`、`repair_required`、`failed` 或 `exhausted` 时，系统 SHALL 阻止 render 后的 publish 或成功终结；measurement observation 的 warning 或 `partial` 状态 SHALL 作为工具结果中的诊断，不得独占阻塞 OCR、布局观察、其他测量或主 Agent 的候选组装。
 
 #### Scenario: Measurement observation remains non-blocking
 
 - **WHEN** 测量工具返回候选和质量 warning
-- **THEN** 运行记录保存 observation、问题和可选下一动作
-- **AND** 主 Agent 仍可调用其他证据工具或提交 evidence decision
+- **THEN** 运行记录保存 observation、问题和可选的局部范围线索
+- **AND** 主 Agent 可自主调用其他证据工具、再次调用带范围的测量工具，或直接提交合法 assembly
 
 #### Scenario: Generated chart review blocks publication
 
@@ -65,7 +65,7 @@
 
 #### Scenario: Gate cannot be bypassed by final text
 
-- **WHEN** 模型最终文本声称候选已经通过，但生成审核仍处于阻塞状态
+- **WHEN** 模型最终文本声称候选已通过审核但代码拥有的 generated-chart review 仍处于阻塞状态
 - **THEN** 系统保持发布门禁关闭
 - **AND** 客户端显示代码拥有的审核状态
 
@@ -87,7 +87,7 @@
 
 ### Requirement: Review failures close the gate without implicit bypass
 
-生成图审核失败、超时、证据不可用、非法审核结果或重试耗尽 SHALL 保持生成发布门禁关闭，并返回有界的失败分类和恢复信息。测量 observation 的重测预算耗尽 SHALL 关闭该补充分支，但不应被伪装成生成图审核失败；如果模型选择其他可追溯证据，主链路可以继续。
+生成图审核失败、超时、证据不可用、非法审核结果或候选修复耗尽 SHALL 保持 generated-chart 发布门禁关闭，并返回有界的失败分类和恢复信息。局部测量的失败或无法补充 SHALL 作为普通 measurement tool result 返回，不改变 generated-chart gate，不产生单独的 measurement repair-exhausted 生命周期状态；主 Agent 可以自主选择其他可追溯证据或结束运行。
 
 #### Scenario: Generated review budget is exhausted
 
@@ -95,11 +95,12 @@
 - **THEN** 当前生成候选进入明确的 `exhausted` 非发布状态
 - **AND** 运行结果不得声称生成成功
 
-#### Scenario: Measurement repair budget is exhausted
+#### Scenario: Measurement failure does not create a review gate
 
-- **WHEN** 某个 measurement session 的局部补充达到上限
-- **THEN** 系统记录 `measurement_repair_exhausted` 及最后诊断
-- **AND** 不再自动重测，但不把整个 run 错报为 generated chart review failure
+- **WHEN** 局部测量失败、区域不充分或模型选择不再补充证据
+- **THEN** 运行记录保留该 measurement 工具结果及 bounded 诊断
+- **AND** 不创建 measurement review/repair gate 或 `measurement_repair_exhausted` 状态
+- **AND** 其他合法证据路线和 ChartSpec assembly 不因该结果被独占阻塞
 
 #### Scenario: Stale review cannot release publication
 

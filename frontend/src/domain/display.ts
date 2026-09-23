@@ -73,17 +73,6 @@ export function eventLabel(event: AgentRunEvent): string {
     generated_chart: '图表已生成',
     generated_chart_published: '图表已发布',
     generated_chart_rejected: '图表未发布',
-    measurement_observed: '测量结果已记录',
-    measurement_repair_required: '需要补充测量',
-    measurement_repair_rejected: '补充测量被拒绝',
-    measurement_repair_exhausted: '补充测量次数已用尽',
-    measurement_decision_required: '测量证据待处理',
-    measurement_focus_requested: '已请求局部测量',
-    measurement_focus_applied: '局部测量范围已应用',
-    measurement_focus_failed: '局部测量未获得足够证据',
-    measurement_evidence_selected: '已选择测量证据',
-    measurement_evidence_discarded: '已舍弃测量候选',
-    measurement_evidence_used: '已采用测量证据',
     assembly_validation_failure: 'ChartSpec 组装校验失败',
     review_started: '审核已开始',
     review_completed: '审核已通过',
@@ -159,7 +148,7 @@ export function evaluationDetailEntryLabel(entry: EvaluationDetailEntry): string
   if (entry.kind === 'tool_message') return '模型可见工具消息'
   if (entry.kind === 'tool_call') return entry.toolLabel || entry.toolName || '工具调用'
   if (entry.kind === 'tool_result') return (entry.toolLabel || entry.toolName || '工具') + ' · 工具结果'
-  if (entry.kind === 'repair' || entry.kind.startsWith('measurement_repair') || entry.kind.startsWith('measurement_')) return '测量证据诊断信息'
+  if (entry.kind === 'repair') return '审核修复信息'
   if (entry.kind.startsWith('review')) return '审核诊断信息'
   if (entry.kind === 'visual_observation') return '视觉观察'
   if (entry.kind === 'generated_chart') return '生成结果'

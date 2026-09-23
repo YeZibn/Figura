@@ -52,7 +52,7 @@ def _augment_axis_ocr(original, *, y_values: list[int]):
 
 
 def _measurement_assembly_fields(observed: dict) -> dict:
-    """Carry the model's explicit evidence decision into assembly."""
+    """Carry the exact candidate refs the scripted model uses into assembly."""
     measurement = observed.get("measurement")
     assert isinstance(measurement, dict)
     reference = measurement.get("reference")
@@ -60,18 +60,13 @@ def _measurement_assembly_fields(observed: dict) -> dict:
     result = {"measurement_ref": reference}
     evidence = measurement.get("evidence")
     refs = evidence.get("refs") if isinstance(evidence, dict) else []
-    selected_refs = [
+    evidence_refs = [
         item.get("ref")
         for item in refs or []
         if isinstance(item, dict) and isinstance(item.get("ref"), str)
     ]
-    if selected_refs:
-        result["measurement_decision"] = {
-            "session_id": reference.get("session_id"),
-            "attempt_id": reference.get("attempt_id"),
-            "selected_refs": selected_refs,
-            "discarded_refs": [],
-        }
+    if evidence_refs:
+        result["evidence_refs"] = evidence_refs
     return result
 
 
@@ -140,9 +135,6 @@ class _UnderstandingClient:
             )
         elif self.stage == 3:
             self.assembled = last_tool_data()
-            decision = self.assembled.pop("_measurement_decision", None)
-            assert isinstance(decision, dict)
-            assert decision["selected_refs"]
             provenance = self.assembled.pop("provenance", None)
             assert isinstance(provenance, dict)
             assert self.assembled == self.ground_truth

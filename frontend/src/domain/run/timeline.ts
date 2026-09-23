@@ -63,14 +63,6 @@ export const technicalTimelineEventKinds = [
 const technicalTimelineEvents = new Set<string>(technicalTimelineEventKinds)
 const toolTimelineEvents = new Set(['tool_call', 'tool_result', 'tool_skipped', 'visual_observation'])
 const hiddenEventKinds = new Set([
-  'measurement_observed',
-  'measurement_repair_required',
-  'measurement_decision_required',
-  'measurement_focus_requested',
-  'measurement_focus_applied',
-  'measurement_evidence_selected',
-  'measurement_evidence_discarded',
-  'measurement_evidence_used',
   'review_gate_required',
   'review_gate_updated',
   'review_subcheck',
@@ -79,9 +71,6 @@ const terminalErrorEvents = new Set([
   'run_failed',
   'recovery_blocked',
   'budget_exhausted',
-  'measurement_focus_failed',
-  'measurement_repair_rejected',
-  'measurement_repair_exhausted',
   'review_failed',
   'generated_chart_rejected',
   'assembly_validation_failure',
@@ -145,10 +134,9 @@ function unitStatus(event: AgentRunEvent, payload: Record<string, unknown>, curr
   if (event.kind === 'review_started') return 'reviewing'
   if (event.kind === 'review_repair_required') return 'blocked'
   if (event.kind === 'review_completed') return state.includes('warning') ? 'passed' : state.includes('fail') ? 'failed' : 'passed'
-  if (event.kind === 'review_failed' || event.kind === 'generated_chart_rejected' || event.kind === 'measurement_focus_failed' || event.kind === 'measurement_repair_rejected' || event.kind === 'measurement_repair_exhausted' || event.kind === 'assembly_validation_failure') return 'failed'
+  if (event.kind === 'review_failed' || event.kind === 'generated_chart_rejected' || event.kind === 'assembly_validation_failure') return 'failed'
   if (event.kind === 'generated_chart_published') return 'published'
-  if (event.kind === 'measurement_repair_required' || event.kind === 'measurement_decision_required' || event.kind === 'measurement_focus_requested') return 'running'
-  if (event.kind === 'measurement_observed' || event.kind === 'measurement_focus_applied' || event.kind === 'measurement_evidence_selected' || event.kind === 'measurement_evidence_discarded' || event.kind === 'measurement_evidence_used' || event.kind === 'generated_chart' || event.kind === 'visual_observation') return 'completed'
+  if (event.kind === 'generated_chart' || event.kind === 'visual_observation') return 'completed'
   if (state === 'abandoned' || event.kind === 'run_interrupted') return 'abandoned'
   if (state === 'partial') return 'partial'
   if (state === 'blocked') return 'blocked'
@@ -266,7 +254,7 @@ function buildProjection(events: AgentRunEvent[]): { roots: TimelineNode[]; node
         actor: meta.actor,
         role: meta.role,
         status: 'running',
-        label: meta.type === 'observation' ? toolLabel([event]) : nodeLabels[meta.type],
+        label: meta.type === 'observation' || meta.type === 'measurement' ? toolLabel([event]) : nodeLabels[meta.type],
         firstSequence: event.sequence,
         lastSequence: event.sequence,
         ...(meta.parent ? { parentUnitId: meta.parent } : {}),
@@ -304,7 +292,7 @@ function buildProjection(events: AgentRunEvent[]): { roots: TimelineNode[]; node
 
   const allNodes = [...nodes.values()]
   for (const node of allNodes) {
-    node.label = node.unitType === 'observation' ? toolLabel(node.events) : nodeLabels[node.unitType!]
+    node.label = node.unitType === 'observation' || node.unitType === 'measurement' ? toolLabel(node.events) : nodeLabels[node.unitType!]
     node.visibleEvents = node.unitType === 'review' ? reviewVisibleEvents(node.events) : dedupeEvents(node.events.filter(userVisibleEvent))
     node.event = node.visibleEvents[node.visibleEvents.length - 1] || node.result || node.call || node.events[node.events.length - 1]
     node.failure = node.events.map(failureForEvent).find((value): value is FailureContext => Boolean(value))

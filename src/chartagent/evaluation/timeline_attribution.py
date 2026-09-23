@@ -59,10 +59,6 @@ def _apply_stage_statuses(
         pending_only = all(
             kind in {
                 "tool_call",
-                "measurement_repair_required",
-                "measurement_decision_required",
-                "measurement_focus_requested",
-                "measurement_observed",
                 "assembly_validation_failure",
             }
             for _, kind, _ in bucket
@@ -179,14 +175,12 @@ def _detect_review_without_repair(
     repairs = [
         event
         for event in events
-        if _kind(event).startswith("measurement_repair_")
-        or _kind(event) in {
-            "measurement_focus_requested",
-            "measurement_focus_applied",
-            "measurement_evidence_selected",
-            "review_repair_required",
-        }
-    ]
+        if _kind(event) == "review_repair_required"
+        or (
+            _kind(event) == "tool_call"
+            and _sequence(event) > review_failures[0][0]
+        )
+    ] if review_failures else []
     if review_failures and not repairs:
         sequence, kind = review_failures[0]
         anomalies.append(

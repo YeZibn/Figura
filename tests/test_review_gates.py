@@ -490,9 +490,10 @@ def test_measurement_observation_does_not_create_generated_review_gate():
     assert answer == "我现在直接结束"
     assert calls == ["measure_bars"]
     assert not any(event.kind == "tool_skipped" for event in events)
-    assert any(event.kind == "measurement_decision_required" for event in events)
+    assert any(event.kind == "tool_call" and event.payload.get("tool_name") == "measure_bars" for event in events)
     assert not any(event.kind in {"review_repair_required", "review_gate_required"} for event in events)
-    assert any(event.kind == "measurement_observed" for event in events)
+    assert any(event.kind == "tool_result" and event.payload.get("tool_name") == "measure_bars" for event in events)
+    assert all(not event.kind.startswith("measurement_") for event in events)
 
 
 def test_gateway_run_summary_keeps_the_derived_gate_projection(tmp_path):

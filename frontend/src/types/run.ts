@@ -152,41 +152,6 @@ export type AgentRunEvent = {
   payload: Record<string, unknown>
 }
 
-export const measurementRepairEventKinds = [
-  'measurement_observed',
-  'measurement_repair_required',
-  'measurement_repair_rejected',
-  'measurement_repair_exhausted',
-  'measurement_decision_required',
-  'measurement_focus_requested',
-  'measurement_focus_applied',
-  'measurement_focus_failed',
-  'measurement_evidence_selected',
-  'measurement_evidence_discarded',
-  'measurement_evidence_used',
-] as const
-
-export type MeasurementRepairEventKind = typeof measurementRepairEventKinds[number]
-
-export type MeasurementRepairSummary = {
-  panelId?: string
-  attemptId?: string
-  parentAttemptId?: string
-  targetType?: string
-  status?: string
-  code?: string
-  reason?: string
-  nextAction?: string
-  budgetRemaining?: number
-  selectedRefs?: string[]
-  discardedRefs?: string[]
-  observationScope?: Record<string, unknown>
-}
-
-export function isMeasurementRepairEventKind(kind: string): kind is MeasurementRepairEventKind {
-  return (measurementRepairEventKinds as readonly string[]).includes(kind)
-}
-
 export type HistoryIntegrity = {
   status: 'complete' | 'redacted' | 'truncated' | 'unavailable' | string
   source?: string

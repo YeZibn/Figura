@@ -1,5 +1,4 @@
 import type { AgentRunEvent, Attachment, EvaluationCase, EvaluationDetailEntry, EvaluationResource, GeneratedChartReference, ObservationReference, PreviewResource, RunHandle, SessionData } from '../../types/protocol'
-import { measurementRepairEventKinds } from '../../types/protocol'
 import { mediaTypeForFile } from '../../attachments'
 import { currentGatewayBaseUrl } from './transport'
 import type { GatewayAttachment, GatewayEvaluationCase, GatewayRunEvent, GatewayRunResponse, GatewaySessionData } from './types'
@@ -140,4 +139,4 @@ export function mapRunEvent(event: GatewayRunEvent, sessionId: string): AgentRun
   return { runId: event.runId, sequence: event.sequence, kind: event.kind, timestamp: event.timestamp, payload }
 }
 
-export { mediaTypeForFile, measurementRepairEventKinds }
+export { mediaTypeForFile }

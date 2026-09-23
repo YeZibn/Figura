@@ -907,24 +907,6 @@ class GatewayService(EvaluationWorkbenchMixin):
                 )
                 run.fail(failure_code, 422, failure_message, failure_code)
                 return
-            if run.has_event("measurement_repair_exhausted"):
-                failure_code = "measurement_repair_exhausted"
-                failure_message = "定向重测次数已用尽，未能形成可用证据"
-                run.publish(
-                    "run_failed",
-                    {
-                        "code": failure_code,
-                        "message": failure_message,
-                        "failure_category": "measurement_evidence",
-                        "failure_code": failure_code,
-                        "safe_message": failure_message,
-                        "retryable": False,
-                        "outcome_known": True,
-                        "first_failure_ref": {"kind": "measurement_repair_exhausted", "stage": "measure"},
-                    },
-                )
-                run.fail(failure_code, 422, failure_message, failure_code)
-                return
         if str(answer) in {REVIEW_INCOMPLETE_MESSAGE, _REVIEW_FAILED_MSG}:
             gate = getattr(run, "execution_gate", {})
             exhausted = isinstance(gate, Mapping) and gate.get("state") == "exhausted"

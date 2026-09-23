@@ -428,7 +428,7 @@ def test_authorized_measurement_fails_closed_for_cross_panel_and_ambiguous_scope
         }, ensure_ascii=False),
     ).content)
     assert "measurement target routing failed" in outside_target["error"]
-    assert outside_target["measurement_repair"]["code"] == "measurement_target_invalid"
+    assert outside_target["measurement_target_error"]["code"] == "measurement_target_invalid"
 
     unscoped = json.loads(dispatch_observation(
         registry,

@@ -15,8 +15,7 @@ export function failureContext(payload: Record<string, unknown>): FailureContext
     recordValue(payload.error),
     recordValue(payload.source_scope_resolution),
     recordValue(payload.sourceScopeResolution),
-    recordValue(payload.measurement_gate),
-    recordValue(payload.measurementGate),
+    recordValue(payload.measurement_validation),
   ].filter((item): item is Record<string, unknown> => Boolean(item))
   const candidates = [payload, ...nested]
   const first = (...keys: string[]): unknown => {

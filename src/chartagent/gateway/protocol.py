@@ -77,7 +77,6 @@ class RunTerminalReason(str, Enum):
     REVIEW_FAILED = "review_failed"
     REVIEW_RETRY_EXHAUSTED = "review_retry_exhausted"
     REVIEW_INCOMPLETE = "review_incomplete"
-    MEASUREMENT_REPAIR_EXHAUSTED = "measurement_repair_exhausted"
     ASSEMBLY_VALIDATION_FAILURE = "assembly_validation_failure"
     HISTORY_EXPIRED = "history_expired"
 
@@ -453,24 +452,18 @@ def _truncate_tool_result_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
             "measurement_reference",
             "measurement_issue_count",
             "measurement_blocking",
-            "measurement_repair_action",
-            "measurement_repair_status",
-            "measurement_focus_suggestion",
             "measurement_evidence_refs",
-            "measurement_selected_refs",
-            "measurement_discarded_refs",
-            "measurement_decision_status",
-            "measurement_series_map",
-            "measurement_evidence_basis",
+            "measurement_series_metadata",
+            "measurement_scope",
+            "measurement_quality",
             "measurement_observation_scope",
-            "measurement_focus",
-                "measurement_target",
-                "observation_scope",
-                "series",
-                "bars",
-                "points",
-                "sectors",
-            )
+            "measurement_target",
+            "observation_scope",
+            "series",
+            "bars",
+            "points",
+            "sectors",
+        )
         if field in payload
     }
     body = payload.get("result")

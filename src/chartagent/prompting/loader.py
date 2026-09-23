@@ -129,11 +129,13 @@ def _bounded_ref_list(value: object, limit: int = 64) -> list[object]:
     for item in _bounded_list(value, limit):
         if isinstance(item, Mapping):
             safe: dict[str, Any] = {}
-            for key in ("ref", "kind", "label", "color", "series_ref", "bbox_px"):
+            for key in ("ref", "kind", "label", "color", "series_ref", "bbox_px", "has_numeric_value"):
                 if item.get(key) is None:
                     continue
                 if key == "bbox_px" and isinstance(item.get(key), (list, tuple)):
                     safe[key] = list(item[key])[:4]
+                elif key == "has_numeric_value":
+                    safe[key] = bool(item.get(key))
                 elif key in {"ref", "kind", "label", "color", "series_ref"}:
                     safe[key] = _bounded_text(item.get(key), 120)
             if safe:
@@ -174,13 +176,7 @@ def _bounded_observation_scope(value: object) -> dict[str, Any] | None:
 
 
 def _bounded_measurement_evidence(value: object) -> dict[str, Any] | list[dict[str, Any]] | None:
-    """Project model-facing measurement facts into bounded JSON.
-
-    Selection and discard state remains available in persisted artifacts for
-    compatibility, but it is not part of the ordinary runtime decision
-    contract.  The model-facing summary focuses on observations and refs that
-    can actually be inspected or referenced by the next tool call.
-    """
+    """Project current candidate results and source facts into bounded JSON."""
     if isinstance(value, (list, tuple)):
         result = []
         for item in list(value)[:16]:
@@ -191,29 +187,31 @@ def _bounded_measurement_evidence(value: object) -> dict[str, Any] | list[dict[s
     if not isinstance(value, Mapping):
         return None
     result: dict[str, Any] = {}
-    for key in (
-        "action",
-        "status",
-        "tool",
-        "attachment_id",
-        "panel_id",
-        "session_id",
-        "attempt_id",
-        "parent_attempt_id",
-        "focus_mode",
-        "budget_remaining",
-        "evidence_basis",
-    ):
+    for key in ("status", "tool", "attachment_id", "panel_id", "parent_attempt_id"):
         if value.get(key) is not None:
             result[key] = _bounded_text(value.get(key), 240)
-    for key in ("refs", "evidence_refs", "used_refs"):
-        if value.get(key) is not None:
-            result[key] = _bounded_ref_list(value.get(key))
-    if isinstance(value.get("series_map"), Mapping):
-        result["series_map"] = {
-            _bounded_text(name, 80): _bounded_text(item, 120)
-            for name, item in list(value["series_map"].items())[:32]
+    measurement_ref = value.get("measurement_ref")
+    if isinstance(measurement_ref, Mapping):
+        result["measurement_ref"] = {
+            key: _bounded_text(measurement_ref.get(key), 160) if isinstance(measurement_ref.get(key), str) else None
+            for key in ("session_id", "attempt_id", "attachment_id", "panel_id")
+            if measurement_ref.get(key) is not None
         }
+    result["evidence_refs"] = _bounded_ref_list(value.get("evidence_refs"), 64)
+    result["series_metadata"] = _bounded_ref_list(value.get("series_metadata"), 64)
+    for key in ("scope", "effective_scope"):
+        if isinstance(value.get(key), Mapping):
+            result[key] = {
+                _bounded_text(name, 64): (
+                    _bounded_text(item, 160)
+                    if isinstance(item, str)
+                    else list(item)[:16]
+                    if isinstance(item, (list, tuple))
+                    else item
+                )
+                for name, item in list(value[key].items())[:16]
+                if isinstance(name, str) and isinstance(item, (str, int, float, bool, list, tuple))
+            }
     observation_scope = _bounded_observation_scope(value.get("observation_scope"))
     if observation_scope is not None:
         result["observation_scope"] = observation_scope
@@ -223,69 +221,7 @@ def _bounded_measurement_evidence(value: object) -> dict[str, Any] | list[dict[s
                 _bounded_text(item.get("message") if isinstance(item, Mapping) else item, 240)
                 for item in list(value[key])[:12]
             ]
-    focus = value.get("focus")
-    if isinstance(focus, Mapping):
-        result["focus"] = {
-            key: focus.get(key)
-            for key in (
-                "requested",
-                "applied",
-                "status",
-                "mode",
-                "target_refs",
-                "search_scope",
-                "region_px",
-                "search_area",
-            )
-            if focus.get(key) is not None
-        }
-    suggestion = value.get("focus_suggestion")
-    if suggestion is None:
-        suggestion = value.get("repair_action")
-    if isinstance(suggestion, Mapping):
-        result["focus_suggestion"] = _bounded_measurement_target(suggestion)
     return result or None
-
-
-def _bounded_measurement_repair(value: object) -> dict[str, Any] | list[dict[str, Any]] | None:
-    """Backward-compatible alias for persisted pre-decision state."""
-    return _bounded_measurement_evidence(value)
-
-
-def _bounded_measurement_target(value: Mapping[str, Any]) -> dict[str, Any]:
-    target = value.get("target") if isinstance(value.get("target"), Mapping) else value
-    safe_target: dict[str, Any] = {}
-    for key in (
-        "action",
-        "status",
-        "tool",
-        "target_id",
-        "panel_id",
-        "parent_attempt_id",
-        "region_kind",
-        "reason",
-        "fields",
-        "refs",
-        "mode",
-        "bbox_source_px",
-        "source_image_size",
-        "bbox_px",
-        "local_image_size",
-        "clipped",
-        "next_action",
-        "budget_remaining",
-    ):
-        if target.get(key) is not None:
-            safe_target[key] = (
-                [_bounded_text(item, 96) for item in list(target[key])[:8]]
-                if key in {"fields", "refs"} and isinstance(target[key], (list, tuple))
-                else target[key]
-            )
-    if "tool" not in safe_target and value.get("tool") is not None:
-        safe_target["tool"] = _bounded_text(value.get("tool"), 80)
-    if "next_action" not in safe_target and value.get("next_action") is not None:
-        safe_target["next_action"] = _bounded_text(value.get("next_action"), 240)
-    return safe_target
 
 
 def _bounded_generation_context(value: object) -> dict[str, Any] | None:
@@ -492,7 +428,7 @@ def build_runtime_context(
         "retry_budget": max(0, int(state.get("retry_budget", 0) or 0)),
         "publication_status": _bounded_text(state.get("publication_status"), 64) or "not_published",
         "measurement_evidence": _bounded_measurement_evidence(
-            state.get("measurement_evidence", state.get("measurement_repair"))
+            state.get("measurement_evidence")
         ),
         "generation_context": _bounded_generation_context(state.get("generation_context")),
         "decision_context": _bounded_decision_context(state.get("decision_context")),
@@ -550,25 +486,20 @@ def build_artifact_index(records: Iterable[Mapping[str, Any]] = ()) -> str:
                 if isinstance(issue, Mapping)
             ],
             "measurement_evidence_refs": _bounded_ref_list(record.get("measurement_evidence_refs"), 64),
-            "measurement_selected_refs": [
-                _bounded_text(value, 32) for value in _bounded_list(record.get("measurement_selected_refs"), 64)
-            ],
-            "measurement_discarded_refs": [
-                _bounded_text(value, 32) for value in _bounded_list(record.get("measurement_discarded_refs"), 64)
-            ],
-            "measurement_decision_status": _bounded_text(record.get("measurement_decision_status"), 32) or None,
+            "measurement_series_metadata": _bounded_ref_list(record.get("measurement_series_metadata"), 64),
+            "measurement_scope": (
+                dict(record.get("measurement_scope"))
+                if isinstance(record.get("measurement_scope"), Mapping)
+                else None
+            ),
             "measurement_effective_scope": (
                 dict(record.get("measurement_effective_scope"))
                 if isinstance(record.get("measurement_effective_scope"), Mapping)
                 else None
             ),
-            "measurement_focus": (
-                {
-                    key: record.get("measurement_focus").get(key)
-                    for key in ("requested", "applied", "status", "mode", "target_refs", "search_scope")
-                    if record.get("measurement_focus").get(key) is not None
-                }
-                if isinstance(record.get("measurement_focus"), Mapping)
+            "measurement_observation_scope": (
+                _bounded_observation_scope(record.get("measurement_observation_scope"))
+                if isinstance(record.get("measurement_observation_scope"), Mapping)
                 else None
             ),
             "resource_refs": [

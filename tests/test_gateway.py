@@ -572,56 +572,61 @@ def test_managed_run_interrupt_is_terminal_and_blocks_late_events(tmp_path):
     manager.close()
 
 
-def test_gateway_replays_measurement_repair_events_and_checkpoint_after_reconnect(tmp_path):
-    database = tmp_path / "measurement-repair-replay.db"
+def test_gateway_replays_measurement_tool_call_result_and_current_attempt(tmp_path):
+    database = tmp_path / "measurement-evidence-replay.db"
     store = GatewayHistoryStore(database)
-    memory = SQLiteAgentMemory("measurement-repair-replay", database=database)
+    memory = SQLiteAgentMemory("measurement-evidence-replay", database=database)
     manager = RunManager(history_store=store)
     run = manager.create(memory.session.id)
-    parent_attempt = "matt_parent"
-    target = {
-        "target_id": "baseline-focus",
-        "panel_id": "panel_bars",
-        "parent_attempt_id": parent_attempt,
-        "region_kind": "baseline",
-        "fields": ["baseline", "bars.measure"],
-        "bbox_source_px": [120, 300, 420, 36],
-        "source_image_size": [640, 480],
-        "reason": "复查 /Users/yezibin/Project/Figura/private-chart.png",
-    }
     run.publish(
-        "measurement_repair_required",
+        "tool_call",
         {
-            "attachment_id": "att_eval",
-            "unit_id": "measurement:matt_parent",
+            "unit_id": "measurement:call_measure",
             "unit_type": "measurement",
-            "phase": "repair",
-            "actor": "system",
-            "role": "gate",
-            "transition_id": "measurement:matt_parent:repair_required",
+            "phase": "action",
+            "actor": "tool",
+            "role": "action",
+            "transition_id": "measurement:call_measure:started",
+            "attachment_id": "att_eval",
             "panel_id": "panel_bars",
-            "parent_attempt_id": parent_attempt,
-            "target": target,
-            "status": "available",
-            "next_action": "在同一 panel 内重新测量",
+            "tool_name": "measure_bars",
+            "tool_label": "柱体测量",
+            "call_id": "call_measure",
+            "state": "running",
+            "arguments": {"measurement_target": {"fields": ["baseline"]}},
         },
     )
+    current_attempt = {
+        "attempt_id": "attempt_current",
+        "session_id": "ms_eval",
+        "run_id": run.run_id,
+        "attachment_id": "att_eval",
+        "panel_id": "panel_bars",
+        "parent_attempt_id": "attempt_parent",
+        "tool": "measure_bars",
+        "status": "partial",
+        "measurement_ref": {
+            "session_id": "ms_eval",
+            "attempt_id": "attempt_current",
+            "attachment_id": "att_eval",
+            "panel_id": "panel_bars",
+        },
+        "scope": {"bbox_px": [10, 20, 300, 200]},
+        "effective_scope": {"bbox_px": [10, 20, 300, 200]},
+        "quality": {"issues": [{"code": "baseline_uncertain"}]},
+        "evidence_refs": [{"ref": "B1", "kind": "bar", "has_numeric_value": True}],
+        "series_metadata": [],
+    }
     checkpoint = run.create_checkpoint(
         {
             "measurementSessions": {
                 "ms_eval": {
                     "session_id": "ms_eval",
+                    "run_id": run.run_id,
                     "attachment_id": "att_eval",
                     "panel_id": "panel_bars",
-                    "current_attempt_id": parent_attempt,
-                    "max_repair_attempts": 3,
-                    "attempts": [],
-                }
-            },
-            "pendingMeasurementRepair": {
-                "status": "available",
-                "parent_attempt_id": parent_attempt,
-                "target": target,
+                    "current_attempt": current_attempt,
+                },
             },
         },
         phase="tool",
@@ -629,35 +634,35 @@ def test_gateway_replays_measurement_repair_events_and_checkpoint_after_reconnec
     )
     assert checkpoint is True
     run.publish(
-        "measurement_repair_exhausted",
+        "tool_result",
         {
-            "attachment_id": "att_eval",
-            "unit_id": "measurement:matt_parent",
+            "unit_id": "measurement:call_measure",
             "unit_type": "measurement",
-            "phase": "repair",
-            "actor": "system",
-            "role": "gate",
-            "transition_id": "measurement:matt_parent:repair_exhausted",
+            "phase": "action",
+            "actor": "tool",
+            "role": "action",
+            "transition_id": "measurement:call_measure:completed",
+            "attachment_id": "att_eval",
             "panel_id": "panel_bars",
-            "parent_attempt_id": parent_attempt,
-            "status": "exhausted",
-            "next_action": "保留失败证据并停止定向重测",
+            "tool_name": "measure_bars",
+            "tool_label": "柱体测量",
+            "call_id": "call_measure",
+            "status": "success",
+            "result": {"measurement": {"status": "partial", "reference": current_attempt["measurement_ref"]}},
         },
     )
     run.complete("未发布")
 
     history = store.get_checkpoint(memory.session.id, run.run_id)
     assert history is not None
-    assert history.state["pendingMeasurementRepair"]["status"] == "available"
+    assert history.state["measurementSessions"]["ms_eval"]["current_attempt"]["attempt_id"] == "attempt_current"
+    assert "pendingMeasurementRepair" not in history.state
     assert "/Users/yezibin/Project/Figura" not in json.dumps(history.state)
 
     events = list(run.iter_events(after_sequence=1))
-    assert [event.kind for event in events] == [
-        "measurement_repair_required",
-        "measurement_repair_exhausted",
-    ]
-    assert events[0].payload["target"]["target_id"] == "baseline-focus"
-    assert "/Users/yezibin/Project/Figura" not in json.dumps(events[0].payload)
+    assert [event.kind for event in events] == ["tool_call", "tool_result"]
+    assert events[0].payload["tool_name"] == "measure_bars"
+    assert events[1].payload["result"]["measurement"]["status"] == "partial"
 
     memory.close()
     manager.close()
@@ -740,7 +745,6 @@ def test_gateway_service_lifecycle_and_message(tmp_path):
 @pytest.mark.parametrize(
     ("event_kind", "expected_code"),
     [
-        ("measurement_repair_exhausted", "measurement_repair_exhausted"),
         ("assembly_validation_failure", "assembly_validation_failure"),
     ],
 )
@@ -1592,8 +1596,9 @@ def test_gateway_replays_scope_lifecycle_fields_without_merging_event_kinds(tmp_
         "parent_attempt": "cand_parent",
         "source_scope": scope,
     }
-    store.append_event(RunEvent(run_id, 1, "measurement_observed", {**common, "unit_id": "measurement:matt_scope", "unit_type": "measurement", "phase": "observe", "actor": "tool", "role": "observation", "state": "partial", "transition_id": "measurement:matt_scope:observed"}))
-    store.append_event(RunEvent(run_id, 2, "measurement_evidence_selected", {**common, "unit_id": "measurement:matt_scope", "unit_type": "measurement", "phase": "decide", "actor": "agent", "role": "decision", "state": "selected", "transition_id": "measurement:matt_scope:selected", "refs": ["B1"]}))
+    measurement_unit = {"unit_id": "measurement:call_scope", "unit_type": "measurement", "phase": "action", "actor": "tool", "role": "action", "tool_name": "measure_bars", "call_id": "call_scope"}
+    store.append_event(RunEvent(run_id, 1, "tool_call", {**common, **measurement_unit, "state": "running", "transition_id": "measurement:call_scope:started", "arguments": {"panel_id": "panel_left"}}))
+    store.append_event(RunEvent(run_id, 2, "tool_result", {**common, **measurement_unit, "state": "completed", "status": "success", "transition_id": "measurement:call_scope:completed", "result": {"measurement": {"status": "partial", "evidence": {"refs": [{"ref": "B1"}]}}}}))
     store.append_event(RunEvent(run_id, 3, "review_started", {**common, "unit_id": "review:review_scope", "unit_type": "review", "phase": "review", "actor": "system", "role": "review", "review_id": "review_scope", "review_type": "generated_chart", "state": "reviewing", "transition_id": "review:review_scope:started", "repair_kind": "evidence_needed"}))
     store.append_event(RunEvent(run_id, 4, "generated_chart_rejected", {**common, "unit_id": "publication:cand_scope", "unit_type": "publication", "phase": "publish", "actor": "system", "role": "publication", "review_id": "review_scope", "state": "rejected", "publication_status": "rejected", "transition_id": "publication:cand_scope:rejected", "repair_kind": "evidence_needed"}))
     store.update_run(run_id, RunStatus.COMPLETED, answer_source="已完成")
@@ -1602,12 +1607,12 @@ def test_gateway_replays_scope_lifecycle_fields_without_merging_event_kinds(tmp_
     history = reopened.history(session_id, run_id)
     assert history is not None
     assert [event["kind"] for event in history["events"]] == [
-        "measurement_observed",
-        "measurement_evidence_selected",
+        "tool_call",
+        "tool_result",
         "review_started",
         "generated_chart_rejected",
     ]
-    assert history["events"][2]["payload"]["source_scope"] == scope
+    assert history["events"][0]["payload"]["source_scope"] == scope
     assert history["events"][2]["payload"]["repair_kind"] == "evidence_needed"
     assert history["events"][3]["payload"]["parent_attempt"] == "cand_parent"
     service.close()

@@ -263,7 +263,7 @@ def test_timeline_attributes_provider_failure_to_model_before_assembly_or_render
     assert timeline.first_failure["sequence"] == 5
 
 
-def test_timeline_separates_measurement_quality_repair_from_tool_failure():
+def test_timeline_treats_partial_measurement_as_diagnostic_not_repair_gate():
     events = [
         _event(1, "run_started"),
         _tool_result(
@@ -272,20 +272,19 @@ def test_timeline_separates_measurement_quality_repair_from_tool_failure():
             result={
                 "data": {
                     "measurement": {
-                        "status": "remeasure_required",
-                        "quality": {"repair_action": {"action": "remeasure"}},
+                        "status": "partial",
+                        "quality": {"issues": [{"code": "baseline_uncertain", "severity": "blocking"}]},
                     }
                 }
             },
         ),
-        _event(3, "measurement_repair_required", {"status": "available", "panel_id": "panel_1"}),
     ]
 
     timeline = build_timeline(_history(events), sample=None)
     stages = {stage.name: stage for stage in timeline.stages}
 
-    assert stages["measurement"].status == "needs_repair"
-    assert stages["repair"].status == "needs_repair"
+    assert stages["measurement"].status == "completed"
+    assert stages["repair"].status == "not_observed"
     assert timeline.first_failure is None
 
 

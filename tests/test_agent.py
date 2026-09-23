@@ -228,7 +228,7 @@ def test_layout_preflight_context_is_cached_and_injected_into_sensor():
                             "y_label": "数值",
                             "points": [{"x": 1, "y": 2}],
                             "measurement_ref": measurement["reference"],
-                            "measurement_decision": {"selected_refs": [ref], "discarded_refs": []},
+                            "evidence_refs": [ref],
                         },
                         ensure_ascii=False,
                     ),
@@ -539,7 +539,14 @@ def test_measurement_quality_does_not_stop_the_tool_batch_after_observation():
     assert any(message["role"] == "tool" and "measurement" in str(message["content"]) for message in messages[2:3])
     skipped = [event for event in events if event.kind == "tool_skipped"]
     assert skipped == []
-    assert any(event.kind == "measurement_observed" for event in events)
+    assert any(
+        event.kind == "tool_call" and event.payload.get("tool_name") == "measure_bars"
+        for event in events
+    )
+    assert any(
+        event.kind == "tool_result" and event.payload.get("tool_name") == "measure_bars"
+        for event in events
+    )
 
 
 def test_invalid_generated_image_does_not_add_multimodal_turn():

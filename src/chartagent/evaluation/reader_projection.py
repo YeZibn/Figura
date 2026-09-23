@@ -946,8 +946,6 @@ class EvaluationReader:
             role = None
         record_kind = cls._bounded_text(row[1], 64) or "record"
         kind = "conversation" if role in {"user", "assistant", "system"} else "tool_message" if role == "tool" else "record"
-        if record_kind == "measurement_repair":
-            kind = "repair"
         entry: dict[str, Any] = {
             "entryId": f"record:{max(0, int(row[0]))}",
             "source": "record",
@@ -1070,7 +1068,7 @@ class EvaluationReader:
         elif persisted_truncated:
             entry["detailUnavailable"] = True
             entry["detailUnavailableReason"] = "detail_resource_unavailable"
-        if kind.startswith("measurement_repair") or kind in {"measurement_observed", "measurement_repair_required", "measurement_repair_rejected", "measurement_repair_exhausted", "measurement_decision_required", "measurement_focus_requested", "measurement_focus_applied", "measurement_focus_failed", "measurement_evidence_selected", "measurement_evidence_discarded", "measurement_evidence_used", "assembly_validation_failure", "review_started", "review_completed", "review_repair_required", "review_failed", "review_gate_required", "review_gate_updated", "generated_chart_published", "generated_chart_rejected"}:
+        if kind in {"assembly_validation_failure", "review_started", "review_completed", "review_repair_required", "review_failed", "review_gate_required", "review_gate_updated", "generated_chart_published", "generated_chart_rejected"}:
             projected, value_truncated, value_redacted = self._safe_projection(payload)
             entry["details"] = projected
             truncated |= value_truncated

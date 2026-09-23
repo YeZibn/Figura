@@ -32,9 +32,6 @@ def _event_stages(kind: str, payload: Mapping[str, Any]) -> list[str]:
         stages.append("assembly")
     elif tool_name == "render_chart":
         stages.append("render")
-    if kind.startswith("measurement_"):
-        stages.append("measurement")
-
     if kind in {
         "generated_chart_rejected",
         "review_started",
@@ -45,11 +42,7 @@ def _event_stages(kind: str, payload: Mapping[str, Any]) -> list[str]:
         "review_gate_updated",
     }:
         stages.append("quality_review")
-    if kind.startswith("measurement_repair_") or kind in {
-        "measurement_focus_requested",
-        "measurement_focus_failed",
-        "measurement_decision_required",
-        "measurement_repair_exhausted",
+    if kind in {
         "assembly_validation_failure",
         "review_repair_required",
     }:
@@ -262,7 +255,7 @@ def _tool_name(payload: Mapping[str, Any]) -> str | None:
 
 
 def _event_is_failure(kind: str, payload: Mapping[str, Any]) -> bool:
-    if kind in {"run_failed", "run_interrupted", "generated_chart_rejected", "measurement_repair_exhausted", "measurement_repair_rejected", "measurement_focus_failed", "assembly_validation_failure", "review_failed"}:
+    if kind in {"run_failed", "run_interrupted", "generated_chart_rejected", "assembly_validation_failure", "review_failed"}:
         return True
     if kind in {"review_repair_required", "review_gate_required", "recovery_blocked"}:
         return True
@@ -272,22 +265,13 @@ def _event_is_failure(kind: str, payload: Mapping[str, Any]) -> bool:
 
 def _event_needs_repair(kind: str, payload: Mapping[str, Any]) -> bool:
     """Identify quality-gate states distinct from tool execution failure."""
-    if kind in {
-        "measurement_repair_required",
-        "measurement_decision_required",
-        "measurement_focus_requested",
-        "measurement_focus_failed",
-        "measurement_repair_exhausted",
-        "assembly_validation_failure",
-        "review_repair_required",
-    }:
+    if kind in {"assembly_validation_failure", "review_repair_required"}:
         return True
-    statuses = _statuses(payload)
-    return bool(statuses & {"remeasure_required", "partial"})
+    return False
 
 
 def _event_is_success(kind: str, payload: Mapping[str, Any]) -> bool:
-    if kind in {"run_started", "resume_started", "generated_chart", "generated_chart_published", "operation_completed", "review_completed", "measurement_focus_applied", "measurement_evidence_selected", "measurement_evidence_discarded", "measurement_evidence_used", "measurement_observed"}:
+    if kind in {"run_started", "resume_started", "generated_chart", "generated_chart_published", "operation_completed", "review_completed"}:
         return not _event_is_failure(kind, payload)
     if kind == "tool_result":
         statuses = _statuses(payload)

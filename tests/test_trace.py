@@ -161,36 +161,35 @@ def test_trace_event_direct_payload_is_json_safe():
     assert "raw-bytes" not in event.to_json()
 
 
-def test_trace_events_get_bounded_decision_unit_envelope_and_stable_transition():
+def test_measurement_tool_events_get_stable_execution_correlation():
     first = enrich_event_payload(
-        "measurement_focus_applied",
+        "tool_call",
         {
             "unit_id": "measurement:attempt-2",
             "unit_type": "measurement",
-            "phase": "observe",
+            "phase": "action",
             "actor": "tool",
-            "role": "observation",
-            "state": "applied",
-            "transition_id": "measurement:attempt-2:focus-applied",
-            "session_id": "session-1",
-            "attempt_id": "attempt-2",
-            "panel_id": "panel-left",
-            "next_action": {"required": True, "allowed": ["observe_same_scope"], "blocked": ["assemble"]},
+            "role": "action",
+            "state": "running",
+            "transition_id": "measurement:attempt-2:started",
+            "tool_name": "measure_bars",
+            "call_id": "call-2",
+            "arguments": {"panel_id": "panel-left"},
         },
         run_id="run-1",
         sequence=3,
     )
-    replay = enrich_event_payload("measurement_focus_applied", first, run_id="run-1", sequence=99)
+    replay = enrich_event_payload("tool_call", first, run_id="run-1", sequence=99)
 
     assert first["unit_id"] == "measurement:attempt-2"
     assert first["unit_type"] == "measurement"
-    assert first["phase"] == "observe"
+    assert first["phase"] == "action"
     assert first["actor"] == "tool"
-    assert first["next_action"]["required"] is True
+    assert first["tool_name"] == "measure_bars"
     assert first["transition_id"] == replay["transition_id"]
 
     duplicate = enrich_event_payload(
-        "measurement_focus_applied",
+        "tool_call",
         first,
         run_id="run-1",
         sequence=3,

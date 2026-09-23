@@ -46,19 +46,16 @@ _FIGURE_LAYOUT_TYPES = frozenset({"grid"})
 _COVERAGE_STATUSES = frozenset({"complete", "incomplete", "unknown"})
 _COVERAGE_BASES = frozenset({"full_source", "requested_subset", "not_applicable"})
 _PROVENANCE_FIELDS = (
-    "status",
     "session_id",
     "attempt_id",
     "attachment_id",
     "panel_id",
     "tool",
+    "scope",
+    "effective_scope",
     "quality",
     "evidence_refs",
-    "selected_refs",
-    "discarded_refs",
-    "decision_status",
-    "series_map",
-    "evidence_basis",
+    "series_metadata",
     "observation_scope",
 )
 
@@ -263,9 +260,6 @@ class ChartSpec:
                 for field_name in ("session_id", "attempt_id", "attachment_id"):
                     if not isinstance(self.provenance.get(field_name), str) or not self.provenance.get(field_name):
                         issues.append(ValidationIssue(f"provenance.{field_name}", "measurement provenance is missing its identity"))
-                status = self.provenance.get("status")
-                if status not in {"accepted", "selected", "discarded", "abandoned", "provisional", "partial"}:
-                    issues.append(ValidationIssue("provenance.status", "measurement provenance has an unsupported status"))
 
         if self.generation_context is not None:
             issues.extend(
@@ -285,19 +279,51 @@ def _bounded_provenance(value: object) -> Optional[Dict[str, Any]]:
             continue
         item = value.get(key)
         if key == "quality" and isinstance(item, Mapping):
-            result[key] = {
+            quality = {
                 "confidence": dict(item.get("confidence") or {}) if isinstance(item.get("confidence"), Mapping) else {},
                 "blocking": bool(item.get("blocking", False)),
             }
-        elif key in {"evidence_refs", "selected_refs", "discarded_refs"} and isinstance(item, (list, tuple)):
+            if isinstance(item.get("warnings"), (list, tuple)):
+                quality["warnings"] = [str(entry)[:240] for entry in item["warnings"][:12]]
+            if isinstance(item.get("issues"), (list, tuple)):
+                quality["issues"] = [
+                    {
+                        str(name)[:64]: str(detail)[:240]
+                        for name, detail in list(entry.items())[:8]
+                        if isinstance(name, str) and isinstance(detail, (str, int, float, bool))
+                    }
+                    for entry in item["issues"][:8]
+                    if isinstance(entry, Mapping)
+                ]
+            if isinstance(item.get("checks"), (list, tuple)):
+                quality["checks"] = [
+                    {
+                        str(name)[:64]: str(detail)[:240]
+                        for name, detail in list(entry.items())[:8]
+                        if isinstance(name, str) and isinstance(detail, (str, int, float, bool))
+                    }
+                    for entry in item["checks"][:16]
+                    if isinstance(entry, Mapping)
+                ]
+            result[key] = quality
+        elif key == "evidence_refs" and isinstance(item, (list, tuple)):
             result[key] = [str(ref)[:24] for ref in list(item)[:64]]
-        elif key == "series_map" and isinstance(item, Mapping):
-            result[key] = {str(name)[:80]: str(value)[:120] for name, value in list(item.items())[:32]}
-        elif key == "observation_scope" and isinstance(item, Mapping):
+        elif key == "series_metadata" and isinstance(item, (list, tuple)):
+            fields = {"ref", "kind", "label", "color", "bbox_px", "has_numeric_value", "series_ref"}
+            result[key] = [
+                {
+                    str(name)[:64]: detail
+                    for name, detail in list(entry.items())[:8]
+                    if name in fields and isinstance(name, str) and isinstance(detail, (str, int, float, bool, list, tuple))
+                }
+                for entry in item[:64]
+                if isinstance(entry, Mapping)
+            ]
+        elif key in {"scope", "effective_scope", "observation_scope"} and isinstance(item, Mapping):
             result[key] = {
                 str(name)[:64]: item_value
                 for name, item_value in list(item.items())[:24]
-                if isinstance(name, str)
+                if isinstance(name, str) and isinstance(item_value, (str, int, float, bool, list, tuple, dict))
             }
         elif isinstance(item, str):
             result[key] = item[:160]

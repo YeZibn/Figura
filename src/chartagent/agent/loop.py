@@ -70,12 +70,8 @@ from .artifacts import (
     _trace_result_summary,
 )
 from .measurement_flow import (
-    _measurement_repair_context_from_content,
-    _measurement_repair_contexts_from_sessions,
-    _measurement_trace_fields,
-    _measurement_evidence_uses_from_content,
-    _merge_measurement_repair_contexts,
-    measurement_decisions_from_content,
+    measurement_evidence_from_sessions as _measurement_evidence_from_sessions,
+    measurement_trace_fields as _measurement_trace_fields,
     register_measurement_observation,
 )
 from .panel_routing import (
@@ -229,8 +225,6 @@ class Agent:
         artifact_records: list[dict[str, Any]] = []
         checkpoint_references: list[dict[str, Any]] = []
         measurement_sessions: dict[str, MeasurementSession] = {}
-        pending_measurement_repairs: list[dict[str, Any]] = []
-        measurement_decision_seen: set[str] = set()
         if isinstance(recovery, dict):
             loader = getattr(self.memory, "recovery_context", None)
             hydrated = loader(recovery, budget=self.context_budget) if callable(loader) else []
@@ -268,18 +262,6 @@ class Agent:
                         self._execution_gate_sink(self._review_manager.execution_gate(run.id).to_dict())
                     except Exception:  # noqa: BLE001 - projection failure cannot open the manager gate
                         pass
-            pending_measurement_repairs = _measurement_repair_contexts_from_sessions(measurement_sessions)
-            raw_repairs = recovery.get("pendingMeasurementRepairs")
-            if isinstance(raw_repairs, list):
-                pending_measurement_repairs = _merge_measurement_repair_contexts(
-                    pending_measurement_repairs,
-                    raw_repairs,
-                )
-            elif isinstance(recovery.get("pendingMeasurementRepair"), dict):
-                pending_measurement_repairs = _merge_measurement_repair_contexts(
-                    pending_measurement_repairs,
-                    [recovery["pendingMeasurementRepair"]],
-                )
         user_message = {"role": "user", "content": user_input}
         self.memory.append(run, "user", {"message": user_message, "text": user_input if isinstance(user_input, str) else "[image attachment turn]"})
         if isinstance(user_input, str):
@@ -314,7 +296,6 @@ class Agent:
                 checkpoint_references=checkpoint_references,
                 artifact_records=artifact_records,
                 measurement_sessions=measurement_sessions,
-                pending_measurement_repairs=pending_measurement_repairs,
                 emitter=emitter,
             )
             pending_recovery_calls = self._recovery_tool_calls(recovery)
@@ -342,10 +323,11 @@ class Agent:
                         active_generation_context = candidate_item["generationContext"]
                         break
                 execution_gate = self._review_manager.execution_gate(run.id).to_dict()
+                measurement_evidence = _measurement_evidence_from_sessions(measurement_sessions)
                 decision_context = build_decision_context(
                     run_id=run.id,
                     execution_gate=execution_gate,
-                    measurement_evidence=pending_measurement_repairs,
+                    measurement_evidence=measurement_evidence,
                     selected_panel=selected_panel,
                     generation_context=active_generation_context,
                     phase="model",
@@ -361,7 +343,7 @@ class Agent:
                         "selected_panel": selected_panel,
                         "current_tool": current_tool_name,
                         "pending_action": pending_action,
-                        "measurement_evidence": pending_measurement_repairs,
+                        "measurement_evidence": measurement_evidence,
                         "recovery_status": "recovery_context_loaded" if recovery else "none",
                         "retry_count": max(
                             [
@@ -461,7 +443,6 @@ class Agent:
                             visual_references=checkpoint_references,
                             artifact_records=artifact_records,
                             measurement_sessions=measurement_sessions,
-                            pending_measurement_repairs=pending_measurement_repairs,
                         ),
                     )
                     continue
@@ -478,12 +459,11 @@ class Agent:
                         layout_contexts,
                         run_attachment_ids,
                         turn,
-                        pending_tool_calls=result.tool_calls[call_index + 1:],
+                        pending_tool_calls=(),
                         pending_answer=result.content,
                         visual_references=checkpoint_references,
                         artifact_records=artifact_records,
                         measurement_sessions=measurement_sessions,
-                        pending_measurement_repairs=pending_measurement_repairs,
                     ),
                 )
                 if isinstance(recovery, dict) and recovery.get("nextAction") == "final" and isinstance(recovery.get("pendingAnswer"), str):
@@ -526,7 +506,6 @@ class Agent:
                     visual_references=checkpoint_references,
                     artifact_records=artifact_records,
                     measurement_sessions=measurement_sessions,
-                    pending_measurement_repairs=pending_measurement_repairs,
                 ),
             )
             visual_evidence: list[ToolVisualEvidence] = []
@@ -565,7 +544,6 @@ class Agent:
                             visual_references=checkpoint_references,
                             artifact_records=artifact_records,
                             measurement_sessions=measurement_sessions,
-                            pending_measurement_repairs=pending_measurement_repairs,
                         ),
                     )
                     break
@@ -611,20 +589,6 @@ class Agent:
                 raw_observation_scope = dispatch.raw_observation_scope
                 prepared_target = dispatch.prepared_target
                 observation = dispatch.observation
-                focus_unit_id = tool_unit_id if call.name in MEASUREMENT_TOOLS else None
-                required_focus = False
-                if isinstance(prepared_target, Mapping):
-                    focus_identity = str(
-                        prepared_target.get("target_fingerprint")
-                        or prepared_target.get("target_id")
-                        or call.id
-                    )[:160]
-                    focus_unit_id = tool_unit_id
-                    active_gate = self._review_manager.execution_gate(run.id)
-                    required_focus = bool(
-                        active_gate.blocking
-                        and active_gate.repair_kind == "evidence_needed"
-                    )
                 self._raise_if_interrupted(run)
                 if call.name in {_LAYOUT_TOOL_NAME, _DECOMPOSE_TOOL_NAME}:
                     self._remember_layout_context(
@@ -662,7 +626,6 @@ class Agent:
                         visual_references=checkpoint_references,
                         artifact_records=artifact_records,
                         measurement_sessions=measurement_sessions,
-                        pending_measurement_repairs=pending_measurement_repairs,
                     )
                     state["pendingReview"] = {
                         "callId": call.id,
@@ -732,201 +695,19 @@ class Agent:
                             blocking=False,
                         )
                 if call.name in MEASUREMENT_TOOLS:
-                    if prepared_target is not None and emitter is not None:
-                        emitter.emit(
-                            "measurement_focus_requested",
-                            turn=turn,
-                            tool_name=call.name,
-                            call_id=call.id,
-                            unit_id=focus_unit_id,
-                            unit_type="measurement",
-                            phase="observe",
-                            actor="agent",
-                            role="action",
-                            state="requested",
-                            transition_id=f"{focus_unit_id}:focus_requested",
-                            parent_unit_id=(
-                                f"review:{self._review_manager.execution_gate(run.id).review_id}"
-                                if required_focus and self._review_manager.execution_gate(run.id).review_id
-                                else None
-                            ),
-                            required=required_focus,
-                            target={
-                                key: prepared_target.get(key)
-                                for key in (
-                                    "target_id",
-                                    "target_fingerprint",
-                                    "panel_id",
-                                    "parent_attempt_id",
-                                    "resolved_refs",
-                                    "mode",
-                                    "fields",
-                                    "region_kind",
-                                )
-                                if prepared_target.get(key) is not None
-                            },
-                        )
-                    focus_observed = False
-                    try:
-                        measurement_payload = json.loads(observation.content)
-                        measurement_data = measurement_payload.get("data") if isinstance(measurement_payload, dict) else None
-                        if isinstance(measurement_data, dict):
-                            measurement_session = register_measurement_observation(
-                                measurement_sessions,
-                                observation.content,
-                            )
-                            if measurement_session is not None and emitter is not None:
-                                focus_observed = True
-                                emitter.emit(
-                                    "measurement_observed",
-                                    turn=turn,
-                                    tool_name=call.name,
-                                    call_id=call.id,
-                                    unit_id=focus_unit_id,
-                                    unit_type="measurement",
-                                    phase="observe",
-                                    actor="tool",
-                                    role="observation",
-                                    state="observed",
-                                    transition_id=f"{focus_unit_id}:observed",
-                                    parent_unit_id=(
-                                        f"review:{self._review_manager.execution_gate(run.id).review_id}"
-                                        if required_focus and self._review_manager.execution_gate(run.id).review_id
-                                        else None
-                                    ),
-                                    session_id=measurement_session.session_id,
-                                    attachment_id=measurement_session.attachment_id,
-                                    panel_id=measurement_session.panel_id,
-                                    measurement_status=measurement_session.current_attempt().status
-                                    if measurement_session.current_attempt() is not None
-                                    else None,
-                                    decision_status=measurement_session.decision_status,
-                                    observation_scope=(measurement_data.get("observation_scope") if isinstance(measurement_data.get("observation_scope"), Mapping) else None),
-                                    blocking=False,
-                                    **_lifecycle_trace_fields(observation.content),
-                                )
-                                if measurement_session.repair_budget_remaining <= 0 and measurement_session.decision_status == "pending":
-                                    emitter.emit(
-                                        "measurement_repair_exhausted",
-                                        turn=turn,
-                                        tool_name=call.name,
-                                        call_id=call.id,
-                                        unit_id=focus_unit_id,
-                                        unit_type="measurement",
-                                        phase="repair",
-                                        actor="system",
-                                        role="gate",
-                                        state="exhausted",
-                                        transition_id=f"{focus_unit_id}:repair_exhausted",
-                                        session_id=measurement_session.session_id,
-                                        attempt_id=measurement_session.current_attempt_id,
-                                        budget_remaining=0,
-                                        next_action="由主 Agent 舍弃不可靠证据或选择已有有效引用；不自动重复测量",
-                                    )
-                            if measurement_session is not None:
-                                pending_measurement_repairs = _measurement_repair_contexts_from_sessions(
-                                    measurement_sessions
-                                )
-                                self._advance_generated_repair_phase(run.id, "assemble")
-                    except (TypeError, json.JSONDecodeError):
-                        pass
-                    if prepared_target is not None and emitter is not None and not focus_observed:
-                        emitter.emit(
-                            "measurement_focus_failed",
-                            turn=turn,
-                            tool_name=call.name,
-                            call_id=call.id,
-                            unit_id=focus_unit_id,
-                            unit_type="measurement",
-                            phase="observe",
-                            actor="tool",
-                            role="observation",
-                            transition_id=f"{focus_unit_id}:focus_failed",
-                            parent_unit_id=(
-                                f"review:{self._review_manager.execution_gate(run.id).review_id}"
-                                if required_focus and self._review_manager.execution_gate(run.id).review_id
-                                else None
-                            ),
-                            required=required_focus,
-                            status="pending" if required_focus else "abandoned",
-                            reason="工具没有返回当前 target 的 measurement observation",
-                            next_action={
-                                "required": required_focus,
-                                "allowed": ["request_same_scope_measurement", "abandon"],
-                                "blocked": ["assemble", "publish"] if required_focus else [],
-                                "reason": "必须先闭合当前 focused measurement 的 observation obligation" if required_focus else "可选局部观察未形成证据，可由主 Agent 明确放弃",
-                            },
-                        )
-                if call.name == "assemble_spec":
-                    self._record_measurement_decision_events(
-                        run,
+                    measurement_session = register_measurement_observation(
+                        measurement_sessions,
                         observation.content,
-                        emitter=emitter,
-                        turn=turn,
-                        call_id=call.id,
-                        seen=measurement_decision_seen,
                     )
+                    if measurement_session is not None:
+                        self._advance_generated_repair_phase(run.id, "assemble")
+                if call.name == "assemble_spec":
                     try:
                         assembled_payload = json.loads(observation.content)
                     except (TypeError, json.JSONDecodeError):
                         assembled_payload = None
                     if isinstance(assembled_payload, Mapping) and not assembled_payload.get("error"):
                         self._advance_generated_repair_phase(run.id, "render")
-                repair_context = _measurement_repair_context_from_content(observation.content)
-                if repair_context is not None:
-                    pending_measurement_repairs = _merge_measurement_repair_contexts(
-                        pending_measurement_repairs,
-                        [repair_context],
-                    )
-                    pending_action = "读取当前测量证据并由主 Agent判断是否使用或补充"[:240]
-                    # Keep the old memory record readable for recovery and
-                    # evaluation, but it is evidence availability, not a
-                    # blocking decision obligation.
-                    self.memory.append(run, "measurement_decision", {"state": {**repair_context, "required": False}})
-                    if emitter is not None:
-                        emitter.emit(
-                            "measurement_decision_required",
-                            turn=turn,
-                            tool_name=call.name,
-                            call_id=call.id,
-                            unit_id=tool_unit_id,
-                            unit_type="measurement",
-                            phase="decide",
-                            actor="agent",
-                            role="decision",
-                            state="pending",
-                            transition_id=f"{tool_unit_id}:decision_required",
-                            required=False,
-                            diagnostic_only=True,
-                            decision=repair_context,
-                        )
-                        focus = repair_context.get("focus")
-                        if isinstance(focus, Mapping) and focus.get("requested"):
-                            emitter.emit(
-                                "measurement_focus_applied"
-                                if focus.get("applied") and focus.get("status") == "applied"
-                                else "measurement_focus_failed",
-                                turn=turn,
-                                tool_name=call.name,
-                                call_id=call.id,
-                                unit_id=focus_unit_id,
-                                unit_type="measurement",
-                                phase="observe",
-                                actor="tool",
-                                role="observation",
-                                state="applied" if focus.get("applied") and focus.get("status") == "applied" else "failed",
-                                transition_id=f"{focus_unit_id}:focus_" + ("applied" if focus.get("applied") and focus.get("status") == "applied" else "failed"),
-                                required=required_focus,
-                                focus={
-                                    key: focus.get(key)
-                                    for key in ("requested", "applied", "status", "mode", "target_refs", "search_scope", "region_px")
-                                    if focus.get(key) is not None
-                                },
-                            )
-                elif call.name in MEASUREMENT_TOOLS:
-                    pending_measurement_repairs = _measurement_repair_contexts_from_sessions(
-                        measurement_sessions
-                    )
                 artifact_records.extend(
                     _artifact_records_from_observation(
                         call.name,
@@ -986,7 +767,6 @@ class Agent:
                         visual_references=checkpoint_references,
                         artifact_records=artifact_records,
                         measurement_sessions=measurement_sessions,
-                        pending_measurement_repairs=pending_measurement_repairs,
                     ),
                 )
                 pending_action = "处理工具观察并决定下一步证据或 ChartSpec 操作"
@@ -1074,9 +854,6 @@ class Agent:
                         "image_count": len(visual_evidence),
                     },
                 )
-            pending_measurement_repairs = _merge_measurement_repair_contexts(
-                _measurement_repair_contexts_from_sessions(measurement_sessions),
-            )
             self._checkpoint(
                 run,
                 phase="tool",
@@ -1091,7 +868,6 @@ class Agent:
                     visual_references=checkpoint_references,
                     artifact_records=artifact_records,
                     measurement_sessions=measurement_sessions,
-                    pending_measurement_repairs=pending_measurement_repairs,
                 ),
             )
         self._raise_if_interrupted(run)
@@ -1243,6 +1019,7 @@ class Agent:
             "reviewId": candidate.review_id,
             "runId": candidate.run_id,
             "reviewType": "generated_chart",
+            "review_mode": review.review_mode if review is not None else "vlm" if candidate.policy.semantic_required else "safety",
             "subjectId": candidate.candidate_id,
             "state": state,
             "blocking": started or candidate.publication_status in {PublicationStatus.UNPUBLISHED, PublicationStatus.REJECTED},
@@ -1284,7 +1061,6 @@ class Agent:
             "subject_id": candidate.candidate_id,
             "review_status": candidate.review_status.value,
             "transition_id": f"review:{candidate.review_id}:{candidate.lineage_attempt}:{state}",
-            "review_mode": review.review_mode if review is not None else "vlm" if candidate.policy.semantic_required else "safety",
             "candidate_status": candidate.status.value,
             "publication_status": candidate.publication_status.value,
         }
@@ -1351,91 +1127,6 @@ class Agent:
             call_id=call_id,
             reason=("review_failed" if publication_kind == "generated_chart_rejected" else None),
         )
-
-    def _record_measurement_decision_events(
-        self,
-        run: Any,
-        content: str,
-        *,
-        emitter: TraceEmitter | None,
-        turn: int,
-        call_id: str,
-        seen: set[str] | None = None,
-    ) -> None:
-        """Record actual evidence use as diagnostic lineage."""
-        for evidence_use in _measurement_evidence_uses_from_content(content):
-            evidence_key = json.dumps(evidence_use, ensure_ascii=False, sort_keys=True, default=str)
-            if seen is not None:
-                evidence_key = f"evidence_used:{evidence_key}"
-                if evidence_key in seen:
-                    continue
-                seen.add(evidence_key)
-            payload = {
-                "turn": turn,
-                "tool_name": "assemble_spec",
-                "call_id": call_id,
-                "unit_id": f"measurement:{str(evidence_use.get('attempt_id') or evidence_use.get('session_id') or call_id)[:128]}",
-                "unit_type": "measurement",
-                "phase": "decide",
-                "actor": "agent",
-                "role": "decision",
-                "state": "used",
-                "transition_id": f"measurement:{str(evidence_use.get('attempt_id') or evidence_use.get('session_id') or call_id)[:128]}:evidence_used",
-                **evidence_use,
-                "blocking": False,
-                "diagnostic_only": False,
-            }
-            self.memory.append(run, "evidence_used", {"state": payload})
-            if emitter is not None:
-                emitter.emit("measurement_evidence_used", **payload)
-        for decision in measurement_decisions_from_content(content):
-            attempt_id = str(decision.get("attempt_id") or "").strip()
-            if not attempt_id:
-                continue
-            decision_key = json.dumps(
-                {
-                    "attempt_id": attempt_id,
-                    "selected_refs": list(decision.get("selected_refs") or [])[:64],
-                    "discarded_refs": list(decision.get("discarded_refs") or [])[:64],
-                    "status": decision.get("decision_status") or decision.get("status") or "selected",
-                    "series_map": dict(decision.get("series_map") or {}) if isinstance(decision.get("series_map"), Mapping) else {},
-                    "evidence_basis": decision.get("evidence_basis"),
-                },
-                ensure_ascii=False,
-                sort_keys=True,
-                default=str,
-            )
-            if seen is not None and decision_key in seen:
-                continue
-            if seen is not None:
-                seen.add(decision_key)
-            payload = {
-                "turn": turn,
-                "tool_name": "assemble_spec",
-                "call_id": call_id,
-                "unit_id": f"measurement:{attempt_id[:128]}",
-                "unit_type": "measurement",
-                "phase": "decide",
-                "actor": "agent",
-                "role": "decision",
-                "state": str(decision.get("decision_status") or decision.get("status") or "selected")[:32],
-                "transition_id": f"measurement:{attempt_id[:128]}:evidence_decision",
-                "session_id": decision.get("session_id"),
-                "attempt_id": attempt_id,
-                "selected_refs": list(decision.get("selected_refs") or [])[:64],
-                "discarded_refs": list(decision.get("discarded_refs") or [])[:64],
-                "decision_status": str(decision.get("decision_status") or decision.get("status") or "selected")[:32],
-                "series_map": dict(decision.get("series_map") or {}) if isinstance(decision.get("series_map"), Mapping) else {},
-                "evidence_basis": str(decision.get("evidence_basis") or "")[:80] or None,
-                "blocking": False,
-            }
-            payload.update(_lifecycle_trace_fields(content))
-            self.memory.append(run, "measurement_decision", {"state": payload})
-            if emitter is not None:
-                if payload["selected_refs"]:
-                    emitter.emit("measurement_evidence_selected", **payload, diagnostic_only=True)
-                if payload["discarded_refs"] or payload["decision_status"] in {"discarded", "abandoned"}:
-                    emitter.emit("measurement_evidence_discarded", **payload, diagnostic_only=True)
 
     def _skip_tool_calls(
         self,
@@ -1547,7 +1238,6 @@ class Agent:
         visual_references: Sequence[dict[str, Any]] = (),
         artifact_records: Sequence[dict[str, Any]] = (),
         measurement_sessions: Mapping[str, MeasurementSession] | None = None,
-        pending_measurement_repairs: Sequence[Mapping[str, Any]] | None = None,
     ) -> dict[str, Any]:
         return checkpoint_state(
             user_input,
@@ -1560,7 +1250,6 @@ class Agent:
             visual_references=visual_references,
             artifact_records=artifact_records,
             measurement_sessions=measurement_sessions,
-            pending_measurement_repairs=pending_measurement_repairs,
         )
 
     @staticmethod
@@ -1621,7 +1310,6 @@ class Agent:
         checkpoint_references: list[dict[str, Any]],
         artifact_records: list[dict[str, Any]],
         measurement_sessions: Mapping[str, MeasurementSession],
-        pending_measurement_repairs: Sequence[Mapping[str, Any]],
         emitter: TraceEmitter | None,
     ) -> None:
         """Finish a staged review before returning to the model after recovery."""
@@ -1658,7 +1346,6 @@ class Agent:
                 visual_references=checkpoint_references,
                 artifact_records=artifact_records,
                 measurement_sessions=measurement_sessions,
-                pending_measurement_repairs=pending_measurement_repairs,
             )
             state["pendingReview"] = {
                 "callId": call_id,
@@ -1764,7 +1451,6 @@ class Agent:
                 visual_references=checkpoint_references,
                 artifact_records=artifact_records,
                 measurement_sessions=measurement_sessions,
-                pending_measurement_repairs=pending_measurement_repairs,
             ),
         )
 

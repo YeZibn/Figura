@@ -3,7 +3,6 @@
 from .evidence import (
     MAX_OBSERVATION_OBJECTIVES,
     MAX_OBSERVATION_REGIONS,
-    MAX_REPAIR_ATTEMPTS,
     MEASUREMENT_FOCUS_MODES,
     MEASUREMENT_STATUSES,
     MEASUREMENT_TOOLS,
@@ -16,10 +15,10 @@ from .evidence import (
 from .lifecycle import (
     MeasurementAttempt,
     MeasurementSession,
-    measurement_gate,
     register_measurement,
     sessions_from_state,
     sessions_to_state,
+    validate_measurement_evidence,
 )
 from .quality import (
     attach_measurement_quality,
@@ -44,7 +43,6 @@ __all__ = [
     "OBSERVATION_REGION_ROLES",
     "MAX_OBSERVATION_REGIONS",
     "MAX_OBSERVATION_OBJECTIVES",
-    "MAX_REPAIR_ATTEMPTS",
     "MeasurementTarget",
     "ObservationScope",
     "MeasurementAttempt",
@@ -54,7 +52,7 @@ __all__ = [
     "build_measurement_evidence_refs",
     "compact_evidence_ref",
     "measurement_from_data",
-    "measurement_gate",
+    "validate_measurement_evidence",
     "measurement_target_fingerprint",
     "normalize_observation_scope",
     "observation_scope_fingerprint",

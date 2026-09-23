@@ -123,7 +123,7 @@ def _write_history(root: Path, *, include_records: bool = True, large_result: bo
                 ("user", {"message": {"role": "user", "content": "请分析这张图"}}, "2026-09-20T00:00:00Z"),
                 ("assistant", {"message": {"role": "assistant", "content": "我会先读取图表并测量。", "reasoning_content": "private reasoning"}}, "2026-09-20T00:00:01Z"),
                 ("tool", {"message": {"role": "tool", "tool_call_id": "call_1", "content": json.dumps({"bars": 2, "authorization": "secret", "path": "/Users/private/chart.png"})}, "tool_name": "measure_bars", "status": "success"}, "2026-09-20T00:00:03Z"),
-                ("measurement_repair", {"state": {"action": "remeasure", "panel_id": "panel_1", "reason": "补充基线证据"}}, "2026-09-20T00:00:04Z"),
+                ("tool", {"message": {"role": "tool", "name": "measure_bars", "content": "测量结果"}, "tool_name": "measure_bars", "status": "success"}, "2026-09-20T00:00:04Z"),
             ]
             connection.executemany(
                 "INSERT INTO records(run_id, sequence, kind, payload_json, created_at) VALUES (?, ?, ?, ?, ?)",

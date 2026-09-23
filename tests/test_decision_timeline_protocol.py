@@ -1,84 +1,74 @@
 from __future__ import annotations
 
-import json
-from pathlib import Path
-
 from chartagent.decision_timeline import enrich_event_payload
 
 
-FIXTURE = Path(__file__).parent / "fixtures" / "decision_timeline_test4.json"
-
-
-def test_test4_replay_reconstructs_closed_units_and_collection_lineage():
-    fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
-    events = [
-        enrich_event_payload(
-            item["kind"],
-            item["payload"],
-            run_id=fixture["run_id"],
-            sequence=item["sequence"],
-        )
-        for item in fixture["events"]
-    ]
-
-    measurement_ids = {
-        event["unit_id"]
-        for event in events[:4]
-    }
-    assert measurement_ids == {"measurement:matt-test4"}
-    assert all(event["unit_type"] == "measurement" for event in events[:4])
-
-    generation_events = events[4:7]
-    assert {event["unit_id"] for event in generation_events} == {
-        "generation:assemble-test4",
-        "generation:candidate-test4",
-    }
-    assert all(event["unit_type"] == "generation" for event in generation_events)
-
-    review_events = [
-        event
-        for item, event in zip(fixture["events"], events)
-        if item["kind"].startswith("review_")
-    ]
-    assert {event["unit_id"] for event in review_events} == {
-        "review:review-test4",
-        "review:review-test4-retry",
-    }
-    assert {event["parent_unit_id"] for event in review_events} == {"review:collection:collection-test4"}
-    assert {event["unit_type"] for event in review_events} == {"review"}
-
-    repair_measurement_events = events[11:15]
-    assert {event["unit_id"] for event in repair_measurement_events} == {"measurement:matt-test4-repair"}
-    assert "next_action" not in repair_measurement_events[0]
-
-    retry_generation_events = events[15:18]
-    assert {event["unit_id"] for event in retry_generation_events} == {
-        "generation:assemble-test4-repair",
-        "generation:candidate-test4-retry",
-    }
-    assert all(event["unit_type"] == "generation" for event in retry_generation_events)
-
-    publication = events[-1]
-    assert publication["unit_id"] == "publication:candidate-test4-retry"
-    assert publication["parent_unit_id"] == "review:review-test4-retry"
-    assert publication["phase"] == "publish"
-
-
-def test_test4_replay_is_idempotent_for_repeated_snapshot_and_safe_for_legacy_event():
-    fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
-    source = fixture["events"][2]
-    first = enrich_event_payload(
-        source["kind"], source["payload"], run_id=fixture["run_id"], sequence=source["sequence"]
+def test_measurement_call_and_result_share_one_canonical_tool_unit():
+    call = enrich_event_payload(
+        "tool_call",
+        {
+            "unit_id": "measurement:call_1",
+            "unit_type": "measurement",
+            "phase": "action",
+            "actor": "tool",
+            "role": "action",
+            "call_id": "call_1",
+            "tool_name": "measure_bars",
+            "state": "running",
+            "transition_id": "measurement:call_1:started",
+            "arguments": {"attachment_id": "att_source", "panel_id": "panel_bars"},
+        },
+        run_id="run_measurement",
+        sequence=1,
     )
-    replay = enrich_event_payload(
-        source["kind"], first, run_id=fixture["run_id"], sequence=source["sequence"]
+    result = enrich_event_payload(
+        "tool_result",
+        {
+            "unit_id": "measurement:call_1",
+            "unit_type": "measurement",
+            "phase": "action",
+            "actor": "tool",
+            "role": "action",
+            "call_id": "call_1",
+            "tool_name": "measure_bars",
+            "state": "completed",
+            "status": "success",
+            "transition_id": "measurement:call_1:completed",
+            "result": {
+                "measurement": {
+                    "status": "partial",
+                    "reference": {"session_id": "ms_1", "attempt_id": "matt_1"},
+                    "evidence": {"refs": [{"ref": "B1"}]},
+                }
+            },
+        },
+        run_id="run_measurement",
+        sequence=2,
     )
+
+    assert call["unit_id"] == result["unit_id"] == "measurement:call_1"
+    assert call["call_id"] == result["call_id"] == "call_1"
+    assert call["phase"] == result["phase"] == "action"
+    assert result["result"]["measurement"]["evidence"]["refs"] == [{"ref": "B1"}]
+    assert "next_action" not in call
+    assert "next_action" not in result
+
+
+def test_tool_result_enrichment_is_idempotent():
+    payload = {
+        "unit_id": "measurement:call_2",
+        "unit_type": "measurement",
+        "phase": "action",
+        "actor": "tool",
+        "role": "action",
+        "call_id": "call_2",
+        "tool_name": "extract_line_series",
+        "status": "success",
+        "state": "completed",
+        "transition_id": "measurement:call_2:completed",
+        "result": {"measurement": {"status": "complete", "evidence": {"refs": []}}},
+    }
+    first = enrich_event_payload("tool_result", payload, run_id="run_1", sequence=3)
+    replay = enrich_event_payload("tool_result", first, run_id="run_1", sequence=3)
+
     assert replay == first
-
-    legacy = enrich_event_payload(
-        "run_failed",
-        {"code": "history_gap"},
-        run_id=fixture["run_id"],
-        sequence=99,
-    )
-    assert legacy == {"code": "history_gap"}

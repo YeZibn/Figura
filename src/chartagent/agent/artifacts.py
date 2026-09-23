@@ -102,7 +102,6 @@ def artifact_records_from_observation(
     measurement_quality = measurement.get("quality") if isinstance(measurement, dict) else None
     measurement_issues = measurement_quality.get("issues", []) if isinstance(measurement_quality, dict) else []
     measurement_evidence = measurement.get("evidence") if isinstance(measurement, dict) and isinstance(measurement.get("evidence"), dict) else {}
-    measurement_decision = measurement.get("decision") if isinstance(measurement, dict) and isinstance(measurement.get("decision"), dict) else {}
     records: list[dict[str, Any]] = [
         {
             "artifact_id": f"observation:{call_id}"[:128],
@@ -123,14 +122,14 @@ def artifact_records_from_observation(
                 "measurement_reference": dict(measurement.get("reference") or {}) if isinstance(measurement.get("reference"), dict) else None,
                 "measurement_issues": [item for item in measurement_issues[:8] if isinstance(item, dict)],
                 "measurement_evidence_refs": list(measurement_evidence.get("refs") or [])[:64] if isinstance(measurement_evidence.get("refs"), list) else [],
-                "measurement_selected_refs": list(measurement_decision.get("selected_refs") or [])[:64] if isinstance(measurement_decision.get("selected_refs"), list) else [],
-                "measurement_discarded_refs": list(measurement_decision.get("discarded_refs") or [])[:64] if isinstance(measurement_decision.get("discarded_refs"), list) else [],
-                "measurement_decision_status": str(measurement_decision.get("status") or "pending")[:32],
-                "measurement_series_map": dict(measurement_decision.get("series_map") or {}) if isinstance(measurement_decision.get("series_map"), Mapping) else {},
-                "measurement_evidence_basis": str(measurement_decision.get("evidence_basis") or "")[:80] or None,
+                "measurement_series_metadata": [
+                    item for item in measurement_evidence.get("refs", [])[:64]
+                    if isinstance(item, dict) and item.get("kind") == "series"
+                ] if isinstance(measurement_evidence.get("refs"), list) else [],
+                "measurement_scope": dict(measurement.get("attempt", {}).get("scope") or {})
+                if isinstance(measurement.get("attempt"), dict) and isinstance(measurement.get("attempt", {}).get("scope"), Mapping) else None,
                 "measurement_observation_scope": dict(measurement.get("observation_scope") or {}) if isinstance(measurement.get("observation_scope"), Mapping) else None,
                 "measurement_effective_scope": dict(measurement.get("effective_scope") or {}) if isinstance(measurement.get("effective_scope"), Mapping) else None,
-                "measurement_focus": dict(measurement_evidence.get("focus") or {}) if isinstance(measurement_evidence.get("focus"), dict) else None,
             }
         )
     lifecycle = lifecycle_trace_fields(content)

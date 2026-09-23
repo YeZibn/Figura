@@ -6,9 +6,9 @@
 
 证据之间冲突时保留冲突来源，选择一次有针对性的再观察或在回答中说明限制。不得把某一种工具结果当成所有语义的替代品。
 
-测量工具返回的 `measurement.status` 是代码拥有的诊断状态，不是主流程共享审核门禁：任何 attempt 都先作为候选证据；`accepted`、`provisional`、`partial` 和 `remeasure_required` 都必须结合视觉结果、refs 和 issues 判断，`unsupported`/`failed` 不能作为可执行的测量来源。不要根据 confidence 自行伪造状态，也不要忽略 `measurement.quality.issues`。
+测量工具返回的 `measurement.status` 和 `measurement.quality` 是当前结果的诊断事实，不是主流程审核门禁。根据图像、实际 refs、范围和 issues 判断结果中哪些证据能支持当前 ChartSpec；即使结果是 `partial`，也可以引用其中有效的证据。工具没有返回的数值不得臆造；结构上无效或跨来源的引用仍会被组装器拒绝。
 
-`measurement.quality.repair_action`（兼容字段）或 `focus_suggestion` 只是有界建议，不是执行命令。先结合 `measurement.evidence.refs` 和 overlay 判断哪些候选可用；确需补充时，使用同一 panel 的原测量工具提交 `measurement_target`，优先填写 `refs`、`mode`（`include`/`exclude`）、`fields` 和 `reason`。新的 attempt 重新阅读后即可直接使用实际采用的 `evidence_refs`，也可以忽略候选或停止；不要伪造 selected refs。
+先结合 `measurement.evidence.refs`、overlay 和范围判断哪些候选可用。确需补充时，由主 Agent 主动调用同一 panel 的原测量工具并提交 `measurement_target`，可填写 `refs`、`mode`（`include`/`exclude`）、`fields` 和 `reason`。新结果会成为该 session 当前 attempt；重新阅读后直接在 `assemble_spec` 中传入实际采用的 `evidence_refs`，也可以忽略候选或停止。
 
 证据引用只用于交叉定位：柱体通常是 `B1`，系列是 `S1`，点是 `P1`，扇区是 `C1`，图例是 `L1`。不要把这些引用、内部 `series_1` 或工具返回的候选 ID 写成最终 ChartSpec 的业务标签。没有可解析的 bounded ref 时，不得凭空制造精确区域；可以停止、保留未解析字段，或重新选择可验证的观察范围。
 

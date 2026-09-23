@@ -8,11 +8,12 @@ from chartagent.agent.artifacts import (
     attach_visual_observation_refs,
 )
 from chartagent.agent.measurement_flow import (
-    measurement_decisions_from_content,
-    measurement_evidence_uses_from_content,
-    measurement_repair_context_from_content,
-    merge_measurement_repair_contexts,
+    measurement_data_from_content,
+    measurement_evidence_from_sessions,
+    measurement_trace_fields,
+    register_measurement_observation,
 )
+from chartagent.measurement import MeasurementSession
 from chartagent.agent.panel_routing import layout_arguments, panel_routing_error
 from chartagent.agent.recovery import checkpoint_state, recovery_tool_calls
 from chartagent.agent.turn import execute_model_turn, prepare_and_dispatch_tool_call
@@ -23,7 +24,7 @@ from chartagent.tools.core.result import DispatchedObservation, GeneratedImage
 def test_agent_data_collaborators_own_their_projection_helpers() -> None:
     assert attach_visual_observation_refs.__module__ == "chartagent.agent.artifacts"
     assert layout_arguments.__module__ == "chartagent.agent.panel_routing"
-    assert measurement_repair_context_from_content.__module__ == "chartagent.agent.measurement_flow"
+    assert measurement_data_from_content.__module__ == "chartagent.agent.measurement_flow"
     assert checkpoint_state.__module__ == "chartagent.agent.recovery"
     assert execute_model_turn.__module__ == "chartagent.agent.turn"
     assert prepare_and_dispatch_tool_call.__module__ == "chartagent.agent.turn"
@@ -79,60 +80,37 @@ def test_panel_routing_collaborator_keeps_scope_guardrails() -> None:
     )
 
 
-def test_measurement_flow_projects_bounded_decisions() -> None:
+def test_measurement_flow_projects_current_candidate_evidence() -> None:
     content = json.dumps(
         {
             "data": {
                 "measurement": {
                     "status": "partial",
                     "reference": {"session_id": "s1", "attempt_id": "a1"},
+                    "attempt": {
+                        "session_id": "s1",
+                        "attempt_id": "a1",
+                        "attachment_id": "att_1",
+                        "panel_id": "panel_1",
+                        "tool": "measure_bars",
+                        "scope": {"bbox_px": [0, 0, 100, 100]},
+                    },
                     "quality": {"issues": [{"code": "missing"}]},
-                    "evidence": {"refs": ["ref_1"]},
-                    "decision": {"status": "pending"},
+                    "evidence": {"refs": [{"ref": "B1", "kind": "bar", "has_numeric_value": True}]},
                 },
-                "_measurement_decisions": [
-                    {"attempt_id": "a1", "selected_refs": ["ref_1"]},
-                ],
             }
         }
     )
-    context = measurement_repair_context_from_content(content)
-    decisions = measurement_decisions_from_content(content)
-    merged = merge_measurement_repair_contexts([context], [{"attempt_id": "a1", "action": "focus"}])
-
-    assert context is not None
-    assert context["refs"] == ["ref_1"]
-    assert len(decisions) == 1
-    assert len(merged) == 2
-
-
-def test_measurement_flow_derives_actual_evidence_use_from_assembly() -> None:
-    content = json.dumps(
-        {
-            "data": {
-                "metadata": {"chart_type": "bar"},
-                "provenance": {
-                    "session_id": "s1",
-                    "attempt_id": "a1",
-                    "attachment_id": "att_1",
-                    "panel_id": "panel_1",
-                    "evidence_refs": ["B1", "B2"],
-                },
-                "_evidence_refs": ["B1", "B2"],
-            }
-        }
-    )
-
-    uses = measurement_evidence_uses_from_content(content)
-
-    assert uses == [{
-        "session_id": "s1",
-        "attempt_id": "a1",
-        "attachment_id": "att_1",
-        "panel_id": "panel_1",
-        "evidence_refs": ["B1", "B2"],
-        "status": "used",
-    }]
+    sessions: dict[str, MeasurementSession] = {}
+    session = register_measurement_observation(sessions, content)
+    assert session is not None
+    projected = measurement_evidence_from_sessions(sessions)
+    trace = measurement_trace_fields(content)
+    assert projected[0]["measurement_ref"]["attempt_id"] == "a1"
+    assert projected[0]["evidence_refs"][0]["ref"] == "B1"
+    assert projected[0]["status"] == "partial"
+    assert trace["measurement_evidence_refs"][0]["ref"] == "B1"
+    assert "measurement_target" not in trace
 
 
 def test_extracted_turn_boundaries_preserve_operation_order() -> None:

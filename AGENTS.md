@@ -47,8 +47,10 @@ optional Tauri shell. OpenSpec planning and main specifications live under
   `src/chartagent/prompting/assets/`. Keep `static/agent.md` focused on stable
   responsibilities; put detailed process rules in `static/workflow.md`, and
   keep runtime/tools/artifact facts in the dynamic layers.
-- Measurement output is candidate evidence, not automatic truth. Preserve the
-  main-Agent measurement decision, ChartSpec validation, generated-chart VLM
+- Measurement output is candidate evidence, not automatic truth. The main
+  Agent chooses evidence by passing actual refs during assembly or explicitly
+  calling a scoped measurement tool; do not add a separate measurement
+  decision state or queue. Preserve ChartSpec validation, generated-chart VLM
   review, and publication-state boundaries when changing orchestration.
 
 ## Build, Test, and Development Commands

@@ -325,7 +325,7 @@ multi-step agent can still reference its own prior actions. The system SHALL
 preserve native tool-message ordering: when one assistant turn contains
 multiple tool calls, every corresponding `tool` result SHALL be appended in the
 original call order before any new user or assistant continuation message,
-including measurement repair context.
+including bounded continuation context.
 
 #### Scenario: Assistant turn retains tool calls
 
@@ -467,7 +467,7 @@ Agent loop SHALL 将 measurement observation 的 scope、evidence refs、issues�
 
 ### Requirement: Measurement repair remains compatible with direct assembly
 
-当模型没有引用测量证据而直接基于清晰视觉输入组装合法 ChartSpec 时，Agent SHALL 保持直接装配路径。即使当前 run 曾经产生未采用、partial 或失败的 observation，模型也可以明确放弃该 observation 后直接装配；该路径不得绕过 ChartSpec 结构校验和后续生成审核。
+当模型没有引用测量 evidence refs 而直接基于清晰视觉输入组装合法 ChartSpec 时，Agent SHALL 保持直接装配路径。任何未被引用、partial 或失败的 measurement observation 都不要求显式放弃，也不得阻塞合法装配；该路径仍必须经过 ChartSpec 结构校验和后续生成审核。
 
 #### Scenario: Direct visual assembly does not enter measurement repair mode
 
@@ -475,11 +475,11 @@ Agent loop SHALL 将 measurement observation 的 scope、evidence refs、issues�
 - **THEN** Agent 按现有 ChartSpec 校验和生成审核流程继续
 - **AND** 不创建虚假的 measurement session 或 repair attempt
 
-#### Scenario: Unused observation remains auditable
+#### Scenario: Unused observation needs no abandonment decision
 
-- **WHEN** 模型放弃一个已有 measurement attempt 并改用视觉或 OCR 证据
-- **THEN** Agent 保留该 attempt 的历史和 abandoned 决策
-- **AND** 不阻塞当前合法的组装请求
+- **WHEN** 模型改用视觉或 OCR 证据而没有在 assembly 中引用某次 measurement attempt
+- **THEN** Agent 保留该工具调用和原始结果作为运行历史
+- **AND** 不创建 abandoned decision、额外测量状态或组装门禁
 
 ### Requirement: Main-chain measurement decisions are model-led
 
@@ -511,38 +511,38 @@ Agent loop SHALL 将 measurement observation 的 scope、evidence refs、issues�
 
 ### Requirement: Assembly validates actual evidence use without a separate decision envelope
 
-主循环 SHALL 允许 `assemble_spec` 通过 `measurement_ref + evidence_refs` 直接接收模型实际采用的 measurement refs，或接收不带 measurement provenance 的合法视觉输入。系统 SHALL 对被引用证据执行 session、attachment、panel、attempt、范围、引用和必要结构校验；只有非法引用或无效 ChartSpec 可以阻止当前组装，缺少独立 `measurement_decision` 不得成为阻断原因。
+主循环 SHALL 允许 `assemble_spec` 直接接收模型实际使用的 `measurement_ref + evidence_refs`，或接收不带 measurement provenance 的合法视觉输入。系统 SHALL 只校验实际引用的 refs 及其 session、attachment、panel、attempt、scope、引用存在性和必要结构；装配 schema 和运行状态不得接受、推导或要求 `measurement_decision`、selected/discarded refs 或 decision status。
 
 #### Scenario: Referenced evidence is valid
 
-- **WHEN** 主 Agent提交属于当前来源和 attempt 的合法 evidence refs
-- **THEN** 组装继续并保存实际使用的 provenance
+- **WHEN** 主 Agent 提交属于当前来源和 attempt 的合法 evidence refs
+- **THEN** 组装继续并从实际输入保存 provenance
 - **AND** 同一 observation 中未引用的候选不会阻塞组装
 
 #### Scenario: Referenced evidence is invalid
 
-- **WHEN** 主 Agent提交不存在、越界、跨来源或结构不完整的 ref
+- **WHEN** 主 Agent 提交不存在、越界、跨来源或结构不完整的 ref
 - **THEN** 系统返回定位到该 ref 的结构化错误
 - **AND** 不自动重测、不渲染、不发布依赖该引用的结果
 
 #### Scenario: Direct visual assembly remains available
 
-- **WHEN** 主 Agent不引用测量结果而提交合法 ChartSpec
+- **WHEN** 主 Agent 不引用测量结果而提交合法 ChartSpec
 - **THEN** 系统执行通常的结构校验和生成审核
-- **AND** 当前 run 中未使用的 measurement observation 不会强制要求 abandoned decision
+- **AND** 当前 run 中未使用的 measurement observation 不要求 decision 或 abandonment 事件
 
 ### Requirement: Measurement warnings do not schedule hidden tool calls
 
-测量工具、质量审计、checkpoint 恢复和 review gate 更新 SHALL 不得仅根据 warning、`repair_action` 或 `remeasure_required` 状态自动创建或执行下一次测量调用。所有局部重测 SHALL 出现在主 Agent 的显式 tool call 中；其他观察工具不得因为测量 warning 被隐式跳过。
+测量工具、质量审计和 checkpoint 恢复 SHALL NOT 仅根据 warning、`repair_action` 或质量状态自动创建或执行下一次测量调用。局部重测必须作为主 Agent 的显式测量 tool call 出现在主链路中；恢复只需将当前 measurement session/attempt 事实提供给模型，不维护独立 repair queue，也不因缺少 decision 阻塞模型继续工作。
 
 #### Scenario: Warning returns control to the main model
 
 - **WHEN** 一次测量返回基准线冲突、系列未解析或覆盖不完整 warning
-- **THEN** 下一轮主 Agent 上下文包含 bounded warning、候选引用、scope 和可选 focus suggestion
-- **AND** 在主 Agent 选择前没有新的 measurement tool call
+- **THEN** 下一轮主 Agent 上下文包含 bounded warning、候选引用、scope 和可选局部线索
+- **AND** 主 Agent 决定是否直接装配、使用其他观察工具或显式调用局部测量
 
 #### Scenario: Recovery resumes without repeating a completed measurement
 
 - **WHEN** Agent 从 checkpoint 或断线状态恢复，且最近一次测量已经完成
-- **THEN** 恢复状态停留在等待主 Agent 决策的阶段
-- **AND** 恢复流程不得重新执行相同的测量调用
+- **THEN** 恢复上下文包含相同 session/current attempt 和工具结果
+- **AND** 恢复流程不重放相同测量、不恢复 pending decision 或隐式创建新调用

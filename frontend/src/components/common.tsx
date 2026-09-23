@@ -2,8 +2,6 @@ import { useState, type ReactNode } from 'react'
 import { loadEvaluationResource } from '../api/gateway/evaluationResource'
 import { eventPayload, failureContext, textDetail } from '../domain/records'
 import { failureCategoryLabel } from '../domain/display'
-import { measurementRepairDetail } from '../domain/measurement'
-import { isMeasurementRepairEventKind } from '../types/protocol'
 import type { AgentRunEvent } from '../types/protocol'
 
 export function CopyDetailButton({ value }: { value: unknown }) {
@@ -40,7 +38,6 @@ export function EvaluationDetailResourceView({ resource, evaluationId, caseId }:
 }
 
 export function traceEventDetail(event: AgentRunEvent): string {
-  if (isMeasurementRepairEventKind(event.kind)) return measurementRepairDetail(event)
   const payload = eventPayload(event)
   const failure = failureContext(payload)
   if (failure) {

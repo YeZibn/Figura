@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import numpy as np
 
-from chartagent.measurement import MeasurementSession, attach_measurement_quality, register_measurement
 from chartagent.panels import PanelHandoff
 from chartagent.tools.chart.observation.scope import (
     ResolvedPanelScope,
@@ -103,40 +102,13 @@ def test_exclude_only_scope_keeps_panel_searchable_and_masks_only_excluded_area(
     assert np.all(focused[:, 40:] == 0)
 
 
-def test_abandoned_decision_is_explicit_and_does_not_require_fake_selected_ref():
-    data = attach_measurement_quality(
-        {
-            "bars": [{"id": "bar_1", "geometry": {"bbox_px": [10, 20, 20, 80]}, "measure": {"ratio": None}}],
-            "baseline": {"slope": 0.0, "intercept": 100.0},
-            "confidence": {"overall": 0.2},
-            "warnings": ["bar values are partial"],
-        },
-        source_tool="measure_bars",
-        image_count=1,
-        source_attachment_id="att_1",
-        source_panel_id="panel_1",
-        source_run_id="run_1",
-    )
-    sessions: dict[str, MeasurementSession] = {}
-    session = register_measurement(sessions, data)
-    assert session is not None
-    reference = data["measurement"]["reference"]
-
+def test_direct_visual_assembly_does_not_require_measurement_lifecycle():
     assembled = assemble_spec(
         chart_type="bar",
         points=[{"category": "A", "value": 1}],
         x_label="类别",
         y_label="数值",
-        measurement_ref=reference,
-        measurement_decision={
-            "status": "abandoned",
-            "session_id": reference["session_id"],
-            "attempt_id": reference["attempt_id"],
-            "evidence_basis": "当前柱体数值无法确认，保留视觉判断",
-        },
-        _measurement_context=sessions,
     )
 
     assert "error" not in assembled
-    assert assembled["provenance"]["status"] == "abandoned"
-    assert assembled["_measurement_decision"]["decision_status"] == "abandoned"
+    assert "provenance" not in assembled

@@ -52,14 +52,14 @@ The Gateway SHALL expose read-only detail resources for a selected evaluation an
 #### Scenario: Case history is requested
 
 - **WHEN** the client requests the ordered history for a case with a persisted run
-- **THEN** the Gateway returns the same safe run-event envelope and payload semantics used by an ordinary session run, including lifecycle events, tool calls, tool results, visual observations, repair/review events, failures, and recovery events
+- **THEN** the Gateway returns the same safe run-event envelope and payload semantics used by an ordinary session run, including lifecycle events, tool calls, tool results, visual observations, review events, failures, and recovery events
 - **AND** each event preserves its sequence, timestamp, status, and `call_id` when available
 - **AND** visual evidence uses stable evaluation-scoped resource references
 - **AND** the response does not return the underlying `sessions.db` or local filesystem paths
 
 ### Requirement: User can expand bounded read-only run details
 
-The evaluation workspace SHALL provide a read-only run transcript whose grouping and presentation semantics match the ordinary session execution timeline. It SHALL display the complete available sanitized values for user/model-visible messages, tool calls, tool results, measurement-repair details, review state, lifecycle events, errors, recovery state, and evaluation-scoped visual evidence. Safety bounds MAY limit transport size or conceal sensitive content, but a complete persisted result SHALL NOT be replaced by a summary solely because its structured value is deeply nested.
+The evaluation workspace SHALL provide a read-only run transcript whose grouping and presentation semantics match the ordinary session execution timeline. It SHALL display the complete available sanitized values for user/model-visible messages, tool calls, tool results, measurement evidence details, review state, lifecycle events, errors, recovery state, and evaluation-scoped visual evidence. Safety bounds MAY limit transport size or conceal sensitive content, but a complete persisted result SHALL NOT be replaced by a summary solely because its structured value is deeply nested.
 
 #### Scenario: User expands a tool call and result
 
@@ -226,25 +226,6 @@ The evaluation workspace SHALL render bounded Markdown/JSON summaries through sa
 - **THEN** the client falls back to the standard summary/diagnostic view and indicates the report limitation
 - **AND** it does not expose arbitrary files from the evaluation directory
 
-### Requirement: Evaluation traces reuse the unified review presentation
-
-评测工作区 SHALL 以只读方式复用普通运行的审核记录、门禁状态和证据引用，完整展示测量审核与生成图审核的开始、阻塞、修复、重试和最终结果，不得把中间审核过程压缩成单一成功或失败标签。
-
-#### Scenario: Evaluation shows both review domains
-- **WHEN** 一个评测同时包含测量审核和生成图审核
-- **THEN** case 时间线分别显示两个审核 subject，同时使用统一的状态和阻塞语义
-- **AND** 用户可以展开查看各自的问题、证据和下一步动作
-
-#### Scenario: Evaluation preserves a blocked outcome
-- **WHEN** 审核失败、修复耗尽或候选未发布
-- **THEN** 评测记录明确显示阻塞原因和未完成阶段
-- **AND** 报告不得把该 case 标记为完整成功
-
-#### Scenario: Evaluation remains read-only
-- **WHEN** 用户在评测工作区查看审核记录
-- **THEN** 客户端只读取已保存的审核事件和资源
-- **AND** 展开详情、刷新或预览不得重新触发测量、审核或发布动作
-
 ### Requirement: Evaluation cases use the shared decision timeline projector
 
 评测工作台 SHALL 使用与普通运行相同的 decision unit、phase、transition 去重和 review cycle 投影。评测批次可以增加 case、expected result 和报告上下文，但不得为 timeline 另定义一套事件解释。
@@ -263,13 +244,13 @@ The evaluation workspace SHALL render bounded Markdown/JSON summaries through sa
 
 ### Requirement: Evaluation timeline preserves unresolved and blocked decisions
 
-评测 case SHALL 保留 pending、abandoned、failed、blocked、partial 和 not_reached 等决策状态，并显示当前 unit 的 reason、next action 和第一失败引用。任何中间摘要不得把未发布候选标记为完整成功。
+评测 case SHALL 保留真实的 pending、failed、blocked、partial 和 not_reached 运行/审核状态，并显示当前运行单元的原因和必要的后续信息。measurement scope 与 observation 属于同一次工具调用；不得把它们之间不存在的间隔显示为 pending/abandoned measurement decision。任何中间摘要不得把未发布候选标记为完整成功。
 
-#### Scenario: Focus application has no follow-up observation
+#### Scenario: Scoped measurement result is atomic
 
-- **WHEN** case 在 focused measurement applied 后中断或没有 observation
-- **THEN** 评测时间线显示未完成的 measurement unit 和 interruption/absence reason
-- **AND** case 不得被报告为已完成生成
+- **WHEN** case 在局部测量 tool call 执行期间中断，或工具返回失败/不充分结果
+- **THEN** 评测时间线显示真实的工具执行状态及 interruption/结果原因
+- **AND** 不构造等待 follow-up observation 的 measurement unit
 
 #### Scenario: Review repair is exhausted
 
@@ -279,10 +260,16 @@ The evaluation workspace SHALL render bounded Markdown/JSON summaries through sa
 
 ### Requirement: Evaluation expands the same safe evidence details
 
-评测工作台 SHALL 使用与普通运行相同的工具 call/result、decision、review sub-check 和 visual resource 关联规则。展开详情时 SHALL 保留 bounded structured values、sequence 和安全资源引用，不得通过本地路径或原始数据库补全内容。
+评测工作台 SHALL 使用与普通运行相同的工具 call/result、实际 assembly 输入、review sub-check 和 visual resource 关联规则。展开详情时 SHALL 保留 bounded structured values、sequence 和安全资源引用，不得通过本地路径或原始数据库补全内容；measurement 候选选择不得表现为单独的 decision record。
 
-#### Scenario: User expands a discarded evidence decision
+#### Scenario: User inspects measurement and assembly evidence
 
-- **WHEN** 用户展开一个 case 的 evidence decision
-- **THEN** UI 显示 attempt、selected/discarded refs、basis 和后续 assemble 关系
-- **AND** 原始 observation 仍然可追溯且未被摘要覆盖
+- **WHEN** 用户展开一个评测 case 的测量或 ChartSpec assembly 工具步骤
+- **THEN** UI 显示 attempt、scope、工具输出 refs/质量信息及 assembly 实际引用关系
+- **AND** 不显示 selected/discarded refs、decision basis 或额外 evidence-decision 步骤
+
+#### Scenario: Original observation remains inspectable
+
+- **WHEN** assembly 未引用某个 measurement candidate
+- **THEN** 原始 measurement tool result 仍可查看
+- **AND** 工作台不推断 abandoned/discarded 状态或把该候选写入最终 ChartSpec
