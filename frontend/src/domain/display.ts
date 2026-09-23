@@ -17,6 +17,24 @@ export function toolStatusLabel(status: 'success' | 'running' | 'error'): string
   return '失败'
 }
 
+const timelineEventStatusLabels: Record<string, Record<string, string>> = {
+  tool_call: { running: '运行中' },
+  tool_result: { success: '已完成', error: '失败' },
+  tool_skipped: { not_started: '未执行' },
+  visual_observation: { observed: '已观察' },
+  generated_chart: { available: '已生成', unavailable: '产物不可用' },
+  generated_chart_published: { published: '已发布', published_with_warning: '已发布·有警告' },
+  generated_chart_rejected: { rejected: '未发布', unpublished: '未发布' },
+  assembly_validation_failure: { failed: '组装校验失败' },
+}
+
+export function timelineEventStatusLabel(kind: string, value: unknown): string | undefined {
+  const labels = timelineEventStatusLabels[kind]
+  if (!labels) return undefined
+  const status = typeof value === 'string' ? value.trim().toLowerCase() : ''
+  return labels[status] || '状态未知'
+}
+
 export function runStateLabel(state: RunState): string {
   if (state === 'connecting') return '正在连接'
   if (state === 'running') return '运行中'

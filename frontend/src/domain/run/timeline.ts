@@ -1,5 +1,5 @@
 import type { AgentRunEvent, ExecutionGate, FailureContext, GeneratedChartReference, HistoryIntegrity, RunSummary } from '../../types/protocol'
-import { eventPayload, failureContext } from '../records'
+import { boundedDisplayText, eventPayload, failureContext } from '../records'
 import { eventLabel } from '../display'
 
 export type RunTimeline = {
@@ -9,7 +9,7 @@ export type RunTimeline = {
   integrity?: HistoryIntegrity
 }
 
-export type TimelineNodeStatus = 'running' | 'completed' | 'reviewing' | 'passed' | 'published' | 'failed' | 'blocked' | 'partial' | 'abandoned'
+export type TimelineNodeStatus = 'running' | 'completed' | 'reviewing' | 'passed' | 'published' | 'failed' | 'blocked' | 'partial' | 'abandoned' | 'unknown' | 'skipped' | 'unavailable'
 export type TimelineNodeType = 'measurement' | 'generation' | 'review' | 'publication' | 'observation'
 export type DecisionPhase = 'observe' | 'decide' | 'assemble' | 'render' | 'review' | 'repair' | 'publish' | 'action'
 export type DecisionRole = 'observation' | 'decision' | 'action' | 'gate' | 'review' | 'publication'
@@ -71,8 +71,10 @@ const strictTimelineEvents = new Set([
   'generated_chart_published', 'generated_chart_rejected', 'tool_call', 'tool_result', 'tool_skipped',
   'visual_observation', 'generated_chart', 'assembly_validation_failure',
 ])
+const unknownStatusAllowedEvents = new Set(['tool_call', 'tool_result', 'tool_skipped', 'visual_observation', 'generated_chart'])
 const reviewTimelineEvents = new Set(['review_started', 'review_completed', 'review_repair_required', 'review_failed', 'review_subcheck'])
 const callTimelineEvents = new Set(['tool_call', 'tool_result', 'tool_skipped', 'visual_observation'])
+const toolBackedTimelineEvents = new Set([...callTimelineEvents, 'generated_chart'])
 const retiredTimelineEvents = new Set([
   'chart_review_started', 'chart_review_required', 'chart_review_repair_required', 'chart_review_completed',
   'review_gate_required', 'review_gate_updated',
@@ -120,7 +122,7 @@ export function timelineProtocolStatus(events: AgentRunEvent[]): TimelineProtoco
     if (['execution_gate', 'executionGate', 'gate'].some((key) => Object.prototype.hasOwnProperty.call(payload, key))) return { status: 'malformed' }
     const stateField = event.kind === 'tool_result' ? 'status' : 'state'
     const aliasField = stateField === 'status' ? 'state' : 'status'
-    if (!nonEmptyString(payload[stateField]) || Object.prototype.hasOwnProperty.call(payload, aliasField)) return { status: 'malformed' }
+    if ((!nonEmptyString(payload[stateField]) && !unknownStatusAllowedEvents.has(event.kind)) || Object.prototype.hasOwnProperty.call(payload, aliasField)) return { status: 'malformed' }
     if (event.kind === 'tool_result' && Object.prototype.hasOwnProperty.call(payload, 'tool_status')) return { status: 'malformed' }
     if (!nonEmptyString(payload.unit_id) || !nonEmptyString(payload.transition_id)) return { status: 'malformed' }
     if (!['measurement', 'generation', 'review', 'publication', 'observation'].includes(String(payload.unit_type))) return { status: 'malformed' }
@@ -152,13 +154,11 @@ function metadata(event: AgentRunEvent): { id: string; type: TimelineNodeType; p
   const actor = payload.actor
   const role = payload.role
   const transition = payload.transition_id
-  const statusField = event.kind === 'tool_result' ? 'status' : 'state'
-  const state = payload[statusField]
   if (typeof id !== 'string' || !id || typeof type !== 'string' || !(type in nodeLabels)) return undefined
   if (!['observe', 'decide', 'assemble', 'render', 'review', 'repair', 'publish', 'action'].includes(String(phase))) return undefined
   if (!['agent', 'tool', 'system', 'vlm'].includes(String(actor))) return undefined
   if (!['observation', 'decision', 'action', 'gate', 'review', 'publication'].includes(String(role))) return undefined
-  if (typeof transition !== 'string' || !transition || typeof state !== 'string' || !state) return undefined
+  if (typeof transition !== 'string' || !transition) return undefined
   const parent = payload.parent_unit_id
   return {
     id,
@@ -177,19 +177,24 @@ function stateValue(event: AgentRunEvent, payload: Record<string, unknown>): str
 
 function unitStatus(event: AgentRunEvent, payload: Record<string, unknown>, current: TimelineNodeStatus): TimelineNodeStatus {
   const state = stateValue(event, payload)
-  if (event.kind === 'tool_call') return 'running'
+  if (event.kind === 'tool_call') return state === 'running' ? 'running' : 'unknown'
   if (event.kind === 'tool_result') {
-    if (state === 'error' || state.includes('fail') || state.includes('reject')) return 'failed'
-    if (state === 'not_started') return 'blocked'
-    return 'completed'
+    if (state === 'success') return 'completed'
+    if (state === 'error') return 'failed'
+    return 'unknown'
   }
-  if (event.kind === 'tool_skipped') return 'blocked'
+  if (event.kind === 'tool_skipped') return state === 'not_started' ? 'skipped' : 'unknown'
   if (event.kind === 'review_started') return 'reviewing'
   if (event.kind === 'review_repair_required') return 'blocked'
   if (event.kind === 'review_completed') return state.includes('warning') ? 'passed' : state.includes('fail') ? 'failed' : 'passed'
   if (event.kind === 'review_failed' || event.kind === 'generated_chart_rejected' || event.kind === 'assembly_validation_failure') return 'failed'
   if (event.kind === 'generated_chart_published') return 'published'
-  if (event.kind === 'generated_chart' || event.kind === 'visual_observation') return 'completed'
+  if (event.kind === 'generated_chart') {
+    if (state === 'available') return 'completed'
+    if (state === 'unavailable') return 'unavailable'
+    return 'unknown'
+  }
+  if (event.kind === 'visual_observation') return state === 'observed' ? 'completed' : 'unknown'
   if (state === 'abandoned' || event.kind === 'run_interrupted') return 'abandoned'
   if (state === 'partial') return 'partial'
   if (state === 'blocked') return 'blocked'
@@ -257,10 +262,12 @@ function reviewVisibleEvents(events: AgentRunEvent[]): AgentRunEvent[] {
 }
 
 function toolLabel(events: AgentRunEvent[]): string {
-  for (const event of events) {
-    const payload = eventPayload(event)
-    if (typeof payload.tool_label === 'string' && payload.tool_label) return payload.tool_label
-    if (typeof payload.tool_display_name === 'string' && payload.tool_display_name) return payload.tool_display_name
+  const payloads = events.map(eventPayload)
+  for (const field of ['tool_label', 'tool_display_name', 'tool_name']) {
+    for (const payload of payloads) {
+      const label = boundedDisplayText(payload[field])
+      if (label) return label
+    }
   }
   return '工具执行'
 }
@@ -307,7 +314,7 @@ function buildProjection(events: AgentRunEvent[]): { roots: TimelineNode[]; node
         actor: meta.actor,
         role: meta.role,
         status: 'running',
-        label: meta.type === 'observation' || meta.type === 'measurement' ? toolLabel([event]) : nodeLabels[meta.type],
+        label: toolBackedTimelineEvents.has(event.kind) ? toolLabel([event]) : nodeLabels[meta.type],
         firstSequence: event.sequence,
         lastSequence: event.sequence,
         ...(meta.parent ? { parentUnitId: meta.parent } : {}),
@@ -345,7 +352,9 @@ function buildProjection(events: AgentRunEvent[]): { roots: TimelineNode[]; node
 
   const allNodes = [...nodes.values()]
   for (const node of allNodes) {
-    node.label = node.unitType === 'observation' || node.unitType === 'measurement' ? toolLabel(node.events) : nodeLabels[node.unitType!]
+    node.label = node.events.some((event) => toolBackedTimelineEvents.has(event.kind))
+      ? toolLabel(node.events)
+      : nodeLabels[node.unitType!]
     node.visibleEvents = node.unitType === 'review' ? reviewVisibleEvents(node.events) : dedupeEvents(node.events.filter(userVisibleEvent))
     node.event = node.visibleEvents[node.visibleEvents.length - 1] || node.result || node.call || node.events[node.events.length - 1]
     node.failure = node.events.map(failureForEvent).find((value): value is FailureContext => Boolean(value))

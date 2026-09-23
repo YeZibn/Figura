@@ -1,8 +1,11 @@
 import { useState, type ReactNode } from 'react'
 import { loadEvaluationResource } from '../api/gateway/evaluationResource'
 import { eventPayload, failureContext, textDetail } from '../domain/records'
-import { failureCategoryLabel } from '../domain/display'
+import { failureCategoryLabel, timelineEventStatusLabel } from '../domain/display'
+import { reviewStateLabel } from '../domain/review'
 import type { AgentRunEvent } from '../types/protocol'
+
+const reviewStatusEvents = new Set(['review_started', 'review_completed', 'review_repair_required', 'review_failed'])
 
 export function CopyDetailButton({ value }: { value: unknown }) {
   const [copied, setCopied] = useState(false)
@@ -54,7 +57,10 @@ export function traceEventDetail(event: AgentRunEvent): string {
     if (details.length > 0) return details.join(' · ')
   }
   const statusField = event.kind === 'tool_result' ? payload.status : payload.state
-  return textDetail(payload.message || statusField || payload.reason || (event.kind === 'generated_chart' ? '生成图表结果已移至最终结果区域' : ''))
+  const statusSummary = reviewStatusEvents.has(event.kind)
+    ? reviewStateLabel(statusField, payload.blocking === true)
+    : timelineEventStatusLabel(event.kind, statusField)
+  return textDetail(payload.message || statusSummary || payload.reason || (event.kind === 'generated_chart' ? '生成图表结果已移至最终结果区域' : ''))
 }
 
 function isSafeLink(value: string): boolean {

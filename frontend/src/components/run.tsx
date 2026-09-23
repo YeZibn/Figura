@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { ChevronDown, ChevronRight, Terminal } from 'lucide-react'
-import { eventLabel, providerLabel, timestampLabel, toolResultIntegrityDetail } from '../domain/display'
-import { eventPayload, textDetail } from '../domain/records'
+import { eventLabel, failureCategoryLabel, providerLabel, timestampLabel, toolResultIntegrityDetail } from '../domain/display'
+import { boundedDisplayText, eventPayload, textDetail } from '../domain/records'
 import { reviewIssues, reviewStateLabel, reviewTypeLabel } from '../domain/review'
 import { executionGateValue, projectUserTimeline, timelineProtocolStatus, type DecisionPhase, type TimelineNodeStatus, type RunTimeline as RunTimelineModel, type UserTimelineItem } from '../domain/run/timeline'
 import type { AgentRunEvent, GeneratedChartReference } from '../types/protocol'
@@ -32,7 +32,7 @@ export function ReviewTimelineItem({ event }: { event: AgentRunEvent }) {
 }
 
 function decisionStatusLabel(status: TimelineNodeStatus): string {
-  return ({ running: '运行中', completed: '已完成', reviewing: '审核中', passed: '审核已通过', published: '已发布', failed: '失败', partial: '部分完成', blocked: '已阻塞', abandoned: '已中断' } as Record<TimelineNodeStatus, string>)[status]
+  return ({ running: '运行中', completed: '已完成', reviewing: '审核中', passed: '审核已通过', published: '已发布', failed: '失败', partial: '部分完成', blocked: '已阻塞', abandoned: '已中断', unknown: '状态未知', skipped: '未执行', unavailable: '产物不可用' } as Record<TimelineNodeStatus, string>)[status]
 }
 
 function decisionPhaseLabel(phase: DecisionPhase): string {
@@ -47,12 +47,18 @@ function UserTimelineItemView({ item, previewLoader, onPreview, evaluationId, ca
   const callPayload = item.call ? eventPayload(item.call) : null
   const resultPayload = item.result ? eventPayload(item.result) : null
   const resultValue = resultPayload?.result ?? resultPayload?.message
-  const [open, setOpen] = useState(item.status === 'running' || item.status === 'reviewing' || item.status === 'blocked' || item.status === 'failed')
+  const [open, setOpen] = useState(false)
   const eventRows = item.visibleEvents.length > 0 ? item.visibleEvents : item.event ? [item.event] : []
   const phase = item.phase && item.itemType !== 'error' ? decisionPhaseLabel(item.phase) : ''
+  const summaryEvent = item.result || item.event || item.call
+  const summaryTimestamp = summaryEvent?.timestamp ? timestampLabel(summaryEvent.timestamp) : ''
+  const failureReason = item.failure
+    ? boundedDisplayText(item.failure.safeMessage || (item.failure.category ? failureCategoryLabel(item.failure.category) : '执行失败'))
+    : undefined
+  const failureLabel = item.itemType === 'review' ? '未通过原因' : '失败原因'
   const rawEvents = item.events.map((event) => ({ sequence: event.sequence, kind: event.kind, payload: eventPayload(event) }))
   return <details className={'user-timeline-item user-timeline-' + item.itemType + ' user-timeline-' + item.status} open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
-    <summary><span className="user-timeline-marker" /><span className="user-timeline-heading"><strong>{item.label}</strong><small>{phase || (item.itemType === 'error' ? '需要关注' : item.itemType === 'review' ? '审核流程' : '执行过程')}</small></span><span className={'run-status ' + item.status}>{timelineStatusLabel(item.status)}</span><ChevronRight className="user-timeline-chevron" size={14} /></summary>
+    <summary><span className="user-timeline-marker" /><span className="user-timeline-heading"><strong>{item.label}</strong><small>{phase || (item.itemType === 'error' ? '需要关注' : item.itemType === 'review' ? '审核流程' : '执行过程')}{summaryTimestamp ? ` · ${summaryTimestamp}` : ''}</small>{failureReason && <small className="user-timeline-failure-summary">{failureLabel}：{failureReason}</small>}</span><span className={'run-status ' + item.status}>{timelineStatusLabel(item.status)}</span>{item.resultTruncated && <span className="user-timeline-truncation" title="工具结果已按安全上限截断">结果已截断</span>}<ChevronRight className="user-timeline-chevron" size={14} /></summary>
     <div className="user-timeline-detail">
       {eventRows.map((event) => <div className="user-timeline-event" key={`${event.runId}-${event.sequence}`}><span><strong>{eventLabel(event)}</strong><small>{timestampLabel(event.timestamp)}</small><span>{traceEventDetail(event)}</span></span></div>)}
       {callPayload && Object.prototype.hasOwnProperty.call(callPayload, 'arguments') && <div><div className="trace-detail-heading"><label>调用参数</label><CopyDetailButton value={callPayload.arguments} /></div><pre>{textDetail(callPayload.arguments)}</pre></div>}

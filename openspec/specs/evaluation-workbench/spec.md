@@ -113,6 +113,25 @@ The evaluation workspace SHALL render a selected case as a read-only equivalent 
 - **THEN** the client never submits a new model/tool operation or mutates the evaluation bundle
 - **AND** the ordinary session workspace retains its existing run, retry, resume, and interruption behavior
 
+### Requirement: Evaluation tool steps use the shared default-collapsed presentation
+
+The evaluation workbench SHALL present persisted tool steps using the same
+canonical bilingual tool names, localized status semantics, and default
+collapsed detail behavior as ordinary run timelines. Evaluation-specific
+presentation MUST NOT independently infer tool completion, review success, or
+chart publication from an unknown tool result status.
+
+#### Scenario: Evaluation tool details are opt-in
+
+- **WHEN** a persisted evaluation run contains a tool call and result
+- **THEN** the unified timeline initially shows one collapsed tool step with
+  its bilingual name, timestamp, localized status, and necessary bounded
+  failure reason
+- **AND** expanding the step reveals the available bounded arguments, result,
+  and visual evidence without re-running the tool
+- **AND** an available generated chart remains visible in the separate result
+  area
+
 ### Requirement: Evaluation uses the runtime compatibility projection
 
 评测工作台 SHALL 对普通 lifecycle/process/legacy 事件使用与普通运行相同的兼容分组、错误字段和去重规则。评测报告可以增加 case 上下文，但不得把同一事件重新解释成另一套顶层时间线。

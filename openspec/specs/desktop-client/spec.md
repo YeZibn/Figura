@@ -165,6 +165,12 @@ unassociated legacy messages through a compatible fallback presentation.
 
 The desktop workspace SHALL display each Agent run as a compact execution group with its status, timestamps when available, and expand/collapse control. Inside the group it SHALL render a chronological user-facing timeline containing meaningful tool, observation, measurement, generation, review, recovery, and failure steps. A tool call and its result SHALL be represented as one logical step, while model-start, model-completion, operation-save, run-start, and resume-start lifecycle events SHALL remain available in the persisted history but SHALL NOT appear as ordinary visible timeline rows. A bounded or truncated tool result SHALL remain part of the corresponding tool step and SHALL NOT become an unknown standalone step when the outer tool identity is available.
 
+Tool arguments, full results, and technical event details SHALL be collapsed by
+default regardless of whether the tool step is running or terminal. The
+collapsed summary SHALL retain the tool name, timestamp, localized status, and
+any necessary bounded failure reason; users SHALL be able to expand the step
+to inspect its bounded details.
+
 #### Scenario: Completed run remains visible after reload
 
 - **WHEN** the user reloads a session containing completed runs
@@ -175,6 +181,16 @@ The desktop workspace SHALL display each Agent run as a compact execution group 
 - **WHEN** a tool call and its result share a call identifier
 - **THEN** the UI shows one logical tool step whose status changes from running to success or failure
 - **AND** its arguments, bounded result, and visual evidence are available behind the step disclosure control
+
+#### Scenario: Tool details start collapsed without hiding the summary
+
+- **WHEN** a tool step is displayed while running, completed, blocked, or failed
+- **THEN** its arguments, full result, and technical event details are initially
+  collapsed
+- **AND** its name, timestamp, localized status, and necessary bounded failure
+  reason remain visible
+- **AND** an available generated chart remains visible in the separate result
+  area
 
 #### Scenario: Technical lifecycle events stay hidden
 
@@ -425,6 +441,22 @@ than inferring review or publication from a generic status string.
   English identifier
 - **AND** the identifier remains available for technical inspection and
   correlation
+
+#### Scenario: Assembly and rendering have distinct tool headlines
+
+- **WHEN** the execution timeline contains a ChartSpec assembly step and a
+  chart rendering step
+- **THEN** their headlines identify the respective tools as
+  `组装图表规格 (assemble_spec)` and `生成图表 (render_chart)`
+- **AND** a broad phase or unit category does not replace the specific tool
+  name
+
+#### Scenario: Unknown tool state is not inferred as success
+
+- **WHEN** a tool result omits its status or supplies an unrecognized status
+- **THEN** the timeline displays an explicit localized unknown state
+- **AND** it does not label the tool as completed, the review as passed, or the
+  chart as published based only on that result
 
 #### Scenario: Generated chart shows independent statuses
 

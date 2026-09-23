@@ -20,6 +20,16 @@ const bundle = await build({
 })
 const source = bundle.outputFiles[0].text
 const timeline = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`)
+const displayBundle = await build({
+  entryPoints: [resolve(root, 'src/domain/display.ts')],
+  bundle: true,
+  format: 'esm',
+  platform: 'node',
+  write: false,
+  sourcemap: false,
+  logLevel: 'silent',
+})
+const display = await import(`data:text/javascript;base64,${Buffer.from(displayBundle.outputFiles[0].text).toString('base64')}`)
 
 const event = (runId, sequence, kind, payload = {}) => ({
   runId,
@@ -48,6 +58,49 @@ assert.equal(units[0].result?.sequence, 5)
 assert.equal(units[0].label, '柱体测量')
 assert.deepEqual(units[0].call?.payload.arguments, { panel_id: 'panel-1' })
 assert.equal(units[0].result?.payload.result.measurement.status, 'partial')
+
+const toolHeadlines = timeline.projectUserTimeline([
+  event('tool-headlines', 1, 'tool_call', { unit_id: 'generation:assemble', unit_type: 'generation', phase: 'assemble', actor: 'tool', role: 'action', transition_id: 'generation:assemble:started', call_id: 'assemble', tool_name: 'assemble_spec', tool_label: '组装图表规格 (assemble_spec)', state: 'running' }),
+  event('tool-headlines', 2, 'tool_result', { unit_id: 'generation:assemble', unit_type: 'generation', phase: 'assemble', actor: 'tool', role: 'action', transition_id: 'generation:assemble:completed', call_id: 'assemble', tool_name: 'assemble_spec', tool_label: '组装图表规格 (assemble_spec)', status: 'success' }),
+  event('tool-headlines', 3, 'tool_call', { unit_id: 'generation:render', unit_type: 'generation', phase: 'render', actor: 'tool', role: 'action', transition_id: 'generation:render:started', call_id: 'render', tool_name: 'render_chart', tool_label: '生成图表 (render_chart)', state: 'running' }),
+  event('tool-headlines', 4, 'tool_result', { unit_id: 'generation:render', unit_type: 'generation', phase: 'render', actor: 'tool', role: 'action', transition_id: 'generation:render:completed', call_id: 'render', tool_name: 'render_chart', tool_label: '生成图表 (render_chart)', status: 'success' }),
+  event('tool-headlines', 5, 'generated_chart', { unit_id: 'generation:render', unit_type: 'generation', phase: 'render', actor: 'tool', role: 'action', transition_id: 'generation:render:generated', state: 'available', tool_name: 'render_chart' }),
+  event('tool-headlines', 6, 'tool_call', { unit_id: 'generation:late-label', unit_type: 'generation', phase: 'assemble', actor: 'tool', role: 'action', transition_id: 'generation:late-label:started', call_id: 'late-label', tool_name: 'assemble_spec', tool_display_name: 'assemble_spec', state: 'running' }),
+  event('tool-headlines', 7, 'tool_result', { unit_id: 'generation:late-label', unit_type: 'generation', phase: 'assemble', actor: 'tool', role: 'action', transition_id: 'generation:late-label:completed', call_id: 'late-label', tool_name: 'assemble_spec', tool_label: '组装图表规格 (assemble_spec)', status: 'success' }),
+])
+assert.deepEqual(toolHeadlines.map(({ label }) => label), ['组装图表规格 (assemble_spec)', '生成图表 (render_chart)', '组装图表规格 (assemble_spec)'])
+
+const statusEvents = [
+  event('status-projection', 1, 'tool_result', { unit_id: 'generation:success', unit_type: 'generation', phase: 'assemble', actor: 'tool', role: 'action', transition_id: 'generation:success:completed', call_id: 'success', status: 'success', result: { count: 3 }, truncated: true }),
+  event('status-projection', 2, 'tool_result', { unit_id: 'generation:error', unit_type: 'generation', phase: 'render', actor: 'tool', role: 'action', transition_id: 'generation:error:failed', call_id: 'error', status: 'error', safe_message: '渲染失败原因' }),
+  event('status-projection', 3, 'tool_result', { unit_id: 'generation:unexpected', unit_type: 'generation', phase: 'render', actor: 'tool', role: 'action', transition_id: 'generation:unexpected:unknown', call_id: 'unexpected', status: 'retrying' }),
+  event('status-projection', 4, 'tool_result', { unit_id: 'generation:missing', unit_type: 'generation', phase: 'render', actor: 'tool', role: 'action', transition_id: 'generation:missing:unknown', call_id: 'missing' }),
+  event('status-projection', 5, 'tool_skipped', { unit_id: 'generation:skipped', unit_type: 'generation', phase: 'action', actor: 'system', role: 'action', transition_id: 'generation:skipped:not-started', call_id: 'skipped', state: 'not_started' }),
+  event('status-projection', 6, 'tool_skipped', { unit_id: 'generation:skipped-unknown', unit_type: 'generation', phase: 'action', actor: 'system', role: 'action', transition_id: 'generation:skipped-unknown:unknown', call_id: 'skipped-unknown', state: 'blocked' }),
+  event('status-projection', 7, 'generated_chart', { unit_id: 'generation:available', unit_type: 'generation', phase: 'render', actor: 'tool', role: 'action', transition_id: 'generation:available:generated', state: 'available' }),
+  event('status-projection', 8, 'generated_chart', { unit_id: 'generation:unavailable', unit_type: 'generation', phase: 'render', actor: 'tool', role: 'action', transition_id: 'generation:unavailable:generated', state: 'unavailable' }),
+  event('status-projection', 9, 'generated_chart', { unit_id: 'generation:chart-unknown', unit_type: 'generation', phase: 'render', actor: 'tool', role: 'action', transition_id: 'generation:chart-unknown:generated', state: 'queued' }),
+  event('status-projection', 10, 'generated_chart', { unit_id: 'generation:chart-missing', unit_type: 'generation', phase: 'render', actor: 'tool', role: 'action', transition_id: 'generation:chart-missing:generated' }),
+  event('status-projection', 11, 'tool_call', { unit_id: 'generation:call-unknown', unit_type: 'generation', phase: 'render', actor: 'tool', role: 'action', transition_id: 'generation:call-unknown:started', call_id: 'call-unknown', state: 'queued' }),
+  event('status-projection', 12, 'tool_call', { unit_id: 'generation:call-missing', unit_type: 'generation', phase: 'render', actor: 'tool', role: 'action', transition_id: 'generation:call-missing:started', call_id: 'call-missing' }),
+  event('status-projection', 13, 'tool_call', { unit_id: 'generation:call-running', unit_type: 'generation', phase: 'render', actor: 'tool', role: 'action', transition_id: 'generation:call-running:started', call_id: 'call-running', state: 'running' }),
+  event('status-projection', 14, 'review_repair_required', { unit_id: 'review:blocked', unit_type: 'review', phase: 'repair', actor: 'system', role: 'review', transition_id: 'review:blocked:repair-required', review_id: 'blocked', state: 'repair_required' }),
+]
+assert.equal(timeline.timelineProtocolStatus(statusEvents).status, 'supported')
+assert.deepEqual(timeline.projectUserTimeline(statusEvents).map(({ status }) => status), [
+  'completed', 'failed', 'unknown', 'unknown', 'skipped', 'unknown',
+  'completed', 'unavailable', 'unknown', 'unknown', 'unknown', 'unknown', 'running', 'blocked',
+])
+const projectedStatuses = timeline.projectUserTimeline(statusEvents)
+assert.equal(projectedStatuses[0].resultTruncated, true)
+assert.equal(projectedStatuses[1].failure.safeMessage, '渲染失败原因')
+assert.equal(display.timelineEventStatusLabel('tool_call', 'running'), '运行中')
+assert.equal(display.timelineEventStatusLabel('tool_result', 'success'), '已完成')
+assert.equal(display.timelineEventStatusLabel('tool_skipped', 'not_started'), '未执行')
+assert.equal(display.timelineEventStatusLabel('generated_chart', 'available'), '已生成')
+assert.equal(display.timelineEventStatusLabel('tool_result', 'retrying'), '状态未知')
+assert.equal(display.timelineEventStatusLabel('tool_result', undefined), '状态未知')
+assert.equal(display.timelineEventStatusLabel('generated_chart_published', 'published_with_warning'), '已发布·有警告')
 
 const legacyHistory = [event('legacy-v1', 1, 'tool_result', {
   correlation_version: 1,
@@ -159,6 +212,9 @@ const evaluationSource = readFileSync(resolve(root, 'src/components/evaluation.t
 assert.match(ordinaryWorkspaceSource, /import \{ RunTimeline \} from '\.\/run'/)
 assert.match(evaluationSource, /import \{ RunTimeline \} from '\.\/run'/)
 assert.match(evaluationSource, /events: props\.history\.events/)
+const supplementalFilter = evaluationSource.match(/const supplementalEntries = ([^\n]+)/)?.[1] || ''
+assert.ok(supplementalFilter)
+assert.ok(!supplementalFilter.includes("entry.kind === 'tool_call'") && !supplementalFilter.includes("entry.kind === 'tool_result'"))
 
 const collectionVisible = timeline.projectUserTimeline([
   event('collection-run', 1, 'generated_chart', { unit_id: 'generation:candidate-collection', unit_type: 'generation', phase: 'render', actor: 'tool', role: 'action', transition_id: 'generation:candidate-collection:rendered', state: 'available', candidate_id: 'candidate-collection' }),
@@ -182,10 +238,14 @@ assert.equal(duplicateSequence.length, 1)
 assert.equal(duplicateSequence[0].itemType, 'observation')
 assert.equal(duplicateSequence[0].observations.length, 1)
 
-// Ordinary runs and evaluation cases intentionally call the same pure projection.
-assert.deepEqual(
-  timeline.projectUserTimeline(fixtureEvents).map(({ id, itemType, label, status, firstSequence }) => ({ id, itemType, label, status, firstSequence })),
-  timeline.projectUserTimeline(fixtureEvents).map(({ id, itemType, label, status, firstSequence }) => ({ id, itemType, label, status, firstSequence })),
-)
+const runComponentSource = readFileSync(resolve(root, 'src/components/run.tsx'), 'utf8')
+assert.ok(/const \[open, setOpen\] = useState\(false\)/.test(runComponentSource))
+assert.ok(/open=\{open\} onToggle=\{\(event\) => setOpen\(event\.currentTarget\.open\)\}/.test(runComponentSource))
+assert.ok(runComponentSource.includes('key={item.id}'))
+assert.ok(runComponentSource.includes('user-timeline-failure-summary'))
+assert.ok(runComponentSource.includes('item.resultTruncated && <span className="user-timeline-truncation"'))
+assert.ok(ordinaryWorkspaceSource.includes('generatedArtifacts(timeline.events)'))
+assert.ok(ordinaryWorkspaceSource.includes('className="run-result"') && ordinaryWorkspaceSource.includes('GeneratedChartView'))
+assert.ok(!evaluationSource.includes('projectUserTimeline'))
 
 console.log('timeline smoke passed (internal grouping, flat user projection, tool merge, failure promotion, replay dedupe)')

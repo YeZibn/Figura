@@ -109,9 +109,14 @@
 .user-timeline-failed .user-timeline-marker,
 .user-timeline-error .user-timeline-marker,
 .user-timeline-blocked .user-timeline-marker { border-color: var(--danger); }
+.user-timeline-skipped .user-timeline-marker,
+.user-timeline-unknown .user-timeline-marker { border-color: var(--subtle); }
+.user-timeline-unavailable .user-timeline-marker { border-color: var(--warning); }
 .user-timeline-heading { display: grid; min-width: 0; flex: 1; gap: 3px; }
 .user-timeline-heading strong { overflow: hidden; color: #40514d; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .user-timeline-heading small { overflow: hidden; color: var(--subtle); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.user-timeline-heading .user-timeline-failure-summary { color: var(--danger); }
+.user-timeline-truncation { flex: none; color: var(--warning); font-size: 9px; }
 .user-timeline-chevron { flex: none; color: var(--subtle); transition: transform .16s ease; }
 .user-timeline-item[open] > summary .user-timeline-chevron { transform: rotate(90deg); }
 .user-timeline-error > summary { color: var(--danger); }

@@ -16,7 +16,7 @@ function EvaluationDetailEntryView(props: { entry: EvaluationDetailEntry; loader
   const hasArguments = entry.arguments !== undefined
   const hasResult = entry.result !== undefined
   const hasDetails = entry.details !== undefined
-  return <details className={'evaluation-detail-entry ' + (entry.kind === 'tool_result' ? 'tool-result' : '')} open={entry.kind === 'conversation' || entry.kind === 'tool_call' || entry.kind === 'tool_result'}>
+  return <details className={'evaluation-detail-entry ' + (entry.kind === 'tool_result' ? 'tool-result' : '')} open={entry.kind === 'conversation'}>
     <summary><span className="evaluation-detail-entry-title"><strong>{evaluationDetailEntryLabel(entry)}</strong><small>{entry.timestamp ? timestampLabel(entry.timestamp) : '未知时间'} · {evaluationDetailSequenceLabel(entry)}{entry.callId ? ' · ' + entry.callId : ''}</small></span><span className="evaluation-detail-entry-state">{entry.status || (entry.source === 'record' ? '可见记录' : '事件')}</span></summary>
     <div className="evaluation-detail-entry-body">
       {entry.toolName && <div className="evaluation-detail-meta"><span>工具</span><code>{entry.toolName}</code></div>}
