@@ -37,6 +37,8 @@ def create_agent_runtime(
     operation_complete: Optional[Callable[..., dict[str, Any] | None]] = None,
     operation_uncertain: Optional[Callable[..., dict[str, Any] | None]] = None,
     execution_gate_sink: Optional[Callable[[dict[str, Any]], Any]] = None,
+    candidate_input_sink: Optional[Callable[[GeneratedImage, dict[str, Any]], Any]] = None,
+    candidate_input_resolver: Optional[Callable[[str, str, str, str], dict[str, Any] | None]] = None,
     session_name: str | None = None,
     database: str | Path | None = None,
     client: Any = None,
@@ -62,7 +64,10 @@ def create_agent_runtime(
         panel_store=memory,
     )
     registry = registry_cls()
-    review_manager = ChartReviewManager(attachments=attachments)
+    review_manager = ChartReviewManager(
+        attachments=attachments,
+        candidate_input_resolver=candidate_input_resolver,
+    )
     register_builtins_fn(registry)
     if hasattr(registry, "register"):
         registry.register(load_image_tool(attachments))
@@ -88,6 +93,7 @@ def create_agent_runtime(
         "operation_complete": operation_complete,
         "operation_uncertain": operation_uncertain,
         "execution_gate_sink": execution_gate_sink,
+        "candidate_input_sink": candidate_input_sink,
     }.items():
         if value is not None:
             agent_kwargs[key] = value

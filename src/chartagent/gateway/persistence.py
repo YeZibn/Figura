@@ -52,6 +52,7 @@ DEFAULT_MAX_HISTORY_ARTIFACTS = 32
 DEFAULT_RECOVERY_RETENTION_SECONDS = DEFAULT_HISTORY_RETENTION_SECONDS
 MAX_EVENT_DETAIL_BYTES = 4 * 1024 * 1024
 _SUPPORTED_ARTIFACT_TYPES = frozenset({"image/png", "image/jpeg", "image/gif", "image/webp"})
+MAX_PRIVATE_CHART_SPEC_BYTES = 2 * 1024 * 1024
 
 
 class GatewayHistoryStore(RunPersistenceMixin, OperationJournalMixin):
@@ -196,7 +197,8 @@ class GatewayHistoryStore(RunPersistenceMixin, OperationJournalMixin):
                   publication_status TEXT,
                   review_mode TEXT,
                   review_json TEXT,
-                  figure_metadata_json TEXT
+                  figure_metadata_json TEXT,
+                  chart_spec_json TEXT
                 );
                 CREATE INDEX IF NOT EXISTS idx_gateway_runs_session
                   ON gateway_runs(session_id, created_at);
@@ -254,6 +256,7 @@ class GatewayHistoryStore(RunPersistenceMixin, OperationJournalMixin):
                 ("review_mode", "TEXT"),
                 ("review_json", "TEXT"),
                 ("figure_metadata_json", "TEXT"),
+                ("chart_spec_json", "TEXT"),
             ):
                 table = "gateway_runs" if name in {
                     "terminal_code",
@@ -731,7 +734,14 @@ class GatewayHistoryStore(RunPersistenceMixin, OperationJournalMixin):
             if value not in (None, "", [], {})
         }
 
-    def add_candidate(self, run_id: str, session_id: str, image: Any) -> dict[str, Any] | None:
+    def add_candidate(
+        self,
+        run_id: str,
+        session_id: str,
+        image: Any,
+        *,
+        chart_spec: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
         """Persist a generated candidate without exposing it as a final artifact."""
         content = getattr(image, "content", None)
         media_type = str(getattr(image, "media_type", "")).lower()
@@ -768,6 +778,24 @@ class GatewayHistoryStore(RunPersistenceMixin, OperationJournalMixin):
         if not chart_type or not title or width <= 0 or height <= 0:
             return None
         figure_metadata = self._chart_figure_metadata(metadata)
+        content_digest = hashlib.sha256(content).hexdigest()
+        chart_spec_json: str | None = None
+        if chart_spec is not None:
+            try:
+                chart_spec_json = json.dumps(dict(chart_spec), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            except (TypeError, ValueError):
+                return None
+            if len(chart_spec_json.encode("utf-8")) > MAX_PRIVATE_CHART_SPEC_BYTES:
+                return None
+            try:
+                from ..spec import ChartFigure, ChartSpec, chart_figure_digest, chart_spec_digest
+
+                spec = ChartFigure.from_dict(chart_spec) if chart_spec.get("kind") == "chart_figure" else ChartSpec.from_dict(chart_spec)
+                calculated_digest = chart_figure_digest(spec) if isinstance(spec, ChartFigure) else chart_spec_digest(spec)
+            except (TypeError, ValueError, KeyError):
+                return None
+            if calculated_digest != digest:
+                return None
         candidate_root = self.artifact_root / session_id
         candidate_root.mkdir(mode=0o700, parents=True, exist_ok=True)
         self._restrict_permissions(candidate_root, 0o700)
@@ -785,32 +813,42 @@ class GatewayHistoryStore(RunPersistenceMixin, OperationJournalMixin):
                 (run_id, session_id, candidate_id, candidate_id),
             ).fetchone()
             if existing is not None:
+                if (
+                    existing["review_id"] != review_id
+                    or existing["chart_spec_digest"] != digest
+                    or existing["sha256"] != content_digest
+                    or int(existing["byte_count"]) != len(content)
+                    or existing["media_type"] != media_type
+                ):
+                    return None
                 if existing["artifact_kind"] == "generated_chart":
                     return self._candidate_reference(existing, artifact_id=existing["observation_id"])
-                if existing["candidate_status"] in {"expired", "timed_out", "retry_exhausted", "review_failed"}:
-                    return self._candidate_reference(existing)
-                if (
-                    existing["review_id"] == review_id
-                    and existing["chart_spec_digest"] == digest
-                    and str(metadata.get("reviewStatus", "pending")) == "completed"
-                ):
+                stored_spec = existing["chart_spec_json"] if "chart_spec_json" in existing.keys() else None
+                if chart_spec_json is not None and stored_spec not in (None, chart_spec_json):
+                    return None
+                if chart_spec_json is not None and stored_spec is None:
                     connection.execute(
-                        """UPDATE gateway_run_artifacts SET candidate_status = ?, review_status = ?,
-                           publication_status = ?, review_mode = ?, review_json = ?, expires_at = ?
-                           WHERE observation_id = ? AND artifact_kind = 'generated_candidate'""",
-                        (
-                            str(metadata.get("candidateStatus", "review_pending")),
-                            "completed",
-                            str(metadata.get("publicationStatus", "unpublished")),
-                            str(metadata.get("reviewMode", "safety")),
-                            json.dumps(metadata.get("review", {}), ensure_ascii=False)[:MAX_EVENT_PAYLOAD],
-                            time.time() + self.retention_seconds,
-                            candidate_id,
-                        ),
+                        "UPDATE gateway_run_artifacts SET chart_spec_json = ? WHERE observation_id = ?",
+                        (chart_spec_json, candidate_id),
                     )
-                    existing = connection.execute(
-                        "SELECT * FROM gateway_run_artifacts WHERE observation_id = ?", (candidate_id,)
-                    ).fetchone()
+                connection.execute(
+                    """UPDATE gateway_run_artifacts SET candidate_status = ?, review_status = ?,
+                       publication_status = ?, review_mode = ?, review_json = ?, figure_metadata_json = ?, expires_at = ?
+                       WHERE observation_id = ? AND artifact_kind = 'generated_candidate'""",
+                    (
+                        str(metadata.get("candidateStatus", "review_pending")),
+                        str(metadata.get("reviewStatus", "pending")),
+                        str(metadata.get("publicationStatus", "unpublished")),
+                        str(metadata.get("reviewMode", "safety")),
+                        json.dumps(metadata.get("review", {}), ensure_ascii=False)[:MAX_EVENT_PAYLOAD],
+                        json.dumps(figure_metadata, ensure_ascii=False)[:MAX_EVENT_PAYLOAD],
+                        time.time() + self.retention_seconds,
+                        candidate_id,
+                    ),
+                )
+                existing = connection.execute(
+                    "SELECT * FROM gateway_run_artifacts WHERE observation_id = ?", (candidate_id,)
+                ).fetchone()
                 return self._candidate_reference(existing)
             run = connection.execute(
                 "SELECT 1 FROM gateway_runs WHERE run_id = ? AND session_id = ?", (run_id, session_id)
@@ -837,12 +875,12 @@ class GatewayHistoryStore(RunPersistenceMixin, OperationJournalMixin):
                        caption, byte_count, sha256, created_at, expires_at,
                        artifact_kind, chart_type, title, width, height,
                        candidate_id, review_id, chart_spec_digest, candidate_status,
-                       review_status, publication_status, review_mode, review_json, figure_metadata_json)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'generated_candidate', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       review_status, publication_status, review_mode, review_json, figure_metadata_json, chart_spec_json)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'generated_candidate', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         candidate_id, run_id, session_id, managed_path, media_type,
                         truncate_text(caption, MAX_ARTIFACT_CAPTION), len(content),
-                        hashlib.sha256(content).hexdigest(), created, expires_at,
+                        content_digest, created, expires_at,
                         chart_type, title, width, height, candidate_id, review_id,
                         digest, candidate_status,
                         str(metadata.get("reviewStatus", "pending")),
@@ -850,6 +888,7 @@ class GatewayHistoryStore(RunPersistenceMixin, OperationJournalMixin):
                         str(metadata.get("reviewMode", "safety")),
                         json.dumps(metadata.get("review", {}), ensure_ascii=False)[:MAX_EVENT_PAYLOAD],
                         json.dumps(figure_metadata, ensure_ascii=False)[:MAX_EVENT_PAYLOAD],
+                        chart_spec_json,
                     ),
                 )
             except Exception:
@@ -920,6 +959,49 @@ class GatewayHistoryStore(RunPersistenceMixin, OperationJournalMixin):
 
     def get_candidate(self, session_id: str, run_id: str, candidate_id: str) -> tuple[bytes, str] | None:
         return self.get_artifact(session_id, run_id, candidate_id, artifact_kind="generated_candidate")
+
+    def get_candidate_review_input(
+        self,
+        session_id: str,
+        run_id: str,
+        candidate_id: str,
+        review_id: str,
+        chart_spec_digest: str,
+    ) -> dict[str, Any] | None:
+        """Load private immutable bytes and ChartSpec for canonical review recovery."""
+        with self._lock, self._connect() as connection:
+            self._cleanup_connection(connection)
+            row = connection.execute(
+                """SELECT * FROM gateway_run_artifacts WHERE candidate_id = ? AND run_id = ? AND session_id = ?
+                   AND artifact_kind IN ('generated_candidate', 'generated_chart') ORDER BY created_at DESC LIMIT 1""",
+                (candidate_id, run_id, session_id),
+            ).fetchone()
+            if (
+                row is None
+                or row["review_id"] != review_id
+                or row["chart_spec_digest"] != chart_spec_digest
+                or not row["chart_spec_json"]
+                or float(row["expires_at"]) <= time.time()
+            ):
+                return None
+            path = self._safe_artifact_path(row["managed_path"], session_id)
+            if path is None or not path.is_file():
+                return None
+            try:
+                content = path.read_bytes()
+                if len(row["chart_spec_json"].encode("utf-8")) > MAX_PRIVATE_CHART_SPEC_BYTES:
+                    return None
+                chart_spec = json.loads(row["chart_spec_json"])
+            except (OSError, TypeError, json.JSONDecodeError):
+                return None
+            if (
+                not isinstance(chart_spec, Mapping)
+                or len(content) != int(row["byte_count"])
+                or len(content) > self.max_artifact_bytes
+                or hashlib.sha256(content).hexdigest() != row["sha256"]
+            ):
+                return None
+            return {"content": content, "media_type": row["media_type"], "chart_spec": dict(chart_spec)}
 
     def get_chart_preview(self, session_id: str, run_id: str, reference_id: str) -> tuple[bytes, str] | None:
         """Read the current bytes for an artifact or candidate reference.

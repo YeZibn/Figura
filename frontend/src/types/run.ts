@@ -33,7 +33,6 @@ export type ExecutionGate = {
   remainingAttempts?: number | null
   nextAction?: string | null
   issues?: ReviewIssue[]
-  repairAction?: Record<string, unknown> | null
   updatedAt?: string | null
 }
 

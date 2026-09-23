@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -20,12 +21,10 @@ REPAIR_KINDS = frozenset({"none", "spec_only", "evidence_needed", "source_rebind
 
 
 class CandidateStatus(str, Enum):
-    CANDIDATE = "candidate"
     REVIEW_PENDING = "review_pending"
     VERIFIED = "verified"
     WARNING = "warning"
     REVIEW_FAILED = "review_failed"
-    EXPIRED = "expired"
     TIMED_OUT = "timed_out"
     RETRY_EXHAUSTED = "retry_exhausted"
 
@@ -34,7 +33,6 @@ class ReviewStatus(str, Enum):
     PENDING = "pending"
     COMPLETED = "completed"
     FAILED = "failed"
-    REQUIRES_MODEL_DECISION = "requires_model_decision"
     TIMED_OUT = "timed_out"
 
 
@@ -59,6 +57,30 @@ class ReviewIssue:
             "message": self.message[:MAX_REVIEW_TEXT],
             "severity": self.severity if self.severity in {"error", "warning"} else "error",
         }
+
+    @classmethod
+    def from_dict(cls, value: object) -> "ReviewIssue | None":
+        if not isinstance(value, Mapping):
+            return None
+        code = value.get("code")
+        location = value.get("location")
+        message = value.get("message")
+        severity = value.get("severity")
+        if (
+            not isinstance(code, str)
+            or not code.strip()
+            or len(code) > 64
+            or not isinstance(location, str)
+            or not location.strip()
+            or len(location) > 160
+            or not isinstance(message, str)
+            or not message.strip()
+            or len(message) > MAX_REVIEW_TEXT
+            or not isinstance(severity, str)
+            or severity not in {"error", "warning"}
+        ):
+            return None
+        return cls(code, location, message, severity)
 
 
 @dataclass(frozen=True)
@@ -122,6 +144,101 @@ class ReviewResult:
             result["candidateAttempt"] = max(1, min(int(self.candidate_attempt), 8))
         return result
 
+    @classmethod
+    def from_dict(cls, value: object) -> "ReviewResult | None":
+        if not isinstance(value, Mapping):
+            return None
+        try:
+            status = ReviewStatus(str(value.get("status") or ""))
+        except ValueError:
+            return None
+        checks = value.get("checks")
+        issues = value.get("issues")
+        evidence = value.get("evidence")
+        confidence = value.get("confidence")
+        model_decision_required = value.get("modelDecisionRequired")
+        review_mode = value.get("reviewMode")
+        if (
+            not isinstance(checks, Mapping)
+            or len(checks) > 64
+            or any(
+                not isinstance(key, str)
+                or not key
+                or len(key) > 96
+                or not isinstance(item, str)
+                or len(item) > 32
+                for key, item in checks.items()
+            )
+            or not isinstance(issues, list)
+            or len(issues) > MAX_REVIEW_ISSUES
+            or not isinstance(evidence, list)
+            or len(evidence) > MAX_REVIEW_EVIDENCE
+            or any(not isinstance(item, Mapping) for item in evidence)
+            or not isinstance(model_decision_required, bool)
+            or not isinstance(review_mode, str)
+            or not review_mode
+            or len(review_mode) > 32
+        ):
+            return None
+        parsed_issues = tuple(ReviewIssue.from_dict(item) for item in issues)
+        if any(issue is None for issue in parsed_issues):
+            return None
+        if confidence is not None:
+            if isinstance(confidence, bool) or not isinstance(confidence, (int, float)):
+                return None
+            try:
+                confidence = float(confidence)
+            except OverflowError:
+                return None
+            if not math.isfinite(confidence) or not 0.0 <= confidence <= 1.0:
+                return None
+        repair_target = value.get("repairTarget")
+        if repair_target is not None and not isinstance(repair_target, Mapping):
+            return None
+        string_fields = (
+            ("decision", 32),
+            ("candidateId", 160),
+            ("reviewId", 160),
+            ("chartSpecDigest", 64),
+            ("suggestedAction", MAX_REVIEW_TEXT),
+            ("recoveryClassification", 64),
+            ("repairKind", 32),
+        )
+        if any(
+            raw is not None and (not isinstance(raw, str) or not raw or len(raw) > limit)
+            for key, limit in string_fields
+            if (raw := value.get(key)) is not None
+        ):
+            return None
+        candidate_attempt = value.get("candidateAttempt")
+        if candidate_attempt is not None and (
+            isinstance(candidate_attempt, bool)
+            or not isinstance(candidate_attempt, int)
+            or not 1 <= candidate_attempt <= 8
+        ):
+            return None
+        repair_kind = value.get("repairKind")
+        if repair_kind is not None and repair_kind not in REPAIR_KINDS:
+            return None
+        return cls(
+            status=status,
+            checks=dict(checks),
+            issues=tuple(issue for issue in parsed_issues if issue is not None),
+            evidence=tuple(dict(item) for item in evidence),
+            model_decision_required=model_decision_required,
+            decision=value.get("decision"),
+            confidence=confidence,
+            review_mode=review_mode,
+            candidate_id=value.get("candidateId"),
+            review_id=value.get("reviewId"),
+            chart_spec_digest=value.get("chartSpecDigest"),
+            suggested_action=value.get("suggestedAction"),
+            recovery_classification=value.get("recoveryClassification"),
+            repair_kind=repair_kind,
+            repair_target=dict(repair_target) if isinstance(repair_target, Mapping) else None,
+            candidate_attempt=candidate_attempt,
+        )
+
 
 @dataclass(frozen=True)
 class ChartCandidate:
@@ -158,6 +275,14 @@ class ChartCandidate:
     context_digest: str | None = None
     context_status: str = "absent"
     parent_attempt: int | None = None
+    input_run_id: str = ""
+    call_id: str = ""
+    tool_name: str = ""
+    turn: int = 0
+    safety_result: ReviewResult | None = None
+    semantic_result: ReviewResult | None = None
+    repair_phase: str = "none"
+    updated_at: str = ""
 
     def safe_metadata(self) -> dict[str, Any]:
         result: dict[str, Any] = {

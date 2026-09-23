@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
-from typing import Any, Sequence
+from collections.abc import Mapping, Sequence
+from typing import Any
 
 from ..spec import ChartFigure
 from .models import (
@@ -42,6 +44,46 @@ class ReviewPolicy:
             "deadlineSeconds": self.deadline_seconds,
             "requiredChecks": list(self.required_checks),
         }
+
+    @classmethod
+    def from_dict(cls, value: object) -> "ReviewPolicy | None":
+        if not isinstance(value, Mapping):
+            return None
+        max_attempts_value = value.get("maxAttempts")
+        deadline_value = value.get("deadlineSeconds")
+        if (
+            isinstance(max_attempts_value, bool)
+            or not isinstance(max_attempts_value, int)
+            or not 1 <= max_attempts_value <= 8
+            or isinstance(deadline_value, bool)
+            or not isinstance(deadline_value, (int, float))
+        ):
+            return None
+        try:
+            deadline = float(deadline_value)
+        except OverflowError:
+            return None
+        if not math.isfinite(deadline) or not 1.0 <= deadline <= 3600.0:
+            return None
+        if not isinstance(value.get("sourceLinked"), bool) or not isinstance(value.get("semanticRequired"), bool):
+            return None
+        if not isinstance(value.get("allowWarnings"), bool):
+            return None
+        checks = value.get("requiredChecks")
+        if (
+            not isinstance(checks, list)
+            or len(checks) > 16
+            or any(not isinstance(item, str) or not item or len(item) > 64 for item in checks)
+        ):
+            return None
+        return cls(
+            source_linked=value["sourceLinked"],
+            semantic_required=value["semanticRequired"],
+            allow_warnings=value["allowWarnings"],
+            max_attempts=max_attempts_value,
+            deadline_seconds=deadline,
+            required_checks=tuple(checks),
+        )
 
 
 def select_review_policy(

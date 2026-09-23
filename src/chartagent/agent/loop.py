@@ -45,12 +45,13 @@ from ..measurement import (
     sessions_to_state,
 )
 from ..review import (
+    CandidateStatus,
     ChartReviewManager,
-    GeneratedChartReviewAdapter,
-    ReviewCoordinator,
+    PublicationStatus,
     ReviewIssue,
     ReviewResult,
     ReviewStatus,
+    review_candidate_bytes,
     review_candidate_with_vlm,
 )
 from ..tools.core.result import GeneratedImage
@@ -105,6 +106,7 @@ from .turn import (
 
 # Sentinel returned when the step budget is exhausted.
 VisualObservationSink = Callable[[str, str, Sequence[GeneratedImage]], Sequence[dict[str, Any]]]
+CandidateInputSink = Callable[[GeneratedImage, Mapping[str, Any]], Any]
 _LAYOUT_TOOL_NAME = "inspect_chart_layout"
 _DECOMPOSE_TOOL_NAME = "decompose_chart_image"
 _MAX_LAYOUT_CONTEXTS = _MAX_LAYOUT_CONTEXTS_CANONICAL
@@ -151,7 +153,7 @@ class Agent:
         attachments: Any = None,
         context_budget: int = 24000,
         review_manager: Optional[ChartReviewManager] = None,
-        review_coordinator: Optional[ReviewCoordinator] = None,
+        candidate_input_sink: CandidateInputSink | None = None,
         interruption_event: Any = None,
         recovery_context: Optional[dict[str, Any]] = None,
         checkpoint_sink: Optional[Callable[..., bool]] = None,
@@ -176,8 +178,7 @@ class Agent:
         self.memory = memory or InMemoryAgentMemory(context_budget=context_budget)
         self.attachments = attachments
         self._review_manager = review_manager or ChartReviewManager(attachments=attachments)
-        self._review_coordinator = review_coordinator or ReviewCoordinator()
-        self._generated_chart_review_adapter = GeneratedChartReviewAdapter()
+        self._candidate_input_sink = candidate_input_sink
         self._interruption_event = interruption_event
         self._recovery_context = recovery_context
         self._checkpoint_sink = checkpoint_sink
@@ -246,13 +247,27 @@ class Agent:
                 artifact_records = [
                     item for item in raw_artifacts[:48] if isinstance(item, dict)
                 ]
+            raw_visual_refs = recovery.get("visualReferences")
+            if isinstance(raw_visual_refs, list):
+                checkpoint_references.extend(item for item in raw_visual_refs[:32] if isinstance(item, dict))
             measurement_sessions = sessions_from_state(recovery.get("measurementSessions"))
-            review_state = recovery.get("reviewState") if isinstance(recovery.get("reviewState"), Mapping) else {}
-            self._review_coordinator.restore(review_state.get("records", []))
-            if isinstance(review_state.get("executionGate"), Mapping):
-                self._review_coordinator.restore_gate(run.id, review_state["executionGate"])
-            elif isinstance(recovery.get("executionGate"), Mapping):
-                self._review_coordinator.restore_gate(run.id, recovery["executionGate"])
+            review_state = recovery.get("reviewState")
+            legacy_review_state = "executionGate" in recovery or (
+                isinstance(review_state, Mapping)
+                and ("records" in review_state or "executionGate" in review_state)
+            )
+            if review_state is None and legacy_review_state:
+                raise AgentRecoveryBlocked("unsupported_review_state_version")
+            if review_state is not None:
+                try:
+                    self._review_manager.restore(review_state, active_run_id=run.id)
+                except (TypeError, ValueError) as exc:
+                    raise AgentRecoveryBlocked(str(exc)) from exc
+                if self._execution_gate_sink is not None:
+                    try:
+                        self._execution_gate_sink(self._review_manager.execution_gate(run.id).to_dict())
+                    except Exception:  # noqa: BLE001 - projection failure cannot open the manager gate
+                        pass
             pending_measurement_repairs = _measurement_repair_contexts_from_sessions(measurement_sessions)
             raw_repairs = recovery.get("pendingMeasurementRepairs")
             if isinstance(raw_repairs, list):
@@ -289,6 +304,20 @@ class Agent:
         )
 
         pending_recovery_calls = self._recovery_tool_calls(recovery)
+        if isinstance(recovery, dict) and recovery.get("nextAction") == "review":
+            self._resume_pending_review(
+                run,
+                recovery,
+                user_input=user_input,
+                layout_contexts=layout_contexts,
+                attachment_ids=run_attachment_ids,
+                checkpoint_references=checkpoint_references,
+                artifact_records=artifact_records,
+                measurement_sessions=measurement_sessions,
+                pending_measurement_repairs=pending_measurement_repairs,
+                emitter=emitter,
+            )
+            pending_recovery_calls = self._recovery_tool_calls(recovery)
         if isinstance(recovery, dict) and recovery.get("nextAction") == "final" and isinstance(recovery.get("pendingAnswer"), str):
             answer = str(recovery["pendingAnswer"])
             self.memory.append(run, "final", {"answer": answer, "recovered": True})
@@ -312,7 +341,7 @@ class Agent:
                     if isinstance(candidate_item, Mapping) and isinstance(candidate_item.get("generationContext"), Mapping):
                         active_generation_context = candidate_item["generationContext"]
                         break
-                execution_gate = self._review_coordinator.gate(run.id).to_dict()
+                execution_gate = self._review_manager.execution_gate(run.id).to_dict()
                 decision_context = build_decision_context(
                     run_id=run.id,
                     execution_gate=execution_gate,
@@ -392,7 +421,7 @@ class Agent:
             if not result.tool_calls:
                 self._raise_if_interrupted(run)
                 assistant_message = assistant_entry(result)
-                shared_gate = self._review_coordinator.gate(run.id)
+                shared_gate = self._review_manager.execution_gate(run.id)
                 if shared_gate.blocking:
                     self._current_messages.append(assistant_message)
                     self._messages.append(assistant_message)
@@ -449,7 +478,7 @@ class Agent:
                         layout_contexts,
                         run_attachment_ids,
                         turn,
-                        pending_tool_calls=(),
+                        pending_tool_calls=result.tool_calls[call_index + 1:],
                         pending_answer=result.content,
                         visual_references=checkpoint_references,
                         artifact_records=artifact_records,
@@ -514,7 +543,7 @@ class Agent:
                     call.name,
                     call_arguments if isinstance(call_arguments, Mapping) else {},
                 ):
-                    active_gate = self._review_coordinator.gate(run.id)
+                    active_gate = self._review_manager.execution_gate(run.id)
                     self._skip_tool_calls(
                         run,
                         result.tool_calls[call_index:],
@@ -544,6 +573,7 @@ class Agent:
                     selected_panel_id = call_arguments["panel_id"]
                 operation_kind = "render" if call.name in _RENDER_TOOL_NAMES else "tool"
                 operation_id = f"{operation_kind}:{turn}:{call.id}"
+                operation_completed = False
                 tool_unit_id, tool_unit_type = _tool_trace_identity(call.name, call.id)
                 operation = self._begin_work_unit(operation_id, operation_kind)
                 if isinstance(recovery, dict) and operation.get("state") in {"in_flight", "uncertain"}:
@@ -590,7 +620,7 @@ class Agent:
                         or call.id
                     )[:160]
                     focus_unit_id = tool_unit_id
-                    active_gate = self._review_coordinator.gate(run.id)
+                    active_gate = self._review_manager.execution_gate(run.id)
                     required_focus = bool(
                         active_gate.blocking
                         and active_gate.repair_kind == "evidence_needed"
@@ -612,27 +642,56 @@ class Agent:
                         handoff_payload = None
                     if isinstance(handoff_payload, Mapping) and not handoff_payload.get("error"):
                         self._advance_generated_repair_phase(run.id, "assemble")
-                review_operation_id = None
-                if any(
-                    isinstance(getattr(image, "metadata", None), dict)
-                    and image.metadata.get("kind") == "generated_chart"
-                    for image in observation.images
-                ):
-                    review_operation_id = f"review:{turn}:{call.id}"
-                    self._begin_work_unit(review_operation_id, "review")
+                def checkpoint_review(candidate_ids: Sequence[str]) -> None:
+                    nonlocal operation_completed
+                    if operation_kind == "render" and not operation_completed:
+                        self._complete_work_unit(
+                            operation_id,
+                            operation_kind,
+                            {"status": "rendered"},
+                            {"candidateIds": list(candidate_ids[:16])},
+                        )
+                        operation_completed = True
+                    state = self._checkpoint_state(
+                        user_input,
+                        self._current_messages,
+                        layout_contexts,
+                        run_attachment_ids,
+                        turn,
+                        pending_tool_calls=(),
+                        visual_references=checkpoint_references,
+                        artifact_records=artifact_records,
+                        measurement_sessions=measurement_sessions,
+                        pending_measurement_repairs=pending_measurement_repairs,
+                    )
+                    state["pendingReview"] = {
+                        "callId": call.id,
+                        "toolName": call.name,
+                        "turn": turn,
+                        "candidateIds": list(candidate_ids[:16]),
+                    }
+                    saved = self._checkpoint(
+                        run,
+                        phase="review",
+                        next_action="review",
+                        state=state,
+                    )
+                    if self._checkpoint_sink is not None and not saved:
+                        raise AgentRecoveryBlocked("review_checkpoint_unavailable")
+
                 observation = self._apply_generation_review(
                     observation,
                     run=run,
                     run_id=run.id,
                     call_id=call.id,
+                    tool_name=call.name,
                     arguments=call.arguments,
                     source_attachment_ids=run_attachment_ids,
                     emitter=emitter,
                     turn=turn,
+                    checkpoint_review=checkpoint_review,
                 )
                 self._raise_if_interrupted(run)
-                if review_operation_id:
-                    self._complete_work_unit(review_operation_id, "review", {"status": "completed"})
                 observation_refs: Sequence[dict[str, Any]] = ()
                 sink_images = observation.images
                 if self._visual_observation_sink is not None and sink_images:
@@ -687,8 +746,8 @@ class Agent:
                             state="requested",
                             transition_id=f"{focus_unit_id}:focus_requested",
                             parent_unit_id=(
-                                f"review:{self._review_coordinator.gate(run.id).review_id}"
-                                if required_focus and self._review_coordinator.gate(run.id).review_id
+                                f"review:{self._review_manager.execution_gate(run.id).review_id}"
+                                if required_focus and self._review_manager.execution_gate(run.id).review_id
                                 else None
                             ),
                             required=required_focus,
@@ -731,8 +790,8 @@ class Agent:
                                     state="observed",
                                     transition_id=f"{focus_unit_id}:observed",
                                     parent_unit_id=(
-                                        f"review:{self._review_coordinator.gate(run.id).review_id}"
-                                        if required_focus and self._review_coordinator.gate(run.id).review_id
+                                        f"review:{self._review_manager.execution_gate(run.id).review_id}"
+                                        if required_focus and self._review_manager.execution_gate(run.id).review_id
                                         else None
                                     ),
                                     session_id=measurement_session.session_id,
@@ -784,8 +843,8 @@ class Agent:
                             role="observation",
                             transition_id=f"{focus_unit_id}:focus_failed",
                             parent_unit_id=(
-                                f"review:{self._review_coordinator.gate(run.id).review_id}"
-                                if required_focus and self._review_coordinator.gate(run.id).review_id
+                                f"review:{self._review_manager.execution_gate(run.id).review_id}"
+                                if required_focus and self._review_manager.execution_gate(run.id).review_id
                                 else None
                             ),
                             required=required_focus,
@@ -894,14 +953,15 @@ class Agent:
                 checkpoint_references.extend(
                     item for item in observation_refs if isinstance(item, dict)
                 )
-                self._complete_work_unit(
-                    operation_id,
-                    operation_kind,
-                    {"status": observation_status(observation.content)},
-                    {"observations": list(observation_refs)},
-                )
+                if not operation_completed:
+                    self._complete_work_unit(
+                        operation_id,
+                        operation_kind,
+                        {"status": observation_status(observation.content)},
+                        {"observations": list(observation_refs)},
+                    )
                 remaining_calls = result.tool_calls[call_index + 1:]
-                shared_gate = self._review_coordinator.gate(run.id)
+                shared_gate = self._review_manager.execution_gate(run.id)
                 stop_batch = shared_gate.blocking
                 if stop_batch and remaining_calls:
                     self._skip_tool_calls(
@@ -1036,7 +1096,7 @@ class Agent:
             )
         self._raise_if_interrupted(run)
         terminal_answer = _BUDGET_MSG
-        shared_terminal_gate = self._review_coordinator.gate(run.id)
+        shared_terminal_gate = self._review_manager.execution_gate(run.id)
         if shared_terminal_gate.blocking:
             terminal_answer = _REVIEW_FAILED_MSG if shared_terminal_gate.state.value in {"failed", "exhausted"} else _REVIEW_REQUIRED_MSG
         if emitter is not None:
@@ -1060,7 +1120,7 @@ class Agent:
         selected tool remains responsible for its own authorization, scope,
         lineage and schema checks.
         """
-        gate = self._review_coordinator.gate(run_id)
+        gate = self._review_manager.execution_gate(run_id)
         if not gate.blocking:
             return True
         if gate.review_type is None:
@@ -1113,7 +1173,7 @@ class Agent:
 
     def _advance_generated_repair_phase(self, run_id: str, phase: str) -> None:
         """Move the active generated-chart repair sub-loop to its next phase."""
-        gate = self._review_coordinator.gate(run_id)
+        gate = self._review_manager.execution_gate(run_id)
         if (
             gate.blocking
             and gate.review_type is not None
@@ -1121,67 +1181,117 @@ class Agent:
             and gate.review_id
         ):
             try:
-                self._review_coordinator.mark_repair_phase(gate.review_id, phase)
+                self._review_manager.mark_repair_phase(run_id, gate.review_id, phase)
             except (KeyError, ValueError):
                 return
+            if self._execution_gate_sink is not None:
+                try:
+                    self._execution_gate_sink(self._review_manager.execution_gate(run_id).to_dict())
+                except Exception:  # noqa: BLE001 - projection cannot stop repair
+                    pass
 
-    def _record_shared_review(
+    def _record_candidate_review(
         self,
         run: Any,
-        record: Any,
+        candidate: Any,
         *,
         emitter: TraceEmitter | None,
         turn: int,
         tool_name: str,
         call_id: str,
-        emit_start: bool = True,
+        started: bool,
     ) -> None:
-        """Persist and expose one normalized review transition."""
-        payload = record.to_dict()
-        payload["execution_gate"] = self._review_coordinator.gate(record.run_id).to_dict()
-        payload.update({"tool_name": tool_name, "call_id": call_id})
-        subject_ref = record.subject_ref if isinstance(record.subject_ref, Mapping) else {}
-        generation_context = subject_ref.get("generation_context")
-        if isinstance(generation_context, Mapping):
-            source_scope = generation_context.get("source_scope") or generation_context.get("sourceScope")
-            coverage = generation_context.get("coverage")
-            if isinstance(source_scope, Mapping):
-                payload["source_scope"] = dict(source_scope)
-            if isinstance(coverage, Mapping):
-                payload["coverage"] = dict(coverage)
-        payload["candidate_id"] = record.subject_id if record.review_type.value == "generated_chart" else None
-        payload["attempt"] = record.attempt
-        payload["parent_attempt"] = record.parent_id
-        payload["repair_kind"] = record.repair_kind
-        payload["collection_id"] = subject_ref.get("collection_id")
-        payload["figure_id"] = subject_ref.get("figure_id")
-        payload["parent_candidate_id"] = subject_ref.get("parent_candidate_id")
-        if payload["collection_id"]:
-            payload["parent_unit_id"] = f"review:collection:{payload['collection_id']}"
-        payload["unit_id"] = f"review:{record.review_id}"
-        payload["unit_type"] = "review"
-        payload["phase"] = "repair" if record.state.value == "repair_required" else "review"
-        payload["actor"] = "system"
-        payload["role"] = "review"
-        payload["review_id"] = record.review_id
-        payload["review_type"] = record.review_type.value
-        payload["subject_id"] = record.subject_id
-        payload["review_status"] = record.state.value
-        payload["transition_id"] = f"review:{record.review_id}:{record.attempt}:{record.state.value}"
-        details = payload.get("details")
-        if isinstance(details, Mapping) and details.get("publication_status"):
-            payload["publication_status"] = details.get("publication_status")
-        if isinstance(details, Mapping) and details.get("candidate_status"):
-            payload["candidate_status"] = details.get("candidate_status")
-        if isinstance(details, Mapping) and details.get("review_status"):
-            payload["review_status"] = details.get("review_status")
-        if isinstance(details, Mapping) and details.get("review_mode"):
-            payload["review_mode"] = details.get("review_mode")
-        payload.setdefault(
-            "review_mode",
-            "vlm" if record.review_type.value == "generated_chart" else "safety",
-        )
-        payload = {"review_mode": payload["review_mode"], **payload}
+        """Persist and expose one transition derived from the candidate aggregate."""
+        gate = self._review_manager.execution_gate(candidate.run_id)
+        review = candidate.review or candidate.safety_result
+        if started:
+            state = "reviewing"
+        elif candidate.publication_status is PublicationStatus.PUBLISHED:
+            state = "passed"
+        elif candidate.publication_status is PublicationStatus.PUBLISHED_WITH_WARNING:
+            state = "passed_with_warning"
+        elif candidate.status is CandidateStatus.RETRY_EXHAUSTED or gate.state.value == "exhausted":
+            state = "exhausted"
+        elif candidate.status is CandidateStatus.REVIEW_FAILED and gate.state.value == "repair_required":
+            state = "repair_required"
+        else:
+            state = "failed"
+        generation_context = candidate.generation_context.to_dict() if candidate.generation_context is not None else None
+        source_scope = generation_context.get("source_scope") if isinstance(generation_context, Mapping) else None
+        coverage = generation_context.get("coverage") if isinstance(generation_context, Mapping) else None
+        subject_ref = {
+            "candidate_id": candidate.candidate_id,
+            "review_id": candidate.review_id,
+            "chart_spec_digest": candidate.chart_spec_digest,
+            "source_attachment_ids": list(candidate.source_attachment_ids[:16]),
+            "panel_ids": list(candidate.panel_ids[:16]),
+            "generation_context": generation_context,
+            "context_status": candidate.context_status,
+            "collection_id": candidate.collection_id,
+            "figure_id": candidate.figure_id,
+            "parent_candidate_id": candidate.parent_candidate_id,
+        }
+        evidence = [{
+            "candidate_id": candidate.candidate_id,
+            "review_id": candidate.review_id,
+            "chart_spec_digest": candidate.chart_spec_digest,
+            "repair_kind": review.repair_kind if review is not None else "none",
+            "repair_target": dict(review.repair_target) if review is not None and isinstance(review.repair_target, Mapping) else None,
+        }]
+        issues = [issue.to_dict() for issue in (review.issues if review is not None else ())[:32]]
+        payload: dict[str, Any] = {
+            "reviewId": candidate.review_id,
+            "runId": candidate.run_id,
+            "reviewType": "generated_chart",
+            "subjectId": candidate.candidate_id,
+            "state": state,
+            "blocking": started or candidate.publication_status in {PublicationStatus.UNPUBLISHED, PublicationStatus.REJECTED},
+            "attempt": candidate.lineage_attempt,
+            "maxAttempts": candidate.policy.max_attempts,
+            "remainingAttempts": max(0, candidate.policy.max_attempts - candidate.lineage_attempt),
+            "issues": issues,
+            "subjectRef": subject_ref,
+            "evidence": evidence,
+            "createdAt": candidate.updated_at,
+            "updatedAt": candidate.updated_at,
+            "repairKind": review.repair_kind if review is not None and review.repair_kind else "none",
+            "repairPhase": candidate.repair_phase,
+            "decision": review.decision if review is not None else "reviewing",
+            "confidence": review.confidence if review is not None else None,
+            "details": {
+                "candidate_status": candidate.status.value,
+                "review_status": candidate.review_status.value,
+                "publication_status": candidate.publication_status.value,
+                "review_mode": review.review_mode if review is not None else "vlm" if candidate.policy.semantic_required else "safety",
+            },
+            "execution_gate": gate.to_dict(),
+            "tool_name": tool_name,
+            "call_id": call_id,
+            "candidate_id": candidate.candidate_id,
+            "attempt": candidate.lineage_attempt,
+            "parent_attempt": candidate.parent_attempt,
+            "repair_kind": review.repair_kind if review is not None and review.repair_kind else "none",
+            "collection_id": candidate.collection_id,
+            "figure_id": candidate.figure_id,
+            "parent_candidate_id": candidate.parent_candidate_id,
+            "unit_id": f"review:{candidate.review_id}",
+            "unit_type": "review",
+            "phase": "repair" if state == "repair_required" else "review",
+            "actor": "system",
+            "role": "review",
+            "review_id": candidate.review_id,
+            "review_type": "generated_chart",
+            "subject_id": candidate.candidate_id,
+            "review_status": candidate.review_status.value,
+            "transition_id": f"review:{candidate.review_id}:{candidate.lineage_attempt}:{state}",
+            "review_mode": review.review_mode if review is not None else "vlm" if candidate.policy.semantic_required else "safety",
+            "candidate_status": candidate.status.value,
+            "publication_status": candidate.publication_status.value,
+        }
+        if isinstance(source_scope, Mapping):
+            payload["source_scope"] = dict(source_scope)
+        if isinstance(coverage, Mapping):
+            payload["coverage"] = dict(coverage)
         self.memory.append(run, "review", {"state": payload})
         if self._execution_gate_sink is not None:
             try:
@@ -1190,82 +1300,53 @@ class Agent:
                 pass
         if emitter is None:
             return
-        if record.state.value == "reviewing":
+        if started:
             emitter.emit(
                 "review_started",
                 turn=turn,
-                review_id=record.review_id,
-                review_type=record.review_type.value,
-                subject_id=record.subject_id,
+                review_id=candidate.review_id,
+                review_type="generated_chart",
+                subject_id=candidate.candidate_id,
                 unit_id=payload["unit_id"],
-                transition_id=payload["transition_id"],
-                state=record.state.value,
-                unit_type="review",
-                phase="review",
-                actor="system",
-                role="review",
-                parent_unit_id=payload.get("parent_unit_id"),
-                attempt=record.attempt,
-                blocking=True,
-                tool_name=tool_name,
-                call_id=call_id,
-                candidate_id=payload.get("candidate_id"),
-                collection_id=payload.get("collection_id"),
-            )
-            return
-        if emit_start:
-            emitter.emit(
-                "review_started",
-                turn=turn,
-                review_id=record.review_id,
-                review_type=record.review_type.value,
-                subject_id=record.subject_id,
-                unit_id=payload["unit_id"],
-                transition_id=f"review:{record.review_id}:{record.attempt}:reviewing",
+                transition_id=f"review:{candidate.review_id}:{candidate.lineage_attempt}:reviewing",
                 state="reviewing",
                 unit_type="review",
                 phase="review",
                 actor="system",
                 role="review",
-                parent_unit_id=payload.get("parent_unit_id"),
-                attempt=record.attempt,
+                parent_unit_id=(f"review:collection:{candidate.collection_id}" if candidate.collection_id else None),
+                attempt=candidate.lineage_attempt,
                 blocking=True,
                 tool_name=tool_name,
                 call_id=call_id,
-                candidate_id=payload.get("candidate_id"),
-                collection_id=payload.get("collection_id"),
+                candidate_id=candidate.candidate_id,
+                collection_id=candidate.collection_id,
             )
-        if record.state.value in {"passed", "passed_with_warning"}:
+            return
+        if state in {"passed", "passed_with_warning"}:
             emitter.emit("review_completed", turn=turn, **payload)
-        elif record.state.value == "repair_required":
+        elif state == "repair_required":
             emitter.emit("review_repair_required", turn=turn, **payload)
         else:
             emitter.emit("review_failed", turn=turn, **payload)
-        if record.review_type.value != "generated_chart":
-            return
-        publication_status = str(payload.get("publication_status") or "")
-        publication_kind = (
-            "generated_chart_published"
-            if publication_status in {"published", "published_with_warning"}
-            else "generated_chart_rejected"
-        )
-        candidate_id = str(payload.get("candidate_id") or record.subject_id)
+        publication_status = candidate.publication_status.value
+        publication_kind = "generated_chart_published" if publication_status in {"published", "published_with_warning"} else "generated_chart_rejected"
         emitter.emit(
             publication_kind,
             turn=turn,
-            unit_id=f"publication:{candidate_id}",
+            unit_id=f"publication:{candidate.candidate_id}",
             unit_type="publication",
             phase="publish",
             actor="system",
             role="publication",
             parent_unit_id=payload["unit_id"],
-            review_id=record.review_id,
-            candidate_id=candidate_id,
-            subject_id=record.subject_id,
-            attempt=record.attempt,
-            publication_status=publication_status or "rejected",
-            state=publication_status or "rejected",
-            transition_id=f"publication:{candidate_id}:{record.attempt}:{publication_status or 'rejected'}",
+            review_id=candidate.review_id,
+            candidate_id=candidate.candidate_id,
+            subject_id=candidate.candidate_id,
+            attempt=candidate.lineage_attempt,
+            publication_status=publication_status,
+            state=publication_status,
+            transition_id=f"publication:{candidate.candidate_id}:{candidate.lineage_attempt}:{publication_status}",
             tool_name=tool_name,
             call_id=call_id,
             reason=("review_failed" if publication_kind == "generated_chart_rejected" else None),
@@ -1443,10 +1524,10 @@ class Agent:
         state: dict[str, Any],
         phase: str,
         next_action: str,
-    ) -> None:
-        checkpoint(
+    ) -> bool | None:
+        return checkpoint(
             self._checkpoint_sink,
-            self._review_coordinator,
+            self._review_manager,
             run,
             state=state,
             phase=phase,
@@ -1528,6 +1609,165 @@ class Agent:
         layout_contexts: dict[str, dict[str, Any]],
     ) -> None:
         remember_layout_context(content, arguments, layout_contexts)
+
+    def _resume_pending_review(
+        self,
+        run: Any,
+        recovery: Mapping[str, Any],
+        *,
+        user_input: str | list[dict],
+        layout_contexts: dict[str, dict[str, Any]],
+        attachment_ids: Sequence[str],
+        checkpoint_references: list[dict[str, Any]],
+        artifact_records: list[dict[str, Any]],
+        measurement_sessions: Mapping[str, MeasurementSession],
+        pending_measurement_repairs: Sequence[Mapping[str, Any]],
+        emitter: TraceEmitter | None,
+    ) -> None:
+        """Finish a staged review before returning to the model after recovery."""
+        pending = recovery.get("pendingReview")
+        if not isinstance(pending, Mapping):
+            raise AgentRecoveryBlocked("pending_review_reference_missing")
+        call_id = pending.get("callId")
+        tool_name = pending.get("toolName")
+        candidate_ids = pending.get("candidateIds")
+        if (
+            not isinstance(call_id, str)
+            or not call_id
+            or not isinstance(tool_name, str)
+            or not tool_name
+            or not isinstance(candidate_ids, list)
+            or not candidate_ids
+            or any(not isinstance(item, str) for item in candidate_ids)
+        ):
+            raise AgentRecoveryBlocked("pending_review_reference_invalid")
+        turn = max(1, int(pending.get("turn", 1)))
+        candidates = self._review_manager.candidates_for_review(run.id, candidate_ids)
+        if {candidate.candidate_id for candidate, _ in candidates} != set(candidate_ids):
+            raise AgentRecoveryBlocked("review_candidate_input_unavailable")
+        remaining_calls = self._recovery_tool_calls(dict(recovery))
+
+        def save_review_checkpoint(ids: Sequence[str]) -> None:
+            state = self._checkpoint_state(
+                user_input,
+                self._current_messages,
+                layout_contexts,
+                attachment_ids,
+                turn,
+                pending_tool_calls=remaining_calls,
+                visual_references=checkpoint_references,
+                artifact_records=artifact_records,
+                measurement_sessions=measurement_sessions,
+                pending_measurement_repairs=pending_measurement_repairs,
+            )
+            state["pendingReview"] = {
+                "callId": call_id,
+                "toolName": tool_name,
+                "turn": turn,
+                "candidateIds": list(ids[:16]),
+            }
+            saved = self._checkpoint(run, phase="review", next_action="review", state=state)
+            if self._checkpoint_sink is not None and not saved:
+                raise AgentRecoveryBlocked("review_checkpoint_unavailable")
+
+        images: list[GeneratedImage] = []
+        review_payloads = []
+        for candidate, spec in candidates:
+            staged_image = self._review_manager.decorate_image(
+                GeneratedImage(candidate.content, candidate.media_type, candidate.title),
+                candidate,
+            )
+            if self._candidate_input_sink is None:
+                raise AgentRecoveryBlocked("review_candidate_store_unavailable")
+            try:
+                staged_reference = self._candidate_input_sink(staged_image, spec.to_dict())
+            except Exception as exc:  # noqa: BLE001 - recovery remains fail closed
+                raise AgentRecoveryBlocked("review_candidate_store_unavailable") from exc
+            if not staged_reference:
+                raise AgentRecoveryBlocked("review_candidate_store_unavailable")
+            candidate = self._finish_candidate_review(
+                candidate,
+                spec,
+                emitter=emitter,
+                turn=turn,
+                checkpoint_review=save_review_checkpoint,
+                candidate_ids=candidate_ids,
+            )
+            if candidate.run_id != run.id:
+                raise AgentRecoveryBlocked("review_candidate_run_mismatch")
+            if self._run_id is not None and candidate.run_id != self._run_id:
+                raise AgentRecoveryBlocked("review_candidate_run_mismatch")
+            staged_image = self._review_manager.decorate_image(
+                GeneratedImage(candidate.content, candidate.media_type, candidate.title),
+                candidate,
+            )
+            try:
+                updated_reference = self._candidate_input_sink(staged_image, spec.to_dict())
+            except Exception as exc:  # noqa: BLE001 - recovery remains fail closed
+                raise AgentRecoveryBlocked("review_candidate_store_unavailable") from exc
+            if not updated_reference:
+                raise AgentRecoveryBlocked("review_candidate_store_unavailable")
+            self._record_candidate_review(
+                run,
+                candidate,
+                emitter=emitter,
+                turn=turn,
+                tool_name="generated_chart_review",
+                call_id=call_id,
+                started=False,
+            )
+            images.append(staged_image)
+            review_payloads.append(candidate.safe_metadata())
+
+        result_content = json.dumps(
+            {
+                "status": "success",
+                "data": {"kind": "generated_chart", "review": review_payloads, "recovered": True},
+                "review": review_payloads,
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        tool_call = ToolCall(call_id, tool_name, "{}")
+        tool_message = tool_entry(tool_call, result_content)
+        self._current_messages.append(tool_message)
+        self._messages.append(tool_message)
+        self.memory.append(run, "tool", {"message": tool_message, "tool_name": tool_name, "status": "success"})
+        references: Sequence[dict[str, Any]] = ()
+        if self._visual_observation_sink is not None:
+            references = self._visual_observation_sink(tool_name, call_id, images)
+        checkpoint_references.extend(item for item in references if isinstance(item, dict))
+        artifact_records.extend(
+            _artifact_records_from_observation(tool_name, call_id, result_content, attachment_ids, references)
+        )
+        artifact_records[:] = artifact_records[-48:]
+        if images:
+            visual_message = {
+                "role": "user",
+                "content": build_tool_observation_content([ToolVisualEvidence(tool_name, call_id, images)]),
+            }
+            self._current_messages.append(visual_message)  # type: ignore[arg-type]
+            self._messages.append(visual_message)  # type: ignore[arg-type]
+            self.memory.append(run, "visual_metadata", {"tool_count": 1, "tools": [tool_name], "call_ids": [call_id], "image_count": len(images)})
+        next_action = "tool" if remaining_calls else "model"
+        self._checkpoint(
+            run,
+            phase="tool",
+            next_action=next_action,
+            state=self._checkpoint_state(
+                user_input,
+                self._current_messages,
+                layout_contexts,
+                attachment_ids,
+                turn,
+                pending_tool_calls=remaining_calls,
+                visual_references=checkpoint_references,
+                artifact_records=artifact_records,
+                measurement_sessions=measurement_sessions,
+                pending_measurement_repairs=pending_measurement_repairs,
+            ),
+        )
+
     def _apply_generation_review(
         self,
         observation: Any,
@@ -1535,10 +1775,12 @@ class Agent:
         run: Any | None = None,
         run_id: str,
         call_id: str,
+        tool_name: str,
         arguments: str,
         source_attachment_ids: Sequence[str],
         emitter: TraceEmitter | None = None,
         turn: int | None = None,
+        checkpoint_review: Callable[[Sequence[str]], None] | None = None,
     ) -> Any:
         """Run the post-generation hook before tool evidence reaches the model."""
         if not observation.images:
@@ -1565,7 +1807,7 @@ class Agent:
             return observation
         generated: list[GeneratedImage] = []
         review_payloads: list[dict[str, Any]] = []
-        changed = False
+        prepared: list[tuple[GeneratedImage, Any, Any, bool]] = []
         for image in observation.images:
             metadata = image.metadata if hasattr(image.metadata, "get") else {}
             if metadata.get("kind") != "generated_chart":
@@ -1590,27 +1832,59 @@ class Agent:
                 image,
                 review_spec,
                 source_attachment_ids=source_attachment_ids,
+                tool_name=tool_name,
+                turn=turn or 0,
             )
-            # Open the shared gate before any VLM/provider review work.  The
-            # generated artifact is therefore never visible as publishable
-            # while the semantic review is still in flight.
-            initial_shared_review = self._generated_chart_review_adapter.submit(
-                self._review_coordinator,
-                candidate=candidate,
-            )
+            # The candidate itself opens the derived gate before persistence or review.
+            persisted = self._candidate_input_sink is None and self._checkpoint_sink is None
+            if self._candidate_input_sink is not None:
+                try:
+                    staged = self._candidate_input_sink(
+                        self._review_manager.decorate_image(image, candidate),
+                        review_spec.to_dict(),
+                    )
+                    persisted = bool(staged)
+                except Exception:  # noqa: BLE001 - candidate storage must fail closed
+                    persisted = False
             if run is not None:
-                self._record_shared_review(
+                self._record_candidate_review(
                     run,
-                    initial_shared_review,
+                    candidate,
                     emitter=emitter,
                     turn=turn or 0,
                     tool_name="generated_chart_review",
                     call_id=call_id,
+                    started=True,
                 )
-            if candidate.review_status is ReviewStatus.PENDING:
-                semantic_result: ReviewResult | None = None
-                from ..review.evaluator import review_candidate_bytes
+            prepared.append((image, candidate, review_spec, persisted))
+        if not prepared:
+            return observation
 
+        candidate_ids = [candidate.candidate_id for _, candidate, _, _ in prepared]
+        for index, (image, candidate, review_spec, persisted) in enumerate(prepared):
+            if candidate.safety_result is not None or candidate.status in {
+                CandidateStatus.VERIFIED,
+                CandidateStatus.WARNING,
+                CandidateStatus.REVIEW_FAILED,
+                CandidateStatus.TIMED_OUT,
+                CandidateStatus.RETRY_EXHAUSTED,
+            }:
+                continue
+            if not persisted:
+                deterministic_result = ReviewResult(
+                    status=ReviewStatus.FAILED,
+                    checks={"candidate_storage": "failed"},
+                    issues=(ReviewIssue(
+                        "candidate_storage_failure",
+                        "candidate.storage",
+                        "candidate image and ChartSpec could not be stored for mandatory review",
+                    ),),
+                    decision="fail",
+                    confidence=0.0,
+                    review_mode="safety",
+                    repair_kind="terminal",
+                )
+            else:
                 deterministic_result = review_candidate_bytes(
                     review_spec,
                     candidate.content,
@@ -1618,159 +1892,56 @@ class Agent:
                     declared_width=candidate.width,
                     declared_height=candidate.height,
                 )
-                review_unit = f"review:{candidate.review_id}"
-                collection_parent = (
-                    f"review:collection:{candidate.collection_id}"
-                    if candidate.collection_id
-                    else None
+            candidate = self._review_manager.record_safety_result(candidate, deterministic_result)
+            review_unit = f"review:{candidate.review_id}"
+            if emitter is not None:
+                emitter.emit(
+                    "review_subcheck",
+                    turn=turn,
+                    unit_id=review_unit,
+                    parent_unit_id=(f"review:collection:{candidate.collection_id}" if candidate.collection_id else None),
+                    candidate_id=candidate.candidate_id,
+                    review_id=candidate.review_id,
+                    unit_type="review",
+                    phase="review",
+                    actor="system",
+                    role="review",
+                    transition_id=f"{review_unit}:{candidate.lineage_attempt}:deterministic",
+                    attempt=candidate.lineage_attempt,
+                    check_type="deterministic_quality_audit",
+                    state="failed" if deterministic_result.blocking else "passed",
+                    status="failed" if deterministic_result.blocking else "passed",
+                    checks=dict(deterministic_result.checks),
+                    issues=[issue.to_dict() for issue in deterministic_result.issues[:16]],
                 )
-                if emitter is not None:
-                    emitter.emit(
-                        "review_subcheck",
-                        turn=turn,
-                        unit_id=review_unit,
-                        parent_unit_id=collection_parent,
-                        candidate_id=candidate.candidate_id,
-                        review_id=candidate.review_id,
-                        unit_type="review",
-                        phase="review",
-                        actor="system",
-                        role="review",
-                        transition_id=f"{review_unit}:{candidate.lineage_attempt}:deterministic",
-                        attempt=candidate.lineage_attempt,
-                        check_type="deterministic_quality_audit",
-                        state="failed" if deterministic_result.blocking else "passed",
-                        status="failed" if deterministic_result.blocking else "passed",
-                        checks=dict(deterministic_result.checks),
-                        issues=[issue.to_dict() for issue in deterministic_result.issues[:16]],
-                    )
-                if candidate.policy.semantic_required:
-                    semantic_result = self._review_manager.semantic_result(candidate)
-                    reused = semantic_result is not None
-                    if semantic_result is None and deterministic_result.blocking:
-                        if emitter is not None:
-                            emitter.emit(
-                                "review_subcheck",
-                                turn=turn,
-                                unit_id=review_unit,
-                                parent_unit_id=collection_parent,
-                                candidate_id=candidate.candidate_id,
-                                review_id=candidate.review_id,
-                                unit_type="review",
-                                phase="review",
-                                actor="system",
-                                role="review",
-                                transition_id=f"{review_unit}:{candidate.lineage_attempt}:semantic_not_run",
-                                attempt=candidate.lineage_attempt,
-                                check_type="semantic_vlm",
-                                state="not_run",
-                                status="not_run",
-                                reason="deterministic quality audit 已阻塞",
-                            )
-                    elif semantic_result is None:
-                        if emitter is not None:
-                            emitter.emit(
-                                "review_subcheck",
-                                turn=turn,
-                                unit_id=review_unit,
-                                parent_unit_id=collection_parent,
-                                candidate_id=candidate.candidate_id,
-                                review_id=candidate.review_id,
-                                unit_type="review",
-                                phase="review",
-                                actor="vlm",
-                                role="review",
-                                transition_id=f"{review_unit}:{candidate.lineage_attempt}:semantic_started",
-                                attempt=candidate.lineage_attempt,
-                                check_type="semantic_vlm",
-                                state="running",
-                                status="running",
-                            )
-                        source_resolution = self._review_manager.source_resolution(candidate)
-                        source_payload = (
-                            (source_resolution.content, source_resolution.media_type)
-                            if source_resolution.resolved
-                            else None
-                        )
-                        if source_payload is None:
-                            resolution_hint = source_resolution.action_hint or "重新绑定有效的 source_scope"
-                            resolution_status = source_resolution.status
-                            semantic_result = ReviewResult(
-                                status=ReviewStatus.FAILED,
-                                checks={"source_evidence": resolution_status},
-                                issues=(ReviewIssue(
-                                    "source_binding_failure",
-                                    "generation_context.source_scope",
-                                    f"source scope is {resolution_status}; {resolution_hint}",
-                                ),),
-                                decision="fail",
-                                confidence=0.0,
-                                review_mode="vlm",
-                                suggested_action="rebind_source",
-                                recovery_classification="source_binding_failure",
-                                repair_kind="source_rebind",
-                            )
-                        else:
-                            semantic_result = review_candidate_with_vlm(
-                                self.client,
-                                candidate,
-                                review_spec,
-                                source_image=source_payload[0],
-                                source_media_type=source_payload[1],
-                                chat_kwargs=self._chat_kwargs,
-                                trace_kwargs=(
-                                    {
-                                        "trace_sink": emitter,
-                                        "trace_run_id": emitter.run_id,
-                                        "trace_turn": turn,
-                                    }
-                                    if emitter is not None and isinstance(self.client, LLMClient)
-                                    else None
-                                ),
-                            )
-                        semantic_result = self._review_manager.remember_semantic_result(candidate, semantic_result)
-                    if emitter is not None and semantic_result is not None:
-                        emitter.emit(
-                            "review_subcheck",
-                            turn=turn,
-                            unit_id=review_unit,
-                            parent_unit_id=collection_parent,
-                            candidate_id=candidate.candidate_id,
-                            review_id=candidate.review_id,
-                            unit_type="review",
-                            phase="review",
-                            actor="vlm",
-                            role="review",
-                            transition_id=f"{review_unit}:{candidate.lineage_attempt}:semantic_completed",
-                            attempt=candidate.lineage_attempt,
-                            check_type="semantic_vlm",
-                            state=semantic_result.status.value,
-                            status=semantic_result.status.value,
-                            decision=semantic_result.decision,
-                            reused=reused,
-                            checks=dict(semantic_result.checks),
-                            issues=[issue.to_dict() for issue in semantic_result.issues[:16]],
-                        )
-                candidate = self._review_manager.process(candidate, semantic_result=semantic_result)
-            shared_review = self._generated_chart_review_adapter.submit(
-                self._review_coordinator,
-                candidate=candidate,
+            prepared[index] = (image, candidate, review_spec, persisted)
+
+        resumable = all(persisted for _, _, _, persisted in prepared)
+        if resumable and checkpoint_review is not None:
+            checkpoint_review(candidate_ids)
+
+        for image, candidate, review_spec, persisted in prepared:
+            candidate = self._finish_candidate_review(
+                candidate,
+                review_spec,
+                emitter=emitter,
+                turn=turn or 0,
+                checkpoint_review=checkpoint_review if resumable else None,
+                candidate_ids=candidate_ids,
+                checkpoint_before_semantic=False,
             )
             if run is not None:
-                self._record_shared_review(
+                self._record_candidate_review(
                     run,
-                    shared_review,
+                    candidate,
                     emitter=emitter,
                     turn=turn or 0,
                     tool_name="generated_chart_review",
                     call_id=call_id,
-                    emit_start=False,
+                    started=False,
                 )
             generated.append(self._review_manager.decorate_image(image, candidate))
             review_payloads.append(candidate.safe_metadata())
-            changed = True
-        if not changed:
-            return observation
         content = observation.content
         try:
             payload = json.loads(content)
@@ -1787,6 +1958,162 @@ class Agent:
         from ..tools.core.result import DispatchedObservation
 
         return DispatchedObservation(content=content, images=tuple(generated))
+
+    def _finish_candidate_review(
+        self,
+        candidate: Any,
+        spec: Any,
+        *,
+        emitter: TraceEmitter | None,
+        turn: int,
+        checkpoint_review: Callable[[Sequence[str]], None] | None,
+        candidate_ids: Sequence[str],
+        checkpoint_before_semantic: bool = True,
+    ) -> Any:
+        """Apply the stored deterministic result and one semantic decision."""
+        if candidate.status in {
+            CandidateStatus.VERIFIED,
+            CandidateStatus.WARNING,
+            CandidateStatus.REVIEW_FAILED,
+            CandidateStatus.TIMED_OUT,
+            CandidateStatus.RETRY_EXHAUSTED,
+        }:
+            return candidate
+        safety_result = candidate.safety_result
+        if safety_result is None:
+            safety_result = review_candidate_bytes(
+                spec,
+                candidate.content,
+                media_type=candidate.media_type,
+                declared_width=candidate.width,
+                declared_height=candidate.height,
+            )
+            candidate = self._review_manager.record_safety_result(candidate, safety_result)
+            if emitter is not None:
+                emitter.emit(
+                    "review_subcheck",
+                    turn=turn,
+                    unit_id=f"review:{candidate.review_id}",
+                    candidate_id=candidate.candidate_id,
+                    review_id=candidate.review_id,
+                    unit_type="review",
+                    phase="review",
+                    actor="system",
+                    role="review",
+                    transition_id=f"review:{candidate.review_id}:{candidate.lineage_attempt}:deterministic",
+                    attempt=candidate.lineage_attempt,
+                    check_type="deterministic_quality_audit",
+                    state="failed" if safety_result.blocking else "passed",
+                    status="failed" if safety_result.blocking else "passed",
+                    checks=dict(safety_result.checks),
+                    issues=[issue.to_dict() for issue in safety_result.issues[:16]],
+                )
+        semantic_result = self._review_manager.semantic_result(candidate)
+        if candidate.policy.semantic_required:
+            if safety_result.blocking:
+                if semantic_result is None and emitter is not None:
+                    emitter.emit(
+                        "review_subcheck",
+                        turn=turn,
+                        unit_id=f"review:{candidate.review_id}",
+                        candidate_id=candidate.candidate_id,
+                        review_id=candidate.review_id,
+                        unit_type="review",
+                        phase="review",
+                        actor="system",
+                        role="review",
+                        transition_id=f"review:{candidate.review_id}:{candidate.lineage_attempt}:semantic_not_run",
+                        attempt=candidate.lineage_attempt,
+                        check_type="semantic_vlm",
+                        state="not_run",
+                        status="not_run",
+                        reason="确定性审核未通过",
+                    )
+            elif semantic_result is None:
+                if checkpoint_review is not None and checkpoint_before_semantic:
+                    checkpoint_review(candidate_ids)
+                if emitter is not None:
+                    emitter.emit(
+                        "review_subcheck",
+                        turn=turn,
+                        unit_id=f"review:{candidate.review_id}",
+                        parent_unit_id=(f"review:collection:{candidate.collection_id}" if candidate.collection_id else None),
+                        candidate_id=candidate.candidate_id,
+                        review_id=candidate.review_id,
+                        unit_type="review",
+                        phase="review",
+                        actor="vlm",
+                        role="review",
+                        transition_id=f"review:{candidate.review_id}:{candidate.lineage_attempt}:semantic_started",
+                        attempt=candidate.lineage_attempt,
+                        check_type="semantic_vlm",
+                        state="running",
+                        status="running",
+                    )
+                source_resolution = self._review_manager.source_resolution(candidate)
+                source_payload = (source_resolution.content, source_resolution.media_type) if source_resolution.resolved else None
+                if source_payload is None:
+                    hint = source_resolution.action_hint or "重新绑定有效的 source_scope"
+                    semantic_result = ReviewResult(
+                        status=ReviewStatus.FAILED,
+                        checks={"source_evidence": source_resolution.status},
+                        issues=(ReviewIssue(
+                            "source_binding_failure",
+                            "generation_context.source_scope",
+                            f"source scope is {source_resolution.status}; {hint}",
+                        ),),
+                        decision="fail",
+                        confidence=0.0,
+                        review_mode="vlm",
+                        candidate_id=candidate.candidate_id,
+                        review_id=candidate.review_id,
+                        chart_spec_digest=candidate.chart_spec_digest,
+                        suggested_action="rebind_source",
+                        recovery_classification="source_binding_failure",
+                        repair_kind="source_rebind",
+                    )
+                else:
+                    semantic_result = review_candidate_with_vlm(
+                        self.client,
+                        candidate,
+                        spec,
+                        source_image=source_payload[0],
+                        source_media_type=source_payload[1],
+                        chat_kwargs=self._chat_kwargs,
+                        trace_kwargs=(
+                            {"trace_sink": emitter, "trace_run_id": emitter.run_id, "trace_turn": turn}
+                            if emitter is not None and isinstance(self.client, LLMClient) else None
+                        ),
+                    )
+                self._review_manager.remember_semantic_result(candidate, semantic_result)
+                if checkpoint_review is not None:
+                    checkpoint_review(candidate_ids)
+            if semantic_result is not None and emitter is not None:
+                emitter.emit(
+                    "review_subcheck",
+                    turn=turn,
+                    unit_id=f"review:{candidate.review_id}",
+                    parent_unit_id=(f"review:collection:{candidate.collection_id}" if candidate.collection_id else None),
+                    candidate_id=candidate.candidate_id,
+                    review_id=candidate.review_id,
+                    unit_type="review",
+                    phase="review",
+                    actor="vlm",
+                    role="review",
+                    transition_id=f"review:{candidate.review_id}:{candidate.lineage_attempt}:semantic_completed",
+                    attempt=candidate.lineage_attempt,
+                    check_type="semantic_vlm",
+                    state=semantic_result.status.value,
+                    status=semantic_result.status.value,
+                    decision=semantic_result.decision,
+                    checks=dict(semantic_result.checks),
+                    issues=[issue.to_dict() for issue in semantic_result.issues[:16]],
+                )
+        return self._review_manager.process(
+            candidate,
+            safety_result=safety_result,
+            semantic_result=semantic_result,
+        )
 
 
 _assistant_entry = assistant_entry

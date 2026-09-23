@@ -77,30 +77,25 @@ def uncertain_work_unit(
 
 def checkpoint(
     checkpoint_sink: Callable[..., bool] | None,
-    review_coordinator: Any,
+    review_manager: Any,
     run: Any,
     *,
     state: dict[str, Any],
     phase: str,
     next_action: str,
-) -> None:
-    """Persist a bounded checkpoint and the current shared review gate."""
+) -> bool | None:
+    """Persist a bounded checkpoint with the sole canonical review snapshot."""
     if checkpoint_sink is None:
-        return
+        return None
     try:
         checkpoint_state = dict(state)
         checkpoint_state.setdefault("phase", phase)
         checkpoint_state["nextAction"] = next_action
-        # The review coordinator is the single source of truth for the
-        # run-level gate. Persist it at every durable boundary so a resume
-        # cannot silently continue past an active review.
         if hasattr(run, "id"):
-            review_state = review_coordinator.to_state(run.id)
-            checkpoint_state["reviewState"] = review_state
-            checkpoint_state["executionGate"] = review_state.get("executionGate", {})
-        checkpoint_sink(checkpoint_state, phase=phase, next_action=next_action)
+            checkpoint_state["reviewState"] = review_manager.to_state(run.id)
+        return bool(checkpoint_sink(checkpoint_state, phase=phase, next_action=next_action))
     except Exception:  # noqa: BLE001 - checkpoint failure is surfaced as unavailable metadata
-        return
+        return False
 
 
 def checkpoint_state(
@@ -161,7 +156,7 @@ def model_result_payload(result: NormalizedResult) -> dict[str, Any]:
 
 def recovery_tool_calls(recovery: Optional[dict[str, Any]]) -> list[ToolCall]:
     """Recover only valid, bounded pending tool calls from a checkpoint."""
-    if not isinstance(recovery, dict) or recovery.get("nextAction") not in {"tool", "dispatch_tool"}:
+    if not isinstance(recovery, dict) or recovery.get("nextAction") not in {"tool", "dispatch_tool", "review"}:
         return []
     raw = recovery.get("pendingToolCalls")
     if not isinstance(raw, list):

@@ -414,15 +414,6 @@ class GatewayService(EvaluationWorkbenchMixin):
                     idempotency_operation_kind="resume",
                     idempotency_parent_run_id=parent.run_id,
                     idempotency_checkpoint_id=checkpoint.checkpoint_id,
-                    execution_gate=(
-                        checkpoint.state.get("executionGate")
-                        if isinstance(checkpoint.state.get("executionGate"), Mapping)
-                        else (
-                            checkpoint.state.get("reviewState", {}).get("executionGate")
-                            if isinstance(checkpoint.state.get("reviewState"), Mapping)
-                            else None
-                        )
-                    ),
                 )
             except RuntimeError as exc:
                 raise GatewayFault("run_limit", 429, "Too many Agent runs are active") from exc
@@ -435,6 +426,35 @@ class GatewayService(EvaluationWorkbenchMixin):
         state: Mapping[str, Any],
     ) -> str | None:
         """Re-authorize opaque checkpoint references without reading local paths."""
+        review_state = state.get("reviewState")
+        if "executionGate" in state or (
+            isinstance(review_state, Mapping)
+            and ("records" in review_state or "executionGate" in review_state)
+        ):
+            return "unsupported_review_state_version"
+        if review_state is not None:
+            if not isinstance(review_state, Mapping) or review_state.get("version") != 1:
+                return "unsupported_review_state_version"
+            candidates = review_state.get("candidates")
+            if not isinstance(candidates, list) or len(candidates) > 64:
+                return "invalid_review_state"
+            for candidate in candidates:
+                if not isinstance(candidate, Mapping):
+                    return "invalid_review_candidate"
+                candidate_id = candidate.get("candidateId")
+                review_id = candidate.get("reviewId")
+                digest = candidate.get("chartSpecDigest")
+                input_run_id = candidate.get("inputRunId")
+                if not all(isinstance(item, str) and item for item in (candidate_id, review_id, digest, input_run_id)):
+                    return "invalid_review_candidate_identity"
+                if self._history.get_candidate_review_input(
+                    session.id,
+                    input_run_id,
+                    candidate_id,
+                    review_id,
+                    digest,
+                ) is None:
+                    return "review_candidate_input_unavailable"
         attachment_ids = state.get("attachmentIds") if isinstance(state.get("attachmentIds"), list) else []
         if attachment_ids:
             memory = self._memory_factory(session.name, create=False)
@@ -976,6 +996,12 @@ class GatewayService(EvaluationWorkbenchMixin):
             "operation_complete": run.complete_operation,
             "operation_uncertain": run.mark_operation_uncertain,
             "execution_gate_sink": run.update_execution_gate,
+            "candidate_input_sink": lambda image, chart_spec: self._history.add_candidate(
+                run.run_id, run.session_id, image, chart_spec=chart_spec,
+            ),
+            "candidate_input_resolver": lambda input_run_id, candidate_id, review_id, digest: self._history.get_candidate_review_input(
+                run.session_id, input_run_id, candidate_id, review_id, digest,
+            ),
         }
         try:
             parameters = inspect.signature(factory).parameters.values()

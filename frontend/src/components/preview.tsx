@@ -122,7 +122,7 @@ export function GeneratedChartView({ artifact, loader, onPreview }: { artifact: 
   const reviewStatus = artifact.reviewStatus || ''
   const candidateStatus = artifact.candidateStatus || ''
   const reviewMode = artifact.reviewMode || ''
-  const status = publicationStatus === 'published' ? 'available' : publicationStatus === 'published_with_warning' ? 'warning' : publicationStatus === 'rejected' || candidateStatus === 'review_failed' || candidateStatus === 'timed_out' || candidateStatus === 'retry_exhausted' ? 'failed' : reviewStatus === 'pending' || reviewStatus === 'requires_model_decision' || candidateStatus === 'review_pending' || artifact.status === 'pending' ? 'pending' : artifact.status === 'unavailable' || (!artifact.imageUrl && !artifact.previewResource) || imageFailed ? 'unavailable' : artifact.status === 'warning' ? 'warning' : 'available'
+  const status = publicationStatus === 'published' ? 'available' : publicationStatus === 'published_with_warning' ? 'warning' : publicationStatus === 'rejected' || candidateStatus === 'review_failed' || candidateStatus === 'timed_out' || candidateStatus === 'retry_exhausted' ? 'failed' : reviewStatus === 'pending' || candidateStatus === 'review_pending' || artifact.status === 'pending' ? 'pending' : artifact.status === 'unavailable' || (!artifact.imageUrl && !artifact.previewResource) || imageFailed ? 'unavailable' : artifact.status === 'warning' ? 'warning' : 'available'
   const statusLabel = status === 'available' ? '已发布' : status === 'warning' ? '已发布·有警告' : status === 'pending' ? (reviewMode === 'vlm' ? 'VLM 审核中' : '待审核') : status === 'failed' ? (candidateStatus === 'retry_exhausted' ? '未发布·修复次数已耗尽' : '未发布·审核未通过') : '暂不可用'
   const metadata = [
     artifact.chartType ? chartTypeLabel(artifact.chartType) : '',
@@ -173,4 +173,3 @@ export function GeneratedChartView({ artifact, loader, onPreview }: { artifact: 
     <div className="generated-chart-copy"><strong>{artifact.title || artifact.caption || '未命名图表'}</strong>{metadata && <small>{metadata}</small>}{figureDetail && <small>{figureDetail}</small>}{artifact.reason && <small className="generated-chart-reason">{artifact.reason}</small>}{artifact.review?.issues?.slice(0, 3).map((issue, index) => issue.message ? <small className="generated-chart-reason" key={`${issue.code || 'issue'}-${index}`}>{issue.message}</small> : null)}{downloadError && <small className="generated-chart-reason">{downloadError}</small>}</div>
   </article>
 }
-

@@ -5,8 +5,6 @@ import json
 from chartagent.review import (
     CandidateStatus,
     ChartReviewManager,
-    GeneratedChartReviewAdapter,
-    ReviewCoordinator,
     PublicationStatus,
     ReviewIssue,
     ReviewResult,
@@ -47,6 +45,7 @@ from chartagent.spec import (
 from chartagent.tools.chart.rendering import render_chart
 from chartagent.agent import Agent
 from chartagent.client.models import NormalizedResult, ToolCall
+from chartagent.tools.core import GeneratedImage
 from chartagent.tools import ToolRegistry
 from chartagent.tools.chart.catalog import register_chart_tools
 from chartagent.gateway.service import GatewayService
@@ -101,6 +100,19 @@ def _full_source_context(attachment_id, panel_id, *, series=()):
         selection_basis=SelectionBasis.AGENT_RESOLVED,
         goal_summary="基于当前 panel 重绘并审核图表",
     )
+
+
+def _record_candidate_safety(manager, candidate):
+    spec = manager.get_spec(candidate.candidate_id, candidate.review_id)
+    assert spec is not None
+    result = review_candidate_bytes(
+        spec,
+        candidate.content,
+        media_type=candidate.media_type,
+        declared_width=candidate.width,
+        declared_height=candidate.height,
+    )
+    return manager.record_safety_result(candidate, result)
 
 
 def _bar_spec() -> ChartSpec:
@@ -212,19 +224,53 @@ def test_collection_children_keep_independent_candidates_under_one_review_parent
     assert len(rendered.images) == 2
 
     manager = ChartReviewManager()
-    coordinator = ReviewCoordinator()
-    adapter = GeneratedChartReviewAdapter()
     candidates = [
         manager.create_candidate("run-collection", "render-collection", image, figure)
         for image, figure in zip(rendered.images, (first, second))
     ]
-    records = [adapter.submit(coordinator, candidate=candidate) for candidate in candidates]
 
     assert [candidate.collection_id for candidate in candidates] == ["collection-review", "collection-review"]
     assert [candidate.figure_id for candidate in candidates] == ["figure-review", "figure-review-2"]
     assert len({candidate.candidate_id for candidate in candidates}) == 2
-    assert {record.parent_id for record in records} == {"collection:collection-review"}
-    assert coordinator.gate("run-collection").blocking is True
+    assert manager.execution_gate("run-collection").blocking is True
+    assert manager.execution_gate("run-collection").subject_id == candidates[0].candidate_id
+
+
+def test_retrying_one_collection_figure_does_not_supersede_its_sibling():
+    first = _figure_spec()
+    second = replace(
+        first,
+        figure_id="figure-review-2",
+        source=FigureSource("att_source_2", "panel_marketing"),
+    )
+    rendered = render_chart(ChartSpecCollection("collection-retry", [first, second]).to_dict())
+    manager = ChartReviewManager()
+    candidates = [
+        manager.create_candidate("run-collection-retry", f"render-{index}", image, figure)
+        for index, (image, figure) in enumerate(zip(rendered.images, (first, second)))
+    ]
+    failed_candidates = []
+    for candidate in candidates:
+        candidate = _record_candidate_safety(manager, candidate)
+        failed_result = ReviewResult(
+            status=ReviewStatus.COMPLETED,
+            issues=(ReviewIssue("layout_mismatch", "layout", "需要修复对应子图"),),
+            decision="fail",
+            review_mode="vlm",
+            candidate_id=candidate.candidate_id,
+            review_id=candidate.review_id,
+            chart_spec_digest=candidate.chart_spec_digest,
+        )
+        failed_candidates.append(manager.process(candidate, semantic_result=failed_result))
+
+    retry = manager.create_candidate("run-collection-retry", "render-retry-first", rendered.images[0], first)
+    gate = manager.execution_gate("run-collection-retry")
+
+    assert retry.parent_candidate_id == failed_candidates[0].candidate_id
+    assert manager.get(failed_candidates[0].candidate_id).superseded is True
+    assert manager.get(failed_candidates[1].candidate_id).superseded is False
+    assert gate.blocking is True
+    assert gate.subject_id == failed_candidates[1].candidate_id
 
 
 def test_semantic_review_result_is_idempotent_for_one_candidate_attempt():
@@ -261,6 +307,7 @@ def test_direct_candidate_is_independently_reviewed_and_promoted():
 
     assert candidate.status is CandidateStatus.REVIEW_PENDING
     assert candidate.publication_status is PublicationStatus.UNPUBLISHED
+    candidate = _record_candidate_safety(manager, candidate)
     reviewed = manager.process(candidate)
 
     assert reviewed.review_status is ReviewStatus.COMPLETED
@@ -296,6 +343,7 @@ def test_independent_reviewer_supports_all_rendered_chart_types(chart_type):
     rendered = render_chart(spec.to_dict())
     manager = ChartReviewManager()
     candidate = manager.create_candidate("run-types", f"call-{chart_type.value}", rendered.images[0], spec)
+    candidate = _record_candidate_safety(manager, candidate)
     reviewed = manager.process(candidate)
     assert reviewed.publication_status is not PublicationStatus.REJECTED, reviewed.review.to_dict() if reviewed.review else None
 
@@ -347,6 +395,7 @@ def test_failed_review_exposes_recovery_action_and_candidate_lineage():
         "checks": {"chart_type": "pass", "orientation": "pass", "layout": "pass", "data_mapping": "fail", "labels": "pass", "readability": "pass"},
         "issues": [{"code": "value_mismatch", "location": "dataset[0].value", "severity": "error", "message": "数据不一致"}],
     }))
+    first = _record_candidate_safety(manager, first)
     failed = manager.process(first, semantic_result=replace(failed_result, candidate_id=first.candidate_id, review_id=first.review_id, chart_spec_digest=first.chart_spec_digest))
     gate = manager.gate("run-repair")
     assert gate["retryable"] is True
@@ -373,6 +422,7 @@ def test_review_correction_budget_ends_in_explicit_unpublished_state():
         current = manager.create_candidate("run-exhaust", f"call-{index}", rendered.images[0], spec, source_attachment_ids=("att_source",))
         if current.status is CandidateStatus.RETRY_EXHAUSTED:
             break
+        current = _record_candidate_safety(manager, current)
         current = manager.process(current, semantic_result=replace(result, candidate_id=current.candidate_id, review_id=current.review_id, chart_spec_digest=current.chart_spec_digest))
     assert current is not None
     assert current.status is CandidateStatus.RETRY_EXHAUSTED
@@ -380,7 +430,7 @@ def test_review_correction_budget_ends_in_explicit_unpublished_state():
     assert manager.gate("run-exhaust")["retryable"] is False
 
 
-def test_vlm_review_retries_one_transient_provider_failure():
+def test_vlm_review_fails_closed_after_one_transient_provider_failure():
     spec = _bar_spec()
     rendered = render_chart(spec.to_dict())
     manager = ChartReviewManager()
@@ -402,8 +452,9 @@ def test_vlm_review_retries_one_transient_provider_failure():
 
     client = Client()
     result = review_candidate_with_vlm(client, candidate, spec)
-    assert client.calls == 2
-    assert result.decision == "pass"
+    assert client.calls == 1
+    assert result.status is ReviewStatus.FAILED
+    assert result.decision == "fail"
 
 
 def test_vlm_review_blocks_a_chartspec_value_mismatch():
@@ -606,6 +657,7 @@ def test_vlm_review_requires_matching_candidate_and_review_ids():
         "issues": [],
     }))
     mismatched = replace(semantic, candidate_id="cand_wrong", review_id="review_wrong", chart_spec_digest="0" * 64)
+    candidate = _record_candidate_safety(manager, candidate)
     reviewed = manager.process(candidate, semantic_result=mismatched)
     assert reviewed.publication_status is PublicationStatus.REJECTED
     assert reviewed.review is not None
@@ -623,6 +675,7 @@ def test_gateway_candidate_promotion_requires_matching_completed_review(tmp_path
         rendered = render_chart(spec.to_dict())
         manager = ChartReviewManager()
         candidate = manager.create_candidate(run_id, "call", rendered.images[0], spec)
+        candidate = _record_candidate_safety(manager, candidate)
         reviewed = manager.process(candidate)
         image = manager.decorate_image(rendered.images[0], reviewed)
 
@@ -655,6 +708,57 @@ def test_gateway_candidate_promotion_requires_matching_completed_review(tmp_path
         assert final["artifactId"].startswith("artifact_")
         assert store.get_artifact(memory.session.id, run_id, final["artifactId"], artifact_kind="generated_chart") is not None
         assert store.get_candidate(memory.session.id, run_id, candidate.candidate_id) is None
+        replayed = store.promote_candidate(
+            run_id,
+            memory.session.id,
+            candidate.candidate_id,
+            candidate.review_id,
+            candidate.chart_spec_digest,
+            candidate_status=reviewed.status.value,
+            review_status=reviewed.review_status.value,
+            publication_status=reviewed.publication_status.value,
+            review=reviewed.review.to_dict() if reviewed.review else None,
+        )
+        assert replayed is not None
+        assert replayed["artifactId"] == final["artifactId"]
+    finally:
+        memory.close()
+
+
+def test_gateway_stages_immutable_review_input_before_review(tmp_path):
+    database = tmp_path / "candidate-input.db"
+    memory = SQLiteAgentMemory("candidate-input-session", database=database)
+    try:
+        store = GatewayHistoryStore(database, artifact_root=tmp_path / "artifacts")
+        run_id = "run-candidate-input"
+        store.create_run(run_id, memory.session.id)
+        spec = _bar_spec()
+        image = render_chart(spec.to_dict()).images[0]
+        manager = ChartReviewManager()
+        candidate = manager.create_candidate(run_id, "call-input", image, spec)
+        staged = manager.decorate_image(image, candidate)
+
+        reference = store.add_candidate(run_id, memory.session.id, staged, chart_spec=spec.to_dict())
+        assert reference is not None
+        assert "chartSpec" not in reference
+        recovered = store.get_candidate_review_input(
+            memory.session.id,
+            run_id,
+            candidate.candidate_id,
+            candidate.review_id,
+            candidate.chart_spec_digest,
+        )
+        assert recovered is not None
+        assert recovered["content"] == candidate.content
+        assert recovered["chart_spec"] == spec.to_dict()
+
+        changed_bytes = GeneratedImage(b"different candidate bytes", staged.media_type, staged.caption, staged.metadata)
+        assert store.add_candidate(
+            run_id,
+            memory.session.id,
+            changed_bytes,
+            chart_spec=spec.to_dict(),
+        ) is None
     finally:
         memory.close()
 
@@ -705,6 +809,7 @@ def test_gateway_replays_candidate_context_lineage_and_repair_metadata(tmp_path)
             source_attachment_ids=("att_source",),
             generation_context=context,
         )
+        candidate = _record_candidate_safety(manager, candidate)
         failed = manager.process(
             candidate,
             semantic_result=ReviewResult(
@@ -766,7 +871,15 @@ def test_agent_final_answer_is_rejected_while_source_linked_candidate_is_pending
     assert "review_generated_chart" not in {item["function"]["name"] for item in client.calls[1]}
 
 
-def test_agent_reviews_composite_figure_once_with_tool_free_vlm(tmp_path):
+def test_agent_reviews_composite_figure_once_with_tool_free_vlm(tmp_path, monkeypatch):
+    safety_calls = []
+    original_safety_review = review_candidate_bytes
+
+    def count_safety_review(*args, **kwargs):
+        safety_calls.append(True)
+        return original_safety_review(*args, **kwargs)
+
+    monkeypatch.setattr("chartagent.agent.loop.review_candidate_bytes", count_safety_review)
     figure = _figure_spec()
     rendered = render_chart(figure.to_dict())
     source_path = tmp_path / "source-composite.png"
@@ -811,6 +924,7 @@ def test_agent_reviews_composite_figure_once_with_tool_free_vlm(tmp_path):
 
     assert result == "复合图表已完成审核"
     assert len([call for call in client.calls if call.get("tools") is None]) == 1
+    assert len(safety_calls) == 1
 
 
 def test_failed_vlm_review_trace_has_independent_lifecycle_fields(tmp_path):

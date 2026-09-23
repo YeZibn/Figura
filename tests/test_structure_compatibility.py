@@ -45,6 +45,7 @@ CANONICAL_MODULES = (
     "chartagent.attachments.metadata",
     "chartagent.review",
     "chartagent.review.manager",
+    "chartagent.review.gates",
     "chartagent.review.models",
     "chartagent.review.policy",
     "chartagent.review.evaluator",
@@ -130,6 +131,19 @@ def test_review_package_exports_point_to_canonical_modules() -> None:
     assert ReviewPolicy is canonical_policy
     assert select_review_policy is canonical_selector
     assert review_candidate_bytes is canonical_evaluator
+
+
+def test_review_package_has_no_second_lifecycle_or_adapters() -> None:
+    review = importlib.import_module("chartagent.review")
+    removed_names = (
+        "ReviewCoordinator",
+        "ReviewRecord",
+        "ReviewDecision",
+        "GeneratedChartReviewAdapter",
+        "MeasurementReviewAdapter",
+    )
+    assert all(not hasattr(review, name) for name in removed_names)
+    assert importlib.util.find_spec("chartagent.review.adapters") is None
 
 
 def test_review_result_json_shape_is_stable() -> None:
