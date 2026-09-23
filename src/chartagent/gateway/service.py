@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import inspect
 import hashlib
 from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Protocol, Sequence
 
 from ..attachments import AttachmentRegistry
 from ..memory import SQLiteAgentMemory
@@ -54,6 +53,39 @@ _SAFE_READINESS_REASONS = frozenset({
     "initialization_failed",
 })
 _MAX_PROVIDER_MODEL = 128
+
+
+VisualObservationSink = Callable[[str, str, Sequence[GeneratedImage]], Sequence[dict[str, Any]]]
+CandidateInputSink = Callable[[GeneratedImage, dict[str, Any]], Any]
+CandidateInputResolver = Callable[[str, str, str, str], dict[str, Any] | None]
+
+
+class GatewayRuntimeFactory(Protocol):
+    """Per-run runtime contract; Gateway lifecycle callbacks are mandatory."""
+
+    def __call__(
+        self,
+        name: str,
+        *,
+        provider: str | None,
+        model: str | None,
+        run_id: str,
+        trace_sink: TraceSink,
+        visual_observation_sink: VisualObservationSink,
+        interruption_event: Callable[[], bool],
+        recovery_context: Mapping[str, Any] | None,
+        checkpoint_sink: Callable[..., bool],
+        operation_begin: Callable[..., dict[str, Any]],
+        operation_complete: Callable[..., dict[str, Any] | None],
+        operation_uncertain: Callable[..., dict[str, Any] | None],
+        execution_gate_sink: Callable[[dict[str, Any]], Any],
+        candidate_input_sink: CandidateInputSink,
+        candidate_input_resolver: CandidateInputResolver,
+    ) -> AgentRuntime: ...
+
+
+class GatewayRuntimeIntegrationError(RuntimeError):
+    """A Gateway runtime factory cannot satisfy its required lifecycle contract."""
 
 
 def _safe_reason(value: object) -> str:
@@ -115,7 +147,7 @@ class GatewayService(EvaluationWorkbenchMixin):
         database: str | Path | None = None,
         model: str | None = None,
         memory_factory: Callable[..., SQLiteAgentMemory] | None = None,
-        runtime_factory: Callable[[str], AgentRuntime] | None = None,
+        runtime_factory: GatewayRuntimeFactory | None = None,
         attachment_store: EphemeralAttachmentStore | None = None,
         attachment_root: str | Path | None = None,
         artifact_root: str | Path | None = None,
@@ -157,18 +189,27 @@ class GatewayService(EvaluationWorkbenchMixin):
         self,
         name: str,
         *,
-        provider: str | None = None,
-        model: str | None = None,
-        run_id: str | None = None,
-        trace_sink: TraceSink | None = None,
-        visual_observation_sink: Callable[[str, str, Sequence[GeneratedImage]], Sequence[dict[str, Any]]] | None = None,
-        interruption_event: Any = None,
-        recovery_context: Mapping[str, Any] | None = None,
-        checkpoint_sink: Callable[..., bool] | None = None,
-        operation_begin: Callable[..., dict[str, Any]] | None = None,
-        operation_complete: Callable[..., dict[str, Any] | None] | None = None,
-        operation_uncertain: Callable[..., dict[str, Any] | None] | None = None,
+        provider: str | None,
+        model: str | None,
+        run_id: str,
+        trace_sink: TraceSink,
+        visual_observation_sink: VisualObservationSink,
+        interruption_event: Callable[[], bool],
+        recovery_context: Mapping[str, Any] | None,
+        checkpoint_sink: Callable[..., bool],
+        operation_begin: Callable[..., dict[str, Any]],
+        operation_complete: Callable[..., dict[str, Any] | None],
+        operation_uncertain: Callable[..., dict[str, Any] | None],
+        execution_gate_sink: Callable[[dict[str, Any]], Any],
+        candidate_input_sink: CandidateInputSink,
+        candidate_input_resolver: CandidateInputResolver,
     ) -> AgentRuntime:
+        if any(callback is None for callback in (
+            execution_gate_sink,
+            candidate_input_sink,
+            candidate_input_resolver,
+        )):
+            raise GatewayRuntimeIntegrationError
         effective_model = model if model is not None else self.model
         return create_agent_runtime(
             provider=provider,
@@ -184,6 +225,9 @@ class GatewayService(EvaluationWorkbenchMixin):
             operation_begin=operation_begin,
             operation_complete=operation_complete,
             operation_uncertain=operation_uncertain,
+            execution_gate_sink=execution_gate_sink,
+            candidate_input_sink=candidate_input_sink,
+            candidate_input_resolver=candidate_input_resolver,
         )
 
     def health(self) -> dict[str, Any]:
@@ -816,15 +860,21 @@ class GatewayService(EvaluationWorkbenchMixin):
             runtime = self._build_runtime_for_run(run, session_name, visual_sink, recovery_context=recovery_context)
         except Exception as exc:  # provider setup errors are a safe gateway fault
             reason = self._agent_setup_failure_reason(exc)
+            integration_failure = isinstance(exc, GatewayRuntimeIntegrationError)
+            safe_message = (
+                "Agent runtime integrations are unavailable"
+                if integration_failure
+                else "Agent service is unavailable"
+            )
             run.publish(
                 "run_failed",
                 {
                     "code": "agent_unavailable",
                     "reason": reason,
-                    "message": "Agent service is unavailable",
-                    "failure_category": "agent_setup",
-                    "failure_code": "agent_unavailable",
-                    "safe_message": "Agent service is unavailable",
+                    "message": safe_message,
+                    "failure_category": "runtime_integration" if integration_failure else "agent_setup",
+                    "failure_code": "runtime_integration_failure" if integration_failure else "agent_unavailable",
+                    "safe_message": safe_message,
                     "retryable": True,
                     "outcome_known": True,
                     "first_failure_ref": {"kind": "run_failed", "stage": "setup"},
@@ -986,18 +1036,9 @@ class GatewayService(EvaluationWorkbenchMixin):
             ),
         }
         try:
-            parameters = inspect.signature(factory).parameters.values()
-            accepts_kwargs = any(item.kind is inspect.Parameter.VAR_KEYWORD for item in parameters)
-            supported = {
-                item.name
-                for item in parameters
-                if item.kind in {inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY}
-            }
-            if not accepts_kwargs:
-                kwargs = {key: value for key, value in kwargs.items() if key in supported}
-        except (TypeError, ValueError):
-            kwargs = {}
-        return factory(session_name, **kwargs)
+            return factory(session_name, **kwargs)
+        except TypeError as exc:
+            raise GatewayRuntimeIntegrationError from exc
 
     def _store_observations(
         self,

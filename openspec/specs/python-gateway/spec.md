@@ -376,6 +376,43 @@ paths or raw image bytes in JSON.
 - **THEN** its generated chart artifacts and metadata are no longer readable
 - **AND** another session's generated chart artifacts remain available
 
+### Requirement: Gateway preserves generated-chart review lifecycle integrations
+
+A Gateway-managed run that requires generated-chart review SHALL preserve the
+operations needed to durably associate a candidate image with the exact
+ChartSpec it represents, resolve those review inputs during review or recovery,
+and propagate execution-gate updates to the owning run. Required review
+integrations MUST NOT be silently omitted. A candidate SHALL remain unpublished
+until its review inputs are persisted and the required review permits
+publication. Missing runtime integration SHALL be distinguishable from an
+actual candidate-storage failure, and genuine persistence failures SHALL
+remain fail-closed.
+
+#### Scenario: Default Gateway runtime prepares a reviewable candidate
+
+- **WHEN** a Gateway-managed run renders a candidate whose policy requires review
+- **THEN** the candidate image and the exact ChartSpec represented by it are durably associated with that candidate before review consumes them
+- **AND** review gate updates are propagated to the owning run
+- **AND** the candidate is not published until review permits publication
+
+#### Scenario: Review inputs remain resolvable during recovery
+
+- **WHEN** a Gateway-managed review resumes or restores a candidate
+- **THEN** the runtime can resolve the same stored image and ChartSpec using bounded run, candidate, review, and digest references
+- **AND** the restored review state continues to control the run's publication gate
+
+#### Scenario: Missing integration is not reported as a storage write failure
+
+- **WHEN** a Gateway runtime cannot provide a required candidate-review or gate integration
+- **THEN** the run reports a bounded runtime-integration failure and does not misclassify the condition as `candidate_storage_failure`
+- **AND** no candidate is published
+
+#### Scenario: Actual candidate persistence failure remains fail-closed
+
+- **WHEN** the configured candidate persistence operation is invoked but durable storage fails or rejects the candidate
+- **THEN** the review reports a bounded candidate-storage failure
+- **AND** the candidate remains unpublished
+
 ### Requirement: Gateway exposes safe run recovery and explicit resume
 
 The Gateway SHALL expose bounded recovery metadata for a run, including

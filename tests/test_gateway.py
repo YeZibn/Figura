@@ -21,7 +21,7 @@ from chartagent.gateway.history import GatewayHistoryStore
 from chartagent.gateway.protocol import GatewayFault, RunEvent, validate_message_text, validate_provider, validate_session_name
 from chartagent.gateway.projection import project_completed_runs
 from chartagent.gateway.server import GatewayHTTPServer, serve
-from chartagent.gateway.service import GatewayService
+from chartagent.gateway.service import GatewayRuntimeIntegrationError, GatewayService
 from chartagent.gateway.runs import ObservationStore, RunManager
 from chartagent.gateway.run_lifecycle import ManagedRun
 from chartagent.memory import SQLiteAgentMemory, RunStatus
@@ -71,6 +71,122 @@ def test_managed_run_drops_invalid_timeline_event_without_changing_completion():
     events = list(run.iter_events())
     assert run.answer == "answer"
     assert events == []
+
+
+def test_default_gateway_runtime_forwards_review_lifecycle_callbacks(monkeypatch, tmp_path):
+    captured = {}
+    runtime = object()
+    monkeypatch.setattr(
+        "chartagent.gateway.service.create_agent_runtime",
+        lambda **kwargs: captured.update(kwargs) or runtime,
+    )
+    service = GatewayService(database=tmp_path / "runtime-contract.db")
+    candidate_input_sink = lambda *_args: {"candidate_id": "cand_test"}
+    candidate_input_resolver = lambda *_args: {"content": b"chart"}
+    execution_gate_sink = lambda _gate: None
+    arguments = {
+        "provider": "qwen",
+        "model": "qwen-test",
+        "run_id": "run-test",
+        "trace_sink": lambda _event: None,
+        "visual_observation_sink": lambda *_args: [],
+        "interruption_event": lambda: False,
+        "recovery_context": None,
+        "checkpoint_sink": lambda *_args, **_kwargs: True,
+        "operation_begin": lambda *_args, **_kwargs: {},
+        "operation_complete": lambda *_args, **_kwargs: {},
+        "operation_uncertain": lambda *_args, **_kwargs: {},
+        "execution_gate_sink": execution_gate_sink,
+        "candidate_input_sink": candidate_input_sink,
+        "candidate_input_resolver": candidate_input_resolver,
+    }
+
+    assert service._build_runtime("runtime-contract", **arguments) is runtime
+    assert captured["execution_gate_sink"] is execution_gate_sink
+    assert captured["candidate_input_sink"] is candidate_input_sink
+    assert captured["candidate_input_resolver"] is candidate_input_resolver
+
+    arguments["candidate_input_sink"] = None
+    with pytest.raises(GatewayRuntimeIntegrationError):
+        service._build_runtime("runtime-contract", **arguments)
+    service.close()
+
+
+def test_per_run_review_callbacks_are_bound_for_fresh_and_recovery_runtimes(monkeypatch, tmp_path):
+    captured = []
+    service = GatewayService(
+        database=tmp_path / "runtime-recovery-contract.db",
+        runtime_factory=lambda _name, **kwargs: captured.append(kwargs) or object(),
+    )
+    session_id = service.create_session("runtime-recovery-contract")["session"]["id"]
+    run = ManagedRun(session_id, provider="openai", model="test-model", history_store=service._history)
+    persisted_inputs = []
+    resolved_inputs = []
+    monkeypatch.setattr(
+        service._history,
+        "add_candidate",
+        lambda run_id, actual_session_id, image, *, chart_spec: persisted_inputs.append(
+            (run_id, actual_session_id, image, chart_spec)
+        ) or {"candidate_id": "cand_test"},
+    )
+    monkeypatch.setattr(
+        service._history,
+        "get_candidate_review_input",
+        lambda actual_session_id, run_id, candidate_id, review_id, digest: resolved_inputs.append(
+            (actual_session_id, run_id, candidate_id, review_id, digest)
+        ) or {"content": b"candidate", "chart_spec": {"metadata": {}}},
+    )
+
+    contexts = (None, {"pendingReview": {"candidateIds": ["cand_test"]}})
+    for recovery_context in contexts:
+        service._build_runtime_for_run(
+            run,
+            "runtime-recovery-contract",
+            lambda *_args: [],
+            recovery_context=recovery_context,
+        )
+        dependencies = captured[-1]
+        assert dependencies["recovery_context"] is recovery_context
+        assert callable(dependencies["execution_gate_sink"])
+        assert callable(dependencies["candidate_input_sink"])
+        assert callable(dependencies["candidate_input_resolver"])
+        gate = {"state": "open", "blocking": False, "issues": []}
+        dependencies["execution_gate_sink"](gate)
+        assert run.execution_gate == gate
+        image = object()
+        chart_spec = {"title": "test"}
+        assert dependencies["candidate_input_sink"](image, chart_spec) == {"candidate_id": "cand_test"}
+        assert dependencies["candidate_input_resolver"](
+            "input-run", "candidate", "review", "digest",
+        ) == {"content": b"candidate", "chart_spec": {"metadata": {}}}
+
+    assert len(persisted_inputs) == 2
+    assert all(item[:2] == (run.run_id, session_id) for item in persisted_inputs)
+    assert len(resolved_inputs) == 2
+    assert all(item == (session_id, "input-run", "candidate", "review", "digest") for item in resolved_inputs)
+    service.close()
+
+
+def test_gateway_runtime_factory_contract_failure_is_bounded(tmp_path):
+    def outdated_factory(_name):
+        pytest.fail("a factory with the old signature must not execute")
+
+    service = GatewayService(
+        database=tmp_path / "runtime-contract-failure.db",
+        runtime_factory=outdated_factory,
+        readiness_probe=lambda: {"status": "ready", "provider": "openai", "model": "test-model"},
+    )
+    session_id = service.create_session("runtime-contract-failure")["session"]["id"]
+    accepted = service.start_run(session_id, "must fail before Agent execution")
+    run = service.get_run(session_id, accepted["run"]["runId"])
+    assert run.wait_terminal(timeout=2)
+    failure = next(event for event in run.iter_events() if event.kind == "run_failed")
+    assert failure.payload["code"] == "agent_unavailable"
+    assert failure.payload["failure_category"] == "runtime_integration"
+    assert failure.payload["failure_code"] == "runtime_integration_failure"
+    assert failure.payload["first_failure_ref"] == {"kind": "run_failed", "stage": "setup"}
+    assert not any(event.kind == "generated_chart" for event in run.iter_events())
+    service.close()
 
 
 def _png_bytes() -> bytes:
@@ -193,7 +309,7 @@ def test_gateway_provider_selection_is_snapshotted_and_persisted(tmp_path):
         def close(self):
             return None
 
-    def runtime_factory(name, *, provider=None, model=None, run_id=None, trace_sink=None, visual_observation_sink=None):
+    def runtime_factory(name, *, provider=None, model=None, run_id=None, trace_sink=None, visual_observation_sink=None, **_kwargs):
         captured.append({"name": name, "provider": provider, "model": model, "run_id": run_id})
         return FakeRuntime()
 
@@ -387,7 +503,7 @@ def test_gateway_dashboard_follow_up_reuses_panel_and_measures_local_scope(tmp_p
             tool_names.append(name)
             return NormalizedResult(tool_calls=[ToolCall(f"call-{len(tool_names)}", name, json.dumps(arguments, ensure_ascii=False))])
 
-    def runtime_factory(name, *, run_id, trace_sink, visual_observation_sink):
+    def runtime_factory(name, *, run_id, trace_sink, visual_observation_sink, **_kwargs):
         nonlocal runtime_number
         runtime_number += 1
         memory = SQLiteAgentMemory(name, database=database, create=False)
@@ -759,7 +875,7 @@ def test_gateway_service_lifecycle_and_message(tmp_path):
         def close(self):
             self.agent.memory.close()
 
-    def runtime_factory(name):
+    def runtime_factory(name, **_kwargs):
         return FakeRuntime(SQLiteAgentMemory(name, database=database, create=False))
 
     service = GatewayService(database=database, runtime_factory=runtime_factory)
@@ -845,7 +961,7 @@ def test_gateway_run_id_is_shared_by_runtime_memory_trace_and_projection(tmp_pat
                 )
             return NormalizedResult(content="统一身份完成")
 
-    def runtime_factory(name, *, run_id, trace_sink, visual_observation_sink):
+    def runtime_factory(name, *, run_id, trace_sink, visual_observation_sink, **_kwargs):
         memory = SQLiteAgentMemory(name, database=database, create=False)
         attachments = AttachmentRegistry(
             session_id=memory.session.id,
@@ -920,7 +1036,7 @@ def test_gateway_multiple_runs_restore_once_in_stable_order(tmp_path):
         def chat(self, messages, **kwargs):
             return NormalizedResult(content="历史恢复完成")
 
-    def runtime_factory(name, *, run_id, trace_sink, visual_observation_sink):
+    def runtime_factory(name, *, run_id, trace_sink, visual_observation_sink, **_kwargs):
         memory = SQLiteAgentMemory(name, database=database, create=False)
         attachments = AttachmentRegistry(
             session_id=memory.session.id,
@@ -964,7 +1080,7 @@ def test_gateway_service_maps_unavailable_agent_and_preserves_history(tmp_path):
     service = GatewayService(database=database)
     session_id = service.create_session("demo")["session"]["id"]
 
-    def unavailable(_name):
+    def unavailable(_name, **_kwargs):
         raise ValueError("An API key is required: secret-key-value")
 
     service = GatewayService(database=database, runtime_factory=unavailable)
@@ -1157,7 +1273,7 @@ def test_attachment_ids_are_session_scoped_and_message_stays_lazy(tmp_path):
     service = GatewayService(
         database=database,
         attachment_root=tmp_path / "attachments-2",
-        runtime_factory=lambda name: FakeRuntime(SQLiteAgentMemory(name, database=database, create=False)),
+        runtime_factory=lambda name, **_kwargs: FakeRuntime(SQLiteAgentMemory(name, database=database, create=False)),
     )
     # The fresh service deliberately loses the upload bytes; re-upload into the
     # active service to test message construction independently.
@@ -1406,7 +1522,7 @@ def test_async_gateway_run_streams_trace_and_scoped_visual_observation(tmp_path)
         def close(self):
             self.agent.memory.close()
 
-    def runtime_factory(name, *, trace_sink=None, visual_observation_sink=None):
+    def runtime_factory(name, *, trace_sink=None, visual_observation_sink=None, **_kwargs):
         return FakeRuntime(
             SQLiteAgentMemory(name, database=database, create=False),
             trace_sink,
@@ -1459,7 +1575,7 @@ def test_http_async_run_returns_sse_stream(tmp_path):
 
     service = GatewayService(
         database=database,
-        runtime_factory=lambda name: FakeRuntime(SQLiteAgentMemory(name, database=database, create=False)),
+        runtime_factory=lambda name, **_kwargs: FakeRuntime(SQLiteAgentMemory(name, database=database, create=False)),
     )
     server = GatewayHTTPServer(("127.0.0.1", 0), service)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -1685,7 +1801,7 @@ def test_gateway_history_routes_return_runs_and_cursor_replay(tmp_path):
 
     service = GatewayService(
         database=database,
-        runtime_factory=lambda name: FakeRuntime(SQLiteAgentMemory(name, database=database, create=False)),
+        runtime_factory=lambda name, **_kwargs: FakeRuntime(SQLiteAgentMemory(name, database=database, create=False)),
     )
     session_id = service.create_session("history-routes")["session"]["id"]
     server = GatewayHTTPServer(("127.0.0.1", 0), service)
@@ -1964,7 +2080,7 @@ def test_async_gateway_orders_generated_chart_event_after_tool_result(tmp_path):
         def close(self):
             self.agent.memory.close()
 
-    def runtime_factory(name, *, trace_sink=None, visual_observation_sink=None):
+    def runtime_factory(name, *, trace_sink=None, visual_observation_sink=None, **_kwargs):
         return FakeRuntime(SQLiteAgentMemory(name, database=database, create=False), trace_sink, visual_observation_sink)
 
     service = GatewayService(database=database, runtime_factory=runtime_factory)

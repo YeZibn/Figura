@@ -1,6 +1,7 @@
 """Tests for the generated-chart candidate review gate."""
 
 import json
+from threading import Event
 
 from chartagent.review import (
     CandidateStatus,
@@ -52,6 +53,7 @@ from chartagent.gateway.service import GatewayService
 from chartagent.runtime import AgentRuntime
 from chartagent.gateway.history import GatewayHistoryStore
 from chartagent.memory.sqlite import SQLiteAgentMemory
+from chartagent.source_scope import SourceScopeResolution
 from tests.chart_fixtures import line_chart
 
 
@@ -986,8 +988,14 @@ def test_failed_vlm_review_trace_has_independent_lifecycle_fields(tmp_path):
     assert not any(event.kind.startswith("chart_review_") for event in events)
 
 
-def test_gateway_publishes_only_after_direct_candidate_review(tmp_path):
+def test_gateway_publishes_only_after_direct_candidate_review(tmp_path, monkeypatch):
     database = tmp_path / "gateway-review.db"
+    review_entered = Event()
+    release_review = Event()
+    reviewing_candidate: dict[str, str] = {}
+    spec = _bar_spec()
+    spec.metadata.source = "gateway-test-source"
+    source_image = render_chart(_bar_spec().to_dict()).images[0]
 
     class Client:
         def __init__(self):
@@ -1000,12 +1008,110 @@ def test_gateway_publishes_only_after_direct_candidate_review(tmp_path):
 
                 return NormalizedResult(
                     tool_calls=[
-                        ToolCall("render", "render_chart", json.dumps({"spec": _bar_spec().to_dict()}))
+                        ToolCall("render", "render_chart", json.dumps({"spec": spec.to_dict()}))
                     ]
                 )
             return NormalizedResult(content="图表已完成审核")
 
-    def runtime_factory(name, *, run_id, trace_sink, visual_observation_sink):
+    from chartagent.runtime.factory import create_agent_runtime
+
+    def create_test_runtime(**kwargs):
+        return create_agent_runtime(**kwargs, client=Client(), load_env=lambda: None)
+
+    monkeypatch.setattr("chartagent.gateway.service.create_agent_runtime", create_test_runtime)
+    monkeypatch.setattr(
+        ChartReviewManager,
+        "source_resolution",
+        lambda _manager, _candidate: SourceScopeResolution(
+            status="resolved",
+            attachment_id="att_gateway_review_source",
+            content=source_image.content,
+        ),
+    )
+    service = GatewayService(
+        database=database,
+        readiness_probe=lambda: {"status": "ready", "provider": "openai", "model": "test-model"},
+    )
+    session_id = service.create_session("gateway-review")["session"]["id"]
+
+    def stub_review(_client, candidate, reviewed_spec, **_kwargs):
+        stored = service._history.get_candidate_review_input(
+            session_id,
+            candidate.run_id,
+            candidate.candidate_id,
+            candidate.review_id,
+            candidate.chart_spec_digest,
+        )
+        assert stored is not None
+        assert stored["chart_spec"] == reviewed_spec.to_dict()
+        reviewing_candidate["candidate_id"] = candidate.candidate_id
+        reviewing_candidate["run_id"] = candidate.run_id
+        review_entered.set()
+        assert release_review.wait(timeout=5), "test did not release the stub reviewer"
+        return ReviewResult(
+            status=ReviewStatus.COMPLETED,
+            checks={"source_fidelity": "pass", "data_mapping": "pass"},
+            decision="pass",
+            confidence=1.0,
+            review_mode="vlm",
+            candidate_id=candidate.candidate_id,
+            review_id=candidate.review_id,
+            chart_spec_digest=candidate.chart_spec_digest,
+        )
+
+    monkeypatch.setattr("chartagent.agent.review_flow.review_candidate_with_vlm", stub_review)
+
+    accepted = service.start_run(session_id, "直接生成")
+    run = service.get_run(session_id, accepted["run"]["runId"])
+    try:
+        assert review_entered.wait(timeout=5)
+        assert service._history.get_artifact(
+            session_id,
+            reviewing_candidate["run_id"],
+            reviewing_candidate["candidate_id"],
+            artifact_kind="generated_chart",
+        ) is None
+    finally:
+        release_review.set()
+    assert run.wait_terminal(timeout=5)
+    generated = [event for event in run.iter_events() if event.kind == "generated_chart"]
+    assert generated
+    artifact = generated[-1].payload["artifacts"][0]
+    assert artifact["publicationStatus"] == "published"
+    assert artifact["artifactId"].startswith("artifact_")
+    stored = service._history.get_candidate_review_input(
+        session_id,
+        run.run_id,
+        artifact["candidateId"],
+        artifact["reviewId"],
+        artifact["chartSpecDigest"],
+    )
+    assert stored is not None
+    assert stored["chart_spec"] == spec.to_dict()
+    assert service.get_generated_artifact(session_id, run.run_id, artifact["artifactId"])[1] == "image/png"
+    service.close()
+
+
+def test_gateway_candidate_storage_failure_remains_fail_closed(tmp_path):
+    database = tmp_path / "gateway-review-storage-failure.db"
+
+    class Client:
+        def __init__(self):
+            self.calls = 0
+
+        def chat(self, _messages, **_kwargs):
+            self.calls += 1
+            if self.calls > 1:
+                return NormalizedResult(content="候选存储失败")
+            import json
+
+            return NormalizedResult(
+                tool_calls=[
+                    ToolCall("render", "render_chart", json.dumps({"spec": _bar_spec().to_dict()}))
+                ]
+            )
+
+    def runtime_factory(name, **kwargs):
         memory = SQLiteAgentMemory(name, database=database, create=False)
         registry = ToolRegistry()
         register_chart_tools(registry)
@@ -1013,21 +1119,35 @@ def test_gateway_publishes_only_after_direct_candidate_review(tmp_path):
             Client(),
             registry,
             memory=memory,
-            run_id=run_id,
-            trace=trace_sink,
-            visual_observation_sink=visual_observation_sink,
+            run_id=kwargs["run_id"],
+            trace=kwargs["trace_sink"],
+            checkpoint_sink=kwargs["checkpoint_sink"],
+            execution_gate_sink=kwargs["execution_gate_sink"],
+            candidate_input_sink=lambda _image, _chart_spec: None,
+            review_manager=ChartReviewManager(
+                candidate_input_resolver=kwargs["candidate_input_resolver"],
+            ),
         )
         return AgentRuntime(agent, memory, None)  # type: ignore[arg-type]
 
-    service = GatewayService(database=database, runtime_factory=runtime_factory)
-    session_id = service.create_session("gateway-review")['session']['id']
-    accepted = service.start_run(session_id, "直接生成")
+    service = GatewayService(
+        database=database,
+        runtime_factory=runtime_factory,
+        readiness_probe=lambda: {"status": "ready", "provider": "openai", "model": "test-model"},
+    )
+    session_id = service.create_session("candidate-storage-failure")["session"]["id"]
+    accepted = service.start_run(session_id, "生成但存储失败")
     run = service.get_run(session_id, accepted["run"]["runId"])
     assert run.wait_terminal(timeout=5)
-    generated = [event for event in run.iter_events() if event.kind == "generated_chart"]
-    assert generated
-    artifact = generated[-1].payload["artifacts"][0]
-    assert artifact["publicationStatus"] in {"published", "published_with_warning"}
-    assert artifact["artifactId"].startswith("artifact_")
-    assert service.get_generated_artifact(session_id, run.run_id, artifact["artifactId"])[1] == "image/png"
+    failure = next(event for event in run.iter_events() if event.kind == "review_failed")
+    assert any(issue["code"] == "candidate_storage_failure" for issue in failure.payload["issues"])
+    assert run.status.value == "failed"
+    candidate_id = failure.payload["candidate_id"]
+    assert service._history.get_artifact(
+        session_id,
+        run.run_id,
+        candidate_id,
+        artifact_kind="generated_chart",
+    ) is None
+    assert not any(event.kind == "generated_chart_published" for event in run.iter_events())
     service.close()
