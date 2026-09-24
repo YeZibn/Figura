@@ -18,6 +18,7 @@ from PIL import Image
 from chartagent.attachments import AttachmentRegistry
 from chartagent.agent import Agent
 from chartagent.gateway.attachments import AttachmentStoreError, EphemeralAttachmentStore
+from chartagent.gateway.durable_execution import GatewayDurableExecutionPort
 from chartagent.gateway.history import GatewayHistoryStore
 from chartagent.gateway.protocol import GatewayFault, RunEvent, validate_message_text, validate_provider, validate_session_name
 from chartagent.gateway.projection import project_completed_runs
@@ -76,7 +77,7 @@ def test_managed_run_drops_invalid_timeline_event_without_changing_completion():
     assert events == []
 
 
-def test_default_gateway_runtime_forwards_execution_and_verification_callbacks(monkeypatch, tmp_path):
+def test_default_gateway_runtime_receives_one_durable_execution_port(monkeypatch, tmp_path):
     captured = {}
     runtime = object()
     monkeypatch.setattr(
@@ -84,12 +85,7 @@ def test_default_gateway_runtime_forwards_execution_and_verification_callbacks(m
         lambda **kwargs: captured.update(kwargs) or runtime,
     )
     service = GatewayService(database=tmp_path / "runtime-contract.db")
-    stage_chart_sink = lambda *_args: {"stagedRef": "stg_preview_12345678"}
-    verification_sink = lambda _result: {"verificationRef": "ver_result_12345678"}
-    promotion_sink = lambda *_args: {"artifactId": "artifact_result_12345678"}
-    execution_result_resolver = lambda _work_key: None
-    staged_chart_resolver = lambda _session_id, _staged_ref: None
-    staged_work_resolver = lambda _session_id, _work_key: None
+    port = object()
     arguments = {
         "provider": "qwen",
         "model": "qwen-test",
@@ -98,37 +94,24 @@ def test_default_gateway_runtime_forwards_execution_and_verification_callbacks(m
         "visual_observation_sink": lambda *_args: [],
         "interruption_event": lambda: False,
         "recovery_context": None,
-        "stage_chart_sink": stage_chart_sink,
-        "verification_sink": verification_sink,
-        "promotion_sink": promotion_sink,
-        "execution_result_resolver": execution_result_resolver,
-        "staged_chart_resolver": staged_chart_resolver,
-        "staged_work_resolver": staged_work_resolver,
-        "execution_commit": lambda *_args, **_kwargs: None,
+        "durable_execution_port": port,
     }
 
     assert service._build_runtime("runtime-contract", **arguments) is runtime
-    assert captured["stage_chart_sink"] is stage_chart_sink
-    assert captured["verification_sink"] is verification_sink
-    assert captured["promotion_sink"] is promotion_sink
-    assert captured["execution_result_resolver"] is execution_result_resolver
-    assert captured["staged_chart_resolver"] is staged_chart_resolver
-    assert captured["staged_work_resolver"] is staged_work_resolver
-    assert captured["execution_commit"] is arguments["execution_commit"]
+    assert captured["durable_execution_port"] is port
 
-    arguments["stage_chart_sink"] = None
+    arguments["durable_execution_port"] = None
     with pytest.raises(GatewayRuntimeIntegrationError):
         service._build_runtime("runtime-contract", **arguments)
 
     session_id = service.create_session("default-runtime-wrapper")['session']['id']
     run = ManagedRun(session_id, provider="qwen", model="qwen-test", history_store=service._history)
     assert service._build_runtime_for_run(run, "default-runtime-wrapper", lambda *_args: []) is runtime
-    assert callable(captured["staged_chart_resolver"])
-    assert callable(captured["staged_work_resolver"])
+    assert isinstance(captured["durable_execution_port"], GatewayDurableExecutionPort)
     service.close()
 
 
-def test_per_run_staging_and_verification_callbacks_are_bound_for_fresh_and_recovery_runtimes(monkeypatch, tmp_path):
+def test_per_run_durable_execution_port_is_bound_for_fresh_and_recovery_runtimes(monkeypatch, tmp_path):
     captured = []
     service = GatewayService(
         database=tmp_path / "runtime-recovery-contract.db",
@@ -143,6 +126,8 @@ def test_per_run_staging_and_verification_callbacks_are_bound_for_fresh_and_reco
     monkeypatch.setattr(service._history, "record_verification", lambda result: verifications.append(result) or {"verificationRef": "ver_result_12345678"})
     monkeypatch.setattr(service._history, "promote_staged_chart", lambda *args: promotions.append(args) or {"artifactId": "artifact_result_12345678"})
     monkeypatch.setattr(service._history, "get_execution_entry_by_work_key_in_lineage", lambda _run_id, work_key: SimpleNamespace(payload={"workKey": work_key}))
+    monkeypatch.setattr(service._history, "get_staged_chart_by_reference", lambda actual_session, staged_ref: {"session": actual_session, "stagedRef": staged_ref})
+    monkeypatch.setattr(service._history, "get_staged_chart_by_work_key", lambda actual_session, work_key: {"session": actual_session, "workKey": work_key})
 
     contexts = (None, {"nextAction": {"kind": "verify", "stagedRef": "stg_preview_12345678"}})
     for recovery_context in contexts:
@@ -154,23 +139,27 @@ def test_per_run_staging_and_verification_callbacks_are_bound_for_fresh_and_reco
         )
         dependencies = captured[-1]
         assert dependencies["recovery_context"] is recovery_context
-        assert callable(dependencies["stage_chart_sink"])
-        assert callable(dependencies["verification_sink"])
-        assert callable(dependencies["promotion_sink"])
-        assert callable(dependencies["execution_result_resolver"])
-        assert callable(dependencies["staged_chart_resolver"])
-        assert callable(dependencies["staged_work_resolver"])
-        assert callable(dependencies["execution_commit"])
-        image, manifest, result = object(), SimpleNamespace(run_id=run.run_id), object()
-        assert dependencies["stage_chart_sink"](image, manifest)["stagedRef"] == "stg_preview_12345678"
-        assert dependencies["verification_sink"](result)["verificationRef"] == "ver_result_12345678"
-        assert dependencies["promotion_sink"]("ignored-run", "ignored-session", "stg_preview_12345678", "ver_result_12345678")["artifactId"] == "artifact_result_12345678"
-        assert dependencies["execution_result_resolver"]("verify:stable-work") == {"workKey": "verify:stable-work"}
+        port = dependencies["durable_execution_port"]
+        assert isinstance(port, GatewayDurableExecutionPort)
+        image = SimpleNamespace(content=b"chart", media_type="image/png")
+        manifest = SimpleNamespace(
+            run_id=run.run_id,
+            session_id=session_id,
+            staged_ref="stg_preview_12345678",
+            work_key="stable-work",
+        )
+        result = object()
+        assert port.stage_chart(image, manifest)["stagedRef"] == "stg_preview_12345678"
+        assert port.record_verification(result)["verificationRef"] == "ver_result_12345678"
+        assert port.promote_chart(manifest, "ver_result_12345678")["artifactId"] == "artifact_result_12345678"
+        assert port.resolve_execution_result("verify:stable-work") == {"workKey": "verify:stable-work"}
+        assert port.resolve_staged_chart("stg_preview_12345678") == {"session": session_id, "stagedRef": "stg_preview_12345678"}
+        assert port.resolve_staged_work("stable-work") == {"session": session_id, "workKey": "stable-work"}
 
     assert len(staged) == 2
     assert all(item[:2] == (run.run_id, session_id) for item in staged)
     assert len(verifications) == 2
-    assert promotions == [("ignored-run", "ignored-session", "stg_preview_12345678", "ver_result_12345678")] * 2
+    assert promotions == [(run.run_id, session_id, "stg_preview_12345678", "ver_result_12345678")] * 2
     service.close()
 
 
@@ -562,11 +551,7 @@ def test_gateway_dashboard_follow_up_reuses_panel_and_measures_local_scope(tmp_p
         run_id,
         trace_sink,
         visual_observation_sink,
-        stage_chart_sink,
-        verification_sink,
-        promotion_sink,
-        execution_result_resolver,
-        execution_commit,
+        durable_execution_port,
         **_kwargs,
     ):
         nonlocal runtime_number
@@ -588,11 +573,7 @@ def test_gateway_dashboard_follow_up_reuses_panel_and_measures_local_scope(tmp_p
             trace=trace_sink,
             visual_observation_sink=visual_observation_sink,
             attachments=attachments,
-            stage_chart_sink=stage_chart_sink,
-            verification_sink=verification_sink,
-            promotion_sink=promotion_sink,
-            execution_result_resolver=execution_result_resolver,
-            execution_commit=execution_commit,
+            durable_execution_port=durable_execution_port,
         )
         return AgentRuntime(agent, memory, attachments)
 
@@ -1019,11 +1000,7 @@ def test_gateway_run_id_is_shared_by_runtime_memory_trace_and_projection(tmp_pat
         run_id,
         trace_sink,
         visual_observation_sink,
-        stage_chart_sink,
-        verification_sink,
-        promotion_sink,
-        execution_result_resolver,
-        execution_commit,
+        durable_execution_port,
         **_kwargs,
     ):
         memory = SQLiteAgentMemory(name, database=database, create=False)
@@ -1065,11 +1042,7 @@ def test_gateway_run_id_is_shared_by_runtime_memory_trace_and_projection(tmp_pat
             trace=trace_sink,
             visual_observation_sink=visual_observation_sink,
             attachments=attachments,
-            stage_chart_sink=stage_chart_sink,
-            verification_sink=verification_sink,
-            promotion_sink=promotion_sink,
-            execution_result_resolver=execution_result_resolver,
-            execution_commit=execution_commit,
+            durable_execution_port=durable_execution_port,
         )
         captured["run_id"] = run_id
         return AgentRuntime(agent, memory, attachments)

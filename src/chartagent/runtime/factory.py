@@ -8,6 +8,7 @@ from typing import Any, Callable, Optional, Sequence
 from ..agent import Agent
 from ..attachments import AttachmentRegistry
 from ..client import LLMClient, load_environment
+from ..durable_execution import DurableExecutionPort
 from ..memory import SQLiteAgentMemory
 from ..trace import TraceSink
 from ..tools.adapters.attachment import load_image_tool
@@ -31,13 +32,7 @@ def create_agent_runtime(
     visual_observation_sink: Optional[VisualObservationSink] = None,
     interruption_event: Any = None,
     recovery_context: dict[str, Any] | None = None,
-    stage_chart_sink: Optional[Callable[[GeneratedImage, Any], Any]] = None,
-    verification_sink: Optional[Callable[[Any], Any]] = None,
-    promotion_sink: Optional[Callable[[str, str, str, str], Any]] = None,
-    execution_result_resolver: Optional[Callable[[str], Any]] = None,
-    staged_chart_resolver: Optional[Callable[[str, str], Any]] = None,
-    staged_work_resolver: Optional[Callable[[str, str], Any]] = None,
-    execution_commit: Optional[Callable[..., Any]] = None,
+    durable_execution_port: DurableExecutionPort | None = None,
     session_name: str | None = None,
     database: str | Path | None = None,
     client: Any = None,
@@ -82,17 +77,8 @@ def create_agent_runtime(
         agent_kwargs["interruption_event"] = interruption_event
     if recovery_context is not None:
         agent_kwargs["recovery_context"] = recovery_context
-    for key, value in {
-        "stage_chart_sink": stage_chart_sink,
-        "verification_sink": verification_sink,
-        "promotion_sink": promotion_sink,
-        "execution_result_resolver": execution_result_resolver,
-        "staged_chart_resolver": staged_chart_resolver,
-        "staged_work_resolver": staged_work_resolver,
-        "execution_commit": execution_commit,
-    }.items():
-        if value is not None:
-            agent_kwargs[key] = value
+    if durable_execution_port is not None:
+        agent_kwargs["durable_execution_port"] = durable_execution_port
     if memory is not None:
         agent_kwargs["memory"] = memory
     agent_kwargs["attachments"] = attachments

@@ -5,8 +5,9 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping, Sequence
-from typing import Any, Callable
+from typing import Any
 
+from ..durable_execution import DurableExecutionPort
 from .checks import verify_chart_bytes
 from ..source_scope import resolve_generation_scope
 from ..spec import (
@@ -75,25 +76,13 @@ class GeneratedChartVerificationFlow:
         chat_kwargs: Mapping[str, Any],
         attachments: Any,
         session_id: str,
-        stage_sink: Callable[[GeneratedImage, ChartManifest], Any] | None = None,
-        verification_sink: Callable[[VerificationResult], Any] | None = None,
-        promotion_sink: Callable[[str, str, str, str], Any] | None = None,
-        execution_result_resolver: Callable[[str], Any] | None = None,
-        staged_chart_resolver: Callable[[str, str], Any] | None = None,
-        staged_work_resolver: Callable[[str, str], Any] | None = None,
-        execution_commit: Callable[..., Any] | None = None,
+        durable_execution_port: DurableExecutionPort | None = None,
     ) -> None:
         self.client = client
         self.chat_kwargs = dict(chat_kwargs)
         self.attachments = attachments
         self.session_id = session_id
-        self.stage_sink = stage_sink
-        self.verification_sink = verification_sink
-        self.promotion_sink = promotion_sink
-        self.execution_result_resolver = execution_result_resolver
-        self.staged_chart_resolver = staged_chart_resolver
-        self.staged_work_resolver = staged_work_resolver
-        self.execution_commit = execution_commit
+        self.durable_execution_port = durable_execution_port
 
     def resume_checkpoint(
         self,
@@ -107,10 +96,10 @@ class GeneratedChartVerificationFlow:
         emitter: Any = None,
     ) -> None:
         """Finish a committed verify/promote cursor from its exact staged bytes."""
-        if action not in {"verify", "promote"} or self.staged_chart_resolver is None:
+        if action not in {"verify", "promote"} or self.durable_execution_port is None:
             raise RuntimeError("staged chart continuation is unavailable")
         try:
-            stored = self.staged_chart_resolver(self.session_id, staged_ref)
+            stored = self.durable_execution_port.resolve_staged_chart(staged_ref)
         except Exception as exc:  # noqa: BLE001 - missing durable bytes must fail closed.
             raise RuntimeError("staged chart continuation is unavailable") from exc
         if not isinstance(stored, Mapping) or not isinstance(stored.get("manifest"), ChartManifest):
@@ -231,9 +220,9 @@ class GeneratedChartVerificationFlow:
                 max_attempts=3,
             )
             replay_manifest = manifest_override if manifest_override is not None and ordinal == 0 else None
-            if replay_manifest is None and self.staged_work_resolver is not None:
+            if replay_manifest is None and self.durable_execution_port is not None:
                 try:
-                    stored_stage = self.staged_work_resolver(self.session_id, work_key)
+                    stored_stage = self.durable_execution_port.resolve_staged_work(work_key)
                 except Exception:  # noqa: BLE001 - absent staging is handled by the normal stage path.
                     stored_stage = None
                 if isinstance(stored_stage, Mapping) and isinstance(stored_stage.get("manifest"), ChartManifest):
@@ -268,9 +257,9 @@ class GeneratedChartVerificationFlow:
             manifest_json = canonical_json(manifest.to_dict(), limit=64 * 1024, name="chart manifest")
             has_model_entry = isinstance(model_entry_id, str) and model_entry_id.startswith("exe_")
             stage_ok = manifest_override is not None
-            if self.stage_sink is not None:
+            if self.durable_execution_port is not None:
                 try:
-                    stage_result = self.stage_sink(image, manifest)
+                    stage_result = self.durable_execution_port.stage_chart(image, manifest)
                     stage_ok = isinstance(stage_result, Mapping) and stage_result.get("stagedRef") == staged_ref
                 except Exception:  # noqa: BLE001 - staging failure closes publication.
                     stage_ok = False
@@ -302,8 +291,8 @@ class GeneratedChartVerificationFlow:
                     if manifest.collection_id else None
                 ),
             }
-            if stage_ok and self.execution_commit is not None and manifest_override is None:
-                self.execution_commit(
+            if stage_ok and self.durable_execution_port is not None and manifest_override is None:
+                self.durable_execution_port.commit_execution_entry(
                     "tool_result",
                     {
                         "stagingCheckpoint": True,
@@ -326,9 +315,9 @@ class GeneratedChartVerificationFlow:
                 emitter.emit("chart_staged", turn=turn, **staged_event)
 
             stored_payload = None
-            if self.execution_result_resolver is not None:
+            if self.durable_execution_port is not None:
                 try:
-                    stored_payload = self.execution_result_resolver(f"verify:{work_key}")
+                    stored_payload = self.durable_execution_port.resolve_execution_result(f"verify:{work_key}")
                 except Exception:  # noqa: BLE001 - a missing result is recomputed on explicit resume.
                     stored_payload = None
             if isinstance(stored_payload, Mapping) and isinstance(stored_payload.get("verification"), Mapping):
@@ -346,8 +335,8 @@ class GeneratedChartVerificationFlow:
                 status = result.status
                 verification_ref = result.verification_ref
                 verification_saved = True
-                if self.execution_commit is not None:
-                    self.execution_commit(
+                if self.durable_execution_port is not None:
+                    self.durable_execution_port.commit_execution_entry(
                         "verification_result",
                         {
                             "verification": result_value,
@@ -456,13 +445,13 @@ class GeneratedChartVerificationFlow:
                 )
                 result_value = result.to_dict()
                 verification_saved = True
-                if self.verification_sink is not None:
+                if self.durable_execution_port is not None:
                     try:
-                        verification_saved = bool(self.verification_sink(result))
+                        verification_saved = bool(self.durable_execution_port.record_verification(result))
                     except Exception:  # noqa: BLE001 - immutable result commit fails closed.
                         verification_saved = False
-                if self.execution_commit is not None:
-                    self.execution_commit(
+                if self.durable_execution_port is not None:
+                    self.durable_execution_port.commit_execution_entry(
                         "verification_result",
                         {
                             "verification": result_value,
@@ -503,9 +492,9 @@ class GeneratedChartVerificationFlow:
             published: Mapping[str, Any] | None = None
             if status in {"pass", "pass_with_warning"} and verification_saved:
                 stored_promotion = None
-                if self.execution_result_resolver is not None:
+                if self.durable_execution_port is not None:
                     try:
-                        stored_promotion = self.execution_result_resolver(f"promote:{work_key}")
+                        stored_promotion = self.durable_execution_port.resolve_execution_result(f"promote:{work_key}")
                     except Exception:  # noqa: BLE001 - a committed result remains reusable on resume.
                         stored_promotion = None
                 if (
@@ -515,9 +504,9 @@ class GeneratedChartVerificationFlow:
                     and isinstance(stored_promotion.get("artifactId"), str)
                 ):
                     published = {"artifactId": stored_promotion["artifactId"]}
-                    if self.execution_commit is not None:
+                    if self.durable_execution_port is not None:
                         promotion_value = dict(stored_promotion)
-                        self.execution_commit(
+                        self.durable_execution_port.commit_execution_entry(
                             "promotion_result",
                             promotion_value,
                             turn=turn,
@@ -542,9 +531,9 @@ class GeneratedChartVerificationFlow:
                                 "warning": bool(promotion_value.get("warning")),
                             },
                         )
-                elif self.promotion_sink is not None:
+                elif self.durable_execution_port is not None:
                     try:
-                        published = self.promotion_sink(manifest.run_id, self.session_id, staged_ref, verification_ref)
+                        published = self.durable_execution_port.promote_chart(manifest, verification_ref)
                     except Exception:  # noqa: BLE001 - publication failure remains previewable.
                         published = None
                 if isinstance(published, Mapping) and published.get("artifactId") and stored_promotion is None:
@@ -555,8 +544,8 @@ class GeneratedChartVerificationFlow:
                         warning=status == "pass_with_warning",
                         work_key=work_key,
                     ).to_dict()
-                    if self.execution_commit is not None:
-                        self.execution_commit(
+                    if self.durable_execution_port is not None:
+                        self.durable_execution_port.commit_execution_entry(
                             "promotion_result",
                             promotion_value,
                             turn=turn,

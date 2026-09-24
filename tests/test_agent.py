@@ -28,6 +28,7 @@ from chartagent.agent.messages import assistant_entry
 from chartagent.agent.final_answer import guard_final_answer
 from chartagent.tools.chart.observation.layout_tool import INSPECT_CHART_LAYOUT
 from chartagent.tools.chart.specification import ASSEMBLE_SPEC
+from tests.durable_execution_fakes import FakeDurableExecutionPort
 
 
 class ScriptedClient:
@@ -598,19 +599,21 @@ def test_chart_generation_emits_staging_and_verification_facts():
     )
     events = []
     client = ScriptedClient([_call("render_chart", json.dumps({"spec": spec}, ensure_ascii=False), "chart-1"), _final("done")])
-    staged = []
-    verified = []
-    promoted = []
+    port = FakeDurableExecutionPort()
+    port.published_artifact_ids = ["artifact_chart_12345678"]
     assert Agent(
         client,
         registry,
         trace_sink=events.append,
-        stage_chart_sink=lambda _image, manifest: staged.append(manifest) or {"stagedRef": manifest.staged_ref},
-        verification_sink=lambda result: verified.append(result) or True,
-        promotion_sink=lambda *_args: promoted.append(True) or {"artifactId": "artifact_chart_12345678"},
+        durable_execution_port=port,
     ).run("重绘") == "done"
-    assert [event.kind for event in events if event.kind.startswith("chart_")] == ["chart_staged"]
-    assert len(staged) == len(verified) == len(promoted) == 1
+    assert [
+        kwargs["event_kind"]
+        for _, _, kwargs in port.commits
+        if kwargs.get("event_kind", "").startswith("chart_")
+    ] == ["chart_staged", "chart_verification_result", "chart_promotion_result"]
+    assert not [event for event in events if event.kind.startswith("chart_")]
+    assert len(port.staged) == len(port.verifications) == len(port.promotions) == 1
     assert "generated_chart" not in [event.kind for event in events]
 
 

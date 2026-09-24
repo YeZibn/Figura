@@ -29,7 +29,6 @@ from .recovery import (
 from .tool_schema import registry_tools
 from .tool_execution import ToolExecutionFlow
 from .turn import assistant_message_for_result, execute_model_turn
-from ..tools.core.definition import ToolReplayEffect
 
 
 def _final_guard_records(run: Any, recovery: Any) -> list[dict[str, Any]]:
@@ -64,6 +63,7 @@ class AgentRunOrchestrator:
         forwarded to the client unchanged.
         """
         agent = self.agent
+        durable_execution_port = agent._durable_execution_port
         if interruption_requested(agent._interruption_event):
             raise AgentInterrupted("Agent run was interrupted before it started")
         recovery = recovery_context if recovery_context is not None else agent._recovery_context
@@ -111,8 +111,8 @@ class AgentRunOrchestrator:
                 existing_execution_cursor = history_store.get_execution_cursor(run.id)
             except Exception:  # noqa: BLE001 - execution callback will surface storage failures
                 existing_execution_cursor = None
-        if agent._execution_commit is not None and not recovery and existing_execution_cursor is None:
-            agent._execution_commit(
+        if durable_execution_port is not None and not recovery and existing_execution_cursor is None:
+            durable_execution_port.commit_execution_entry(
                 "input",
                 {
                     "text": user_input if isinstance(user_input, str) else "[image attachment turn]",
@@ -167,8 +167,8 @@ class AgentRunOrchestrator:
                 _final_guard_records(run, recovery),
                 execution.current_output_artifacts,
             )
-            if agent._execution_commit is not None:
-                agent._execution_commit(
+            if durable_execution_port is not None:
+                durable_execution_port.commit_execution_entry(
                     "final_answer",
                     {"answer": answer, "recovered": True},
                     turn=max(0, int(recovery.get("currentTurn", 0) or 0)),
@@ -261,24 +261,7 @@ class AgentRunOrchestrator:
                     trace_run_id=emitter.run_id,
                     trace_turn=turn,
                 )
-            def commit_model_response(kind, payload, **kwargs):
-                if kind == "model_response" and isinstance(payload, dict):
-                    calls = payload.get("toolCalls")
-                    if isinstance(calls, list):
-                        for call in calls[:16]:
-                            if not isinstance(call, dict):
-                                continue
-                            tool = agent.registry.get(str(call.get("name") or ""))
-                            call["replayEffect"] = (
-                                tool.replay_effect.value
-                                if tool is not None
-                                else ToolReplayEffect.RECONCILE_REQUIRED.value
-                            )
-                entry = agent._execution_commit(kind, payload, **kwargs)
-                execution.model_entry_id = entry.entry_id
-                return entry
-
-            result, execution.pending_recovery_calls = execute_model_turn(
+            result, execution.pending_recovery_calls, committed_model_entry = execute_model_turn(
                 agent.client,
                 agent._messages,
                 tools,
@@ -290,8 +273,11 @@ class AgentRunOrchestrator:
                 emitter=emitter,
                 turn=turn,
                 trace_reasoning=agent._trace_reasoning,
-                execution_commit=commit_model_response if agent._execution_commit is not None else None,
+                registry=agent.registry,
+                durable_execution_port=durable_execution_port,
             )
+            if committed_model_entry is not None:
+                execution.model_entry_id = committed_model_entry.entry_id
             if not result.tool_calls:
                 raise_if_interrupted(agent._interruption_event, agent.memory, run)
                 result.content = guard_final_answer(
@@ -303,8 +289,8 @@ class AgentRunOrchestrator:
                 agent._current_messages.append(assistant_message)
                 agent._messages.append(assistant_message)
                 agent.memory.append(run, "assistant", {"message": assistant_message})
-                if agent._execution_commit is not None:
-                    agent._execution_commit(
+                if durable_execution_port is not None:
+                    durable_execution_port.commit_execution_entry(
                         "final_answer",
                         {"answer": result.content, "finishReason": result.finish_reason},
                         turn=turn,
@@ -372,8 +358,8 @@ class AgentRunOrchestrator:
                 max_steps=agent.max_steps,
                 answer=terminal_answer,
             )
-        if agent._execution_commit is not None:
-            agent._execution_commit(
+        if durable_execution_port is not None:
+            durable_execution_port.commit_execution_entry(
                 "final_answer",
                 {"answer": terminal_answer, "reason": "budget_exhausted"},
                 turn=agent.max_steps,

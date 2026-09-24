@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import io
 from dataclasses import replace
+from types import SimpleNamespace
 
 from PIL import Image, ImageDraw
 
 from chartagent.gateway.history import GatewayHistoryStore
+from chartagent.gateway.durable_execution import GatewayDurableExecutionPort
 from chartagent.memory import SQLiteAgentMemory
 from chartagent.spec import (
     ChartCoverage,
@@ -38,6 +40,7 @@ from chartagent.verification import (
     verify_chart_bytes,
 )
 from chartagent.verification.models import canonical_json
+from tests.durable_execution_fakes import FakeDurableExecutionPort
 
 
 def _png(width: int = 24, height: int = 16) -> bytes:
@@ -114,32 +117,15 @@ def test_verification_flow_stages_commits_and_promotes_one_immutable_result():
         "Sales chart",
         {"kind": "generated_chart", "width": 24, "height": 16, "chart_type": "pie", "title": "Sales"},
     )
-    staged = []
-    stored = []
-    promoted = []
-    committed = []
-
-    def stage_sink(_image, manifest):
-        staged.append(manifest)
-        return {"stagedRef": manifest.staged_ref}
-
-    def verification_sink(result):
-        stored.append(result)
-        return True
-
-    def promotion_sink(_run_id, _session_id, staged_ref, verification_ref):
-        promoted.append((staged_ref, verification_ref))
-        return {"artifactId": "artifact_1234567890"}
+    port = FakeDurableExecutionPort()
+    port.published_artifact_ids = ["artifact_1234567890"]
 
     flow = GeneratedChartVerificationFlow(
         client=object(),
         chat_kwargs={},
         attachments=None,
         session_id="session_verify",
-        stage_sink=stage_sink,
-        verification_sink=verification_sink,
-        promotion_sink=promotion_sink,
-        execution_commit=lambda *args, **kwargs: committed.append((args, kwargs)),
+        durable_execution_port=port,
     )
     events = []
 
@@ -154,12 +140,12 @@ def test_verification_flow_stages_commits_and_promotes_one_immutable_result():
         call_id="call_render", turn=1, emitter=Emitter(),
     )
 
-    assert len(staged) == len(stored) == len(promoted) == 1
+    assert len(port.staged) == len(port.verifications) == len(port.promotions) == 1
     assert events == []
     assert outputs[0].metadata["artifactId"] == "artifact_1234567890"
     assert outputs[0].metadata["verification"]["status"] == "pass"
     assert facts[0]["verification"]["status"] == "pass"
-    assert [kwargs["event_kind"] for _, kwargs in committed] == [
+    assert [kwargs["event_kind"] for _, _, kwargs in port.commits] == [
         "chart_staged", "chart_verification_result", "chart_promotion_result",
     ]
 
@@ -174,17 +160,73 @@ def test_source_linked_chart_without_authorized_scope_cannot_be_published():
     )
     spec = _spec(generation_context=context)
     image = GeneratedImage(_png(), "image/png", "Sales chart", {"kind": "generated_chart", "width": 24, "height": 16, "chart_type": "pie", "title": "Sales"})
-    published = []
+    port = FakeDurableExecutionPort()
     flow = GeneratedChartVerificationFlow(
         client=object(), chat_kwargs={}, attachments=None, session_id="session_verify",
-        stage_sink=lambda _image, manifest: {"stagedRef": manifest.staged_ref},
-        verification_sink=lambda _result: True,
-        promotion_sink=lambda *_args: published.append(True),
+        durable_execution_port=port,
     )
     outputs, _ = flow.process([image], spec_value=spec.to_dict(), run_id="run_verify", model_entry_id="exe_model_1", call_id="call_render", turn=1)
     assert outputs[0].metadata["verification"]["status"] == "fail"
     assert any(issue["code"] == "source_binding_failure" for issue in outputs[0].metadata["verification"]["issues"])
-    assert published == []
+    assert port.promotions == []
+
+
+def test_gateway_port_keeps_chart_unpublished_when_staging_persistence_fails():
+    class Run:
+        run_id = "run_stage_failure"
+
+        def commit_execution_entry(self, *_args, **_kwargs):
+            return SimpleNamespace(entry_id="exe_stage_failure", sequence=1)
+
+    class History:
+        promotions = []
+
+        def stage_chart(self, *_args):
+            return None
+
+        def get_execution_entry_by_work_key_in_lineage(self, *_args):
+            return None
+
+        def record_verification(self, _result):
+            return None
+
+        def promote_staged_chart(self, *args):
+            self.promotions.append(args)
+            return {"artifactId": "artifact_must_not_publish"}
+
+    history = History()
+    port = GatewayDurableExecutionPort(
+        run=Run(),
+        session_id="session_stage_failure",
+        history_store=history,
+    )
+    flow = GeneratedChartVerificationFlow(
+        client=object(),
+        chat_kwargs={},
+        attachments=None,
+        session_id="session_stage_failure",
+        durable_execution_port=port,
+    )
+    image = GeneratedImage(
+        _png(),
+        "image/png",
+        "Sales chart",
+        {"kind": "generated_chart", "width": 24, "height": 16, "chart_type": "pie", "title": "Sales"},
+    )
+
+    outputs, _ = flow.process(
+        [image],
+        spec_value=_spec().to_dict(),
+        run_id="run_stage_failure",
+        model_entry_id="exe_model_stage_failure",
+        call_id="call_stage_failure",
+        turn=1,
+    )
+
+    assert outputs[0].metadata["verification"]["status"] == "unavailable"
+    assert outputs[0].metadata["stageCommitted"] is False
+    assert outputs[0].metadata.get("artifactId") is None
+    assert history.promotions == []
 
 
 def test_persistence_promotes_only_matching_pass_and_keeps_failed_preview(tmp_path):
@@ -301,25 +343,26 @@ def test_promote_checkpoint_resumes_from_stored_bytes_and_parent_manifest(tmp_pa
         1.0,
     )
     assert store.record_verification(verification) is not None
-    committed = []
+    port = FakeDurableExecutionPort()
+    port.staged_charts[manifest.staged_ref] = store.get_staged_chart_by_reference(session_id, manifest.staged_ref)
+    port.execution_results[f"verify:{work_key}"] = {"verification": verification.to_dict()}
+    port.record_verification = store.record_verification
     promotions = []
+    port.promote_chart = lambda staged_manifest, verification_ref: (
+        promotions.append((staged_manifest.run_id, session_id, staged_manifest.staged_ref, verification_ref))
+        or store.promote_staged_chart(
+            staged_manifest.run_id,
+            session_id,
+            staged_manifest.staged_ref,
+            verification_ref,
+        )
+    )
     flow = GeneratedChartVerificationFlow(
         client=object(),
         chat_kwargs={},
         attachments=None,
         session_id=session_id,
-        verification_sink=store.record_verification,
-        promotion_sink=lambda run_id, session, staged_ref, verification_ref: (
-            promotions.append((run_id, session, staged_ref, verification_ref))
-            or store.promote_staged_chart(run_id, session, staged_ref, verification_ref)
-        ),
-        execution_result_resolver=lambda key: (
-            {"verification": verification.to_dict()}
-            if key == f"verify:{work_key}"
-            else None
-        ),
-        staged_chart_resolver=store.get_staged_chart_by_reference,
-        execution_commit=lambda *args, **kwargs: committed.append((args, kwargs)),
+        durable_execution_port=port,
     )
 
     flow.resume_checkpoint(
@@ -332,7 +375,7 @@ def test_promote_checkpoint_resumes_from_stored_bytes_and_parent_manifest(tmp_pa
     )
 
     assert promotions == [("run_parent", session_id, manifest.staged_ref, verification.verification_ref)]
-    assert [kwargs["work_key"] for _, kwargs in committed] == [f"verify:{work_key}", f"promote:{work_key}"]
+    assert [kwargs["work_key"] for _, _, kwargs in port.commits] == [f"verify:{work_key}", f"promote:{work_key}"]
     assert store.get_staged_chart_by_reference(session_id, manifest.staged_ref)["reference"]["artifactId"].startswith("artifact_")
     store.close()
 
@@ -395,8 +438,8 @@ def test_collection_figures_keep_independent_verification_and_promotion(monkeypa
         GeneratedImage(_png(), "image/png", "left", {"kind": "generated_chart", "width": 24, "height": 16, "figure_id": "figure_left"}),
         GeneratedImage(_png(), "image/png", "right", {"kind": "generated_chart", "width": 24, "height": 16, "figure_id": "figure_right"}),
     ]
-    manifests = []
-    promotions = []
+    port = FakeDurableExecutionPort()
+    port.published_artifact_ids = ["artifact_00000001"]
     events = []
 
     class Emitter:
@@ -410,12 +453,7 @@ def test_collection_figures_keep_independent_verification_and_promotion(monkeypa
         chat_kwargs={},
         attachments=None,
         session_id="session_collection",
-        stage_sink=lambda _image, manifest: manifests.append(manifest) or {"stagedRef": manifest.staged_ref},
-        verification_sink=lambda _result: True,
-        promotion_sink=lambda _run, _session, staged_ref, verification_ref: (
-            promotions.append((staged_ref, verification_ref))
-            or {"artifactId": f"artifact_{len(promotions):08d}"}
-        ),
+        durable_execution_port=port,
     )
 
     outputs, facts = flow.process(
@@ -428,6 +466,7 @@ def test_collection_figures_keep_independent_verification_and_promotion(monkeypa
         emitter=Emitter(),
     )
 
+    manifests = [manifest for _, manifest in port.staged]
     assert [manifest.figure_id for manifest in manifests] == ["figure_left", "figure_right"]
     assert {manifest.collection_id for manifest in manifests} == {"collection_batch"}
     assert [manifest.child_chart_ids for manifest in manifests] == [("sales",), ("sales",)]
@@ -435,8 +474,12 @@ def test_collection_figures_keep_independent_verification_and_promotion(monkeypa
     assert [output.metadata.get("artifactId") for output in outputs] == ["artifact_00000001", None]
     assert [fact["verification"]["status"] for fact in facts] == ["pass", "fail"]
     assert len({fact["stagedRef"] for fact in facts}) == 2
-    assert len(promotions) == 1
-    staged_events = [payload for kind, payload in events if kind == "chart_staged"]
+    assert len(port.promotions) == 1
+    staged_events = [
+        kwargs["event_payload"]
+        for _, _, kwargs in port.commits
+        if kwargs.get("event_kind") == "chart_staged"
+    ]
     assert [event["parent_unit_id"] for event in staged_events] == [
         "generation:collection:collection_batch",
         "generation:collection:collection_batch",

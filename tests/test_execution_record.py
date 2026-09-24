@@ -15,6 +15,7 @@ from chartagent.gateway.execution_record import (
     NextAction,
 )
 from chartagent.gateway.execution_context import recovery_state_from_entries
+from chartagent.gateway.durable_execution import GatewayDurableExecutionPort
 from chartagent.gateway.history import GatewayHistoryStore
 from chartagent.gateway.run_lifecycle import ManagedRun
 from chartagent.gateway.service import GatewayService
@@ -324,7 +325,11 @@ def test_agent_model_and_final_answer_are_committed_privately(execution_store):
         ToolRegistry(),
         run_id=run_id,
         memory=memory,
-        execution_commit=managed_run.commit_execution_entry,
+        durable_execution_port=GatewayDurableExecutionPort(
+            run=managed_run,
+            session_id=session_id,
+            history_store=store,
+        ),
     )
 
     assert agent.run("hello") == "answer"
@@ -552,7 +557,11 @@ def test_resume_from_committed_final_stage_does_not_call_model(execution_store, 
         run_id="run_final_child",
         memory=InMemoryAgentMemory(),
         recovery_context=recovery,
-        execution_commit=child.commit_execution_entry,
+        durable_execution_port=GatewayDurableExecutionPort(
+            run=child,
+            session_id=session_id,
+            history_store=store,
+        ),
     )
 
     answer = agent.run(recovery["prompt"], recovery_context=recovery)

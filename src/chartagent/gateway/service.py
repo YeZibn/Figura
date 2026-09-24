@@ -9,13 +9,13 @@ from pathlib import Path
 from typing import Any, Callable, Protocol, Sequence
 
 from ..attachments import AttachmentRegistry
+from ..durable_execution import DurableExecutionPort
 from ..memory import SQLiteAgentMemory
 from ..multimodal import build_registered_attachment_turn
 from ..runtime import AgentRuntime, create_agent_runtime, probe_agent_readiness
 from ..storage import StoragePaths, resolve_storage_paths
 from ..agent import AgentInterrupted, AgentRecoveryBlocked
 from ..client.client import classify_provider_error
-from ..verification.models import ChartManifest, VerificationResult
 from ..tools.core.result import GeneratedImage
 from ..trace import TraceSink, truncate_text
 from .attachments import AttachmentStoreError, EphemeralAttachmentStore
@@ -24,6 +24,7 @@ from .service_evaluation import EvaluationWorkbenchMixin
 from .history import GatewayHistoryStore, HistoryStoreError
 from .execution_context import recovery_state_from_entries
 from .execution_record import ExecutionCursor, ExecutionRecordError, execution_cursor_id
+from .durable_execution import GatewayDurableExecutionPort
 from .projection import project_completed_runs, session_summary
 from .runs import HistoricalRun, ManagedRun, RunManager
 from .protocol import (
@@ -58,7 +59,6 @@ _MAX_PROVIDER_MODEL = 128
 
 
 VisualObservationSink = Callable[[str, str, Sequence[GeneratedImage]], Sequence[dict[str, Any]]]
-StageChartSink = Callable[[GeneratedImage, ChartManifest], Any]
 
 
 class GatewayRuntimeFactory(Protocol):
@@ -75,13 +75,7 @@ class GatewayRuntimeFactory(Protocol):
         visual_observation_sink: VisualObservationSink,
         interruption_event: Callable[[], bool],
         recovery_context: Mapping[str, Any] | None,
-        stage_chart_sink: StageChartSink,
-        verification_sink: Callable[[VerificationResult], Any],
-        promotion_sink: Callable[[str, str, str, str], Any],
-        execution_result_resolver: Callable[[str], Any],
-        staged_chart_resolver: Callable[[str, str], Any],
-        staged_work_resolver: Callable[[str, str], Any],
-        execution_commit: Callable[..., Any],
+        durable_execution_port: DurableExecutionPort,
     ) -> AgentRuntime: ...
 
 
@@ -197,23 +191,9 @@ class GatewayService(EvaluationWorkbenchMixin):
         visual_observation_sink: VisualObservationSink,
         interruption_event: Callable[[], bool],
         recovery_context: Mapping[str, Any] | None,
-        stage_chart_sink: StageChartSink,
-        verification_sink: Callable[[VerificationResult], Any],
-        promotion_sink: Callable[[str, str, str, str], Any],
-        execution_result_resolver: Callable[[str], Any],
-        staged_chart_resolver: Callable[[str, str], Any],
-        staged_work_resolver: Callable[[str, str], Any],
-        execution_commit: Callable[..., Any],
+        durable_execution_port: DurableExecutionPort,
     ) -> AgentRuntime:
-        if any(callback is None for callback in (
-            stage_chart_sink,
-            verification_sink,
-            promotion_sink,
-            execution_result_resolver,
-            staged_chart_resolver,
-            staged_work_resolver,
-            execution_commit,
-        )):
+        if durable_execution_port is None:
             raise GatewayRuntimeIntegrationError
         effective_model = model if model is not None else self.model
         return create_agent_runtime(
@@ -226,13 +206,7 @@ class GatewayService(EvaluationWorkbenchMixin):
             visual_observation_sink=visual_observation_sink,
             interruption_event=interruption_event,
             recovery_context=recovery_context,
-            stage_chart_sink=stage_chart_sink,
-            verification_sink=verification_sink,
-            promotion_sink=promotion_sink,
-            execution_result_resolver=execution_result_resolver,
-            staged_chart_resolver=staged_chart_resolver,
-            staged_work_resolver=staged_work_resolver,
-            execution_commit=execution_commit,
+            durable_execution_port=durable_execution_port,
         )
 
     def health(self) -> dict[str, Any]:
@@ -1027,23 +1001,11 @@ class GatewayService(EvaluationWorkbenchMixin):
             "visual_observation_sink": visual_sink,
             "interruption_event": run.interruption_requested,
             "recovery_context": recovery_context,
-            "stage_chart_sink": lambda image, manifest: self._history.stage_chart(
-                manifest.run_id, run.session_id, image, manifest,
+            "durable_execution_port": GatewayDurableExecutionPort(
+                run=run,
+                session_id=run.session_id,
+                history_store=self._history,
             ),
-            "verification_sink": self._history.record_verification,
-            "promotion_sink": self._history.promote_staged_chart,
-            "execution_result_resolver": lambda work_key: (
-                entry.payload
-                if (entry := self._history.get_execution_entry_by_work_key_in_lineage(run.run_id, work_key)) is not None
-                else None
-            ),
-            "staged_chart_resolver": lambda session_id, staged_ref: self._history.get_staged_chart_by_reference(
-                session_id, staged_ref,
-            ),
-            "staged_work_resolver": lambda session_id, work_key: self._history.get_staged_chart_by_work_key(
-                session_id, work_key,
-            ),
-            "execution_commit": run.commit_execution_entry,
         }
         try:
             return factory(session_name, **kwargs)

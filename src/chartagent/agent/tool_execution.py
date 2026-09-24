@@ -245,8 +245,8 @@ class ToolExecutionFlow:
             )
             artifact_records[:] = artifact_records[-48:]
             remaining_calls = calls[call_index + 1:]
-            if agent._execution_commit is not None:
-                agent._execution_commit(
+            if agent._durable_execution_port is not None:
+                agent._durable_execution_port.commit_execution_entry(
                     "tool_result",
                     {
                         "toolName": call.name,

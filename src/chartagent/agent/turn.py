@@ -10,13 +10,15 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from collections.abc import Mapping, Sequence
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
 from ..client.client import LLMClient, classify_provider_error
 from ..client.models import NormalizedResult, ToolCall
+from ..durable_execution import CommittedExecutionEntry, DurableExecutionPort
 from ..measurement import MEASUREMENT_TOOLS, MeasurementSession
 from ..memory import RunStatus
 from ..tools.core import ToolRegistry, dispatch_observation
+from ..tools.core.definition import ToolReplayEffect
 from ..tools.core.result import DispatchedObservation
 from .messages import assistant_entry
 from .measurement_flow import measurement_target_context
@@ -53,10 +55,12 @@ def execute_model_turn(
     emitter: Any = None,
     turn: int,
     trace_reasoning: bool,
-    execution_commit: Callable[..., Any] | None = None,
-) -> tuple[NormalizedResult, list[ToolCall]]:
+    registry: ToolRegistry,
+    durable_execution_port: DurableExecutionPort | None = None,
+) -> tuple[NormalizedResult, list[ToolCall], CommittedExecutionEntry | None]:
     """Run or recover one model turn and emit its model-side trace."""
     raise_if_interrupted(interruption_event, memory, run)
+    committed_model_entry = None
     if pending_recovery_calls:
         result = NormalizedResult(tool_calls=list(pending_recovery_calls), finish_reason="tool_calls")
         remaining_recovery_calls: list[ToolCall] = []
@@ -93,7 +97,7 @@ def execute_model_turn(
                     error_type=type(exc).__name__[:64],
                 )
             raise
-        if execution_commit is not None:
+        if durable_execution_port is not None:
             private_payload = {
                 "content": result.content,
                 "finishReason": result.finish_reason,
@@ -108,7 +112,14 @@ def execute_model_turn(
                 if len(result.reasoning) > PRIVATE_REASONING_LIMIT:
                     raise ValueError("provider continuation context exceeds the private limit")
                 private_payload["reasoning_content"] = result.reasoning
-            execution_commit(
+            for call in private_payload["toolCalls"][:16]:
+                tool = registry.get(str(call.get("name") or ""))
+                call["replayEffect"] = (
+                    tool.replay_effect.value
+                    if tool is not None
+                    else ToolReplayEffect.RECONCILE_REQUIRED.value
+                )
+            committed_model_entry = durable_execution_port.commit_execution_entry(
                 "model_response",
                 private_payload,
                 turn=turn,
@@ -139,7 +150,7 @@ def execute_model_turn(
             status="available" if result.reasoning else "unavailable",
             reasoning=bounded_reasoning(result.reasoning),
         )
-    return result, remaining_recovery_calls
+    return result, remaining_recovery_calls, committed_model_entry
 
 
 def prepare_and_dispatch_tool_call(

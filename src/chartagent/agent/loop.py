@@ -24,6 +24,7 @@ from typing import Any, Callable, List, Optional, Sequence
 from openai.types.chat import ChatCompletionMessageParam
 
 from ..client.client import LLMClient
+from ..durable_execution import DurableExecutionPort
 from ..trace import TraceSink
 from ..tools.core import ToolRegistry
 from ..memory import AgentMemory, InMemoryAgentMemory
@@ -32,7 +33,6 @@ from ..verification.flow import GeneratedChartVerificationFlow
 
 # Sentinel returned when the step budget is exhausted.
 VisualObservationSink = Callable[[str, str, Sequence[GeneratedImage]], Sequence[dict[str, Any]]]
-StageChartSink = Callable[[GeneratedImage, Any], Any]
 
 
 class Agent:
@@ -63,15 +63,9 @@ class Agent:
         memory: Optional[AgentMemory] = None,
         attachments: Any = None,
         context_budget: int = 24000,
-        stage_chart_sink: StageChartSink | None = None,
-        verification_sink: Callable[[Any], Any] | None = None,
-        promotion_sink: Callable[[str, str, str, str], Any] | None = None,
-        execution_result_resolver: Callable[[str], Any] | None = None,
-        staged_chart_resolver: Callable[[str, str], Any] | None = None,
-        staged_work_resolver: Callable[[str, str], Any] | None = None,
+        durable_execution_port: DurableExecutionPort | None = None,
         interruption_event: Any = None,
         recovery_context: Optional[dict[str, Any]] = None,
-        execution_commit: Optional[Callable[..., Any]] = None,
         **chat_kwargs: Any,
     ) -> None:
         self.client = client
@@ -90,20 +84,14 @@ class Agent:
         self.attachments = attachments
         self._interruption_event = interruption_event
         self._recovery_context = recovery_context
-        self._execution_commit = execution_commit
+        self._durable_execution_port = durable_execution_port
         session_id = self.memory.session.id if self.memory.session is not None else "local"
         self._verification_flow = GeneratedChartVerificationFlow(
             client=self.client,
             chat_kwargs=self._chat_kwargs,
             attachments=self.attachments,
             session_id=session_id,
-            stage_sink=stage_chart_sink,
-            verification_sink=verification_sink,
-            promotion_sink=promotion_sink,
-            execution_result_resolver=execution_result_resolver,
-            staged_chart_resolver=staged_chart_resolver,
-            staged_work_resolver=staged_work_resolver,
-            execution_commit=self._execution_commit,
+            durable_execution_port=self._durable_execution_port,
         )
         self.context_budget = context_budget
         self._messages: List[ChatCompletionMessageParam] = []
