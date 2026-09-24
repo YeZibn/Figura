@@ -29,8 +29,6 @@ def authorized_chart_tool(tool: Tool, attachments: AttachmentRegistry) -> Tool:
 
         panel_id = kwargs.pop("panel_id", None)
         raw_generation_context = kwargs.pop("generation_context", None)
-        candidate_id = kwargs.pop("candidate_id", None)
-        candidate_attempt = kwargs.pop("candidate_attempt", None)
         measurement_target = kwargs.get("measurement_target")
         observation_scope = kwargs.get("observation_scope")
         if not isinstance(panel_id, str) and isinstance(measurement_target, Mapping):
@@ -54,16 +52,6 @@ def authorized_chart_tool(tool: Tool, attachments: AttachmentRegistry) -> Tool:
             {"attachment_id": attachment_id, "panel_ids": [panel_id]}
             if isinstance(panel_id, str) and panel_id.strip()
             else None
-        )
-        raw_scope = raw_generation_context.get("source_scope") if isinstance(raw_generation_context, Mapping) else None
-        raw_scope = raw_scope or (raw_generation_context.get("sourceScope") if isinstance(raw_generation_context, Mapping) else None)
-        scope_bound = (
-            raw_generation_context is not None
-            and raw_scope is None
-            and source_scope_hint is not None
-            and str(raw_generation_context.get("mode") or "") != "synthesize"
-            if isinstance(raw_generation_context, Mapping)
-            else False
         )
         generation_context = normalize_generation_context(
             raw_generation_context,
@@ -184,27 +172,12 @@ def authorized_chart_tool(tool: Tool, attachments: AttachmentRegistry) -> Tool:
                 kwargs.pop("layout_context", None)
             with scoped_image_path(item.canonical_path, scope) as local_path:
                 result = original(image_path=local_path, **kwargs)
-            binding = None
-            if scope_bound:
-                binding = {
-                    "status": "bound",
-                    "basis": "unique_runtime_scope",
-                    "requested_scope": None,
-                    "effective_scope": (
-                        source_scope_resolution.effective_scope
-                        if source_scope_resolution is not None
-                        else scope.envelope()
-                    ),
-                }
             return _decorate_scoped_result(
                 result,
                 scope,
                 measurement_target=kwargs.get("measurement_target"),
                 observation_scope=kwargs.get("observation_scope"),
                 generation_context=generation_context,
-                generation_context_binding=binding,
-                candidate_id=candidate_id,
-                candidate_attempt=candidate_attempt,
             )
 
         if tool.name in scoped_tool_names and panel_store is not None and hasattr(panel_store, "list_panel_handoffs"):
@@ -226,20 +199,6 @@ def authorized_chart_tool(tool: Tool, attachments: AttachmentRegistry) -> Tool:
         return _decorate_context_result(
             result,
             generation_context=generation_context,
-            generation_context_binding=(
-                {
-                    "status": "bound",
-                    "basis": "unique_runtime_scope",
-                    "requested_scope": None,
-                    "effective_scope": source_scope_resolution.effective_scope
-                    if source_scope_resolution is not None
-                    else None,
-                }
-                if scope_bound
-                else None
-            ),
-            candidate_id=candidate_id,
-            candidate_attempt=candidate_attempt,
         )
 
     schema = dict(tool.parameters)
@@ -279,6 +238,7 @@ def authorized_chart_tool(tool: Tool, attachments: AttachmentRegistry) -> Tool:
         call,
         display_name=tool.display_name,
         group=tool.group,
+        replay_effect=tool.replay_effect,
     )
 
 
@@ -305,9 +265,6 @@ def _decorate_scoped_result(
     measurement_target: Mapping | None = None,
     observation_scope: Mapping | None = None,
     generation_context: object = None,
-    generation_context_binding: Mapping[str, Any] | None = None,
-    candidate_id: object = None,
-    candidate_attempt: object = None,
 ) -> object:
     from ..chart.observation.scope import add_scope_metadata
 
@@ -320,9 +277,6 @@ def _decorate_scoped_result(
             return _decorate_context_result(
                 payload,
                 generation_context=generation_context,
-                generation_context_binding=generation_context_binding,
-                candidate_id=candidate_id,
-                candidate_attempt=candidate_attempt,
             )
         return result
     data = add_scope_metadata(result.data, scope)
@@ -330,17 +284,13 @@ def _decorate_scoped_result(
         data["measurement_target"] = dict(measurement_target)
     if isinstance(data, dict) and isinstance(observation_scope, Mapping):
         data["observation_scope"] = dict(observation_scope)
-    data = _context_data(data, generation_context, candidate_id, candidate_attempt, generation_context_binding)
+    data = _context_data(data, generation_context)
     images = []
     for image in result.images:
         metadata = dict(image.metadata) if isinstance(image.metadata, Mapping) else {}
         metadata.update({"panel_id": scope.panel.panel_id, "scope_mode": "panel", "source_origin_x": scope.origin[0], "source_origin_y": scope.origin[1], "source_width": scope.source_size[0], "source_height": scope.source_size[1]})
         if generation_context is not None:
             metadata["generation_context"] = generation_context.to_dict() if hasattr(generation_context, "to_dict") else generation_context
-        if isinstance(candidate_id, str) and candidate_id.strip():
-            metadata["candidate_id"] = candidate_id[:160]
-        if isinstance(candidate_attempt, int) and candidate_attempt > 0:
-            metadata["candidate_attempt"] = min(candidate_attempt, 8)
         images.append(GeneratedImage(image.content, image.media_type, f"{image.caption}（局部面板）", metadata))
     evidence = dict(result.evidence or {})
     evidence["scope"] = scope.envelope()
@@ -350,21 +300,12 @@ def _decorate_scoped_result(
 def _context_data(
     data: object,
     context: object,
-    candidate_id: object,
-    candidate_attempt: object,
-    generation_context_binding: Mapping[str, Any] | None = None,
 ) -> object:
     if not isinstance(data, Mapping):
         return data
     result = dict(data)
     if context is not None:
         result["generation_context"] = context.to_dict() if hasattr(context, "to_dict") else context
-    if isinstance(generation_context_binding, Mapping):
-        result["generation_context_binding"] = dict(generation_context_binding)
-    if isinstance(candidate_id, str) and candidate_id.strip():
-        result["candidate_id"] = candidate_id[:160]
-    if isinstance(candidate_attempt, int) and candidate_attempt > 0:
-        result["candidate_attempt"] = min(candidate_attempt, 8)
     return result
 
 
@@ -372,27 +313,18 @@ def _decorate_context_result(
     result: object,
     *,
     generation_context: object,
-    generation_context_binding: Mapping[str, Any] | None = None,
-    candidate_id: object,
-    candidate_attempt: object,
 ) -> object:
     if isinstance(result, ToolResult):
-        data = _context_data(result.data, generation_context, candidate_id, candidate_attempt, generation_context_binding)
+        data = _context_data(result.data, generation_context)
         images = []
         for image in result.images:
             metadata = dict(image.metadata) if isinstance(image.metadata, Mapping) else {}
             if generation_context is not None:
                 metadata["generation_context"] = generation_context.to_dict() if hasattr(generation_context, "to_dict") else generation_context
-            if isinstance(generation_context_binding, Mapping):
-                metadata["generation_context_binding"] = dict(generation_context_binding)
-            if isinstance(candidate_id, str) and candidate_id.strip():
-                metadata["candidate_id"] = candidate_id[:160]
-            if isinstance(candidate_attempt, int) and candidate_attempt > 0:
-                metadata["candidate_attempt"] = min(candidate_attempt, 8)
             images.append(GeneratedImage(image.content, image.media_type, image.caption, metadata))
         return ToolResult(data, images=tuple(images), warnings=result.warnings, evidence=result.evidence)
     if isinstance(result, Mapping):
-        return _context_data(result, generation_context, candidate_id, candidate_attempt, generation_context_binding)
+        return _context_data(result, generation_context)
     return result
 
 

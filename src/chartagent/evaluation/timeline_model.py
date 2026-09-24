@@ -14,17 +14,17 @@ STAGE_NAMES = (
     "decomposition",
     "panel_handoff",
     "measurement",
-    "quality_review",
-    "repair",
+    "verification",
     "assembly",
     "render",
 )
-STAGE_STATUSES = ("completed", "needs_repair", "failed", "not_reached", "not_observed")
+STAGE_STATUSES = ("completed", "failed", "not_reached", "not_observed")
 FAILURE_STATUSES = {
     "error",
     "failed",
     "failure",
     "rejected",
+    "fail",
     "exhausted",
     "blocked",
     "timeout",
@@ -40,6 +40,9 @@ SUCCESS_STATUSES = {
     "passed",
     "published",
     "published_with_warning",
+    "pass",
+    "pass_with_warning",
+    "staged",
     "success",
 }
 MEASUREMENT_TOOLS = {

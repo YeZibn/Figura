@@ -22,11 +22,7 @@ from .messages import assistant_entry
 from .measurement_flow import measurement_target_context
 from .panel_routing import layout_arguments, panel_routing_error
 from .recovery import (
-    begin_work_unit,
-    complete_work_unit,
-    model_result_payload,
     raise_if_interrupted,
-    uncertain_work_unit,
 )
 
 
@@ -51,30 +47,24 @@ def execute_model_turn(
     *,
     chat_kwargs: dict[str, Any],
     pending_recovery_calls: Sequence[ToolCall],
-    operation_begin: Callable[..., dict[str, Any]] | None,
-    operation_complete: Callable[..., dict[str, Any] | None] | None,
-    operation_uncertain: Callable[..., dict[str, Any] | None] | None,
     memory: Any,
     run: Any,
     interruption_event: Any,
     emitter: Any = None,
     turn: int,
     trace_reasoning: bool,
+    execution_commit: Callable[..., Any] | None = None,
 ) -> tuple[NormalizedResult, list[ToolCall]]:
-    """Run or recover one model operation and emit its model-side trace."""
+    """Run or recover one model turn and emit its model-side trace."""
     raise_if_interrupted(interruption_event, memory, run)
-    operation_id = f"model:{turn}"
     if pending_recovery_calls:
         result = NormalizedResult(tool_calls=list(pending_recovery_calls), finish_reason="tool_calls")
         remaining_recovery_calls: list[ToolCall] = []
     else:
-        begin_work_unit(operation_begin, operation_id, "model")
         try:
             result = client.chat(messages, tools=tools, **chat_kwargs)
         except Exception as exc:
             failure = classify_provider_error(exc)
-            if not failure["outcome_known"]:
-                uncertain_work_unit(operation_uncertain, operation_id, "model_response_outcome_uncertain")
             memory.append(
                 run,
                 "error",
@@ -103,13 +93,31 @@ def execute_model_turn(
                     error_type=type(exc).__name__[:64],
                 )
             raise
-        complete_work_unit(
-            operation_complete,
-            operation_uncertain,
-            operation_id,
-            "model",
-            model_result_payload(result),
-        )
+        if execution_commit is not None:
+            private_payload = {
+                "content": result.content,
+                "finishReason": result.finish_reason,
+                "toolCalls": [
+                    {"id": call.id, "name": call.name, "arguments": call.arguments}
+                    for call in result.tool_calls
+                ],
+            }
+            if result.reasoning:
+                from ..memory.context import PRIVATE_REASONING_LIMIT
+
+                if len(result.reasoning) > PRIVATE_REASONING_LIMIT:
+                    raise ValueError("provider continuation context exceeds the private limit")
+                private_payload["reasoning_content"] = result.reasoning
+            execution_commit(
+                "model_response",
+                private_payload,
+                turn=turn,
+                next_action_kind="tool" if result.tool_calls else "final",
+                call_id=result.tool_calls[0].id if result.tool_calls else None,
+                work_key=f"model:{turn}",
+                event_kind="model_response_committed",
+                event_payload={"turn": turn, "tool_calls": len(result.tool_calls)},
+            )
         remaining_recovery_calls = []
 
     if emitter is not None and not isinstance(client, LLMClient):
@@ -146,9 +154,9 @@ def prepare_and_dispatch_tool_call(
 ) -> ToolDispatchResult:
     """Validate scope/target and dispatch one tool call.
 
-    Review decoration and memory/trace projection intentionally remain in the
-    loop because they need run-level collaborators.  This boundary owns the
-    tool input contract and native observation production only.
+    Verification decoration and memory/trace projection intentionally remain
+    in the loop because they need run-level collaborators. This boundary owns
+    the tool input contract and native observation production only.
     """
     try:
         call_arguments: Any = json.loads(call.arguments) if call.arguments.strip() else {}

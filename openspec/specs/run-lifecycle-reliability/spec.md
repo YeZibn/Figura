@@ -182,12 +182,16 @@ append new execution events to it.
 - **THEN** 系统创建可归因的新 child run
 - **AND** 父 run 的失败原因和事件保持不变
 
-### Requirement: Recovery blocking remains reserved for unknown outcomes
+### Requirement: Explicit recovery distinguishes replayable requests from unknown external effects
 
-只有在系统无法判断远端是否接受了模型、工具或发布操作时，系统 SHALL 进入 uncertain/recovery-blocked 语义。网络或超时失败的历史记录 SHALL 同时保留操作上下文和恢复所需的第一失败引用。
+运行仍 SHALL 只使用 running、completed、failed、interrupted 四态。恢复资格 SHALL 从有效 checkpoint、授权引用和下一动作的重放契约推导；未提交模型/VLM 请求可以在显式 resume 后重新请求，只有不可核对的外部副作用结果不明时才阻止自动继续。断线重连 SHALL 保持原 Run，resume SHALL 产生可归因子 Run。
 
-#### Scenario: Timeout has unknown outcome
+#### Scenario: Provider times out before local commit
+- **WHEN** 模型请求超时且没有已提交响应
+- **THEN** 原 Run 保留明确失败或中断原因
+- **AND** 用户显式 resume 后系统可以重新请求，同时说明可能重复费用
 
-- **WHEN** 请求超时且没有确认 provider 未接受该请求
-- **THEN** run 标记 operation outcome uncertain 并阻止不安全的自动继续
-- **AND** 用户可以看到需要显式 retry 或 resume 判断的原因
+#### Scenario: Reconnect does not reissue a model request
+- **WHEN** 仅 SSE 连接断开
+- **THEN** 客户端按原 Run 的事件序号重连
+- **AND** 不创建子 Run 或重复模型调用

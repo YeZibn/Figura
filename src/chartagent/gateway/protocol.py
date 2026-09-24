@@ -22,10 +22,7 @@ MAX_IDEMPOTENCY_KEY = 128
 MAX_TERMINAL_CODE = 64
 MAX_EVENT_KIND = 64
 MAX_EVENT_PAYLOAD = 12000
-MAX_CHECKPOINT_PAYLOAD = 64 * 1024
-MAX_OPERATION_RESULT = 16 * 1024
 MAX_RECOVERY_REASON = 240
-MAX_OPERATION_ID = 160
 SUPPORTED_PROVIDERS = ("openai", "qwen", "deepseek")
 MAX_ARTIFACT_CAPTION = 500
 MAX_ARTIFACT_TITLE = 240
@@ -74,9 +71,6 @@ class RunTerminalReason(str, Enum):
     RUN_TIMEOUT = "run_timeout"
     AGENT_FAILED = "agent_failed"
     AGENT_UNAVAILABLE = "agent_unavailable"
-    REVIEW_FAILED = "review_failed"
-    REVIEW_RETRY_EXHAUSTED = "review_retry_exhausted"
-    REVIEW_INCOMPLETE = "review_incomplete"
     ASSEMBLY_VALIDATION_FAILURE = "assembly_validation_failure"
     HISTORY_EXPIRED = "history_expired"
 
@@ -89,28 +83,6 @@ class RecoveryStatus(str, Enum):
     UNAVAILABLE = "unavailable"
 
 
-class CheckpointPhase(str, Enum):
-    """The last durable boundary reached by a run."""
-
-    ACCEPTED = "accepted"
-    MODEL = "model"
-    TOOL = "tool"
-    RENDER = "render"
-    REVIEW = "review"
-    PUBLICATION = "publication"
-    FINAL = "final"
-
-
-class OperationState(str, Enum):
-    """Durable state of a resumable work unit."""
-
-    NOT_STARTED = "not_started"
-    IN_FLIGHT = "in_flight"
-    COMPLETED = "completed"
-    UNCERTAIN = "uncertain"
-    UNKNOWN = "uncertain"  # compatibility spelling for persisted crash windows
-
-
 class ContinuationKind(str, Enum):
     """How a child run relates to its parent."""
 
@@ -118,11 +90,8 @@ class ContinuationKind(str, Enum):
     RETRY = "retry"
 
 
-CHECKPOINT_SCHEMA_VERSION = 1
 RECOVERY_UNAVAILABLE_CODE = "recovery_unavailable"
 RECOVERY_BLOCKED_CODE = "recovery_blocked"
-CHECKPOINT_EXPIRED_CODE = "checkpoint_expired"
-CHECKPOINT_VERSION_CODE = "unsupported_checkpoint_version"
 RESUME_IDEMPOTENCY_CONFLICT_CODE = "resume_idempotency_conflict"
 
 
@@ -155,33 +124,24 @@ class RunLineage:
 
 @dataclass(frozen=True)
 class RunRecovery:
-    """Bounded public recovery projection; checkpoint payloads never leave storage."""
+    """Bounded public recovery projection derived from a committed cursor."""
 
     status: RecoveryStatus = RecoveryStatus.UNAVAILABLE
-    checkpoint_id: str | None = None
-    checkpoint_version: int | None = None
-    phase: CheckpointPhase | None = None
+    cursor_id: str | None = None
     next_action: str | None = None
     blocked_reason: str | None = None
     updated_at: str | None = None
-    expires_at: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         result: dict[str, Any] = {"status": self.status.value}
-        if self.checkpoint_id:
-            result["checkpointId"] = truncate_text(self.checkpoint_id, MAX_RUN_ID)
-        if self.checkpoint_version is not None:
-            result["checkpointVersion"] = int(self.checkpoint_version)
-        if self.phase:
-            result["phase"] = self.phase.value
+        if self.cursor_id:
+            result["cursorId"] = truncate_text(self.cursor_id, MAX_RUN_ID)
         if self.next_action:
             result["nextAction"] = truncate_text(self.next_action, 120)
         if self.blocked_reason:
             result["blockedReason"] = truncate_text(self.blocked_reason, MAX_RECOVERY_REASON)
         if self.updated_at:
             result["updatedAt"] = self.updated_at
-        if self.expires_at is not None:
-            result["expiresAt"] = self.expires_at
         return result
 
 
@@ -201,7 +161,6 @@ class RunAccepted:
     root_run_id: str | None = None
     continuation_kind: ContinuationKind | None = None
     recovery: RunRecovery | None = None
-    execution_gate: Mapping[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         result = {
@@ -223,8 +182,6 @@ class RunAccepted:
         result.update(lineage.to_dict())
         if self.recovery is not None:
             result["recovery"] = self.recovery.to_dict()
-        if isinstance(self.execution_gate, Mapping):
-            result["executionGate"] = sanitize_payload(self.execution_gate)
         return result
 
 
@@ -248,7 +205,7 @@ class ObservationReference:
 
 @dataclass(frozen=True)
 class GeneratedChartReference:
-    """Safe metadata for a durable, user-facing generated chart artifact."""
+    """Safe projection of a staged chart or its published artifact."""
 
     artifact_id: str | None
     media_type: str
@@ -258,34 +215,20 @@ class GeneratedChartReference:
     title: str
     width: int
     height: int
-    status: str = "available"
+    status: str = "staged"
     reason: str | None = None
-    candidate_id: str | None = None
-    review_id: str | None = None
-    chart_spec_digest: str | None = None
-    candidate_status: str | None = None
-    review_status: str | None = None
-    publication_status: str | None = None
-    review_mode: str | None = None
-    review: Mapping[str, Any] | None = None
+    staged_ref: str | None = None
+    verification: Mapping[str, Any] | None = None
     figure_id: str | None = None
     collection_id: str | None = None
     child_chart_ids: tuple[str, ...] = ()
     source: Mapping[str, Any] | None = None
     layout: Mapping[str, Any] | None = None
     coverage: Mapping[str, Any] | None = None
-    chart_types: tuple[str, ...] = ()
     generation_context: Mapping[str, Any] | None = None
     generation_context_digest: str | None = None
-    context_status: str | None = None
-    candidate_attempt: int | None = None
-    review_attempts: int | None = None
-    lineage_attempt: int | None = None
-    parent_candidate_id: str | None = None
-    parent_attempt: int | None = None
     panel_ids: tuple[str, ...] = ()
     source_attachment_ids: tuple[str, ...] = ()
-    repair_kind: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         result: dict[str, Any] = {
@@ -301,28 +244,16 @@ class GeneratedChartReference:
         }
         if self.artifact_id:
             result["artifactId"] = self.artifact_id
-        if self.candidate_id:
-            result["candidateId"] = self.candidate_id
-        if self.review_id:
-            result["reviewId"] = self.review_id
-        if self.chart_spec_digest:
-            result["chartSpecDigest"] = self.chart_spec_digest
-        if self.candidate_status:
-            result["candidateStatus"] = self.candidate_status
-        if self.review_status:
-            result["reviewStatus"] = self.review_status
-        if self.publication_status:
-            result["publicationStatus"] = self.publication_status
-        if self.review_mode:
-            result["reviewMode"] = truncate_text(self.review_mode, 32)
+        if self.staged_ref:
+            result["stagedRef"] = self.staged_ref
+        if isinstance(self.verification, Mapping):
+            result["verification"] = sanitize_payload(self.verification)
         if self.figure_id:
             result["figureId"] = truncate_text(self.figure_id, 128)
         if self.collection_id:
             result["collectionId"] = truncate_text(self.collection_id, 128)
         if self.child_chart_ids:
             result["childChartIds"] = [truncate_text(item, 128) for item in self.child_chart_ids[:16]]
-        if self.chart_types:
-            result["chartTypes"] = [truncate_text(item, 64) for item in self.chart_types[:16]]
         for key, value in (("source", self.source), ("layout", self.layout), ("coverage", self.coverage)):
             if isinstance(value, Mapping):
                 result[key] = sanitize_payload(value)
@@ -330,26 +261,10 @@ class GeneratedChartReference:
             result["generationContext"] = sanitize_payload(self.generation_context)
         if self.generation_context_digest:
             result["generationContextDigest"] = truncate_text(self.generation_context_digest, 128)
-        if self.context_status:
-            result["contextStatus"] = truncate_text(self.context_status, 32)
-        if self.candidate_attempt is not None:
-            result["candidateAttempt"] = max(1, min(int(self.candidate_attempt), 8))
-        if self.review_attempts is not None:
-            result["reviewAttempts"] = max(0, min(int(self.review_attempts), 16))
-        if self.lineage_attempt is not None:
-            result["lineageAttempt"] = max(1, min(int(self.lineage_attempt), 8))
-        if self.parent_candidate_id:
-            result["parentCandidateId"] = truncate_text(self.parent_candidate_id, 128)
-        if self.parent_attempt is not None:
-            result["parentAttempt"] = max(0, min(int(self.parent_attempt), 8))
         if self.panel_ids:
             result["panelIds"] = [truncate_text(item, 160) for item in self.panel_ids[:16]]
         if self.source_attachment_ids:
             result["sourceAttachmentIds"] = [truncate_text(item, 128) for item in self.source_attachment_ids[:16]]
-        if self.repair_kind:
-            result["repairKind"] = truncate_text(self.repair_kind, 32)
-        if isinstance(self.review, Mapping):
-            result["review"] = sanitize_payload(self.review)
         if self.reason:
             result["reason"] = truncate_text(self.reason, MAX_ERROR_MESSAGE)
         return result
@@ -431,10 +346,10 @@ def _truncate_tool_result_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
         "outcome_known",
         "first_failure_ref",
         "attempt",
-        "candidate_id",
-        "review_id",
+        "staged_ref",
+        "verification_ref",
+        "artifact_id",
         "collection_id",
-        "repair_kind",
     )
     identity = {
         field: payload[field] if isinstance(payload[field], (bool, int, float)) else truncate_text(payload[field], 160)
@@ -446,7 +361,6 @@ def _truncate_tool_result_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
         for field in (
             "image_count",
             "observations",
-            "artifacts",
             "measurement_status",
             "measurement_reference",
             "measurement_issue_count",

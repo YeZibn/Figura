@@ -15,13 +15,13 @@ export function generatedArtifactUrl(sessionId: string, runId: string, artifactI
   return `${currentGatewayBaseUrl()}/sessions/${encodeURIComponent(sessionId)}/runs/${encodeURIComponent(runId)}/artifacts/${encodeURIComponent(artifactId)}`
 }
 
-export function generatedCandidateUrl(sessionId: string, runId: string, candidateId: string): string {
-  return `${currentGatewayBaseUrl()}/sessions/${encodeURIComponent(sessionId)}/runs/${encodeURIComponent(runId)}/candidates/${encodeURIComponent(candidateId)}`
+export function generatedStagedChartUrl(sessionId: string, runId: string, stagedRef: string): string {
+  return `${currentGatewayBaseUrl()}/sessions/${encodeURIComponent(sessionId)}/runs/${encodeURIComponent(runId)}/chart-previews/${encodeURIComponent(stagedRef)}`
 }
 
 export function chartPreviewResource(sessionId: string, runId: string, reference: GeneratedChartReference): PreviewResource | undefined {
   if (reference.artifactId) return { kind: 'artifact', sessionId, runId, artifactId: reference.artifactId }
-  if (reference.candidateId) return { kind: 'candidate', sessionId, runId, candidateId: reference.candidateId }
+  if (reference.stagedRef) return { kind: 'staged', sessionId, runId, stagedRef: reference.stagedRef }
   return undefined
 }
 
@@ -71,15 +71,9 @@ export function mapEvaluationEvent(event: GatewayRunEvent, evaluationId: string,
       return mapped ? { ...observation, previewResource: mapped } : item
     })
   }
-  if (event.kind === 'generated_chart' && Array.isArray(payload.artifacts)) {
-    payload.artifacts = payload.artifacts.map((item) => {
-      if (!item || typeof item !== 'object') return item
-      const artifact = item as Record<string, unknown>
-      const resource = artifact.previewResource
-      if (!resource || typeof resource !== 'object') return item
-      const mapped = evaluationPreviewResource(evaluationId, caseId, resource as Partial<EvaluationResource>)
-      return mapped ? { ...artifact, previewResource: mapped } : item
-    })
+  if (payload.previewResource && typeof payload.previewResource === 'object') {
+    const mapped = evaluationPreviewResource(evaluationId, caseId, payload.previewResource as Partial<EvaluationResource>)
+    if (mapped) payload.previewResource = mapped
   }
   const detailResource = payload.detailResource
   if (detailResource && typeof detailResource === 'object') {
@@ -121,20 +115,21 @@ export function mapRunEvent(event: GatewayRunEvent, sessionId: string): AgentRun
       return { ...reference, previewResource: { kind: 'observation', sessionId, runId: event.runId, observationId: reference.observationId } }
     })
   }
-  if (event.kind === 'generated_chart' && Array.isArray(payload.artifacts)) {
-    payload.artifacts = payload.artifacts.map((item) => {
-      if (!item || typeof item !== 'object') return item
-      const reference = item as Partial<GeneratedChartReference>
-      if (reference.status === 'unavailable') return item
-      const chartReference = reference as GeneratedChartReference
-      const resource = chartPreviewResource(sessionId, event.runId, chartReference)
-      const url = reference.artifactId
-        ? generatedArtifactUrl(sessionId, event.runId, reference.artifactId)
-        : reference.candidateId
-          ? generatedCandidateUrl(sessionId, event.runId, reference.candidateId)
-          : ''
-      return resource ? { ...reference, previewResource: resource, imageUrl: url, downloadUrl: reference.artifactId ? url : undefined } : item
-    })
+  if (event.kind === 'chart_staged') {
+    const stagedRef = typeof payload.staged_ref === 'string' ? payload.staged_ref : ''
+    if (stagedRef) {
+      payload.previewResource = { kind: 'staged', sessionId, runId: event.runId, stagedRef }
+      payload.imageUrl = generatedStagedChartUrl(sessionId, event.runId, stagedRef)
+    }
+  }
+  if (event.kind === 'chart_promotion_result') {
+    const artifactId = typeof payload.artifact_id === 'string' ? payload.artifact_id : ''
+    if (artifactId) {
+      const url = generatedArtifactUrl(sessionId, event.runId, artifactId)
+      payload.downloadUrl = url
+      payload.imageUrl = url
+      payload.previewResource = { kind: 'artifact', sessionId, runId: event.runId, artifactId }
+    }
   }
   return { runId: event.runId, sequence: event.sequence, kind: event.kind, timestamp: event.timestamp, payload }
 }

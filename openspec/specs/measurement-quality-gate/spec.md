@@ -67,16 +67,6 @@
 - **THEN** 该内容作为主 Agent 的动态证据上下文返回
 - **AND** 系统不得仅凭该字段自动创建下一次 measurement attempt
 
-### Requirement: Measurement quality state is bounded and serializable
-
-当前 attempt 的 scope、质量检查、问题、measurement/evidence refs、系列元数据和来源身份 SHALL 使用有界、可序列化的结果表达，并 SHALL 能够在工具 observation、run artifact index、checkpoint 和恢复流程之间保持一致。该状态不得包含 evidence selection/discard decisions，也不得暴露本地路径、图像字节或 provider 原始 payload。
-
-#### Scenario: Observation and recovery preserve the same attempt facts
-
-- **WHEN** 测量结果写入运行记录并在后续恢复
-- **THEN** 恢复后的当前 attempt、refs、scope、质量问题和来源身份与原结果一致
-- **AND** 恢复不会新增、推断或恢复选取/舍弃状态
-
 ### Requirement: Measurement issues expose machine-readable repair targets
 
 当测量质量审计发现需要补充证据的问题时，系统 SHALL 返回有界的 `observation_scope` 或 `measurement_target`。首次观察可以使用 `observation_scope` 表达当前 panel 内的 plot、legend、axis 等 include/exclude 范围；已有 attempt 的局部补充 SHALL 使用 `measurement_target` 表达候选引用或区域、受影响字段、模式和原因。两类范围都必须保持 attachment、panel 和源坐标边界，且不得由代码自动执行。
@@ -241,3 +231,12 @@ source scope 错误与重新绑定 SHALL 通过对应的普通测量工具请求
 - **WHEN** Agent 根据工具返回的 scope 诊断重新提交同一 panel 的 source context
 - **THEN** 新工具调用明确关联来源及可用父 attempt，并只读取授权同范围
 - **AND** 工具不因首次 scope 错误而回退到全图测量
+
+### Requirement: Current measurement facts derive from committed attempts
+
+每次测量 SHALL 保存有界、可归属的 attempt、attachment/panel、effective scope、质量、measurement/evidence refs 和系列元数据。当前测量结果 SHALL 从已提交 attempt 推导；checkpoint 只保留恢复所需的安全引用，不复制完整 measurement session。质量状态仅描述观察，不驱动自动采用、舍弃或重测。
+
+#### Scenario: Resume after a committed measurement
+- **WHEN** 测量结果已经提交而下一次模型调用前中断
+- **THEN** 显式 resume 恢复相同来源范围和 refs
+- **AND** 不重复测量或建立 measurement decision gate

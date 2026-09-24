@@ -17,10 +17,10 @@ MAX_ACTION_ITEMS = 16
 MAX_FAILURE_CODE = 96
 MAX_FAILURE_MESSAGE = 240
 
-UNIT_TYPES = frozenset({"measurement", "generation", "review", "publication", "observation"})
-PHASES = frozenset({"observe", "decide", "assemble", "render", "review", "repair", "publish", "action"})
+UNIT_TYPES = frozenset({"measurement", "generation", "verification", "artifact", "observation"})
+PHASES = frozenset({"observe", "decide", "assemble", "render", "verify", "publish", "action"})
 ACTORS = frozenset({"agent", "tool", "system", "vlm"})
-ROLES = frozenset({"observation", "decision", "action", "gate", "review", "publication"})
+ROLES = frozenset({"observation", "decision", "action", "verification", "artifact"})
 
 
 class TimelineProtocolError(ValueError):
@@ -34,34 +34,21 @@ class UnsupportedTimelineVersion(TimelineProtocolError):
 
     code = "unsupported_timeline_version"
 
-_REVIEW_KINDS = frozenset(
-    {
-        "review_started",
-        "review_completed",
-        "review_repair_required",
-        "review_failed",
-        "review_subcheck",
-    }
-)
-_PUBLICATION_KINDS = frozenset({"generated_chart_published", "generated_chart_rejected"})
-
 _STRICT_KINDS = frozenset(
     {
-        *_REVIEW_KINDS,
-        *_PUBLICATION_KINDS,
+        "chart_staged",
+        "chart_verification_result",
+        "chart_promotion_result",
         "tool_call",
         "tool_result",
         "tool_skipped",
         "visual_observation",
-        "generated_chart",
         "assembly_validation_failure",
     }
 )
 
-# Every participating event kind has exactly one execution-state field. Tool
-# results describe the outcome of a tool call with `status`; lifecycle and
-# review transitions use `state`. Other domain dimensions (for example
-# `review_status` or `publication_status`) remain distinct fields.
+# Tool results describe a call outcome with `status`; verification and
+# promotion facts use `state`.
 EVENT_STATUS_FIELD_BY_KIND = {
     kind: "status" if kind == "tool_result" else "state"
     for kind in _STRICT_KINDS
@@ -75,10 +62,6 @@ _STRICT_CAMEL_ALIASES = frozenset(
         "parentUnitId",
         "transitionId",
         "callId",
-        "reviewId",
-        "reviewType",
-        "candidateId",
-        "subjectId",
         "toolName",
         "runId",
         "processId",
@@ -96,33 +79,50 @@ _STRICT_CAMEL_ALIASES = frozenset(
         "sourceScope",
         "sourceAttachmentIds",
         "panelIds",
-        "parentCandidateId",
-        "parentAttempt",
         "collectionId",
         "figureId",
-        "candidateStatus",
-        "reviewStatus",
-        "publicationStatus",
-        "repairKind",
-        "repairPhase",
         "maxAttempts",
         "remainingAttempts",
         "createdAt",
         "updatedAt",
         "subjectRef",
         "generationContext",
-        "contextStatus",
+        "stagedRef",
+        "verificationRef",
+        "artifactId",
+        "manifestDigest",
         "traceSequence",
     }
 )
 _RETIRED_KINDS = frozenset(
     {
+        "review_started",
+        "review_completed",
+        "review_repair_required",
+        "review_failed",
+        "review_subcheck",
         "chart_review_started",
         "chart_review_required",
-        "chart_review_repair_required",
         "chart_review_completed",
+        "chart_review_failed",
+        "chart_review_subcheck",
+        "chart_review_repair_required",
         "review_gate_required",
         "review_gate_updated",
+        "review_gate_blocked",
+        "review_gate_opened",
+        "generated_chart_published",
+        "generated_chart_rejected",
+        "generated_chart",
+    }
+)
+_RETIRED_FIELDS = frozenset(
+    {
+        "candidate_id", "candidateId", "candidate_attempt", "candidateAttempt",
+        "review_id", "reviewId", "review_type", "reviewType", "review_status", "reviewStatus",
+        "publication_status", "publicationStatus", "repair_kind", "repairKind",
+        "repair_phase", "repairPhase", "execution_gate", "executionGate", "review_gate", "reviewGate",
+        "artifacts",
     }
 )
 
@@ -171,11 +171,8 @@ def _strict_identity(kind: str, payload: Mapping[str, Any]) -> tuple[str, str, s
     if unit_type not in UNIT_TYPES:
         raise TimelineProtocolError(f"事件 {kind} 的 unit_type 必须是 canonical 类型")
     call_id = _text(payload.get("call_id"))
-    if kind in {"tool_call", "tool_result", "tool_skipped", "visual_observation"} and not call_id:
+    if kind in {"tool_call", "tool_result", "tool_skipped", "visual_observation", "chart_staged"} and not call_id:
         raise TimelineProtocolError(f"事件 {kind} 缺少 call_id")
-    review_id = _text(payload.get("review_id"))
-    if kind in _REVIEW_KINDS and not review_id:
-        raise TimelineProtocolError(f"事件 {kind} 缺少 review_id")
     parent_unit_id = _text(payload.get("parent_unit_id")) or None
     if parent_unit_id == unit_id:
         raise TimelineProtocolError(f"事件 {kind} 的 parent_unit_id 不能指向自身")
@@ -290,6 +287,10 @@ def _transition_id(kind: str, payload: Mapping[str, Any]) -> str:
 
 
 def _validate_v2_fields(kind: str, payload: Mapping[str, Any]) -> None:
+    retired = _RETIRED_FIELDS.intersection(payload)
+    if retired:
+        field = sorted(retired)[0]
+        raise TimelineProtocolError(f"事件 {kind} 不允许已退役字段 {field}")
     aliases = _STRICT_CAMEL_ALIASES.intersection(payload)
     if aliases:
         alias = sorted(aliases)[0]
@@ -312,8 +313,6 @@ def validate_timeline_event(kind: str, payload: Mapping[str, Any]) -> None:
     if type(version) is not int or version != CORRELATION_VERSION:
         raise UnsupportedTimelineVersion(f"事件 {event_kind} 的 timeline 版本不受支持")
     _validate_v2_fields(event_kind, payload)
-    if any(field in payload for field in ("execution_gate", "executionGate", "gate")):
-        raise TimelineProtocolError(f"事件 {event_kind} 不允许嵌入 Gate 快照")
     _strict_identity(event_kind, payload)
     _phase(event_kind, payload)
     _actor(event_kind, payload)
@@ -334,12 +333,12 @@ def enrich_event_payload(
     Lifecycle events which are not business timeline nodes remain plain
     process records.  Every event that can enter the user timeline must,
     however, arrive with an explicit canonical identity.  This boundary never
-    invents a unit or parent relation and rejects retired review aliases.
+    invents a unit or parent relation and rejects retired lifecycle aliases.
     """
     source = dict(payload or {})
     event_kind = str(kind or "")
     if event_kind in _RETIRED_KINDS:
-        raise UnsupportedTimelineVersion(f"事件 {event_kind} 已废弃，请使用 canonical review 生命周期")
+        raise UnsupportedTimelineVersion(f"事件 {event_kind} 已从当前图表验证协议退役")
     if event_kind not in _STRICT_KINDS:
         process = _process_context(event_kind, source, sequence=sequence)
         failure = _failure_context(source)

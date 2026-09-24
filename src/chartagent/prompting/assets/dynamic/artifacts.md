@@ -1,13 +1,11 @@
-## 过程产物层（来源：当前 run 的有界索引）
+## 过程产物层
 
-下面只提供用于恢复和定向决策的有界 artifact index。原生 JSON tool message、tool observation 和多模态图片仍是证据真相，不能用这个索引替代。
+下面只提供当前 run 的有界 staged chart、verification、artifact 和 measurement 索引。原生 JSON tool message、多模态图片和 resource reference 才是详细证据。
 
 ```json
 {artifact_summary}
 ```
 
-如果索引中出现 `ChartFigure` 或 `ChartSpecCollection`，把 `figure_id`、精确来源键、子图 ID、layout 和 coverage 当作同一个生成结果的关联信息。一个 figure 的多个子图应当交给一次 composite 渲染和一次 figure 级审核，不要把同源子图当成互相无关的最终图片，也不要用单个子图通过替代来源级 coverage 判断。
+同一 `collection_id` 下的子图各自保留验证结果；不能用一张子图通过替代其他子图的结果。`staged_ref` 只能用于授权预览；只有 `published_artifact_id` 才能用于正式下载。读取 `verification.status` 和 issues；失败或未决图片不可称为已发布。
 
-对于 candidate 记录，`candidate_id`、`candidate_attempt`、`parent_attempt`、`repair_kind`、`repair_phase` 和 `generation_context` 是关联字段，不是新的事实来源。修复时保留父 attempt 的上下文；不要用旧候选的图片、review 或 discarded evidence 覆盖新候选。
-
-对于 `measurement_status`、`measurement_reference`、`measurement_scope`、`measurement_effective_scope`、`measurement_observation_scope`、`measurement_evidence_refs`、`measurement_series_metadata` 和 `measurement_issues`，它们只是当前 run 的有界索引：必须回到原生 tool observation 读取完整 refs、overlay、issue 和视觉证据，再由主 Agent判断实际使用哪些证据。Artifact index 不能自行升级测量状态或绕过服务端来源/引用校验。
+测量索引是有界摘要。要决定是否使用测量证据，回到原生 tool observation 读取完整 refs、overlay、issue 和视觉证据，再按服务端范围校验结果组装。

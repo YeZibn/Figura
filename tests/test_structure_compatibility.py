@@ -3,7 +3,6 @@ from __future__ import annotations
 import importlib
 import json
 
-from chartagent.review import chart_spec_digest as review_chart_spec_digest
 from chartagent.spec import ChartSpec, chart_spec_digest
 from chartagent.tools import Tool, ToolRegistry
 from chartagent.tools.core import Tool as CanonicalTool
@@ -16,7 +15,6 @@ CANONICAL_MODULES = (
     "chartagent.agent.loop",
     "chartagent.agent.messages",
     "chartagent.agent.observations",
-    "chartagent.agent.review_gate",
     "chartagent.agent.tool_schema",
     "chartagent.agent.artifacts",
     "chartagent.agent.panel_routing",
@@ -31,7 +29,6 @@ CANONICAL_MODULES = (
     "chartagent.gateway.persistence",
     "chartagent.gateway.persistence_connection",
     "chartagent.gateway.persistence_errors",
-    "chartagent.gateway.operation_journal",
     "chartagent.gateway.run_persistence",
     "chartagent.gateway.evaluation_adapter",
     "chartagent.gateway.service_evaluation",
@@ -43,12 +40,11 @@ CANONICAL_MODULES = (
     "chartagent.attachments.registry",
     "chartagent.attachments.policy",
     "chartagent.attachments.metadata",
-    "chartagent.review",
-    "chartagent.review.manager",
-    "chartagent.review.gates",
-    "chartagent.review.models",
-    "chartagent.review.policy",
-    "chartagent.review.evaluator",
+    "chartagent.verification",
+    "chartagent.verification.models",
+    "chartagent.verification.checks",
+    "chartagent.verification.vlm",
+    "chartagent.verification.flow",
     "chartagent.tools.core",
     "chartagent.tools.integrations",
     "chartagent.tools.adapters",
@@ -91,10 +87,8 @@ def test_canonical_module_matrix_imports() -> None:
 
 def test_domain_modules_do_not_import_adapter_layer_at_definition_time() -> None:
     from chartagent.attachments import registry as attachment_registry
-    from chartagent.review import manager as review_manager
 
     assert "tools.adapters" not in attachment_registry.__file__
-    assert "tools.adapters" not in review_manager.__file__
 
 
 def test_tool_core_exports_are_public() -> None:
@@ -108,62 +102,32 @@ def test_chart_spec_digest_compatibility_export_is_canonical() -> None:
             "dataset": [{"category": "A", "value": 1}],
         }
     )
-    assert chart_spec_digest is review_chart_spec_digest
-    assert chart_spec_digest(spec) == review_chart_spec_digest(spec)
+    assert chart_spec_digest(spec) == chart_spec_digest(ChartSpec.from_dict(spec.to_dict()))
 
 
-def test_review_package_exports_point_to_canonical_modules() -> None:
-    from chartagent.review import (
-        ChartCandidate,
-        ReviewPolicy,
-        ReviewResult,
-        review_candidate_bytes,
-        select_review_policy,
-    )
-    from chartagent.review.evaluator import review_candidate_bytes as canonical_evaluator
-    from chartagent.review.models import ChartCandidate as canonical_candidate
-    from chartagent.review.models import ReviewResult as canonical_result
-    from chartagent.review.policy import ReviewPolicy as canonical_policy
-    from chartagent.review.policy import select_review_policy as canonical_selector
-
-    assert ChartCandidate is canonical_candidate
-    assert ReviewResult is canonical_result
-    assert ReviewPolicy is canonical_policy
-    assert select_review_policy is canonical_selector
-    assert review_candidate_bytes is canonical_evaluator
+def test_review_lifecycle_package_has_been_removed() -> None:
+    assert importlib.util.find_spec("chartagent.review") is None
 
 
-def test_review_package_has_no_second_lifecycle_or_adapters() -> None:
-    review = importlib.import_module("chartagent.review")
-    removed_names = (
-        "ReviewCoordinator",
-        "ReviewRecord",
-        "ReviewDecision",
-        "GeneratedChartReviewAdapter",
-        "MeasurementReviewAdapter",
-    )
-    assert all(not hasattr(review, name) for name in removed_names)
-    assert importlib.util.find_spec("chartagent.review.adapters") is None
+def test_verification_package_exposes_immutable_bounded_result() -> None:
+    from chartagent.verification import VerificationIssue, VerificationResult
 
-
-def test_review_result_json_shape_is_stable() -> None:
-    from chartagent.review import ReviewIssue, ReviewResult, ReviewStatus
-
-    result = ReviewResult(
-        status=ReviewStatus.COMPLETED,
-        checks={"structure": "passed"},
-        issues=(ReviewIssue("warning", "labels", "可读性提示", "warning"),),
-        evidence=({"kind": "encoded_artifact", "width": 320},),
+    result = VerificationResult(
+        verification_ref="ver_result_12345678",
+        staged_ref="stg_preview_12345678",
+        manifest_digest="a" * 64,
+        policy_version=1,
+        status="pass_with_warning",
+        checks={"readability": "warning"},
+        issues=(VerificationIssue("crowded_labels", "labels", "标签略拥挤", "warning"),),
         decision="pass_with_warning",
         confidence=0.8,
-        review_mode="vlm",
     )
     payload = result.to_dict()
 
     assert json.loads(json.dumps(payload, ensure_ascii=False)) == payload
-    assert payload["status"] == "completed"
+    assert payload["status"] == "pass_with_warning"
     assert payload["issues"][0]["severity"] == "warning"
-    assert payload["evidence"][0]["kind"] == "encoded_artifact"
 
 
 def test_measurement_package_exports_point_to_canonical_modules() -> None:

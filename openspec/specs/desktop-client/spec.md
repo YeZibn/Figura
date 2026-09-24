@@ -109,8 +109,8 @@ the canonical run identifier returned by the Gateway to associate the user
 request, assistant answer, execution events, and generated artifacts. New
 server-backed runs SHALL NOT leave their user request or assistant answer in
 the unassociated-message fallback merely because different layers generated
-different local identifiers. The client SHALL preserve genuinely
-unassociated legacy messages through a compatible fallback presentation.
+different local identifiers. The client SHALL keep genuinely unassociated
+messages visible with an explicit incomplete-association state.
 
 #### Scenario: Conversation renders one Run in stable order
 
@@ -145,11 +145,10 @@ unassociated legacy messages through a compatible fallback presentation.
   completion or reload
 - **AND** the client does not duplicate the user message or final answer
 
-#### Scenario: Legacy messages remain visible
+#### Scenario: Unassociated messages remain visible
 
-- **WHEN** a session contains a message that cannot be associated with a run
-  identifier from the current or legacy data contract
-- **THEN** the client renders the message in a compatible fallback position
+- **WHEN** a session contains a message that has no associated run identifier
+- **THEN** the client renders the message in an explicit incomplete-association position
 - **AND** the message is not silently discarded while Run items are built
 
 #### Scenario: Final answer renders Markdown
@@ -163,7 +162,7 @@ unassociated legacy messages through a compatible fallback presentation.
 
 ### Requirement: User can inspect persisted Agent runs
 
-The desktop workspace SHALL display each Agent run as a compact execution group with its status, timestamps when available, and expand/collapse control. Inside the group it SHALL render a chronological user-facing timeline containing meaningful tool, observation, measurement, generation, review, recovery, and failure steps. A tool call and its result SHALL be represented as one logical step, while model-start, model-completion, operation-save, run-start, and resume-start lifecycle events SHALL remain available in the persisted history but SHALL NOT appear as ordinary visible timeline rows. A bounded or truncated tool result SHALL remain part of the corresponding tool step and SHALL NOT become an unknown standalone step when the outer tool identity is available.
+The desktop workspace SHALL display each Agent run as a compact execution group with its status, timestamps when available, and expand/collapse control. Inside the group it SHALL render a chronological user-facing timeline containing meaningful tool, observation, measurement, generation, verification, recovery, and failure steps. A tool call and its result SHALL be represented as one logical step, while model-start, model-completion, internal commit-confirmation, run-start, and resume-start lifecycle events SHALL remain available in the persisted history but SHALL NOT appear as ordinary visible timeline rows. A bounded or truncated tool result SHALL remain part of the corresponding tool step and SHALL NOT become an unknown standalone step when the outer tool identity is available.
 
 Tool arguments, full results, and technical event details SHALL be collapsed by
 default regardless of whether the tool step is running or terminal. The
@@ -192,9 +191,9 @@ to inspect its bounded details.
 - **AND** an available generated chart remains visible in the separate result
   area
 
-#### Scenario: Technical lifecycle events stay hidden
+#### Scenario: Technical execution events stay hidden
 
-- **WHEN** a run history contains model-start, model-completion, or operation-save events
+- **WHEN** a run history contains model-start, model-completion, or internal commit-confirmation events
 - **THEN** the ordinary timeline does not render separate rows or cards for those events
 - **AND** the run status, tool steps, domain milestones, and terminal error remain understandable without opening raw history
 
@@ -426,121 +425,6 @@ context.
 - **AND** the action does not expose a local server path or provider data
 - **AND** downloading remains independent from opening the interactive preview
 
-### Requirement: Desktop client distinguishes tool, review, and publication presentation
-
-The desktop client SHALL render tool execution, generated-chart review, and
-publication as separate user-facing concepts. Tool names SHALL use the
-canonical bilingual presentation mapping when available, while lifecycle event
-labels SHALL use the event label catalog and structured state fields rather
-than inferring review or publication from a generic status string.
-
-#### Scenario: Tool step uses bilingual name mapping
-
-- **WHEN** the execution timeline renders a known tool call
-- **THEN** it displays the Simplified Chinese tool name together with its stable
-  English identifier
-- **AND** the identifier remains available for technical inspection and
-  correlation
-
-#### Scenario: Assembly and rendering have distinct tool headlines
-
-- **WHEN** the execution timeline contains a ChartSpec assembly step and a
-  chart rendering step
-- **THEN** their headlines identify the respective tools as
-  `组装图表规格 (assemble_spec)` and `生成图表 (render_chart)`
-- **AND** a broad phase or unit category does not replace the specific tool
-  name
-
-#### Scenario: Unknown tool state is not inferred as success
-
-- **WHEN** a tool result omits its status or supplies an unrecognized status
-- **THEN** the timeline displays an explicit localized unknown state
-- **AND** it does not label the tool as completed, the review as passed, or the
-  chart as published based only on that result
-
-#### Scenario: Generated chart shows independent statuses
-
-- **WHEN** the final result or execution timeline renders a generated chart
-- **THEN** it can show tool completion, review state, and publication state
-  separately
-- **AND** a successful render is not labeled as verified or published unless
-  the corresponding publication field allows it
-
-#### Scenario: Review labels are semantically accurate
-
-- **WHEN** the client receives `chart_review_started`,
-  `chart_review_completed`, or a publication event
-- **THEN** it uses distinct Simplified Chinese labels for review start, review
-  completion, publication, and rejection
-- **AND** it does not label `chart_review_started` as a completed review
-
-#### Scenario: Generated chart survives an ordinary reload
-
-- **WHEN** the user reopens a session containing a generated chart within the
-  configured retention policy
-- **THEN** the run history restores its metadata and the preview or download
-  action can request the authorized artifact again
-
-#### Scenario: Generated chart is unavailable
-
-- **WHEN** the artifact is expired, missing, unauthorized, or the run reports a
-  rendering failure
-- **THEN** the workspace shows an explicit bounded unavailable or failed state
-- **AND** it does not render a broken image or claim that generation succeeded
-
-### Requirement: Desktop client provides a unified preview experience
-
-The desktop client SHALL use one preview resource boundary for uploaded
-attachments, visual observations, generated candidates, and published chart
-artifacts and one interactive preview presentation in mock, browser
-development, and Tauri Gateway modes. It SHALL resolve resources using the
-active backend configuration, validate that the response is an expected image
-media type, release temporary client URLs when their owner is no longer
-displayed, preserve safe metadata when bytes are unavailable, and expose
-consistent pointer, keyboard, zoom, fit, and close behavior for resources
-that are available.
-
-#### Scenario: All supported image kinds use the active Gateway
-
-- **WHEN** the client renders an uploaded attachment, visual observation,
-  candidate, or published chart in Gateway mode
-- **THEN** it requests the resource through the active Gateway endpoint and
-  does not construct a path from a local source filename
-
-#### Scenario: All supported image kinds use the same interactive preview
-
-- **WHEN** the user opens an available attachment, visual observation, candidate, or published chart
-- **THEN** the client uses the same bounded preview presentation and controls for each image kind
-- **AND** the surrounding session and run context remains intact
-
-#### Scenario: Tauri-managed Gateway address is honored
-
-- **WHEN** the Tauri runtime starts the Gateway on a configured loopback host
-  or non-default port
-- **THEN** preview requests use that runtime address consistently with session,
-  run, and event requests
-
-#### Scenario: Preview response is not an image
-
-- **WHEN** a preview request returns an error document, unsupported media type,
-  empty body, or malformed image bytes
-- **THEN** the client does not render it as an image and shows a bounded
-  unavailable or invalid-preview state
-- **AND** it does not open an interactive preview for that resource
-
-#### Scenario: Preview resource is released
-
-- **WHEN** a preview component or open interactive preview is replaced, unmounted, closed, or its resource changes
-- **THEN** the client releases any temporary object URL it created and does not
-  retain stale image bytes for another session or run
-
-#### Scenario: Mock preview remains compatible
-
-- **WHEN** the client runs in mock mode
-- **THEN** the same preview presentation states and interactive controls are
-  exercised with local mock resources without requiring a Gateway or provider
-  connection
-
 ### Requirement: User can select the provider for the next run
 
 The desktop workspace SHALL provide a visible provider selector with the
@@ -591,43 +475,6 @@ identifiers in any technical details.
 - **WHEN** a historical run has no provider metadata
 - **THEN** the workspace renders it without fabricating a provider value
 
-### Requirement: User can choose resume separately from reconnect and retry
-
-The desktop client SHALL distinguish transport reconnect, explicit
-continuation, and fresh retry in its run presentation. For an interrupted or
-failed run, it SHALL display whether a safe checkpoint is available, show
-bounded recovery block reasons in Simplified Chinese, and expose a `继续执行`
-action only when the Gateway reports resume eligibility. Resume SHALL create
-and display a new child run while retaining the parent timeline; reconnect
-SHALL never create a new run.
-
-#### Scenario: Recoverable interruption shows continue action
-
-- **WHEN** a restored run is interrupted and exposes an available checkpoint
-- **THEN** the client shows the interrupted reason and a `继续执行` action
-- **AND** it also keeps `重新尝试` available as a from-scratch alternative
-
-#### Scenario: Resume displays parent and child runs
-
-- **WHEN** the user chooses `继续执行`
-- **THEN** the client displays the new child run with a bounded resume
-  relationship to the parent
-- **AND** the original timeline and terminal state remain inspectable
-
-#### Scenario: Blocked recovery explains the fallback
-
-- **WHEN** a run has an uncertain in-flight operation or an expired checkpoint
-- **THEN** the client hides or disables `继续执行`
-- **AND** it shows a bounded Chinese explanation with the option to
-  `重新尝试`
-
-#### Scenario: Reconnect remains same-run recovery
-
-- **WHEN** the event stream disconnects while a run is still active
-- **THEN** the client reconnects with the same run identity and cursor
-- **AND** it does not show the disconnect as a resume or create another user
-  message
-
 ### Requirement: Execution view explains scoped reuse
 
 桌面客户端 SHALL 在执行轨迹或结果上下文中显示当前使用的源附件、panel 名称或 panel ID、是否复用已有分区，以及分析结果是否来自局部范围。
@@ -638,151 +485,27 @@ SHALL never create a new run.
 - **THEN** 用户可以看到该 run 复用了哪个面板
 - **AND** 不需要通过工具原始日志推断是否重新拆解
 
-### Requirement: Failed review remains inspectable
+### Requirement: User can inspect measurement tool steps
 
-当生成图审核失败但仍可修复或已产生未发布候选时，客户端 SHALL 保留相关候选、诊断和状态；当最终不可恢复时，客户端 SHALL 显示失败原因和下一步行动。measurement tool observation 即使未被用于组装也可作为原始运行结果查看，但不得显示为采用/舍弃 decision 或已验证数值来源。
-
-#### Scenario: Unpublished candidate remains visible
-
-- **WHEN** 候选审核失败并进入修复流程
-- **THEN** 用户可以查看该候选及其未发布状态
-- **AND** 最终发布区域只展示通过审核的 artifact
-
-#### Scenario: Unused measurement observation remains inspectable
-
-- **WHEN** 主 Agent 后续未在 assembly 中引用某次 measurement observation
-- **THEN** 用户仍可以查看原始工具调用、候选结果、scope 和质量信息
-- **AND** 客户端不额外显示放弃决策、已采用或已验证状态
-
-### Requirement: User can inspect measurement repair lifecycle
-
-桌面客户端 SHALL 在 Agent 运行时间线中将每次图表测量呈现为普通工具步骤，并允许用户查看实际 scope、工具结果中的候选 refs/overlay、质量与系列 metadata。模型后续显式发起的局部重测 SHALL 显示为新的测量工具步骤；客户端 SHALL NOT 为选择/舍弃证据、repair queue、focus pending 或内部预算创建独立业务步骤。
+桌面客户端 SHALL 在 Agent 运行时间线中将每次图表测量呈现为普通工具步骤，并允许用户查看实际 scope、工具结果中的 evidence refs/overlay、质量与系列 metadata。模型后续显式发起的局部重测 SHALL 显示为新的测量工具步骤；客户端 SHALL NOT 为选择/舍弃证据、focus pending 或内部预算创建独立业务步骤。
 
 #### Scenario: Scoped observation is visible
 
 - **WHEN** 活跃运行收到带 `observation_scope` 的测量 tool call/result
-- **THEN** 客户端在该工具步骤中显示 panel、实际观察范围、候选 overlay 和结果状态
+- **THEN** 客户端在该工具步骤中显示 panel、实际观察范围、overlay 和结果状态
 - **AND** 客户端不把范围成功应用本身显示为测量通过或待完成门禁
 
 #### Scenario: Local remeasurement is visible as another tool call
 
 - **WHEN** 主 Agent 主动使用 `measurement_target` 发起局部测量
 - **THEN** 客户端显示新的测量工具步骤及其 scope、refs 和诊断结果
-- **AND** 不生成独立的“需要重测”“选择证据”或“修复被拒绝”卡片
+- **AND** 不生成独立的证据选择或焦点等待卡片
 
 #### Scenario: Measurement failure stays within the tool result
 
 - **WHEN** 活跃运行收到局部测量失败或不充分结果
 - **THEN** 客户端显示对应工具步骤及有界原因
-- **AND** 不把它显示为 generated-chart review failure 或发布状态
-
-### Requirement: Desktop client presents a unified blocking review state
-
-桌面客户端 SHALL 区分非阻塞的 measurement tool observations 与阻塞发布的 generated-chart review。measurement warning、partial observation 和候选 refs 作为工具结果呈现；只有实际 generated-chart review 状态影响候选发布展示。客户端不得展示 measurement selected/discarded 状态或 decision gate。
-
-#### Scenario: Measurement observation is visibly non-blocking
-
-- **WHEN** 测量工具返回 warning、partial 或未解析标签
-- **THEN** 运行时间线在工具步骤中显示观察状态、问题、scope、候选和可选局部线索
-- **AND** 不显示“测量决策待处理”或阻止模型继续运行的 measurement gate
-
-#### Scenario: Generated chart review is visibly blocking
-
-- **WHEN** 生成图候选尚未通过审核
-- **THEN** 候选卡片显示审核中、需要修复或未发布状态
-- **AND** 用户不会把候选预览误认为已发布结果
-
-#### Scenario: Actual assembly references remain inspectable
-
-- **WHEN** 用户展开 measurement tool result 或对应 assembly tool details
-- **THEN** 客户端可分别查看工具返回的候选 refs 与 assembly 实际携带的 refs、scope、质量信息和 overlay
-- **AND** 不显示 selected/discarded 列表、semantic-decision 状态或独立 measurement gate
-
-#### Scenario: Reconnected history shows the same current contract
-
-- **WHEN** 客户端重新连接或读取可用的运行历史
-- **THEN** 它根据工具调用/结果和生成审核事件恢复测量与发布展示
-- **AND** 不因缺少 measurement decision 事件而显示为 pending、失败或已发布
-
-### Requirement: Desktop client renders a grouped decision timeline
-
-普通运行详情 SHALL 从同一份 execution events 派生内部关联和面向用户的扁平时间线。内部关联可以保留 observe、assemble、render、review、repair、publish 阶段、lineage 和去重语义，但模型内部对候选值的采用判断不得形成单独的测量状态或顶层卡片。界面顶层只 SHALL 展示可解释的测量/工具、审核、生成、发布、恢复或错误步骤；process、turn、operation 和 legacy 关联不得直接渲染为嵌套容器。
-
-#### Scenario: User follows measurement through generation without decision cards
-
-- **WHEN** 一个 run 包含测量、一次或多次局部测量、assembly、render、review 和 publication
-- **THEN** 用户可以在一条连续时间线上看到实际工具调用及生成审核结果
-- **AND** 系统不插入测量决策、证据舍弃或待处理状态卡片
-
-#### Scenario: Tool invocation is a single visible step
-
-- **WHEN** 一个工具依次产生 tool_call、tool_result 和 visual_observation
-- **THEN** UI 将它们合并为一条可折叠工具步骤
-- **AND** 用户无需阅读模型轮次或 operation-save 事件即可理解工具是否完成及其结果
-
-#### Scenario: Pending states reflect actual blocking work only
-
-- **WHEN** 生成图审核或其他实际阻塞操作尚未完成
-- **THEN** UI 可以显示对应的真实待完成状态和下一步
-- **AND** measurement scope/result 已在同一工具调用中返回时不创建 pending measurement unit
-
-### Requirement: Client distinguishes observations, decisions, actions, gates, and publication
-
-时间线 SHALL 区分工具观察、实际系统动作、generated-chart review gate 和发布结果；模型在主链路中选择哪些 measurement candidates SHALL 由实际后续工具输入体现，不得包装成单独的 decision card。相同 transition 的状态更新不得生成重复顶层卡片，原始工具结果仍可展开。
-
-#### Scenario: Unused candidate does not create a decision card
-
-- **WHEN** 主 Agent 未在 assembly 中引用某个 measurement evidence ref
-- **THEN** 客户端继续显示原始测量工具结果和实际 assembly 请求
-- **AND** 不新增“舍弃证据”步骤或 reason/basis 状态
-
-#### Scenario: Review sub-checks are nested
-
-- **WHEN** 一个 candidate review cycle 包含 deterministic audit 和 VLM semantic review
-- **THEN** UI 显示一个审核父项和其子检查
-- **AND** 不显示多个重复的审核开始卡片
-
-### Requirement: Collection candidates are grouped without losing child details
-
-当同一 render 产生 collection child candidates 时，客户端 SHALL 以 collection review parent 聚合展示，并允许展开每个 child 的 candidate、attempt、issue、scope 和 publication status。
-
-#### Scenario: Multiple generated images share one parent
-
-- **WHEN** 一次生成返回多个同源 child charts
-- **THEN** UI 显示一个生成/审核批次和多个 child 状态
-- **AND** 用户可以区分“多个子图”与“同一候选被重复审核”
-
-### Requirement: Timeline details remain read-only and recoverable
-
-展开、刷新和重连时间线 SHALL 只读取已有事件、诊断和安全资源，不得重新触发模型、工具、审核或发布。用户默认看到面向业务的步骤；技术生命周期字段、sequence 和原始 payload SHALL 只能通过受限的按需详情读取。历史缺失、截断、不支持和不可用状态 SHALL 在对应可见步骤或运行摘要上明确展示。
-
-#### Scenario: Refresh does not repeat a review
-
-- **WHEN** 用户刷新一个已完成或失败的 run
-- **THEN** UI 从受支持的历史记录重建相同的用户时间线和 review cycle
-- **AND** 不产生新的 VLM invocation 或 publication action
-
-#### Scenario: Unsupported history stays explicit
-
-- **WHEN** 用户打开不支持的旧事件版本或无法解析的事件字段形状
-- **THEN** UI 显示明确的历史不可用/协议不支持状态并保留可用的运行摘要
-- **AND** 不创建兼容容器或推断审核、发布和终态成功
-
-### Requirement: Desktop timeline consumes one canonical event projection
-
-桌面客户端 SHALL 通过单一用户时间线投影呈现受支持的 Run 事件。投影 SHALL 使用事件类型规定的字段，不得从 `execution_gate`、`executionGate`、`gate` 或其他同义字段 fallback 读取同一 Gate；Run summary 中的派生 Gate 可以提供当前状态摘要，但不得覆盖事件历史表达的转移。技术审核子检查可以留在受限详情中，不得作为重复的顶层审核步骤。
-
-#### Scenario: Review appears as one business cycle
-
-- **WHEN** 一个候选产生审核开始、审核结果和发布转移
-- **THEN** 用户看到一个审核周期及清晰的结果/原因，并能查看受限技术详情
-- **AND** Gate 快照、技术子检查和重复事件不生成额外审核卡片
-
-#### Scenario: Existing public API contract remains stable
-
-- **WHEN** 当前客户端通过 Gateway/SSE 接收受支持的事件和 Run summary
-- **THEN** 客户端继续使用现有公开字段约定、run identity、sequence 和 opaque IDs
-- **AND** 只移除内部及同一 payload 中的重复 fallback，不进行无关的 API 重命名
+- **AND** 不把它显示为图像验证失败或发布状态
 
 ### Requirement: Client exposes actionable provider and scope errors
 
@@ -798,4 +521,36 @@ SHALL never create a new run.
 
 - **WHEN** 图表工具因 source scope 缺失、不一致或歧义拒绝调用
 - **THEN** 客户端显示具体字段、当前范围和 action hint
-- **AND** 不把该错误显示成无上下文的 render 或 review 失败
+- **AND** 不把该错误显示成无上下文的渲染失败
+
+### Requirement: Desktop presents execution, verification and published results
+
+客户端 SHALL 以简体中文从同一事件投影呈现工具、测量、图像验证、正式图表和终态错误。暂存失败图可以预览并显示诊断，但下载和已发布标识只适用于正式 artifact；界面不得维护独立验证状态或从互不一致的事实拼装发布结论。
+
+#### Scenario: Failed image is inspectable
+- **WHEN** 生成图验证失败但暂存预览仍有效
+- **THEN** 用户可以查看图片、问题和来源范围
+- **AND** 该图片不显示为可下载的成功产物
+
+#### Scenario: Verified warning is explicit
+- **WHEN** 策略允许带 warning 发布
+- **THEN** 用户看到正式 artifact 和明确警告
+- **AND** 不显示为无条件通过
+
+### Requirement: Client separates reconnect, resume and retry
+
+SSE 断线 SHALL 使用原 Run 和最后序号重连；显式 resume SHALL 仅在 Gateway 推导可恢复时可用，并创建具有父子关系的新 Run；retry SHALL 从原请求开始。客户端 SHALL 展示有界不可恢复原因，并在模型/VLM 未提交请求可能重发时说明可能增加调用费用。
+
+#### Scenario: Interrupted run has an eligible cursor
+- **WHEN** 历史 Run 中断且 Gateway 报告可恢复
+- **THEN** 客户端提供显式继续执行入口
+- **AND** 继续后的执行显示在子 Run 中
+
+### Requirement: Client groups collection verification by stable identity
+
+客户端 SHALL 将同一 collection 的 figure/child 尝试作为一个可展开生成流程呈现，同时保留每个子图的独立结果、来源范围和问题。前端 mock 与 Gateway 模式 SHALL 实现相同客户端合约，时间线刷新不得重新发起 VLM 或发布。
+
+#### Scenario: Collection has mixed results
+- **WHEN** 一个子图发布且另一个子图验证失败
+- **THEN** 展开内容分别显示正式产物和失败预览
+- **AND** 刷新后仍保持相同关联

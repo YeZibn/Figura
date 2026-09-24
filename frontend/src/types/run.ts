@@ -4,36 +4,29 @@ import type { Provider } from './provider'
 export type RunStatus = 'running' | 'completed' | 'failed' | 'interrupted'
 export type RunState = 'idle' | 'connecting' | 'running' | 'reconnecting' | 'cancel_requested' | 'completed' | 'failed' | 'interrupted' | 'history-gap' | 'unavailable'
 export type RecoveryStatus = 'available' | 'blocked' | 'unavailable'
-export type CheckpointPhase = 'accepted' | 'model' | 'tool' | 'render' | 'review' | 'publication' | 'final'
-export type OperationState = 'not_started' | 'in_flight' | 'completed' | 'uncertain'
 export type ContinuationKind = 'resume' | 'retry'
 
 export type RunRecovery = {
   status: RecoveryStatus
-  checkpointId?: string | null
-  checkpointVersion?: number | null
-  phase?: CheckpointPhase | string | null
+  cursorId?: string | null
   nextAction?: string | null
   blockedReason?: string | null
   updatedAt?: string | null
-  expiresAt?: number | null
 }
 
-export type ReviewState = 'reviewing' | 'passed' | 'passed_with_warning' | 'repair_required' | 'failed' | 'exhausted' | 'uncertain' | string
-export type ReviewType = 'measurement' | 'generated_chart' | string
-export type ReviewIssue = { code?: string; location?: string; message?: string; severity?: string }
-export type ExecutionGate = {
-  state: 'open' | 'reviewing' | 'repair_required' | 'failed' | 'exhausted' | string
-  blocking: boolean
-  reviewType?: ReviewType
-  reviewId?: string | null
-  subjectId?: string | null
-  attempt?: number | null
-  maxAttempts?: number | null
-  remainingAttempts?: number | null
-  nextAction?: string | null
-  issues?: ReviewIssue[]
-  updatedAt?: string | null
+export type VerificationStatus = 'pass' | 'pass_with_warning' | 'fail' | 'unavailable'
+export type VerificationIssue = { code: string; location: string; message: string; severity: 'warning' | 'error' }
+export type ChartVerification = {
+  verificationRef: string
+  stagedRef: string
+  manifestDigest: string
+  policyVersion: number
+  status: VerificationStatus
+  checks: Record<string, string>
+  issues: VerificationIssue[]
+  decision?: 'pass' | 'pass_with_warning' | 'fail' | null
+  confidence?: number | null
+  attempt: number
 }
 
 export type RunSummary = {
@@ -56,7 +49,6 @@ export type RunSummary = {
   rootRunId?: string | null
   continuationKind?: ContinuationKind | null
   recovery?: RunRecovery | null
-  executionGate?: ExecutionGate | null
 }
 
 export type RunHandle = {
@@ -72,7 +64,6 @@ export type RunHandle = {
   rootRunId?: string | null
   continuationKind?: ContinuationKind | null
   recovery?: RunRecovery | null
-  executionGate?: ExecutionGate | null
 }
 
 export type FailureContext = {
@@ -99,8 +90,8 @@ export type ObservationReference = {
 export type GeneratedChartReference = {
   artifactKind: 'generated_chart'
   artifactId?: string
-  candidateId?: string
-  reviewId?: string
+  stagedRef?: string
+  verificationRef?: string
   chartSpecDigest?: string
   mediaType: string
   caption: string
@@ -109,11 +100,8 @@ export type GeneratedChartReference = {
   title?: string
   width?: number
   height?: number
-  status?: 'available' | 'pending' | 'warning' | 'unavailable' | 'failed' | string
-  candidateStatus?: string
-  reviewStatus?: string
-  publicationStatus?: string
-  reviewMode?: string
+  status?: VerificationStatus
+  verification?: ChartVerification
   figureId?: string
   collectionId?: string
   childChartIds?: string[]
@@ -124,20 +112,8 @@ export type GeneratedChartReference = {
   generationContext?: Record<string, unknown>
   generationContextDigest?: string
   contextStatus?: string
-  candidateAttempt?: number
-  reviewAttempts?: number
-  lineageAttempt?: number
-  parentCandidateId?: string
-  parentAttempt?: number
   panelIds?: string[]
   sourceAttachmentIds?: string[]
-  repairKind?: string
-  review?: {
-    decision?: string
-    confidence?: number
-    issues?: ReviewIssue[]
-    checks?: Record<string, string>
-  }
   reason?: string
   imageUrl?: string
   downloadUrl?: string

@@ -73,17 +73,6 @@ def measurement_contract_properties() -> dict[str, Any]:
         "measurement_target": dict(MEASUREMENT_TARGET_SCHEMA),
         "observation_scope": dict(OBSERVATION_SCOPE_SCHEMA),
         "generation_context": generation_context_schema(),
-        "candidate_id": {
-            "type": "string",
-            "maxLength": 160,
-            "description": "可选当前生成 candidate 身份，用于关联 evidence，不改变测量语义。",
-        },
-        "candidate_attempt": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 8,
-            "description": "可选当前 candidate attempt 序号；只用于 lineage 关联，不触发自动重测。",
-        },
     }
 
 

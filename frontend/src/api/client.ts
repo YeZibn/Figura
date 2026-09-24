@@ -1,7 +1,7 @@
 import type { AgentRunEvent, Attachment, EvaluationCaseData, EvaluationDetail, EvaluationHistory, EvaluationHistoryDetails, EvaluationSummary, GatewayHealth, Provider, RunHandle, RunHistory, Session, SessionData } from '../types/protocol'
 
 export type RunStartOptions = { idempotencyKey?: string; retryOf?: string }
-export type RunResumeOptions = { idempotencyKey: string; checkpointId?: string }
+export type RunResumeOptions = { idempotencyKey: string; cursorId?: string }
 
 export type RunSubscription = { close(): void }
 

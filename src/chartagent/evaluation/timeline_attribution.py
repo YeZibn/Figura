@@ -9,7 +9,6 @@ from .timeline_evidence import (
     _contains_reuse,
     _event_is_failure,
     _event_is_success,
-    _event_needs_repair,
     _find_scope,
     _kind,
     _mapping_candidates,
@@ -54,7 +53,6 @@ def _apply_stage_statuses(
             if _event_is_failure(kind, payload)
         ][:64]
         has_success = any(_event_is_success(kind, payload) for _, kind, payload in bucket)
-        needs_repair = any(_event_needs_repair(kind, payload) for _, kind, payload in bucket)
         pending_only = all(
             kind in {
                 "tool_call",
@@ -64,8 +62,6 @@ def _apply_stage_statuses(
         )
         if has_failure:
             stage.status = "failed"
-        elif needs_repair:
-            stage.status = "needs_repair"
         elif has_success:
             stage.status = "completed"
         elif pending_only:
@@ -159,38 +155,6 @@ def _detect_unscoped_measurement(
                     "message": "多 panel 样本的测量没有携带 panel 作用域",
                 }
             )
-
-
-def _detect_review_without_repair(
-    events: list[Mapping[str, Any]],
-    anomalies: list[dict[str, Any]],
-) -> None:
-    review_failures = [
-        (_sequence(event), _kind(event))
-        for event in events
-        if _kind(event) in {"generated_chart_rejected", "review_failed"}
-        and _event_is_failure(_kind(event), _payload(event))
-    ]
-    repairs = [
-        event
-        for event in events
-        if _kind(event) == "review_repair_required"
-        or (
-            _kind(event) == "tool_call"
-            and _sequence(event) > review_failures[0][0]
-        )
-    ] if review_failures else []
-    if review_failures and not repairs:
-        sequence, kind = review_failures[0]
-        anomalies.append(
-            {
-                "code": "review_failed_without_repair",
-                "category": "repair",
-                "stage": "repair",
-                "sequence": sequence,
-                "message": f"审核事件 {kind} 失败后没有观察到修复动作",
-            }
-        )
 
 
 def _detect_assembly_omission(
@@ -288,8 +252,8 @@ def _category_for_stage(stage_name: str) -> str:
         return "measurement"
     if stage_name == "model":
         return "transport_runtime"
-    if stage_name in {"quality_review", "repair"}:
-        return "repair"
+    if stage_name == "verification":
+        return "verification"
     if stage_name in {"assembly", "render"}:
         return "assembly_render"
     return "unknown"
@@ -300,7 +264,7 @@ def _failure_priority(category: Any) -> int:
         "decomposition": 0,
         "panel_routing": 1,
         "measurement": 2,
-        "repair": 3,
+        "verification": 3,
         "assembly_render": 4,
         "transport_runtime": 5,
         "unknown": 6,

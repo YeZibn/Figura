@@ -12,7 +12,7 @@ import numpy as np
 from PIL import Image
 
 from ....panels import PanelHandoff, handoff_from_panel, normalize_bbox, stable_panel_id
-from ...core.definition import Tool
+from ...core.definition import Tool, ToolReplayEffect
 from ...core.result import GeneratedImage, ToolResult
 from .foundation import image_size
 from .overlays import render_dashboard_overlay
@@ -873,6 +873,7 @@ DECOMPOSE_CHART_IMAGE = Tool(
     },
     fn=decompose_chart_image,
     group="chart-observation",
+    replay_effect=ToolReplayEffect.IDEMPOTENT_LOCAL_WRITE,
 )
 
 

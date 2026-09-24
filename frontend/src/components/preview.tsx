@@ -118,12 +118,16 @@ export function GeneratedChartView({ artifact, loader, onPreview }: { artifact: 
   const [downloadError, setDownloadError] = useState('')
   const [imageFailed, setImageFailed] = useState(false)
   useEffect(() => setImageFailed(false), [artifact.imageUrl, artifact.previewResource])
-  const publicationStatus = artifact.publicationStatus || ''
-  const reviewStatus = artifact.reviewStatus || ''
-  const candidateStatus = artifact.candidateStatus || ''
-  const reviewMode = artifact.reviewMode || ''
-  const status = publicationStatus === 'published' ? 'available' : publicationStatus === 'published_with_warning' ? 'warning' : publicationStatus === 'rejected' || candidateStatus === 'review_failed' || candidateStatus === 'timed_out' || candidateStatus === 'retry_exhausted' ? 'failed' : reviewStatus === 'pending' || candidateStatus === 'review_pending' || artifact.status === 'pending' ? 'pending' : artifact.status === 'unavailable' || (!artifact.imageUrl && !artifact.previewResource) || imageFailed ? 'unavailable' : artifact.status === 'warning' ? 'warning' : 'available'
-  const statusLabel = status === 'available' ? '已发布' : status === 'warning' ? '已发布·有警告' : status === 'pending' ? (reviewMode === 'vlm' ? 'VLM 审核中' : '待审核') : status === 'failed' ? (candidateStatus === 'retry_exhausted' ? '未发布·修复次数已耗尽' : '未发布·审核未通过') : '暂不可用'
+  const verificationStatus = artifact.verification?.status || artifact.status
+  const hasPreview = Boolean(artifact.imageUrl || artifact.previewResource)
+  const status = artifact.artifactId
+    ? verificationStatus === 'pass_with_warning' ? 'warning' : 'available'
+    : verificationStatus === 'fail' ? 'failed'
+      : verificationStatus === 'unavailable' || !hasPreview || imageFailed ? 'unavailable' : 'pending'
+  const statusLabel = status === 'available' ? '已发布'
+    : status === 'warning' ? '已发布·有警告'
+      : status === 'pending' ? '仅预览·发布未完成'
+        : status === 'failed' ? '验证未通过·仅可预览' : '暂不可用'
   const metadata = [
     artifact.chartType ? chartTypeLabel(artifact.chartType) : '',
     artifact.figureId ? `复合图 ${artifact.figureId}` : '',
@@ -137,13 +141,13 @@ export function GeneratedChartView({ artifact, loader, onPreview }: { artifact: 
     artifact.coverage?.omitted_series?.length ? `遗漏系列：${artifact.coverage.omitted_series.join('、')}` : '',
   ].filter(Boolean).join(' · ') : ''
   const download = async () => {
-    if ((!artifact.downloadUrl && !artifact.previewResource) || downloading) return
+    if ((!artifact.downloadUrl && !artifact.artifactId) || downloading) return
     setDownloading(true)
     setDownloadError('')
     try {
       let objectUrl = artifact.downloadUrl || ''
       let temporary = false
-      if (loader && artifact.previewResource) {
+      if (loader && artifact.artifactId && artifact.previewResource) {
         const result = await loader(artifact.previewResource)
         objectUrl = result.url
         temporary = result.temporary
@@ -169,7 +173,7 @@ export function GeneratedChartView({ artifact, loader, onPreview }: { artifact: 
   }
   return <article className={'generated-chart ' + status}>
     <div className="generated-chart-heading"><div className="observation-label"><BarChart3 size={13} /><strong>生成图表</strong><span>{statusLabel}</span></div>{(artifact.downloadUrl || artifact.previewResource) && (status === 'available' || status === 'warning') && <button className="chart-download" type="button" onClick={() => void download()} disabled={downloading} title="下载生成图表"><Download size={13} />{downloading ? '正在下载' : '下载 PNG'}</button>}</div>
-    {(artifact.imageUrl || artifact.previewResource) && (status === 'available' || status === 'warning' || status === 'pending' || status === 'failed') ? <PreviewImage loader={loader} onPreview={onPreview} sourceLabel="生成图表" statusLabel={statusLabel} title={artifact.title || artifact.caption || '生成图表'} resource={artifact.previewResource} fallbackUrl={artifact.previewResource ? undefined : artifact.imageUrl} alt={artifact.title || artifact.caption || '生成图表'} onError={() => setImageFailed(true)} /> : <div className="observation-placeholder">{status === 'failed' ? '图表审核未通过，未产生可下载文件' : '图表文件已过期或暂不可用'}</div>}
-    <div className="generated-chart-copy"><strong>{artifact.title || artifact.caption || '未命名图表'}</strong>{metadata && <small>{metadata}</small>}{figureDetail && <small>{figureDetail}</small>}{artifact.reason && <small className="generated-chart-reason">{artifact.reason}</small>}{artifact.review?.issues?.slice(0, 3).map((issue, index) => issue.message ? <small className="generated-chart-reason" key={`${issue.code || 'issue'}-${index}`}>{issue.message}</small> : null)}{downloadError && <small className="generated-chart-reason">{downloadError}</small>}</div>
+    {(artifact.imageUrl || artifact.previewResource) && (status === 'available' || status === 'warning' || status === 'pending' || status === 'failed') ? <PreviewImage loader={loader} onPreview={onPreview} sourceLabel="生成图表" statusLabel={statusLabel} title={artifact.title || artifact.caption || '生成图表'} resource={artifact.previewResource} fallbackUrl={artifact.previewResource ? undefined : artifact.imageUrl} alt={artifact.title || artifact.caption || '生成图表'} onError={() => setImageFailed(true)} /> : <div className="observation-placeholder">{status === 'failed' ? '图表验证未通过，文件仅供预览' : '图表文件已过期或暂不可用'}</div>}
+    <div className="generated-chart-copy"><strong>{artifact.title || artifact.caption || '未命名图表'}</strong>{metadata && <small>{metadata}</small>}{figureDetail && <small>{figureDetail}</small>}{artifact.reason && <small className="generated-chart-reason">{artifact.reason}</small>}{artifact.verification?.issues?.slice(0, 3).map((issue, index) => issue.message ? <small className="generated-chart-reason" key={`${issue.code || 'issue'}-${index}`}>{issue.message}</small> : null)}{downloadError && <small className="generated-chart-reason">{downloadError}</small>}</div>
   </article>
 }

@@ -25,7 +25,8 @@ def test_static_prompt_is_packaged_chinese_and_does_not_contain_run_values():
 
     assert "Figura 主 Agent" in prompt
     assert "assemble_spec" in prompt
-    assert "publicationStatus" in prompt
+    assert "verification.status" in prompt
+    assert "publicationStatus" not in prompt
     assert "run_123" not in prompt
     assert "att_test" not in prompt
     assert "panel_test" not in prompt
@@ -99,14 +100,22 @@ def test_four_layers_are_explicit_and_dynamic_values_do_not_enter_static_layer()
                 "selection_basis": "agent_resolved",
                 "goal_summary": "转换当前 panel",
             },
+            "decision_context": {
+                "unit_id": "verification:ver_result_12345678",
+                "unit_type": "verification",
+                "phase": "verify",
+                "status": "fail",
+                "scope": {"panel_id": "panel-1", "attachment_ids": ["att-1"]},
+                "verification": {
+                    "verificationRef": "ver_result_12345678",
+                    "stagedRef": "stg_preview_12345678",
+                    "status": "fail",
+                    "checks": {"data_mapping": "fail"},
+                    "issues": [{"code": "mapping_mismatch", "location": "dataset", "severity": "error", "message": "数据映射不一致"}],
+                },
+            },
         },
         panel_inventory=[{"panel_id": "panel-1", "status": "accepted"}],
-        review_gate={
-            "state": "repair_required",
-            "blocking": True,
-            "repairKind": "evidence_needed",
-            "repairPhase": "evidence",
-        },
     )
 
     assert tuple(context["metadata"]["layers"]) == PROMPT_LAYERS
@@ -122,8 +131,9 @@ def test_four_layers_are_explicit_and_dynamic_values_do_not_enter_static_layer()
     assert "focus_suggestion" not in context["runtime"]
     assert "measurement_decision_status" not in context["artifacts"]
     assert '"mode":"transform"' in context["runtime"]
-    assert '"repairKind":"evidence_needed"' in context["runtime"]
-    assert '"repairPhase":"evidence"' in context["runtime"]
+    assert '"verification_ref":"ver_result_12345678"' in context["runtime"]
+    assert '"mapping_mismatch"' in context["runtime"]
+    assert "repairKind" not in context["runtime"]
     assert "inspect_fixture" in context["tools"]
     assert "当前没有可调用工具" in assemble_prompt_context()["tools"]
     assert "[]" in assemble_prompt_context()["artifacts"]
@@ -153,42 +163,35 @@ def test_panel_inventory_preserves_stable_scope_and_status():
     ]
 
 
-def test_decision_context_exposes_review_facts_without_action_whitelist():
-    decision = build_decision_context(
-        run_id="run-review",
-        execution_gate={
-            "state": "repair_required",
-            "blocking": True,
-            "reviewId": "review-1",
-            "subjectId": "candidate-1",
-            "repairKind": "evidence_needed",
-            "repairPhase": "evidence",
-            "nextAction": "补充同一 panel 的 evidence",
-        },
-        selected_panel={"panel_id": "panel-left"},
-        generation_context={
-            "version": "context-v1",
-            "source_scope": {"attachment_id": "att-1", "panel_ids": ["panel-left"]},
-            "goal_summary": "不要把大图当成当前 panel",
-        },
-        retry_budget=4,
-    )
+def test_decision_context_exposes_verification_facts_without_repair_state():
     runtime = build_runtime_context(
         {
-            "run_id": "run-review",
-            "decision_context": decision,
-        },
-        review_gate={"state": "repair_required", "blocking": True},
+            "run_id": "run-verification",
+            "decision_context": {
+                "unit_id": "verification:ver_result_12345678",
+                "unit_type": "verification",
+                "phase": "verify",
+                "status": "fail",
+                "budget_remaining": 3,
+                "scope": {"panel_id": "panel-left", "attachment_ids": ["att-1"]},
+                "verification": {
+                    "verificationRef": "ver_result_12345678",
+                    "stagedRef": "stg_preview_12345678",
+                    "status": "fail",
+                    "checks": {"data_mapping": "fail"},
+                    "issues": [{"code": "mapping_mismatch", "location": "dataset", "severity": "error", "message": "数据映射不一致"}],
+                },
+            },
+        }
     )
 
-    assert '"unit_id":"review:review-1"' in runtime
-    assert '"review_id":"review-1"' in runtime
-    assert '"repair_kind":"evidence_needed"' in runtime
-    assert '"repair_hint":"补充同一 panel 的 evidence"' in runtime
-    assert '"current_candidate_not_publishable"' in runtime
+    assert '"unit_id":"verification:ver_result_12345678"' in runtime
+    assert '"verification_ref":"ver_result_12345678"' in runtime
+    assert '"mapping_mismatch"' in runtime
+    assert '"budget_remaining":3' in runtime
     assert '"allowed_actions"' not in runtime
     assert '"blocked_actions"' not in runtime
-    assert '不要把大图当成当前 panel' in runtime
+    assert '"repair_kind"' not in runtime
     assert '/Users/' not in runtime
 
 

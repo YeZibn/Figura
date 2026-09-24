@@ -2,8 +2,7 @@
 
 ## Purpose
 
-Provide a local, browser-compatible gateway that lets the ChartAgent desktop client work with durable named Agent sessions and completed text runs without exposing Python internals or SQLite directly.
-
+提供仅监听本机的 HTTP Gateway，支持持久会话、异步 Run、授权附件访问、事件重连与显式子 Run 恢复，而不暴露 Python 内部或 SQLite。
 ## Requirements
 
 ### Requirement: Gateway is available only as a local HTTP service
@@ -376,80 +375,30 @@ paths or raw image bytes in JSON.
 - **THEN** its generated chart artifacts and metadata are no longer readable
 - **AND** another session's generated chart artifacts remain available
 
-### Requirement: Gateway preserves generated-chart review lifecycle integrations
+### Requirement: Gateway exposes staged preview and verified artifact separately
 
-A Gateway-managed run that requires generated-chart review SHALL preserve the
-operations needed to durably associate a candidate image with the exact
-ChartSpec it represents, resolve those review inputs during review or recovery,
-and propagate execution-gate updates to the owning run. Required review
-integrations MUST NOT be silently omitted. A candidate SHALL remain unpublished
-until its review inputs are persisted and the required review permits
-publication. Missing runtime integration SHALL be distinguishable from an
-actual candidate-storage failure, and genuine persistence failures SHALL
-remain fail-closed.
+Gateway SHALL 按 session、Run 和不透明引用授权提供暂存图预览及已发布图表资源。暂存图 SHALL 不可通过正式 artifact 下载接口获取；仅匹配的已提交验证结果可以发布正式 artifact。Gateway SHALL 返回有界、脱敏的图像元数据与诊断，并在持久化集成缺失时失败关闭。
 
-#### Scenario: Default Gateway runtime prepares a reviewable candidate
+#### Scenario: Failed staged image can be inspected
+- **WHEN** 授权用户请求一个验证失败但仍在保留期内的暂存图
+- **THEN** Gateway 可返回该预览和有界失败原因
+- **AND** 正式 artifact 接口不返回它
 
-- **WHEN** a Gateway-managed run renders a candidate whose policy requires review
-- **THEN** the candidate image and the exact ChartSpec represented by it are durably associated with that candidate before review consumes them
-- **AND** review gate updates are propagated to the owning run
-- **AND** the candidate is not published until review permits publication
+#### Scenario: Missing persistence fails closed
+- **WHEN** 图像或准确 ChartSpec 无法持久暂存
+- **THEN** Gateway 返回明确存储错误
+- **AND** 不调用发布或把结果显示成已验证
 
-#### Scenario: Review inputs remain resolvable during recovery
+### Requirement: Gateway exposes derived resume eligibility and explicit child runs
 
-- **WHEN** a Gateway-managed review resumes or restores a candidate
-- **THEN** the runtime can resolve the same stored image and ChartSpec using bounded run, candidate, review, and digest references
-- **AND** the restored review state continues to control the run's publication gate
+Gateway SHALL 由终态、有效 checkpoint、授权引用和下一动作重放契约推导可恢复性及有界原因，不持久维护独立 RecoveryStatus 状态机。现有显式 resume 接口 SHALL 保留 idempotency key、session 授权、父子 Run 归因与父 Run 终态；仅断线重连仍按原 Run 的序号读取事件。
 
-#### Scenario: Missing integration is not reported as a storage write failure
+#### Scenario: Valid resume starts a child
+- **WHEN** 用户显式恢复一个具有有效安全游标的终态 Run
+- **THEN** Gateway 创建或幂等返回具有 resume 归因的新 Run
+- **AND** 父 Run 状态和历史不变
 
-- **WHEN** a Gateway runtime cannot provide a required candidate-review or gate integration
-- **THEN** the run reports a bounded runtime-integration failure and does not misclassify the condition as `candidate_storage_failure`
-- **AND** no candidate is published
-
-#### Scenario: Actual candidate persistence failure remains fail-closed
-
-- **WHEN** the configured candidate persistence operation is invoked but durable storage fails or rejects the candidate
-- **THEN** the review reports a bounded candidate-storage failure
-- **AND** the candidate remains unpublished
-
-### Requirement: Gateway exposes safe run recovery and explicit resume
-
-The Gateway SHALL expose bounded recovery metadata for a run, including
-checkpoint availability, recovery phase, and a safe blocked reason when
-applicable. It SHALL provide an authorized resume operation at
-`/api/v1/sessions/{sessionId}/runs/{runId}/resume`. A valid resume request SHALL
-use a new idempotency key, create a new child run from a recoverable
-checkpoint, and preserve the parent terminal outcome. The Gateway SHALL reject
-unavailable, expired, cross-session, or uncertain recovery with stable safe
-errors.
-
-#### Scenario: Resume returns a child run
-
-- **WHEN** an authorized client resumes an interrupted run with an available
-  checkpoint
-- **THEN** the Gateway returns a new running run identity with a `resume`
-  parent relationship
-- **AND** it does not change the parent run's terminal summary or events
-
-#### Scenario: Resume request is idempotent
-
-- **WHEN** a client repeats the same resume request with the same idempotency
-  key and parent checkpoint
-- **THEN** the Gateway returns the original child run and current state
-- **AND** it does not enqueue a second Agent continuation
-
-#### Scenario: Recovery is blocked safely
-
-- **WHEN** the parent has no valid checkpoint, an expired reference, or an
-  uncertain in-flight operation without a replay-safe contract
-- **THEN** the Gateway returns a bounded recovery-unavailable or
-  recovery-blocked error with a stable reason
-- **AND** it does not start a new Agent execution
-
-#### Scenario: Resume authorization and lineage are enforced
-
-- **WHEN** a client resumes a run from another session or submits a malformed
-  checkpoint or idempotency identity
-- **THEN** the Gateway rejects the request before execution
-- **AND** it does not expose the other session's checkpoint or run data
+#### Scenario: Invalid reference rejects resume
+- **WHEN** checkpoint 引用已过期或属于其他 session
+- **THEN** Gateway 返回稳定、安全的不可恢复原因
+- **AND** 不启动 Agent 工作

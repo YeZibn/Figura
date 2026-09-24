@@ -1,6 +1,6 @@
 """Canonical low-level tool primitives."""
 
-from .definition import Tool, canonical_tool_definition, normalise_parameters
+from .definition import Tool, ToolReplayEffect, canonical_tool_definition, normalise_parameters
 from .presentation import (
     DEFAULT_TOOL_CATALOG,
     ToolCatalog,
@@ -22,6 +22,7 @@ from .result import (
 
 __all__ = [
     "Tool",
+    "ToolReplayEffect",
     "canonical_tool_definition",
     "normalise_parameters",
     "ToolRegistry",

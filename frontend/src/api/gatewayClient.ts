@@ -141,7 +141,7 @@ export const gatewayClient: ChartAgentClient = {
   async resumeRun(sessionId, runId, options: RunResumeOptions) {
     const payload = await request<GatewayRunResponse>(`/sessions/${encodeURIComponent(sessionId)}/runs/${encodeURIComponent(runId)}/resume`, {
       method: 'POST',
-      body: JSON.stringify(options.checkpointId ? { checkpointId: options.checkpointId } : {}),
+      body: JSON.stringify(options.cursorId ? { cursorId: options.cursorId } : {}),
       headers: { 'Idempotency-Key': options.idempotencyKey },
     })
     return mapRun(payload)

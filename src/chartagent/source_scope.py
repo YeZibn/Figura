@@ -1,8 +1,8 @@
 """Resolve generation context into an authorized source crop.
 
-The resolver is deliberately independent from review and measurement.  Those
-consumers need the same attachment/panel authorization and must not each
-invent their own fallback to the full dashboard.
+The resolver is deliberately independent from chart verification and
+measurement. Those consumers need the same attachment/panel authorization and
+must not each invent their own fallback to the full dashboard.
 """
 
 from __future__ import annotations

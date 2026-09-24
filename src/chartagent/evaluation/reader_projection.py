@@ -604,7 +604,7 @@ class EvaluationReader:
             for row in self._artifact_rows(root, session_id, run_id):
                 kind = {
                     "visual_observation": "observation",
-                    "generated_candidate": "candidate",
+                    "staged_chart": "staged",
                     "generated_chart": "artifact",
                 }.get(row.artifact_kind, "evidence")
                 label = row.title or row.caption or row.observation_id
@@ -724,8 +724,7 @@ class EvaluationReader:
             run = connection.execute(
                 "SELECT run_id, session_id, status, created_at, updated_at, terminal_code, terminal_message, "
                 "answer_source, history_warning, provider, model, cancel_requested, retry_of, parent_run_id, "
-                "root_run_id, continuation_kind, recovery_status, recovery_phase, recovery_next_action, "
-                "recovery_reason, recovery_version, recovery_updated_at, "
+                "root_run_id, continuation_kind, "
                 "(SELECT COUNT(*) FROM gateway_run_events e WHERE e.run_id = r.run_id) AS event_count "
                 "FROM gateway_runs r WHERE run_id = ? AND session_id = ?",
                 (run_id, session_id),
@@ -775,8 +774,7 @@ class EvaluationReader:
             run = connection.execute(
                 "SELECT run_id, session_id, status, created_at, updated_at, terminal_code, terminal_message, "
                 "answer_source, history_warning, provider, model, cancel_requested, retry_of, parent_run_id, "
-                "root_run_id, continuation_kind, recovery_status, recovery_phase, recovery_next_action, "
-                "recovery_reason, recovery_version, recovery_updated_at, "
+                "root_run_id, continuation_kind, "
                 "(SELECT COUNT(*) FROM gateway_run_events e WHERE e.run_id = r.run_id) AS event_count "
                 "FROM gateway_runs r WHERE run_id = ? AND session_id = ?",
                 (run_id, session_id),
@@ -784,7 +782,7 @@ class EvaluationReader:
             if run is None:
                 raise EvaluationReaderError("evaluation_history_unavailable", 404, "评测运行历史不存在")
 
-            event_count = max(0, int(run[22] or 0))
+            event_count = max(0, int(run[16] or 0))
             first_row = connection.execute(
                 "SELECT MIN(sequence) FROM gateway_run_events WHERE run_id = ?", (run_id,)
             ).fetchone()
@@ -838,7 +836,7 @@ class EvaluationReader:
             if entry.get("kind") in {"tool_call", "tool_result"} and entry.get("callId")
         }
         # Gateway events are authoritative for tool lifecycle and correlation.
-        # Records remain useful for conversation/repair context, but the same
+        # Records remain useful for conversation context, but the same
         # tool message must not be rendered a second time.
         record_entries = [
             entry for entry in record_entries
@@ -1003,7 +1001,7 @@ class EvaluationReader:
             text = payload.get("text")
             entry["content"] = cls._safe_text(text, MAX_TEXT_CHARS) or ""
             truncated |= isinstance(text, str) and len(text) > MAX_TEXT_CHARS
-        if kind in {"record", "repair"}:
+        if kind == "record":
             projected, detail_truncated, detail_redacted = cls._safe_projection(payload)
             entry["details"] = projected
             truncated |= detail_truncated
@@ -1073,19 +1071,24 @@ class EvaluationReader:
                 truncated |= isinstance(result, Mapping) and bool(result.get("truncated"))
         if kind == "visual_observation":
             entry["observations"] = self._safe_observations(root, evaluation_id, case_id, payload.get("observations"))
-        if kind == "generated_chart":
-            entry["artifacts"] = self._safe_generated_artifacts(evaluation_id, case_id, payload.get("artifacts"))
         if detail_resource is not None:
             entry["detailResource"] = detail_resource
         elif persisted_truncated:
             entry["detailUnavailable"] = True
             entry["detailUnavailableReason"] = "detail_resource_unavailable"
-        if kind in {"assembly_validation_failure", "review_started", "review_completed", "review_repair_required", "review_failed", "generated_chart_published", "generated_chart_rejected"}:
+        if kind in {"assembly_validation_failure", "chart_staged", "chart_verification_result", "chart_promotion_result"}:
             projected, value_truncated, value_redacted = self._safe_projection(payload)
             entry["details"] = projected
             truncated |= value_truncated
             projection_truncated |= value_truncated
             redacted |= value_redacted
+        if kind == "chart_staged":
+            staged_ref = self._bounded_text(payload.get("staged_ref"), 160)
+            if staged_ref:
+                raw_case = self._case_from_root(root, case_id)
+                staged_resource_id = self._resource_id(evaluation_id, case_id, "staged", staged_ref)
+                if any(item.resource_id == staged_resource_id for item in self._resources(root, evaluation_id, case_id, raw_case)):
+                    safe["previewResource"] = {"resourceId": staged_resource_id, "caseId": case_id, "kind": "staged"}
         if truncated:
             entry["truncated"] = True
         if redacted:
@@ -1195,14 +1198,13 @@ class EvaluationReader:
             key = self._bounded_text(raw_key, 96) or "field"
             if key in {"detail_resource", "detailResource"}:
                 continue
+            if key == "artifacts":
+                continue
             if self._is_sensitive_detail_key(key):
                 redacted = True
                 continue
             if key == "observations":
                 safe[key] = self._safe_observations(root, evaluation_id, case_id, value)
-                continue
-            if key == "artifacts":
-                safe[key] = self._safe_generated_artifacts(evaluation_id, case_id, value)
                 continue
             projected, value_truncated, value_redacted = self._safe_projection(value)
             safe[key] = projected
@@ -1216,8 +1218,15 @@ class EvaluationReader:
             safe["detailUnavailableReason"] = "detail_resource_unavailable"
         if row[2] == "visual_observation":
             safe["observations"] = self._safe_observations(root, evaluation_id, case_id, payload.get("observations"))
-        if row[2] == "generated_chart":
-            safe["artifacts"] = self._safe_generated_artifacts(evaluation_id, case_id, payload.get("artifacts"))
+        if row[2] in {"chart_staged", "chart_promotion_result"}:
+            reference_key = "staged_ref" if row[2] == "chart_staged" else "artifact_id"
+            reference = self._bounded_text(payload.get(reference_key), 160)
+            resource_kind = "staged" if row[2] == "chart_staged" else "artifact"
+            if reference:
+                raw_case = self._case_from_root(root, case_id)
+                resource_id = self._resource_id(evaluation_id, case_id, resource_kind, reference)
+                if any(item.resource_id == resource_id for item in self._resources(root, evaluation_id, case_id, raw_case)):
+                    safe["previewResource"] = {"resourceId": resource_id, "caseId": case_id, "kind": resource_kind}
         if truncated:
             safe["truncated"] = True
         if redacted:
@@ -1260,35 +1269,6 @@ class EvaluationReader:
             if match is not None:
                 observation["previewResource"] = match.to_dict()
             result.append(observation)
-        return result
-
-    def _safe_generated_artifacts(self, evaluation_id: str, case_id: str, value: Any) -> list[dict[str, Any]]:
-        if not isinstance(value, list):
-            return []
-        result: list[dict[str, Any]] = []
-        for item in value[:32]:
-            if not isinstance(item, Mapping):
-                continue
-            artifact: dict[str, Any] = {
-                "artifactKind": "generated_chart",
-                "artifactId": self._bounded_id(item.get("artifactId") or item.get("artifact_id")),
-                "candidateId": self._bounded_id(item.get("candidateId") or item.get("candidate_id")),
-                "mediaType": self._bounded_text(item.get("mediaType") or item.get("media_type"), 64),
-                "caption": self._safe_text(item.get("caption"), 500) or "生成图表",
-                "title": self._safe_text(item.get("title"), 240) or "生成图表",
-                "chartType": self._bounded_text(item.get("chartType") or item.get("chart_type"), 64),
-                "status": self._bounded_text(item.get("status"), 32) or "unavailable",
-                "reason": self._safe_text(item.get("reason"), 240),
-            }
-            artifact = {key: value for key, value in artifact.items() if value not in (None, "")}
-            resource_key = artifact.get("artifactId") or artifact.get("candidateId")
-            if isinstance(resource_key, str):
-                artifact["previewResource"] = {
-                    "resourceId": self._resource_id(evaluation_id, case_id, "artifact", resource_key),
-                    "caseId": case_id,
-                    "kind": "artifact",
-                }
-            result.append(artifact)
         return result
 
     def _case_from_root(self, root: Path, case_id: str) -> Mapping[str, Any]:
@@ -1438,7 +1418,7 @@ class EvaluationReader:
             "status": cls._bounded_text(row[2], 32) or "unknown",
             "createdAt": cls._bounded_text(row[3], 64) or "",
             "updatedAt": cls._bounded_text(row[4], 64) or "",
-            "eventCount": max(0, int(row[22] or 0)),
+            "eventCount": max(0, int(row[16] or 0)),
             "terminalCode": cls._bounded_text(row[5], 64),
             "terminalMessage": cls._safe_text(row[6], 240),
             "answer": cls._safe_text(row[7], 12000),
@@ -1450,15 +1430,6 @@ class EvaluationReader:
             "parentRunId": cls._bounded_id(row[13]),
             "rootRunId": cls._bounded_id(row[14]) or cls._bounded_id(row[0]),
             "continuationKind": cls._bounded_text(row[15], 32),
-        }
-        recovery_status = cls._bounded_text(row[16], 32) or "unavailable"
-        result["recovery"] = {
-            "status": recovery_status,
-            **({"phase": cls._bounded_text(row[17], 32)} if row[17] else {}),
-            **({"nextAction": cls._safe_text(row[18], 120)} if row[18] else {}),
-            **({"blockedReason": cls._safe_text(row[19], 240)} if row[19] else {}),
-            **({"checkpointVersion": cls._bounded_int(row[20])} if row[20] is not None else {}),
-            **({"updatedAt": cls._bounded_text(row[21], 64)} if row[21] else {}),
         }
         return {key: value for key, value in result.items() if value is not None}
 

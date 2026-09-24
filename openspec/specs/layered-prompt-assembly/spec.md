@@ -70,23 +70,6 @@
 - **THEN** 过程产物层保留 measurement observation 和实际 assembly refs
 - **AND** 不单独记录 selected、discarded 或 semantic-decision 生命周期
 
-
-### Requirement: Run and Turn state is dynamic control context
-
-Run/Turn 动态状态层 SHALL 表示当前用户请求、active source、selected panel、当前 measurement session/current attempt、最近工具动作、可选下一动作、生成图 review gate、恢复状态、资源预算和中断状态等代码拥有的事实。普通 measurement warning SHALL 作为工具结果中的诊断和可选局部线索，不得自动将主链路置于独占 reviewing 或待决状态。
-
-#### Scenario: Scoped observation exposes candidate facts and model agency
-
-- **WHEN** 当前 run 已在一个 panel 中完成局部测量
-- **THEN** 动态状态提供当前 panel、attempt、实际 scope、候选 refs、质量信息和可用工具
-- **AND** Agent 可以在 assembly 中引用证据、忽略未用候选、显式再次测量或直接使用其他证据，无需提交 decision object
-
-#### Scenario: Generated review remains a blocking state
-
-- **WHEN** 生成图候选尚未通过审核
-- **THEN** 动态状态明确禁止发布以及可执行的修复动作
-- **AND** 该生成审核状态与非阻塞的测量诊断分开表达
-
 ### Requirement: Layer assembly preserves authority and untrusted evidence boundaries
 
 装配后的上下文 SHALL 保持以下优先级：代码拥有的授权、工具 Schema、生命周期和发布状态高于模型文本；静态职责高于过程产物中的自然语言；结构化工具结果和图片属于证据而非指令。用户输入、OCR 文字、图表图片中的文字和工具返回的自由文本不得修改 Agent 的硬性安全、范围或发布规则。
@@ -97,11 +80,11 @@ Run/Turn 动态状态层 SHALL 表示当前用户请求、active source、select
 - **THEN** Agent 将其作为待分析证据而不是系统指令
 - **AND** 授权、范围校验和发布门禁仍由代码状态决定
 
-#### Scenario: Model claim cannot override publication state
+#### Scenario: Model claim cannot override committed publication facts
 
-- **WHEN** 模型文本声称候选已通过审核但代码返回 publication status 为 rejected
-- **THEN** Agent 继续将候选视为未发布
-- **AND** 最终回答不得把该候选描述为 verified 或 published
+- **WHEN** 模型文本声称图表已发布但没有对应的已提交 artifact 引用
+- **THEN** 最终回答 guard 删除或更正该发布声明
+- **AND** Agent 不得把暂存预览描述为正式 artifact
 
 ### Requirement: Prompt bundle identity is observable
 
@@ -135,56 +118,38 @@ linked generation context SHALL 作为结构化动态上下文在适当层注入
 - **THEN** Agent可以采用已有证据、忽略候选、局部补测、改用其他证据或停止
 - **AND** 系统不会自动调用工具，也不要求先写独立 decision 对象
 
-### Requirement: Review prompt is a separate tool-free contract
+### Requirement: Runtime prompt exposes committed facts without shadow lifecycle state
 
-审核提示词 SHALL 只接收候选、source crop、ChartSpec、generation context 和 bounded
-review history；不得暴露可调用工具，也不得要求审核 VLM 自行重新测量。prompt SHALL 要求
-严格 JSON decision，并声明 repair kind 与 scope/target。
+Run/Turn 状态层 SHALL 提供当前请求、授权来源、selected panel、measurement evidence、最近工具动作、可选下一动作、已提交的 staged chart、verification 与正式 artifact 事实、派生恢复资格、预算和中断状态。它 MUST NOT 提供平行的领域生命周期状态、独立执行门禁、固定修复阶段或完整上下文快照。measurement warning 和验证 repair hint SHALL 是可选诊断，不得自动调度工具。
 
-#### Scenario: Reviewer returns machine-readable repair
+#### Scenario: Unfinished verification is described from committed facts
 
-- **WHEN** reviewer 认为一个值需要补充证据
-- **THEN** 返回可解析的 decision、issue、repair_kind=evidence_needed 和 bounded target
-- **AND** 不返回要求 reviewer 自己调用工具的指令
+- **WHEN** Run 有已暂存但尚未验证的图像
+- **THEN** 主 Agent 上下文显示其暂存身份及当前验证事实
+- **AND** 不声称图像已通过或已发布，也不维护额外 gate 状态
 
-### Requirement: Main Agent receives a compact current decision context
+#### Scenario: Measurement warning remains model selected
 
-每轮主 Agent prompt SHALL 在现有四层体系中提供有界的当前状态摘要，至少表达当前 scope、measurement session/current attempt、候选 evidence refs、issues、publication status、恢复状态和剩余预算。摘要 SHALL 引用代码拥有的事实，不得包含普通业务动作的 allowed/blocked action contract；仅不可绕过的授权、结构和发布约束可以标记为硬限制。
+- **WHEN** measurement observation 带有 warning 或补测建议
+- **THEN** prompt 将其作为有范围的证据和可选诊断
+- **AND** 在 Agent 选择前系统不会自动重复调用工具
 
-#### Scenario: Scope and result are presented as one measurement observation
+### Requirement: Semantic verification prompt keeps a bounded tool-free contract
 
-- **WHEN** 当前 attempt 包含一次有范围的测量请求
-- **THEN** prompt 同时呈现请求范围、实际应用范围和该调用的 observation 结果
-- **AND** 不要求模型继续一个分离的 focus/observation transition 或提交 abandonment 状态
+语义验证提示 SHALL 接收暂存图、准确 ChartSpec、授权来源范围及 generation context，不得暴露工具调用。它 SHALL 使用 generated-chart-verification 定义的严格 JSON 结论和有界 issues；repair hint 仅描述诊断，不得要求验证模型选择或执行后续工具。
 
-#### Scenario: Agent sees actual evidence lineage
+#### Scenario: Verifier identifies a repair hint without scheduling work
 
-- **WHEN** 当前 attempt 有候选 refs 或部分 refs 已在 assembly 输入中出现
-- **THEN** prompt 显示 attempt、scope、候选 refs 和已使用 provenance
-- **AND** 不呈现 selected/discarded lifecycle，也不要求 Agent 维护另一套状态
+- **WHEN** VLM 找到可修复的标签或数据映射问题
+- **THEN** 返回固定字段的验证结论和有界 issue
+- **AND** 主 Agent 自主决定是否重测、修正 Spec、重新生成或停止
 
-### Requirement: Decision context declares allowed and blocked actions
+### Requirement: Prompt and timeline share stable committed references
 
-动态状态层 SHALL 只对授权越界、无效来源、非法 ChartSpec、失败候选发布、terminal 状态和预算耗尽声明硬性阻止。对测量选择、修复工具、局部补测、ChartSpec 调整或来源恢复的建议 SHALL 作为可选 `repair_hint` 或 issue 表达，不得形成普通业务动作白名单。
+主 Agent prompt 与客户端时间线 SHALL 使用相同的 run、staged、verification、artifact、collection child 和 source scope 引用。提示词 MAY 包含模型所需的证据说明，但不得引用客户端无法解析的第二套生命周期身份；客户端不得控制模型内部动作。
 
-#### Scenario: Required evidence repair is explicit
+#### Scenario: Published result matches the visible timeline
 
-- **WHEN** generated review 失败但仍有预算
-- **THEN** prompt 明确当前候选不可发布并显示 issues 与建议
-- **AND** Agent可以在授权范围内自主选择修复动作
-
-#### Scenario: Prompt does not turn a warning into an automatic loop
-
-- **WHEN** measurement 只有 warning 且没有 required repair obligation
-- **THEN** prompt 将其标为可选决策
-- **AND** Agent 未作出选择前不会自动重复调用工具
-
-### Requirement: Prompt context remains aligned with the timeline projection
-
-主 Agent prompt 与客户端时间线 SHALL 共享 run、candidate、attempt、scope 和 publication 身份，但两者无需共享模型内部下一动作状态。内部 decision、repair phase 和 subcheck 事件可以保留在 trace；默认客户端和模型上下文 SHALL 分别投影为适合其用途的事实摘要。
-
-#### Scenario: Model and client agree on the next action
-
-- **WHEN** 同一 candidate 正在审核或修复
-- **THEN** prompt 与客户端引用相同 candidate/review 身份和最终状态
-- **AND** 客户端无需显示模型的候选动作，模型也无需遵循 UI projection 的步骤容器
+- **WHEN** 图表已有已提交的正式 artifact
+- **THEN** prompt 和时间线引用相同 artifact 身份与 warning 结果
+- **AND** 时间线刷新不会触发验证或发布

@@ -9,136 +9,6 @@ on a final answer or an exhausted step budget.
 
 ## Requirements
 
-### Requirement: Agent performs semantic chart review automatically without an exposed review tool
-
-The Agent runtime SHALL invoke the internal tool-free VLM review path whenever
-a generated candidate carries a semantic review obligation. The review
-invocation SHALL be isolated from the main model's normal tool surface and
-SHALL return bounded structured state to the Agent loop. The main model MAY
-correct a failed candidate, but SHALL not submit or override the review
-decision through a tool call or final text.
-
-#### Scenario: Normal tool surface excludes the review transition
-
-- **WHEN** the Agent prepares a model request before or after a generated chart
-  candidate is created
-- **THEN** the model receives the normal registered tools without
-  `review_generated_chart`
-- **AND** no review candidate or review decision tool schema is advertised
-
-#### Scenario: Render completion triggers an isolated reviewer call
-
-- **WHEN** a semantic-review-required candidate is produced by a rendering tool
-- **THEN** the Agent invokes one additional VLM call with no tools
-- **AND** the call is not appended as a user-visible main-agent tool exchange
-- **AND** its bounded result is attached to the candidate's review lifecycle
-
-#### Scenario: Failed review returns correction context
-
-- **WHEN** the isolated VLM reviewer rejects a candidate and retry budget remains
-- **THEN** the next main-agent context identifies the candidate, review state,
-  bounded issues, and required corrective action
-- **AND** the main Agent can call `assemble_spec` and `render_chart` for a new
-  candidate while the rejected candidate remains unpublished
-
-### Requirement: Agent distinguishes candidate previews from published artifacts
-
-The Agent SHALL treat every `render_chart` result as an unpublished candidate
-or preview until the code-owned publication gate promotes it. The static main
-prompt SHALL identify `publicationStatus` as the authority for publication,
-shall not treat `reviewStatus=completed` alone as a pass, and shall require the
-Agent to use only bounded review diagnostics to correct a failed candidate.
-The Agent SHALL not invoke OCR, CV, geometry, or layout tools after rendering
-to replace or override the automatic VLM review.
-
-#### Scenario: Rendered image remains a preview
-
-- **WHEN** `render_chart` returns an image whose publication status is pending
-  or unpublished
-- **THEN** the Agent treats the image as a candidate preview
-- **AND** it does not describe the image as verified or published
-- **AND** it waits for or responds to the automatic review lifecycle
-
-#### Scenario: Review completion does not imply publication
-
-- **WHEN** a candidate has `reviewStatus=completed` but its normalized decision
-  is `fail` or its `publicationStatus` is rejected
-- **THEN** the Agent treats the candidate as failed
-- **AND** it does not claim that the review passed or that the artifact was
-  published
-
-#### Scenario: Failed candidate follows the correction chain
-
-- **WHEN** a failed candidate has retry budget remaining
-- **THEN** the Agent uses only `decision`, `checks`, and bounded issue
-  `code`, `location`, `severity`, and `message` as correction evidence
-- **AND** it revises the ChartSpec, calls `assemble_spec`, and then calls
-  `render_chart` for a new candidate
-- **AND** it does not call a post-render evidence tool to substitute for VLM
-  review
-
-### Requirement: Run a single user turn to completion
-
-The system SHALL provide an `Agent` that, given a user input — either a plain
-string or an OpenAI multimodal content list — drives a ReAct-style loop until
-the model returns no tool calls and no required generated-chart review
-obligation remains, or the step budget is exhausted, and SHALL return the
-final text. The user input is appended to history and forwarded to the client
-unchanged in either form.
-The run SHALL also accept a cooperative interruption signal, stop at a safe
-loop boundary when the signal is observed, and SHALL not publish a final
-answer for an interrupted run.
-
-#### Scenario: Returns after final answer
-
-- **WHEN** `Agent.run(user_input)` is called and the model eventually returns a
-  turn with no tool calls while no review obligation is pending
-- **THEN** the returned value is that final turn's text content
-
-#### Scenario: Final answer is held while review is pending
-
-- **WHEN** the model returns no tool calls while a required generated-chart
-  candidate remains unpublished and unresolved
-- **THEN** the Agent does not finalize that response and continues with bounded
-  review-gate context identifying the required action
-
-#### Scenario: Failed review cannot be bypassed
-
-- **WHEN** a required candidate has failed, timed out, or exhausted its review
-  retries and the model returns no tool calls
-- **THEN** the Agent does not mark the candidate published
-- **AND** it returns a bounded non-published result or requires a bounded
-  correction path rather than accepting the model's free-form final claim
-
-#### Scenario: Stops at the step budget
-
-- **WHEN** the model keeps requesting tool calls past the configured maximum
-  steps, or a required review remains unresolved past the configured maximum
-  steps
-- **THEN** the loop stops and returns a bounded result indicating the budget or
-  review gate was reached, without looping forever or publishing the candidate
-
-#### Scenario: Multimodal user input passes through
-
-- **WHEN** `Agent.run` is called with a multimodal content list (text part plus
-  image part)
-- **THEN** the user entry in history carries that content list unchanged, and
-  the client receives it verbatim on the first model turn
-
-#### Scenario: Interruption stops before the next work unit
-
-- **WHEN** the interruption signal is observed before a model turn, tool call,
-  rendering operation, or review action begins
-- **THEN** the Agent exits the loop with a bounded interrupted outcome
-- **AND** it does not begin that work unit or claim a completed final answer
-
-#### Scenario: Late work result is ignored
-
-- **WHEN** a provider or tool returns after the Agent has observed interruption
-- **THEN** the result is not used to continue the loop or publish a final
-  answer
-- **AND** the caller can still finalize the run as interrupted
-
 ### Requirement: Agent cooperatively stops an interrupted run
 
 The Agent SHALL check the interruption signal before each model request and
@@ -159,93 +29,6 @@ ordering for work that completed before interruption was observed.
 - **WHEN** a generated visual result becomes available after interruption
 - **THEN** the Agent does not expose it as new run progress or a final answer
 - **AND** the run remains interruptible and terminalizable
-
-### Requirement: Agent uses a layered behavior prompt and automatic review obligations
-
-The Agent SHALL assemble a stable static responsibility layer together with a
-runtime-derived tool surface, attributable process artifacts, and dynamic
-Run/Turn state. The static layer SHALL define evidence discipline,
-model-led semantic interpretation, adaptive tool-selection principles, atomic
-ChartSpec assembly and validation, generated chart review rules, and
-final-answer boundaries without encoding mutable analysis, generation, or
-review state. The dynamic layers SHALL identify the current source, panel,
-available tools, produced observations or candidates, publication state, and
-bounded next action. The Agent SHALL allow the model to use multimodal visual
-understanding as a first-pass hypothesis, select OCR, geometry, or layout tools
-for unresolved source evidence, and use `assemble_spec` as the
-model-facing construction-and-validation gate when a structured ChartSpec is
-needed; it SHALL NOT require a separate `validate_spec` tool call, prescribe
-`inspect_chart_layout` as a universal precondition, or ask the model to call a
-chart-review tool. When a generated chart creates an automatic review
-obligation, the model-visible dynamic context SHALL identify candidate
-references, review result, publication state, and bounded required next action
-as structured data. The prompt SHALL describe normalized review fields
-(`decision`, `confidence`, `checks`, and `issues`) as system-provided evidence
-to consume, not as a JSON decision that the main Agent may generate or
-override.
-
-#### Scenario: Ordinary turn uses the layered behavior contract
-
-- **WHEN** the Agent requests a model turn before any generated chart review is
-  pending
-- **THEN** the model receives the static responsibility layer, the current registered tool surface, and the current Run/Turn context
-- **AND** the context explains that visual understanding is a hypothesis, auxiliary tool observations are attributable evidence, `assemble_spec` performs the construction-and-validation gate, and tool success, review completion, and publication are distinct outcomes
-
-#### Scenario: Model chooses targeted evidence
-
-- **WHEN** a chart restoration turn contains uncertainty about text, geometry,
-  orientation, or series association
-- **THEN** the model can choose the corresponding OCR, chart sensor, or layout
-  tool without following a fixed phase order
-- **AND** the Agent keeps the resulting observations available as attributable process artifacts for the next model turn
-
-#### Scenario: Clear chart does not require layout preflight
-
-- **WHEN** the model has sufficient multimodal evidence to construct a valid
-  ChartSpec for a clear chart
-- **THEN** it can request `assemble_spec` without first requesting
-  `inspect_chart_layout`
-- **AND** the Agent does not inject an implicit layout requirement that blocks
-  the assembly
-
-#### Scenario: Structured output uses the atomic assembly gate
-
-- **WHEN** the model has gathered enough evidence to return structured chart
-  data or invoke `render_chart`
-- **THEN** it requests `assemble_spec` before that downstream action
-- **AND** a successful assembly is the only model-facing construction and
-  validation step required for the ChartSpec
-- **AND** an assembly error causes the model to revise, re-observe, or reassemble
-  instead of returning or rendering the invalid candidate
-
-#### Scenario: Runtime context exposes existing panel reuse
-
-- **WHEN** a named session already contains a valid panel handoff for the current source
-- **THEN** the next model turn receives the panel inventory and can use the stable `panel_id`
-- **AND** the Agent does not require the model to rediscover the panel from incomplete prior history
-
-#### Scenario: Pending review is added as structured context
-
-- **WHEN** a generated chart creates an unresolved review obligation
-- **THEN** the next model-visible context includes the candidate ID, review ID, candidate status, review status, publication status, and required review action
-- **AND** the Agent does not replace the static responsibility layer with a phase-specific system prompt
-
-#### Scenario: Publication state controls the final claim
-
-- **WHEN** the model prepares a final response after a generated chart
-  candidate has been reviewed
-- **THEN** it may call the chart published only when `publicationStatus` is
-  `published` or `published_with_warning`
-- **AND** it preserves the warning for `published_with_warning`
-- **AND** it describes pending, rejected, failed, timed-out, or
-  retry-exhausted candidates as not published
-
-#### Scenario: Source evidence scope is explicit
-
-- **WHEN** a source-linked candidate lacks authorized source evidence
-- **THEN** the Agent does not claim that source-fidelity review completed
-- **AND** a direct-data candidate without a source-fidelity obligation is not
-  described as equivalent to a source image
 
 ### Requirement: Serial native tool-calling loop with observations
 
@@ -383,66 +166,6 @@ ordering, returned final answer, or step-budget behavior.
 - **THEN** the trace consumer receives a corresponding final-answer or
   budget-exhausted event
 
-### Requirement: Agent resumes from a committed execution checkpoint
-
-The Agent SHALL be able to start a continuation from a validated checkpoint
-that contains bounded conversation context, completed tool results, visual
-evidence references, layout context, and review/publication references. It SHALL
-continue from the checkpoint's next action, reuse completed operations, and
-preserve the existing interruption and terminal rules. It SHALL return a
-bounded recovery-blocked outcome rather than automatically replaying an
-uncertain provider, tool, rendering, review, or publication operation.
-
-#### Scenario: Continuation starts after a completed tool result
-
-- **WHEN** an explicit resume provides a checkpoint after a committed tool
-  result
-- **THEN** the Agent reconstructs the safe model context and begins at the
-  checkpoint's next action
-- **AND** the prior tool call is not dispatched again
-
-#### Scenario: Layout and chart evidence survive continuation
-
-- **WHEN** a checkpoint contains authorized layout, visual, candidate, or
-  publication references
-- **THEN** the resumed Agent can use those references in later chart reasoning
-- **AND** it does not require the original process-local state to be present
-
-#### Scenario: Uncertain operation stops automatic continuation
-
-- **WHEN** the checkpoint identifies a provider or tool operation whose result
-  is uncertain and no replay-safe contract exists
-- **THEN** the Agent does not dispatch that operation automatically
-- **AND** the caller receives a bounded recovery-blocked result that can be
-  followed by an explicit retry
-
-### Requirement: Recoverable review failures return to the main Agent
-
-当生成候选的审核失败且仍有重试预算时，Agent loop SHALL 将结构化审核诊断、候选身份、来源范围和剩余预算返回主 Agent。主 Agent SHALL 能够根据问题自主选择修正 ChartSpec、补充观察、局部测量、恢复来源绑定或停止；系统 SHALL NOT 仅因 `repair_kind` 将后续工具调用限定为一条固定阶段链。任何修复产生的新候选仍 SHALL 重新审核。
-
-#### Scenario: Semantic failure triggers a model-selected correction
-
-- **WHEN** VLM review 拒绝候选并返回具体语义问题
-- **THEN** 主 Agent 收到问题、候选身份、来源范围和剩余预算
-- **AND** 主 Agent 可以选择适用的授权工具或直接修正 ChartSpec
-- **AND** 新候选重新进入生成审核
-
-#### Scenario: Repair hint does not become a tool whitelist
-
-- **WHEN** 审核将问题分类为 `spec_only`、`evidence_needed` 或 `source_rebind`
-- **THEN** 该分类作为诊断和修复建议返回
-- **AND** 系统不因该分类拒绝同一任务范围内其他合法工具调用
-
-### Requirement: Exhausted review recovery terminates explicitly
-
-当源绑定或候选修复达到上限时，Agent loop SHALL 以明确的非发布状态结束，保留失败原因和候选 lineage，不得绕过审核门禁发布最后一个失败候选。
-
-#### Scenario: Retry budget is exhausted
-
-- **WHEN** 所有允许的审核修复或重试次数均已使用
-- **THEN** run 状态为 retry_exhausted 或等价的非发布失败状态
-- **AND** 用户可以看到下一步是重新绑定源图还是调整规格
-
 ### Requirement: Agent keeps measurement evidence decisions bounded
 
 Agent loop SHALL 将 measurement observation 的 scope、evidence refs、issues、overlay、attempt lineage 和实际被下游引用的 refs 作为有界上下文保存。多个 measurement session SHALL 保持来源、面板和 attempt 边界；系统 SHALL NOT 要求主 Agent先创建独立 selected/discarded/abandoned decision unit 才能调用 `assemble_spec`。
@@ -546,3 +269,42 @@ Agent loop SHALL 将 measurement observation 的 scope、evidence refs、issues�
 - **WHEN** Agent 从 checkpoint 或断线状态恢复，且最近一次测量已经完成
 - **THEN** 恢复上下文包含相同 session/current attempt 和工具结果
 - **AND** 恢复流程不重放相同测量、不恢复 pending decision 或隐式创建新调用
+
+### Requirement: Agent runs one turn through committed actions
+
+Agent SHALL 按模型响应、有序工具调用、自动生成图验证与最终回答推进一个用户请求；文本和多模态输入的原始结构 SHALL 保持有效。模型无工具调用时，只有不存在未决必需验证且最终产物引用均已正式发布，Run 才能成功完成。中断信号 SHALL 在安全边界停止新工作，迟到结果不得覆盖中断终态。
+
+#### Scenario: Final text with no generation
+- **WHEN** 模型结束且没有工具调用或未决生成图
+- **THEN** Agent 提交最终回答并完成 Run
+
+#### Scenario: Pending generated image blocks success
+- **WHEN** 模型试图用未验证的暂存图作最终成功回答
+- **THEN** Agent 不完成成功 Run
+- **AND** 继续有界验证或返回明确未完成原因
+
+### Requirement: Agent resumes from the committed next action
+
+显式续接 SHALL 使用受限私有执行记录和已提交 checkpoint 重建必要模型上下文，从下一动作继续。Agent SHALL 复用已提交工具与验证结果，并按副作用契约处理未提交动作；不可核对外部副作用不得自动重放。
+
+#### Scenario: Completed tool is not repeated
+- **WHEN** 子 Run 从工具结果后的 checkpoint 恢复
+- **THEN** 模型看到该结果且工具不重新执行
+
+### Requirement: Verification failures return bounded facts to the main Agent
+
+生成图验证失败 SHALL 向主 Agent 返回暂存尝试、来源范围、issues、修复提示和剩余预算。Agent SHALL 自主选择合法观察、测量、装配、重新生成或停止；提示内容不得自动调度工具、形成自动 repair phase 或工具白名单，也不得限制可用工具。预算耗尽 SHALL 以明确非成功终态保留诊断。
+
+#### Scenario: Evidence repair is model selected
+- **WHEN** 验证返回 evidence-needed 诊断
+- **THEN** Agent 可以显式选择当前授权范围的测量工具
+- **AND** 新图仍经过完整验证
+
+### Requirement: Layered prompt exposes verification facts
+
+主 Agent 的分层提示 SHALL 描述工具、ChartSpec、证据范围及自动验证/发布事实。运行时层只提供当前已提交的暂存尝试、验证结果及正式 artifact 引用；未提交或非权威状态不得暗示成功。
+
+#### Scenario: Failed output is explained without a gate snapshot
+- **WHEN** 暂存图的验证失败
+- **THEN** 下一模型上下文包含有界 issues 与来源绑定
+- **AND** 不包含另一份可变 gate 状态

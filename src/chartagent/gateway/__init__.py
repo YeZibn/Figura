@@ -1,11 +1,9 @@
 """Local HTTP gateway for the ChartAgent desktop client."""
 
 from .protocol import (
-    CheckpointPhase,
     ContinuationKind,
     GATEWAY_VERSION,
     GatewayFault,
-    OperationState,
     RecoveryStatus,
     SessionSummary,
     SessionTranscript,
@@ -19,8 +17,6 @@ __all__ = [
     "GATEWAY_VERSION",
     "GatewayFault",
     "RecoveryStatus",
-    "CheckpointPhase",
-    "OperationState",
     "ContinuationKind",
     "GatewayService",
     "SessionSummary",

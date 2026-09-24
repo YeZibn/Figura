@@ -4,17 +4,15 @@ from __future__ import annotations
 
 import time
 from collections import deque
-from collections.abc import Mapping
 from threading import Condition, Event, RLock
 from typing import Iterable
 from dataclasses import dataclass
 from uuid import uuid4
 
 from ..decision_timeline import TimelineProtocolError, enrich_event_payload
-from ..trace import TraceEvent, sanitize_payload
+from ..trace import TraceEvent
 from .history import GatewayHistoryStore
 from .protocol import (
-    CheckpointPhase,
     ContinuationKind,
     ObservationReference,
     RecoveryStatus,
@@ -24,6 +22,7 @@ from .protocol import (
     RunStatus,
     utc_timestamp,
 )
+from .execution_record import ExecutionCursor, ExecutionEntry, NextAction
 
 DEFAULT_MAX_RUN_EVENTS = 256
 DEFAULT_RUN_RETENTION_SECONDS = 120.0
@@ -46,19 +45,12 @@ def _recovery_from_dict(value: dict | None) -> RunRecovery:
         status = RecoveryStatus(value.get("status", RecoveryStatus.UNAVAILABLE.value))
     except ValueError:
         status = RecoveryStatus.UNAVAILABLE
-    try:
-        phase = CheckpointPhase(value["phase"]) if value.get("phase") else None
-    except ValueError:
-        phase = None
     return RunRecovery(
         status=status,
-        checkpoint_id=value.get("checkpointId"),
-        checkpoint_version=value.get("checkpointVersion"),
-        phase=phase,
+        cursor_id=value.get("cursorId"),
         next_action=value.get("nextAction"),
         blocked_reason=value.get("blockedReason"),
         updated_at=value.get("updatedAt"),
-        expires_at=value.get("expiresAt"),
     )
 
 class ManagedRun:
@@ -78,7 +70,6 @@ class ManagedRun:
         parent_run_id: str | None = None,
         root_run_id: str | None = None,
         continuation_kind: ContinuationKind | str | None = None,
-        execution_gate: Mapping[str, object] | None = None,
     ) -> None:
         self.run_id = run_id or f"run_{uuid4().hex}"
         self.session_id = session_id
@@ -89,16 +80,6 @@ class ManagedRun:
         self.root_run_id = root_run_id or self.run_id
         self.continuation_kind = ContinuationKind(continuation_kind) if continuation_kind is not None else None
         self.recovery = RunRecovery()
-        default_gate: dict[str, object] = {
-            "state": "open",
-            "blocking": False,
-            "issues": [],
-        }
-        self.execution_gate: dict[str, object] = (
-            sanitize_payload(dict(list(execution_gate.items())[:32]))
-            if isinstance(execution_gate, Mapping)
-            else default_gate
-        )
         self.status = RunStatus.RUNNING
         self.answer: str | None = None
         self.error_code: str | None = None
@@ -113,6 +94,7 @@ class ManagedRun:
         self.cancel_requested = False
         self._events: deque[RunEvent] = deque(maxlen=max_events)
         self._next_sequence = 0
+        self._execution_parent_references: dict[str, object] = {}
         self._interrupt_event = Event()
         self._condition = Condition(RLock())
 
@@ -139,7 +121,6 @@ class ManagedRun:
             root_run_id=self.root_run_id,
             continuation_kind=self.continuation_kind,
             recovery=recovery,
-            execution_gate=self.execution_gate,
         )
 
     @property
@@ -162,6 +143,21 @@ class ManagedRun:
     def _publish_locked(self, kind: str, payload: dict | None = None) -> RunEvent | None:
         """Append one event while the run condition lock is held."""
         sequence = self._next_sequence + 1
+        event = self._build_event(kind, payload, sequence)
+        if event is None:
+            return None
+        self._next_sequence = sequence
+        if self.history_store is not None:
+            try:
+                self.history_store.append_event(event)
+            except Exception:  # noqa: BLE001 - trace persistence cannot stop a run
+                self._mark_history_warning()
+        self._events.append(event)
+        self._condition.notify_all()
+        return event
+
+    def _build_event(self, kind: str, payload: dict | None, sequence: int) -> RunEvent | None:
+        """Build a fully sanitized event without committing it to a surface."""
         event_payload = dict(payload or {})
         if kind in _RUN_PROCESS_KINDS and not any(
             event_payload.get(key) for key in ("process_id", "operation_id", "turn")
@@ -178,21 +174,113 @@ class ManagedRun:
             # Invalid timeline diagnostics are dropped; a malformed event must
             # not alter Run state, sequence identity, or the caller's outcome.
             return None
-        self._next_sequence = sequence
-        event = RunEvent(
+        return RunEvent(
             run_id=self.run_id,
             sequence=sequence,
             kind=kind,
             payload=event_payload,
         )
-        if self.history_store is not None:
-            try:
-                self.history_store.append_event(event)
-            except Exception:  # noqa: BLE001 - trace persistence cannot stop a run
-                self._mark_history_warning()
-        self._events.append(event)
-        self._condition.notify_all()
-        return event
+
+    def commit_execution_step(
+        self,
+        entry: ExecutionEntry,
+        cursor: ExecutionCursor,
+        *,
+        event_kind: str | None = None,
+        event_payload: dict | None = None,
+    ) -> ExecutionEntry:
+        """Commit a private step, its next-action cursor, and its public event atomically."""
+        if self.history_store is None:
+            raise RuntimeError("durable execution storage is unavailable")
+        with self._condition:
+            if self.terminal:
+                raise RuntimeError("cannot commit execution for a terminal run")
+            event = None
+            if event_kind is not None:
+                event = self._build_event(event_kind, event_payload, self._next_sequence + 1)
+                if event is None:
+                    raise RuntimeError("execution event is invalid")
+            committed = self.history_store.commit_execution_step(entry, cursor, event=event)
+            if event is not None:
+                self._next_sequence = event.sequence
+                self._events.append(event)
+            self._condition.notify_all()
+            return committed
+
+    def set_execution_prefix(self, parent_run_id: str, parent_cursor: int) -> None:
+        """Bind a child run to an immutable committed parent prefix."""
+        if parent_cursor < 1:
+            raise ValueError("parent execution cursor is invalid")
+        self._execution_parent_references = {
+            "parentRunId": parent_run_id,
+            "parentCursor": parent_cursor,
+        }
+
+    def commit_execution_entry(
+        self,
+        kind: str,
+        payload: dict,
+        *,
+        turn: int,
+        next_action_kind: str,
+        work_key: str | None = None,
+        call_id: str | None = None,
+        message_entry_id: str | None = None,
+        staged_ref: str | None = None,
+        verification_ref: str | None = None,
+        event_kind: str | None = None,
+        event_payload: dict | None = None,
+    ) -> ExecutionEntry:
+        """Allocate an entry identity and atomically commit it with its cursor."""
+        if self.history_store is None:
+            raise RuntimeError("durable execution storage is unavailable")
+        with self._condition:
+            if work_key is not None:
+                previous_entry = self.history_store.get_execution_entry_by_work_key(self.run_id, work_key)
+                if previous_entry is not None:
+                    if previous_entry.kind == kind and previous_entry.payload == payload:
+                        return previous_entry
+                    raise RuntimeError("execution work identity already has a different committed result")
+            previous = self.history_store.get_execution_cursor(self.run_id)
+            sequence = previous.entry_cursor + 1 if previous is not None else 1
+            entry_id = f"exe_{uuid4().hex}"
+            if next_action_kind == "model":
+                action = NextAction(kind="model")
+            elif next_action_kind == "tool":
+                action = NextAction(
+                    kind="tool",
+                    message_entry_id=message_entry_id or entry_id,
+                    call_id=call_id,
+                )
+            elif next_action_kind == "verify":
+                action = NextAction(kind="verify", staged_ref=staged_ref)
+            elif next_action_kind == "promote":
+                action = NextAction(kind="promote", staged_ref=staged_ref, verification_ref=verification_ref)
+            elif next_action_kind == "final":
+                action = NextAction(kind="final", answer_entry_id=entry_id)
+            else:
+                raise ValueError("unsupported next action")
+            entry = ExecutionEntry(
+                run_id=self.run_id,
+                sequence=sequence,
+                entry_id=entry_id,
+                kind=kind,
+                work_key=work_key,
+                payload=payload,
+            )
+            cursor = ExecutionCursor(
+                run_id=self.run_id,
+                entry_cursor=sequence,
+                turn=turn,
+                next_action=action,
+                references=previous.references if previous is not None else dict(self._execution_parent_references),
+            )
+            return self.commit_execution_step(
+                entry,
+                cursor,
+                event_kind=event_kind,
+                event_payload=event_payload,
+            )
 
     def publish_trace(self, event: TraceEvent) -> None:
         # Provider reasoning is intentionally not a desktop event. The CLI's
@@ -204,94 +292,6 @@ class ManagedRun:
             payload.setdefault("turn", event.turn)
         payload["trace_sequence"] = event.sequence
         self.publish(event.kind, payload)
-
-    def update_execution_gate(self, gate: Mapping[str, object]) -> dict[str, object]:
-        """Persist and project the current shared review gate."""
-        clean = sanitize_payload(dict(list(gate.items())[:32]))
-        with self._condition:
-            if clean == self.execution_gate:
-                return dict(self.execution_gate)
-            self.execution_gate = clean
-            self._condition.notify_all()
-        self._update_history(self.status, execution_gate=clean)
-        return dict(clean)
-
-    def create_checkpoint(
-        self,
-        state: dict,
-        *,
-        phase: CheckpointPhase | str,
-        next_action: str,
-        status: RecoveryStatus | str = RecoveryStatus.AVAILABLE,
-        blocked_reason: str | None = None,
-    ) -> bool:
-        """Persist a recovery boundary before announcing it to consumers."""
-        if self.history_store is None:
-            return False
-        try:
-            checkpoint = self.history_store.create_checkpoint(
-                self.session_id,
-                self.run_id,
-                state,
-                phase=phase,
-                next_action=next_action,
-                status=status,
-                blocked_reason=blocked_reason,
-                sequence=self._next_sequence,
-            )
-            self.recovery = _recovery_from_dict(checkpoint.public())
-            return True
-        except Exception:  # noqa: BLE001 - recovery failures become bounded metadata
-            self.recovery = RunRecovery(
-                status=RecoveryStatus.UNAVAILABLE,
-                blocked_reason="checkpoint_persistence_failed",
-            )
-            return False
-
-    def begin_operation(self, operation_id: str, operation_kind: str, *, request_fingerprint: str | None = None) -> dict:
-        if self.history_store is None:
-            return {"operationId": operation_id, "state": "in_flight"}
-        return self.history_store.begin_operation(
-            self.run_id, operation_id, operation_kind, request_fingerprint=request_fingerprint,
-        )
-
-    def complete_operation(self, operation_id: str, *, result: dict | None = None, references: dict | None = None) -> dict | None:
-        if self.history_store is None:
-            return None
-        completed = self.history_store.complete_operation(
-            self.run_id, operation_id, result=result, references=references,
-        )
-        if completed is not None:
-            self.publish("operation_completed", {
-                "operationId": operation_id,
-                "operationKind": completed.get("operationKind"),
-                "state": completed.get("state"),
-            })
-        return completed
-
-    def mark_operation_uncertain(self, operation_id: str, *, reason: str | None = None) -> dict | None:
-        if self.history_store is None:
-            return None
-        uncertain = self.history_store.uncertain_operation(self.run_id, operation_id, reason=reason)
-        if uncertain is not None:
-            try:
-                self.history_store.mark_recovery(
-                    self.session_id,
-                    self.run_id,
-                    RecoveryStatus.BLOCKED,
-                    reason="operation_outcome_uncertain",
-                )
-            except Exception:  # noqa: BLE001 - local projection remains conservative
-                pass
-            self.recovery = RunRecovery(
-                status=RecoveryStatus.BLOCKED,
-                blocked_reason="operation_outcome_uncertain",
-            )
-            self.publish("recovery_blocked", {
-                "operationId": operation_id,
-                "reason": "operation_outcome_uncertain",
-            })
-        return uncertain
 
     def has_event(self, kind: str) -> bool:
         with self._condition:
@@ -518,12 +518,6 @@ class HistoricalRun:
         except ValueError:
             self.continuation_kind = None
         self.recovery = _recovery_from_dict(summary.get("recovery"))
-        raw_gate = summary.get("executionGate")
-        self.execution_gate = (
-            sanitize_payload(dict(list(raw_gate.items())[:32]))
-            if isinstance(raw_gate, Mapping)
-            else {"state": "open", "blocking": False, "issues": []}
-        )
         self.history_store = history_store
 
     @property
@@ -541,7 +535,6 @@ class HistoricalRun:
             root_run_id=self.root_run_id,
             continuation_kind=self.continuation_kind,
             recovery=self.recovery,
-            execution_gate=self.execution_gate,
         )
 
     @property

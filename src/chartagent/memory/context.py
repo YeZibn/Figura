@@ -78,8 +78,8 @@ def records_to_messages(records: Iterable[Record]) -> list[dict[str, Any]]:
     return messages
 
 
-def recovery_messages(state: dict[str, Any] | None, *, budget: int = 24000) -> list[dict[str, Any]]:
-    """Read only an explicitly supplied checkpoint context.
+def execution_messages(state: dict[str, Any] | None, *, budget: int = 24000) -> list[dict[str, Any]]:
+    """Read bounded model messages rebuilt from an authorized execution prefix.
 
     Interrupted runs are intentionally absent from ``build_context``.  This
     separate API makes the authorization boundary visible to callers and

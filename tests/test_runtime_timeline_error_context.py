@@ -29,18 +29,17 @@ def test_runtime_lifecycle_envelope_uses_bounded_process_identity() -> None:
 
     assert events[1]["process_id"] == "turn:1"
     assert events[2]["process_id"] == "turn:1"
-    assert events[3]["process_id"] == "operation:model:1"
-    assert events[4]["result"]["issues"][0]["location"] == "generation_context.source_scope"
-    assert events[5]["failure_code"] == "provider_balance_required"
-    assert events[5]["provider_status"] == 402
-    assert events[5]["outcome_known"] is True
-    assert "sequence" not in events[5]["process_id"]
+    assert events[3]["result"]["issues"][0]["location"] == "generation_context.source_scope"
+    assert events[4]["failure_code"] == "provider_balance_required"
+    assert events[4]["provider_status"] == 402
+    assert events[4]["outcome_known"] is True
+    assert "sequence" not in events[4]["process_id"]
 
 
 def test_process_events_do_not_normalize_legacy_camel_case_fields() -> None:
-    operation = enrich_event_payload(
-        "operation_completed",
-        {"operationId": "model:1", "state": "completed"},
+    lifecycle = enrich_event_payload(
+        "run_started",
+        {"callId": "call-1", "status": "success"},
         run_id="run-1",
         sequence=1,
     )
@@ -51,8 +50,7 @@ def test_process_events_do_not_normalize_legacy_camel_case_fields() -> None:
         sequence=2,
     )
 
-    assert "process_id" not in operation
-    assert "operation_id" not in operation
+    assert "call_id" not in lifecycle
     assert "failure_category" not in failure
     assert "safe_message" not in failure
 

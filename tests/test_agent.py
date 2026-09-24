@@ -8,9 +8,11 @@ history shape — is verified offline.
 from __future__ import annotations
 
 import json
+import io
 from threading import Event
 from typing import Any, Dict, List
 
+from PIL import Image, ImageDraw
 from chartagent import (
     Agent,
     GeneratedImage,
@@ -22,7 +24,7 @@ from chartagent import (
 from chartagent.agent import AgentInterrupted, registry_tools
 from chartagent.client.models import NormalizedResult, ToolCall
 from chartagent.agent.messages import assistant_entry
-from chartagent.agent.review_gate import review_gate_context
+from chartagent.agent.final_answer import guard_final_answer
 from chartagent.tools.chart.observation.layout_tool import INSPECT_CHART_LAYOUT
 from chartagent.tools.chart.specification import ASSEMBLE_SPEC
 
@@ -73,6 +75,34 @@ def _registry():
     return reg
 
 
+def test_final_answer_chart_claims_follow_verification_and_publication_records():
+    from types import SimpleNamespace
+
+    failed = SimpleNamespace(
+        kind="verification_result",
+        payload={"stagedRef": "stg_chart_a", "verificationRef": "ver_chart_a", "status": "fail"},
+    )
+    assert "未通过验证" in guard_final_answer("图表验证通过，已发布。", [failed])
+    assert "不能报告验证通过" in guard_final_answer("图表验证通过。", [failed])
+
+    passed = SimpleNamespace(
+        kind="verification_result",
+        payload={"stagedRef": "stg_chart_a", "verificationRef": "ver_chart_a", "status": "pass"},
+    )
+    assert "发布尚未确认" in guard_final_answer("图表已发布。", [passed])
+
+    promotion = SimpleNamespace(
+        kind="promotion_result",
+        payload={
+            "stagedRef": "stg_chart_a",
+            "verificationRef": "ver_chart_a",
+            "artifactId": "artifact_0123456789abcdef",
+        },
+    )
+    assert guard_final_answer("图表验证通过并已发布。", [passed, promotion]) == "图表验证通过并已发布。"
+    assert "没有可确认的已发布图表" in guard_final_answer("请打开 artifact_fedcba9876543210。", [passed, promotion])
+
+
 def test_final_answer_returned_no_tools():
     client = ScriptedClient([_final("hello")])
     agent = Agent(client, ToolRegistry(), system="sys")
@@ -116,25 +146,6 @@ def test_descriptive_chart_question_does_not_require_restoration_tools():
     assert Agent(client, registry).run("这张图的趋势是什么？") == "蓝线上升，橙线下降"
     assert len(client.calls) == 1
     assert client.calls[0]["tools"]
-
-
-def test_review_gate_context_is_bounded_structured_json():
-    context = json.loads(review_gate_context({
-        "pending": [{
-            "candidateId": "cand_1",
-            "reviewId": "review_1",
-            "candidateStatus": "review_pending",
-            "reviewStatus": "pending",
-            "publicationStatus": "unpublished",
-        }],
-        "failed": [],
-        "published": [],
-    }))
-    assert context["type"] == "execution_review_gate"
-    assert context["status"] == "reviewing"
-    assert context["publication_blocked"] is True
-    assert "required_action" not in context
-    assert context["pending"][0]["candidateId"] == "cand_1"
 
 
 def test_multi_step_tool_loop(tmp_path):
@@ -405,30 +416,47 @@ def test_visual_tool_result_adds_attributed_multimodal_observation():
     assert evidence[2]["image_url"]["url"].startswith("data:image/png;base64,")
 
 
-def test_generated_chart_emits_distinct_trace_event():
+def test_chart_generation_emits_staging_and_verification_facts():
+    pixels = Image.new("RGB", (64, 40), "white")
+    draw = ImageDraw.Draw(pixels)
+    draw.rectangle((8, 8, 22, 34), fill="#3568a8")
+    draw.rectangle((34, 16, 48, 34), fill="#df824b")
+    encoded = io.BytesIO()
+    pixels.save(encoded, format="PNG")
+    spec = {"metadata": {"chart_type": "pie", "title": "销售"}, "dataset": [{"category": "A", "value": 3}, {"category": "B", "value": 2}]}
     registry = ToolRegistry()
     registry.register(
         Tool(
             "render_chart",
             "return a generated chart",
-            {"type": "object"},
-            lambda: ToolResult(
-                {"kind": "generated_chart", "chart_type": "bar"},
+            {"type": "object", "properties": {"spec": {"type": "object"}}},
+            lambda spec: ToolResult(
+                {"kind": "generated_chart", "chart_type": "pie"},
                 [GeneratedImage(
-                    b"chart",
+                    encoded.getvalue(),
                     "image/png",
                     "生成图表：销售",
-                    metadata={"kind": "generated_chart", "chart_type": "bar", "title": "销售", "width": 640, "height": 480},
+                    metadata={"kind": "generated_chart", "chart_type": "pie", "title": "销售", "width": 64, "height": 40},
                 )],
             ),
         )
     )
     events = []
-    client = ScriptedClient([_call("render_chart", "{}", "chart-1"), _final("done")])
-    sink = lambda _tool, _call, _images: [{"artifactKind": "generated_chart", "artifactId": "artifact_chart", "status": "available"}]
-    assert Agent(client, registry, trace_sink=events.append, visual_observation_sink=sink).run("重绘") == "done"
-    chart_event = next(event for event in events if event.kind == "generated_chart")
-    assert chart_event.payload["artifacts"][0]["artifactKind"] == "generated_chart"
+    client = ScriptedClient([_call("render_chart", json.dumps({"spec": spec}, ensure_ascii=False), "chart-1"), _final("done")])
+    staged = []
+    verified = []
+    promoted = []
+    assert Agent(
+        client,
+        registry,
+        trace_sink=events.append,
+        stage_chart_sink=lambda _image, manifest: staged.append(manifest) or {"stagedRef": manifest.staged_ref},
+        verification_sink=lambda result: verified.append(result) or True,
+        promotion_sink=lambda *_args: promoted.append(True) or {"artifactId": "artifact_chart_12345678"},
+    ).run("重绘") == "done"
+    assert [event.kind for event in events if event.kind.startswith("chart_")] == ["chart_staged"]
+    assert len(staged) == len(verified) == len(promoted) == 1
+    assert "generated_chart" not in [event.kind for event in events]
 
 
 def test_multiple_tools_append_all_tool_messages_before_visual_observation():

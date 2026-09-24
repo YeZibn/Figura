@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import json
 import time
-from collections.abc import Mapping
 from typing import Any
 
-from ..trace import sanitize_payload, truncate_text
+from ..trace import truncate_text
 from .persistence_errors import HistoryStoreError
 from .protocol import (
     ContinuationKind,
@@ -40,9 +39,9 @@ class RunPersistenceMixin:
         parent_run_id: str | None = None,
         root_run_id: str | None = None,
         continuation_kind: ContinuationKind | str | None = None,
-        idempotency_operation_kind: str | None = None,
+        idempotency_continuation_kind: str | None = None,
         idempotency_parent_run_id: str | None = None,
-        idempotency_checkpoint_id: str | None = None,
+        idempotency_cursor_id: str | None = None,
     ) -> None:
         now = utc_timestamp()
         expires_at = time.time() + self.retention_seconds
@@ -79,7 +78,7 @@ class RunPersistenceMixin:
                 connection.execute(
                     """INSERT INTO gateway_run_idempotency(
                        idempotency_key, session_id, run_id, request_fingerprint,
-                       created_at, expires_at, operation_kind, parent_run_id, checkpoint_id
+                       created_at, expires_at, continuation_kind, parent_run_id, cursor_id
                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         idempotency_key[:MAX_IDEMPOTENCY_KEY],
@@ -88,9 +87,9 @@ class RunPersistenceMixin:
                         request_fingerprint[:128],
                         now,
                         expires_at,
-                        idempotency_operation_kind,
+                        idempotency_continuation_kind,
                         idempotency_parent_run_id,
-                        idempotency_checkpoint_id,
+                        idempotency_cursor_id,
                     ),
                 )
 
@@ -121,7 +120,7 @@ class RunPersistenceMixin:
         idempotency_key: str,
         session_id: str,
         parent_run_id: str,
-        checkpoint_id: str,
+        cursor_id: str,
         request_fingerprint: str,
         child_run_id: str,
     ) -> dict[str, Any]:
@@ -142,15 +141,15 @@ class RunPersistenceMixin:
                     "runId": existing["run_id"],
                     "requestFingerprint": existing["request_fingerprint"],
                     "parentRunId": existing["parent_run_id"] if "parent_run_id" in existing.keys() else None,
-                    "checkpointId": existing["checkpoint_id"] if "checkpoint_id" in existing.keys() else None,
+                    "cursorId": existing["cursor_id"] if "cursor_id" in existing.keys() else None,
                     "existing": True,
                 }
             connection.execute(
                 """INSERT INTO gateway_run_idempotency(
                    idempotency_key, session_id, run_id, request_fingerprint,
-                   created_at, expires_at, operation_kind, parent_run_id, checkpoint_id)
+                   created_at, expires_at, continuation_kind, parent_run_id, cursor_id)
                    VALUES (?, ?, ?, ?, ?, ?, 'resume', ?, ?)""",
-                (key, session_id, child_run_id, request_fingerprint[:128], now, expires_at, parent_run_id, checkpoint_id),
+                (key, session_id, child_run_id, request_fingerprint[:128], now, expires_at, parent_run_id, cursor_id),
             )
         return {
             "idempotencyKey": key,
@@ -158,7 +157,7 @@ class RunPersistenceMixin:
             "runId": child_run_id,
             "requestFingerprint": request_fingerprint[:128],
             "parentRunId": parent_run_id,
-            "checkpointId": checkpoint_id,
+            "cursorId": cursor_id,
             "existing": False,
         }
 
@@ -173,7 +172,6 @@ class RunPersistenceMixin:
         history_warning: str | None = None,
         cancel_requested: bool | None = None,
         retry_of: str | None = None,
-        execution_gate: Mapping[str, Any] | None = None,
     ) -> None:
         with self._lock, self._connect() as connection:
             self._cleanup_connection(connection)
@@ -201,10 +199,6 @@ class RunPersistenceMixin:
             if retry_of is not None:
                 assignments.append("retry_of = ?")
                 values.append(truncate_text(retry_of, MAX_RUN_ID))
-            if execution_gate is not None:
-                assignments.append("execution_gate_json = ?")
-                safe_gate = sanitize_payload(dict(list(execution_gate.items())[:32]))
-                values.append(json.dumps(safe_gate, ensure_ascii=False, separators=(",", ":")))
             values.append(run_id)
             connection.execute(
                 f"""UPDATE gateway_runs SET {', '.join(assignments)}
@@ -276,34 +270,30 @@ class RunPersistenceMixin:
                           expires_at,
                           terminal_code, terminal_message, answer_source, history_warning, provider, model,
                           cancel_requested, retry_of, parent_run_id, root_run_id, continuation_kind,
-                          recovery_status, checkpoint_id, recovery_phase, recovery_next_action,
-                          recovery_reason, recovery_version, recovery_updated_at, execution_gate_json,
                           (SELECT COUNT(*) FROM gateway_run_events e WHERE e.run_id = r.run_id) AS event_count
                      FROM gateway_runs r WHERE session_id = ? ORDER BY created_at""",
                 (session_id,),
             ).fetchall()
-        return [self._run_summary(row) for row in rows]
+        return [self._summary_with_recovery(row) for row in rows]
 
     def get_run(self, session_id: str, run_id: str) -> dict[str, Any] | None:
         with self._lock, self._connect() as connection:
             self._cleanup_connection(connection)
             row = connection.execute(
-                "SELECT run_id, session_id, status, created_at, updated_at, expires_at, terminal_code, terminal_message, answer_source, history_warning, provider, model, cancel_requested, retry_of, parent_run_id, root_run_id, continuation_kind, recovery_status, checkpoint_id, recovery_phase, recovery_next_action, recovery_reason, recovery_version, recovery_updated_at, execution_gate_json, (SELECT COUNT(*) FROM gateway_run_events e WHERE e.run_id = r.run_id) AS event_count FROM gateway_runs r WHERE run_id = ? AND session_id = ?",
+                "SELECT run_id, session_id, status, created_at, updated_at, expires_at, terminal_code, terminal_message, answer_source, history_warning, provider, model, cancel_requested, retry_of, parent_run_id, root_run_id, continuation_kind, (SELECT COUNT(*) FROM gateway_run_events e WHERE e.run_id = r.run_id) AS event_count FROM gateway_runs r WHERE run_id = ? AND session_id = ?",
                 (run_id, session_id),
             ).fetchone()
-        return self._run_summary(row) if row else None
+        return self._summary_with_recovery(row) if row else None
+
+    def _summary_with_recovery(self, row) -> dict[str, Any]:
+        summary = self._run_summary(row)
+        derived = self.get_recovery(row["session_id"], row["run_id"])
+        if derived is not None:
+            summary["recovery"] = derived
+        return summary
 
     @staticmethod
     def _run_summary(row) -> dict[str, Any]:
-        execution_gate: dict[str, Any] | None = None
-        raw_gate = row["execution_gate_json"] if "execution_gate_json" in row.keys() else None
-        if raw_gate:
-            try:
-                parsed_gate = json.loads(raw_gate)
-                if isinstance(parsed_gate, dict):
-                    execution_gate = parsed_gate
-            except (TypeError, ValueError, json.JSONDecodeError):
-                execution_gate = {"state": "uncertain", "blocking": True, "reason": "invalid_projection"}
         result = {
             "runId": row["run_id"],
             "sessionId": row["session_id"],
@@ -323,18 +313,7 @@ class RunPersistenceMixin:
             "parentRunId": row["parent_run_id"],
             "rootRunId": row["root_run_id"] or row["run_id"],
             "continuationKind": row["continuation_kind"] or (ContinuationKind.RETRY.value if row["retry_of"] else None),
-            "recovery": {
-                "status": row["recovery_status"] or RecoveryStatus.UNAVAILABLE.value,
-                **({"checkpointId": row["checkpoint_id"]} if row["checkpoint_id"] else {}),
-                **({"checkpointVersion": int(row["recovery_version"])} if row["recovery_version"] is not None else {}),
-                **({"phase": row["recovery_phase"]} if row["recovery_phase"] else {}),
-                **({"nextAction": row["recovery_next_action"]} if row["recovery_next_action"] else {}),
-                **({"blockedReason": row["recovery_reason"]} if row["recovery_reason"] else {}),
-                **({"updatedAt": row["recovery_updated_at"]} if row["recovery_updated_at"] else {}),
-            },
         }
-        if execution_gate is not None:
-            result["executionGate"] = execution_gate
         return result
 
     def list_events(self, session_id: str, run_id: str, after_sequence: int = 0) -> list[RunEvent]:

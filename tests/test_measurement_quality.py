@@ -15,7 +15,8 @@ from chartagent.measurement import (
 from chartagent.tools.core import GeneratedImage, Tool, ToolRegistry, ToolResult, dispatch_observation
 from chartagent.tools.chart.specification import assemble_spec
 from chartagent.agent import Agent
-from chartagent.agent.recovery import checkpoint_state
+from chartagent.gateway.execution_context import recovery_state_from_entries
+from chartagent.gateway.execution_record import ExecutionCursor, ExecutionEntry, NextAction
 from chartagent.client.models import NormalizedResult, ToolCall
 
 
@@ -31,6 +32,25 @@ def _bar_data() -> dict:
         "confidence": {"overall": 0.92, "geometry": 0.95},
         "warnings": [],
     }
+
+
+def _measurement_recovery_state(observations: list[dict]) -> dict:
+    run_id = "run_measurement_replay"
+    entries = [ExecutionEntry(run_id, 1, "input", {"text": "检查测量结果"}, "exe_input")]
+    for index, observation in enumerate(observations, start=1):
+        entries.append(ExecutionEntry(
+            run_id,
+            index + 1,
+            "tool_result",
+            {
+                "toolName": "measure_bars",
+                "callId": f"call_{index}",
+                "observation": json.dumps({"data": observation}, ensure_ascii=False),
+            },
+            f"exe_tool_{index}",
+        ))
+    cursor = ExecutionCursor(run_id, len(entries), 1, NextAction("model"), {})
+    return recovery_state_from_entries(entries, cursor)
 
 
 @pytest.mark.parametrize(
@@ -737,7 +757,7 @@ def test_agent_uses_main_decision_for_a_bounded_targeted_attempt_without_hidden_
     assert all("/Users/" not in event.to_json() for event in events)
 
 
-def test_measurement_sessions_are_included_in_checkpoint_recovery_state():
+def test_measurement_sessions_are_rebuilt_from_committed_tool_results():
     data = attach_measurement_quality(
         _bar_data(),
         source_tool="measure_bars",
@@ -746,31 +766,19 @@ def test_measurement_sessions_are_included_in_checkpoint_recovery_state():
         source_panel_id="panel_bars",
         source_run_id="run_1",
     )
-    sessions: dict[str, MeasurementSession] = {}
-    register_measurement(sessions, data)
-    state = checkpoint_state(
-        "读取图表",
-        [],
-        {},
-        ["att_chart"],
-        1,
-        pending_tool_calls=(),
-        measurement_sessions=sessions,
-    )
+    state = _measurement_recovery_state([data])
 
     restored = sessions_from_state(state["measurementSessions"])
     restored_attempt = restored[data["measurement"]["reference"]["session_id"]].current_attempt()
     assert restored_attempt is not None
     assert restored_attempt.attempt_id == data["measurement"]["reference"]["attempt_id"]
-    assert "pendingMeasurementRepair" not in state
-    assert "pendingMeasurementRepairs" not in state
+    assert "measurementSessions" in state
 
 
-def test_checkpoint_keeps_only_one_current_measurement_attempt_per_panel():
-    sessions: dict[str, MeasurementSession] = {}
+def test_measurement_sessions_replay_one_current_attempt_per_panel():
+    observations = []
     for panel_id in ("panel_bars", "panel_line"):
-        register_measurement(
-            sessions,
+        observations.append(
             attach_measurement_quality(
                 _bar_data(),
                 source_tool="measure_bars",
@@ -782,18 +790,8 @@ def test_checkpoint_keeps_only_one_current_measurement_attempt_per_panel():
             ),
         )
 
-    state = checkpoint_state(
-        "检查多个 panel",
-        [],
-        {},
-        ["att_chart"],
-        1,
-        pending_tool_calls=(),
-        measurement_sessions=sessions,
-    )
+    state = _measurement_recovery_state(observations)
 
-    assert set(state["measurementSessions"]) == {session.session_id for session in sessions.values()}
+    assert len(state["measurementSessions"]) == 2
     assert all("current_attempt" in value for value in state["measurementSessions"].values())
     assert all("attempts" not in value for value in state["measurementSessions"].values())
-    assert "pendingMeasurementRepair" not in state
-    assert "pendingMeasurementRepairs" not in state

@@ -32,7 +32,7 @@ export function previewResourcePath(resource: PreviewResource): string {
   const run = 'runId' in resource ? `/runs/${encodeURIComponent(resource.runId)}` : ''
   if (resource.kind === 'attachment') return `/sessions/${session}/attachments/${encodeURIComponent(resource.attachmentId)}/content`
   if (resource.kind === 'observation') return `/sessions/${session}${run}/observations/${encodeURIComponent(resource.observationId)}`
-  if (resource.kind === 'candidate') return `/sessions/${session}${run}/chart-previews/${encodeURIComponent(resource.candidateId)}`
+  if (resource.kind === 'staged') return `/sessions/${session}${run}/chart-previews/${encodeURIComponent(resource.stagedRef)}`
   return `/sessions/${session}${run}/chart-previews/${encodeURIComponent(resource.artifactId)}`
 }
 

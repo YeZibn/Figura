@@ -124,10 +124,10 @@ def test_authorized_chart_tools_keep_identity_and_hide_local_paths():
         "extract_text": {"attachment_id", "panel_id"},
         "decompose_chart_image": {"attachment_id", "regions", "segmentation_mode", "max_panels", "crop_padding"},
         "inspect_chart_layout": {"attachment_id", "layout_hint", "chart_type"},
-        "measure_bars": {"attachment_id", "panel_id", "measurement_target", "observation_scope", "generation_context", "candidate_id", "candidate_attempt"},
-        "extract_line_series": {"attachment_id", "panel_id", "measurement_target", "observation_scope", "generation_context", "candidate_id", "candidate_attempt"},
-        "extract_pie_slices": {"attachment_id", "panel_id", "measurement_target", "observation_scope", "generation_context", "candidate_id", "candidate_attempt"},
-        "extract_scatter_points": {"attachment_id", "panel_id", "measurement_target", "observation_scope", "generation_context", "candidate_id", "candidate_attempt"},
+        "measure_bars": {"attachment_id", "panel_id", "measurement_target", "observation_scope", "generation_context"},
+        "extract_line_series": {"attachment_id", "panel_id", "measurement_target", "observation_scope", "generation_context"},
+        "extract_pie_slices": {"attachment_id", "panel_id", "measurement_target", "observation_scope", "generation_context"},
+        "extract_scatter_points": {"attachment_id", "panel_id", "measurement_target", "observation_scope", "generation_context"},
     }
     for name, fields in expected_fields.items():
         public = registry.get(name)
@@ -226,12 +226,12 @@ def test_sanitize_payload_removes_data_urls_and_provider_fields():
     assert clean == {"image": {"url": "[image content omitted from memory]"}, "ok": 1}
 
 
-def test_checkpoint_context_can_replay_bounded_private_reasoning():
-    from chartagent.gateway.recovery import sanitize_checkpoint_state
+def test_execution_prefix_can_replay_bounded_private_reasoning():
+    from chartagent.memory.context import execution_messages
 
     state = {"messages": [{"role": "assistant", "content": "", "reasoning_content": "keep exactly"}]}
-    clean = sanitize_checkpoint_state(state)
-    assert clean["messages"][0]["reasoning_content"] == "keep exactly"
+    clean = execution_messages(state)
+    assert clean[0]["reasoning_content"] == "keep exactly"
     assert "reasoning_content" not in sanitize_payload(state)["messages"][0]
 
 

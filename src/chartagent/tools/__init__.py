@@ -15,12 +15,13 @@ from .core import (
     ToolPresentation,
     get_tool_presentation,
 )
-from .core import Tool, canonical_tool_definition, normalise_parameters
+from .core import Tool, ToolReplayEffect, canonical_tool_definition, normalise_parameters
 from .core import ToolRegistry, dispatch, dispatch_observation
 from .integrations import McpToolManifest, manifests_json, to_mcp_tools
 
 __all__ = [
     "Tool",
+    "ToolReplayEffect",
     "canonical_tool_definition",
     "normalise_parameters",
     "ToolRegistry",

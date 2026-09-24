@@ -174,7 +174,8 @@ expose an internal local path as a model input.
 - **WHEN** a chart assembly, validation, rendering, or review tool accepts
   chart-specific structured input
 - **THEN** the schema identifies applicable chart types, required fields,
-  allowed values, bounded arrays, and candidate/review identifiers where
+  allowed values, bounded arrays, and staged-chart, verification, figure, or
+  collection identifiers where
   relevant
 - **AND** constraints needed to avoid a predictable tool error are not hidden
   only inside the callable

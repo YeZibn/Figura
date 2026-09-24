@@ -5,11 +5,10 @@ import type { GatewayRunEvent } from './types'
 
 const terminalEventKinds = new Set(['final_answer', 'run_failed', 'run_interrupted'])
 const streamEventKinds = [
-  'run_started', 'resume_started', 'model_started', 'model_completed', 'tool_call', 'tool_result', 'visual_observation', 'generated_chart',
-  'generated_chart_rejected', 'generated_chart_published',
-  'review_started', 'review_completed', 'review_repair_required', 'review_failed', 'review_subcheck',
+  'run_started', 'resume_started', 'model_started', 'model_completed', 'tool_call', 'tool_result', 'visual_observation',
+  'chart_staged', 'chart_verification_result', 'chart_promotion_result',
   'reasoning', 'budget_exhausted', 'final_answer', 'run_failed', 'run_interrupted', 'recovery_blocked',
-  'operation_completed', 'history_gap',
+  'history_gap',
 ]
 
 export function subscribeRun(baseUrl: string, sessionId: string, runId: string, callbacks: RunEventCallbacks, afterSequence = 0): RunSubscription {

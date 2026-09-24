@@ -19,7 +19,6 @@ from chartagent.evaluation.timeline_model import (
 from chartagent.gateway import GatewayService as PublicGatewayService
 from chartagent.gateway.evaluation_adapter import EvaluationReaderAdapter
 from chartagent.gateway.history import GatewayHistoryStore
-from chartagent.gateway.operation_journal import OperationJournalMixin
 from chartagent.gateway.persistence import GatewayHistoryStore as CanonicalGatewayHistoryStore
 from chartagent.gateway.persistence_connection import SQLiteGatewayDatabase
 from chartagent.gateway.run_persistence import RunPersistenceMixin
@@ -47,7 +46,6 @@ def test_gateway_public_facade_and_constructor_signatures_are_stable() -> None:
     assert PublicGatewayService is GatewayService
     assert GatewayHistoryStore is CanonicalGatewayHistoryStore
     assert RunPersistenceMixin in GatewayHistoryStore.__mro__
-    assert OperationJournalMixin in GatewayHistoryStore.__mro__
     assert "transaction" in dir(SQLiteGatewayDatabase)
     assert "..evaluation.reader" not in (ROOT / "src/chartagent/gateway/service.py").read_text(encoding="utf-8")
     assert EvaluationReaderAdapter.__module__ == "chartagent.gateway.evaluation_adapter"

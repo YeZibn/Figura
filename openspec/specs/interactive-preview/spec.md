@@ -49,28 +49,6 @@ The preview SHALL present the selected image in a bounded overlay that does not 
 - **THEN** the client initially fits it within the bounded preview area
 - **AND** the user can inspect it through the zoom controls without the overlay escaping the application window
 
-### Requirement: Generated result preview preserves artifact actions and statuses
-
-When a generated chart or candidate has an available image resource, the interactive preview SHALL preserve its generated-result identity and status metadata. The generated-result presentation SHALL retain an accessible download action when the artifact is downloadable, while preview availability SHALL remain distinct from download availability.
-
-#### Scenario: Available generated result is previewable and downloadable
-
-- **WHEN** a generated chart artifact has an authorized preview resource and is in an available or warning state with download support
-- **THEN** the user can open its interactive preview and can activate the existing download action independently
-- **AND** the preview identifies the output as a generated chart or candidate
-
-#### Scenario: Pending generated result has preview bytes
-
-- **WHEN** a generated result is marked pending but already has usable preview bytes
-- **THEN** the client can open the image for inspection
-- **AND** the preview visibly retains the pending state and does not imply that generation or publication has completed
-
-#### Scenario: Generated result cannot be previewed
-
-- **WHEN** a generated result is failed, expired, unauthorized, or has no usable image resource
-- **THEN** the client shows the bounded failure or unavailable reason
-- **AND** it does not offer an interactive preview for missing bytes or a download action that cannot succeed
-
 ### Requirement: Interactive preview respects resource safety and accessibility
 
 The preview SHALL use the active preview resource boundary and SHALL release temporary client-owned resources when the overlay or its source is no longer needed. The overlay SHALL expose a dialog name, a visible focus treatment, keyboard-operable controls, and status text that does not rely on color alone.
@@ -92,3 +70,17 @@ The preview SHALL use the active preview resource boundary and SHALL release tem
 - **WHEN** the interactive preview opens and the user navigates with a keyboard
 - **THEN** focus moves to the named preview dialog and remains operable across its controls
 - **AND** closing the dialog restores focus to the originating trigger when possible
+
+### Requirement: Staged and published chart previews have distinct actions
+
+交互预览 SHALL 使用同一安全资源边界打开授权的暂存图或正式图表。暂存图 SHALL 显示验证中、失败或不可用的有界诊断，不能提供正式 artifact 下载或暗示已发布；只有已发布图表 MAY 提供下载。资源过期、无权限或缺少图像字节时不得打开无效预览。
+
+#### Scenario: Failed staged chart is previewable
+- **WHEN** 失败尝试的暂存图仍在保留期内且用户有权限
+- **THEN** 用户可用共享缩放预览检查该图
+- **AND** 看不到正式产物下载动作
+
+#### Scenario: Published chart can be downloaded
+- **WHEN** 已验证的正式图表有可用资源
+- **THEN** 用户可分别预览及下载它
+- **AND** 警告发布结果在预览中保留警告

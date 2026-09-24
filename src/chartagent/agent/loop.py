@@ -27,13 +27,12 @@ from ..client.client import LLMClient
 from ..trace import TraceSink
 from ..tools.core import ToolRegistry
 from ..memory import AgentMemory, InMemoryAgentMemory
-from ..review import ChartReviewManager
 from ..tools.core.result import GeneratedImage
-from .review_flow import GeneratedChartReviewFlow
+from ..verification.flow import GeneratedChartVerificationFlow
 
 # Sentinel returned when the step budget is exhausted.
 VisualObservationSink = Callable[[str, str, Sequence[GeneratedImage]], Sequence[dict[str, Any]]]
-CandidateInputSink = Callable[[GeneratedImage, Mapping[str, Any]], Any]
+StageChartSink = Callable[[GeneratedImage, Any], Any]
 
 
 class Agent:
@@ -64,15 +63,15 @@ class Agent:
         memory: Optional[AgentMemory] = None,
         attachments: Any = None,
         context_budget: int = 24000,
-        review_manager: Optional[ChartReviewManager] = None,
-        candidate_input_sink: CandidateInputSink | None = None,
+        stage_chart_sink: StageChartSink | None = None,
+        verification_sink: Callable[[Any], Any] | None = None,
+        promotion_sink: Callable[[str, str, str, str], Any] | None = None,
+        execution_result_resolver: Callable[[str], Any] | None = None,
+        staged_chart_resolver: Callable[[str, str], Any] | None = None,
+        staged_work_resolver: Callable[[str, str], Any] | None = None,
         interruption_event: Any = None,
         recovery_context: Optional[dict[str, Any]] = None,
-        checkpoint_sink: Optional[Callable[..., bool]] = None,
-        operation_begin: Optional[Callable[..., dict[str, Any]]] = None,
-        operation_complete: Optional[Callable[..., dict[str, Any] | None]] = None,
-        operation_uncertain: Optional[Callable[..., dict[str, Any] | None]] = None,
-        execution_gate_sink: Optional[Callable[[Mapping[str, Any]], Any]] = None,
+        execution_commit: Optional[Callable[..., Any]] = None,
         **chat_kwargs: Any,
     ) -> None:
         self.client = client
@@ -89,24 +88,22 @@ class Agent:
         self._visual_observation_sink = visual_observation_sink
         self.memory = memory or InMemoryAgentMemory(context_budget=context_budget)
         self.attachments = attachments
-        self._review_manager = review_manager or ChartReviewManager(attachments=attachments)
-        self._candidate_input_sink = candidate_input_sink
         self._interruption_event = interruption_event
         self._recovery_context = recovery_context
-        self._checkpoint_sink = checkpoint_sink
-        self._operation_begin = operation_begin
-        self._operation_complete = operation_complete
-        self._operation_uncertain = operation_uncertain
-        self._execution_gate_sink = execution_gate_sink
-        self._review_flow = GeneratedChartReviewFlow(
-            self._review_manager,
-            self.registry,
-            self.client,
-            self._chat_kwargs,
-            memory=self.memory,
-            candidate_input_sink=self._candidate_input_sink,
-            checkpoint_sink=self._checkpoint_sink,
-            execution_gate_sink=self._execution_gate_sink,
+        self._execution_commit = execution_commit
+        session_id = self.memory.session.id if self.memory.session is not None else "local"
+        self._verification_flow = GeneratedChartVerificationFlow(
+            client=self.client,
+            chat_kwargs=self._chat_kwargs,
+            attachments=self.attachments,
+            session_id=session_id,
+            stage_sink=stage_chart_sink,
+            verification_sink=verification_sink,
+            promotion_sink=promotion_sink,
+            execution_result_resolver=execution_result_resolver,
+            staged_chart_resolver=staged_chart_resolver,
+            staged_work_resolver=staged_work_resolver,
+            execution_commit=self._execution_commit,
         )
         self.context_budget = context_budget
         self._messages: List[ChatCompletionMessageParam] = []

@@ -2,8 +2,7 @@
 
 ## Purpose
 
-Make Agent execution inspectable and recoverable across the live run, page reloads, session switches, and Gateway restarts while keeping final answers readable as safe Markdown.
-
+为 Agent Run 提供有界、可排序的公开事件历史，并与私有执行记录及模型上下文区分；支持实时观察、历史读取和安全终态呈现。
 ## Requirements
 
 ### Requirement: Agent runs have durable execution history
@@ -70,13 +69,13 @@ reordering events.
 The system SHALL preserve one canonical run identifier across Gateway run
 acceptance, Agent execution, durable memory records, execution events,
 conversation projection, attachments, visual observations, and generated chart
-artifacts. Every measurement, generation, review, and publication event that
+artifacts. Every measurement, generation, verification, and promotion event that
 participates in the decision timeline SHALL contain a complete `unit_id`,
 `unit_type`, `phase`, `actor`, `role`, and `transition_id`. A tool call and its
-result SHALL use the same `unit_id` and `call_id`; a review cycle SHALL use one
-canonical `review_id` for its candidate attempt. The producer SHALL reject a
-timeline event that is missing required identity or state fields instead of
-creating a legacy or unknown association.
+result SHALL use the same `unit_id` and `call_id`; each generated image SHALL
+use its committed staged reference and verification reference as stable
+identity. The producer SHALL reject a timeline event that is missing required
+identity or state fields instead of creating an unknown association.
 
 The grouping SHALL retain intermediate evidence when the final answer is
 available, while allowing generated chart artifacts to be displayed as final
@@ -106,8 +105,8 @@ client correlation.
 
 #### Scenario: Missing timeline identity is rejected
 
-- **WHEN** a producer attempts to persist a measurement, generation, review, or
-  publication event without its required unit identity or state
+- **WHEN** a producer attempts to persist a measurement, generation,
+  verification, or artifact event without its required unit identity or state
 - **THEN** the producer records a bounded protocol error and does not publish
   the malformed event to the user timeline
 - **AND** the client does not synthesize a legacy, unknown, or orphan business
@@ -177,35 +176,6 @@ without exposing unsanitized HTML or replacing the original answer text.
   limits
 - **AND** unsafe markup does not execute in the desktop client
 
-### Requirement: Lifecycle events separate execution, review, and publication state
-
-Lifecycle events SHALL keep tool execution, measurement evidence, canonical
-review, and publication status in independent fields. `tool_call`/`tool_result`
-express measurement invocation and candidate result; new runs SHALL NOT emit
-separate measurement decision, selection, discard, focus, or repair lifecycle
-events. Measurement results SHALL NOT be interpreted as generated-chart review
-outcomes. `review_started` and `review_completed` SHALL be public review
-lifecycle events; Run lifecycle SHALL distinguish active, completed, failed,
-interrupted, and history-gap.
-
-#### Scenario: Tool result reports candidate evidence facts
-
-- **WHEN** OCR 或图表测量工具完成
-- **THEN** tool result 和适用的 observation 记录独立报告执行状态、scope、refs、质量/系列 metadata 和 overlay
-- **AND** 工具成功不会自动产生 accepted、published 或 generated-review-passed 状态
-
-#### Scenario: Actual usage is visible in the assembly request
-
-- **WHEN** 主 Agent 在 assembly 中使用某些 measurement evidence refs
-- **THEN** trace 可以通过同一 run 中的实际工具调用和 assembly 输入关联这些 refs
-- **AND** 不新增选择、舍弃或待决事件
-
-#### Scenario: Generated review has one authoritative lifecycle
-
-- **WHEN** a generated candidate enters review, repair, or publication
-- **THEN** the trace contains one canonical `review_started` transition, one final `review_completed` or `review_failed` transition, and an explicit publication transition when applicable
-- **AND** internal deterministic and VLM checks remain diagnostic details rather than parallel review lifecycles
-
 ### Requirement: Measurement tool calls are attributable
 
 执行追踪 SHALL 通过实际 measurement tool calls 及其结果保留首次 scope 或后续局部 scope、run/panel/attempt、父 attempt（如适用）、measurement/evidence refs、quality 与必要的结果摘要。局部重测是模型显式发起的下一次普通测量调用，不额外生成 measurement decision、repair-required、repair-rejected、pending-focus 或 repair-budget timeline unit。trace 不得记录原始图片、绝对路径、密钥或 provider 原始 payload。
@@ -226,7 +196,7 @@ interrupted, and history-gap.
 
 - **WHEN** 定向范围为空、无法应用或质量不足
 - **THEN** trace 保留该 tool call 的有界失败/质量诊断
-- **AND** 不伪造 pending measurement unit 或将其归类为 generated-chart review failure
+- **AND** 不伪造 pending measurement unit 或将其归类为图像验证失败
 
 ### Requirement: Measurement tool results have stable client presentation
 
@@ -313,36 +283,6 @@ cleanup guarantees as session records and attachments.
   artifacts are no longer readable through the Gateway
 - **AND** another session's execution history is unaffected
 
-### Requirement: Generated chart preview references follow candidate publication
-
-Generated chart lifecycle events SHALL expose enough bounded identity and
-status information for a client to resolve both an unpublished candidate and
-its later published artifact. When a candidate is promoted, subsequent
-historical or live representations SHALL provide a current artifact reference
-or a stable preview resolution that does not depend on a stale candidate URL.
-
-#### Scenario: Pending candidate has a preview resource
-
-- **WHEN** a generated chart candidate is persisted for review
-- **THEN** its event contains the candidate identity and the client can request
-  the candidate image for an authorized owning run while it remains available
-
-#### Scenario: Published artifact replaces a candidate
-
-- **WHEN** a review promotes a candidate to a published or warning publication
-  state
-- **THEN** the resulting event and later history expose the published artifact
-  identity and preview resource, and the client does not continue relying only
-  on the old candidate resource
-
-#### Scenario: Historical lifecycle can resolve the current image
-
-- **WHEN** the client reloads a run after candidate publication or receives a
-  lifecycle event out of order
-- **THEN** it can resolve the current preview using the available bounded
-  reference and displays an explicit pending or unavailable state when no
-  current bytes can be served
-
 ### Requirement: Run trace preserves effective provider metadata
 
 Execution history SHALL carry the effective provider and model as bounded
@@ -368,92 +308,41 @@ raw endpoint values, and provider response bodies.
 - **THEN** historical and live events for that run continue to report its
   original provider
 
-### Requirement: Execution checkpoints and continuation lineage are inspectable
-
-The execution trace SHALL expose bounded checkpoint state and work-unit
-completion information for runs that may be continued. A continuation SHALL
-retain its parent run identifier and relation kind while using its own event
-sequence. The trace SHALL keep the parent terminal state immutable and SHALL
-make recovery-blocked or uncertain operations distinguishable from completed
-work.
-
-#### Scenario: Checkpoint is visible without exposing execution internals
-
-- **WHEN** a run reaches a committed recovery boundary
-- **THEN** its summary or trace exposes the checkpoint phase, next-action
-  category, and recovery availability
-- **AND** it does not expose secrets, raw provider responses, or binary content
-
-#### Scenario: Resume lineage is preserved
-
-- **WHEN** a resume creates a child run
-- **THEN** the child trace identifies the parent and the `resume` relation
-- **AND** the child events remain ordered independently from the parent's
-  terminal event stream
-
-#### Scenario: Uncertain operation is not shown as completed
-
-- **WHEN** a run stops with an operation whose result cannot be confirmed
-- **THEN** the trace records the bounded uncertain or recovery-blocked state
-- **AND** it does not render that operation as a successful completed step
-
-### Requirement: Candidate lifecycle events share stable scope correlation
-
-候选生成、measurement tool observation、审核、修复和 publication 事件 SHALL 在适用时共享 `candidate_id`、attempt、source scope 和 repair kind。事件 SHALL 保持工具执行、measurement evidence、chart review 与 publication status 的语义分离；measurement evidence 的是否采用由实际 assembly 输入体现，不形成独立事件种类。
-
-#### Scenario: Measurement and generated review are not displayed as one status
-
-- **WHEN** 一个候选经历 measurement observation、assembly、`review_started` 和 generated-chart rejection
-- **THEN** trace 保留各实际工具调用、审核和发布状态
-- **AND** 关联字段允许客户端把它们归入同一 candidate attempt，但 measurement 成功不被解释为 review passed
-
-### Requirement: Repair events identify the next permitted phase
-
-每个审核失败或修复事件 SHALL 携带 bounded repair kind、父 attempt 和允许的下一阶段。
-`evidence_needed` 事件 SHALL 能区分“等待主 Agent 决策”和“正在同范围补证据”；
-`terminal` 事件 SHALL 表示不得继续。
-
-#### Scenario: Evidence repair is traceable from failure to re-review
-
-- **WHEN** review 失败后主 Agent 进行同范围补测并重新审核
-- **THEN** trace 能通过父/子 attempt 连接失败、补测、重新装配和下一次审核
-- **AND** 不会把多个 review lifecycle event 误显示为多次独立生成请求
-
 ### Requirement: Oversized diagnostic results preserve the scope identity
 
-当 tool result 或 review diagnostic 被截断时，外层事件 SHALL 仍保留 tool name、call_id、
-candidate_id、attempt、source scope 和 status；截断只影响诊断正文，不得造成孤立或未知
-候选。
+当 tool result、来源绑定诊断或图像验证诊断被截断时，外层事件 SHALL 仍保留 bounded
+tool name、call_id、unit identity、来源范围引用和 status；截断只影响诊断正文，不得造成
+孤立工具结果或虚构业务状态。
 
 #### Scenario: Truncated measurement remains attributable
 
 - **WHEN** 局部测量结果超过事件正文限制
-- **THEN** 客户端仍能知道它属于哪个 candidate/panel attempt
+- **THEN** 客户端仍能知道它属于哪个工具调用、来源范围和验证结果
 - **AND** 可以通过授权引用获取完整结果或显示明确的 truncated 状态
 
-### Requirement: Execution events expose decision-unit correlation
+### Requirement: Execution events expose committed-fact correlation
 
-测量、装配、生成、审核、修复和发布相关的 execution event SHALL 在适用时携带统一的 `unit_id`、`unit_type`、`phase`、`actor`、`parent_unit_id`、`transition_id` 和 `next_action`。字段 SHALL 是有界、可序列化且与现有 run、candidate、attempt、scope 和 call 标识兼容的。
+测量、装配、生成、验证和发布相关的 execution event SHALL 在适用时携带统一的 `unit_id`、`unit_type`、`phase`、`actor`、`parent_unit_id` 和 `transition_id`。字段 SHALL 有界、可序列化，并与 run、staged reference、verification reference、scope 和 call 标识兼容；恢复控制游标不得成为业务时间线事件。
 
 #### Scenario: Cross-domain events share a unit lineage
 
-- **WHEN** 一个候选由 measurement tool observation、实际 assembly 输入和一次审核修复产生
-- **THEN** 相关事件可以通过 unit 和 parent unit 关联到同一 candidate lineage
-- **AND** 客户端可以区分 observation、action、gate 和 publication，而不需要独立 measurement-decision event
+- **WHEN** 一张图由 measurement tool observation、实际 assembly 输入、渲染、验证和发布产生
+- **THEN** 相关事件可以通过 unit 与 parent unit 关联到同一张图
+- **AND** 客户端可以区分工具观察、生成、验证、正式 artifact 和终态，而不需要额外 decision 或 gate 事件
 
 #### Scenario: Event without applicable parent remains valid
 
 - **WHEN** 一个独立的工具观察没有父决策 unit
 - **THEN** 事件可以使用自身的 observation unit 和空 parent
-- **AND** 不得伪造一个不存在的 candidate 或 review 关系
+- **AND** 不得伪造一个不存在的生成、验证或父子关系
 
 ### Requirement: Timeline events have one canonical payload shape
 
 每个参与用户时间线的事件类型 SHALL 定义唯一的 envelope 字段形状和状态字段语义。新的 timeline correlation envelope SHALL 使用版本 2；envelope 标识字段 SHALL 使用当前运行事件协议约定的 `snake_case`。同一事件类型不得把 `state/status`、snake/camel 字段名或 Gate 别名作为可互换输入。不同公开 DTO（例如 Run summary）可以继续使用其既有字段约定，但不得把 DTO 别名注入事件 envelope。`tool_result` 的工具执行状态使用 `status`，其他生命周期状态使用该事件类型定义的 canonical 字段；生产端遇到同一语义的冲突或别名字段 SHALL 拒绝该时间线事件，不得选择一个值继续发布。
 
-#### Scenario: Lifecycle event has one state field
+#### Scenario: Verification and artifact events have one state field
 
-- **WHEN** 生产端发出审核、生成或发布生命周期事件
+- **WHEN** 生产端发出验证、生成或 artifact 生命周期事件
 - **THEN** 事件只包含该事件类型定义的 canonical 状态字段
 - **AND** 客户端无需从另一个状态别名推断状态
 
@@ -463,11 +352,11 @@ candidate_id、attempt、source scope 和 status；截断只影响诊断正文�
 - **THEN** 外层事件使用该事件类型规定的工具执行状态字段，并保留 tool/call/unit/run 关联
 - **AND** 不额外写入一个含义重复的生命周期状态别名
 
-#### Scenario: Gate snapshots do not create parallel lifecycle events
+#### Scenario: Committed facts do not create mirror events
 
-- **WHEN** 权威审核状态变化并更新 Gateway 的 Gate 查询投影
-- **THEN** 系统通过审核/发布业务事件表达相关领域转移
-- **AND** 不另外发出 `review_gate_required` 或 `review_gate_updated` 镜像事件
+- **WHEN** Gateway 保存已提交的图像验证结果或 artifact 结果
+- **THEN** 系统通过对应的验证或发布事实事件表达转移
+- **AND** 不从查询投影再生成重复的镜像事件
 
 #### Scenario: Conflicting aliases are rejected
 
@@ -494,38 +383,22 @@ candidate_id、attempt、source scope 和 status；截断只影响诊断正文�
 #### Scenario: Evaluation reads the same trace contract
 
 - **WHEN** 评测工作台读取一个 case 的 run history
-- **THEN** 事件中的 unit、phase、decision 和 gate 字段与普通运行读取时一致
+- **THEN** 事件中的 unit、phase、state 和来源关联与普通运行读取时一致
 - **AND** 评测层不需要访问原始 SQLite 或重新执行 Agent
-
-### Requirement: Pending transitions are explicit in the execution trace
-
-执行追踪 SHALL 仅对确实跨越工具调用且会改变运行可恢复性的动作记录 pending/next-action 状态。一次 measurement tool call SHALL 将请求 scope、实际应用范围与 observation 结果作为同一操作的事实；不存在可独立等待的 measurement focus 或 evidence decision transition。审核等其他实际阻塞操作仍可显式记录其当前状态。
-
-#### Scenario: Measurement scope and observation are atomic
-
-- **WHEN** trace 收到一次成功应用 scope 的 measurement tool result
-- **THEN** 当前 measurement attempt 同时包含该 effective scope 和 observation refs
-- **AND** trace 不留下 pending next action 等待第二个 measurement/evidence-decision 事件
-
-#### Scenario: A failed tool call does not become a pending evidence unit
-
-- **WHEN** 局部测量调用没有产生可用 observation
-- **THEN** tool result 保存失败或不充分原因
-- **AND** 主 Agent 可在下一轮自主选择重试、调整 scope、使用其他证据或停止，无需先关闭 abandonment unit
 
 ### Requirement: Equivalent transitions are projected idempotently
 
 同一 `run_id`、`unit_id`、`attempt`、`phase` 和 `transition_id` 的重复事件 SHALL 不创建重复的顶层时间线行。去重不得删除原始 event history，也不得隐藏相同 transition 的错误状态。
 
-#### Scenario: Review snapshot does not duplicate review start
+#### Scenario: Repeated verification transition does not create a duplicate
 
-- **WHEN** review gate 和 tool result 都携带同一个 review start transition
-- **THEN** timeline projection 只生成一个 review start 状态
+- **WHEN** SSE 与历史补偿都携带同一个 chart verification transition
+- **THEN** timeline projection 只生成一个验证结果
 - **AND** 原始事件仍然按 sequence 保留
 
 ### Requirement: Lifecycle events expose bounded process correlation
 
-执行事件 SHALL 在可确定时携带有界的 process、turn、operation 或其他现有运行关联信息，并继续保留 run sequence 作为事实顺序。无法确定关联时，事件仍 SHALL 合法持久化并明确为未关联，不得伪造 candidate、unit 或 parent。
+执行事件 SHALL 在可确定时携带有界的 process、turn、operation 或其他现有运行关联信息，并继续保留 run sequence 作为事实顺序。无法确定关联时，事件仍 SHALL 合法持久化并明确为未关联，不得伪造 unit 或 parent 关联。
 
 #### Scenario: Model and operation events share a process context
 
@@ -533,11 +406,11 @@ candidate_id、attempt、source scope 和 status；截断只影响诊断正文�
 - **THEN** 相关 lifecycle events 可以通过有界上下文归入同一过程展示
 - **AND** 原始 sequence、call identity 和工具详情仍可单独展开
 
-#### Scenario: Legacy events remain replayable
+#### Scenario: Unsupported legacy protocol is explicit
 
 - **WHEN** 历史事件没有新增的过程关联字段
-- **THEN** 系统按兼容规则持久化和投影这些事件
-- **AND** 历史读取、实时追加和评测读取不会因为缺失字段而丢失事件或生成虚假 lineage
+- **THEN** Gateway 或客户端按不支持的历史协议返回有界不可用状态
+- **AND** 不从旧 lifecycle 字段迁移或合成缺失的关联信息
 
 ### Requirement: Execution failures carry deterministic classification
 
@@ -554,3 +427,26 @@ candidate_id、attempt、source scope 和 status；截断只影响诊断正文�
 - **WHEN** 请求超时、连接中断或系统无法判断远端是否已接受操作
 - **THEN** trace 标记 operation outcome uncertain 并保留恢复阻塞原因
 - **AND** 用户可以看到这是结果未知，而不是已确认的 provider 拒绝
+
+### Requirement: Execution events represent committed tool, verification and artifact facts
+
+公开执行事件 SHALL 使用同一 Run 内单调序号及稳定 transition/correlation identity，分别表达工具过程、验证结论、正式 artifact 和终态；未提交的内部结果不得投影为完成。测量质量仍作为工具事实，不建立采用/舍弃事件。验证和发布分别使用各自已提交的结论与 artifact 引用，不叠加并行状态字段或固定处理阶段。
+
+#### Scenario: Verification and promotion appear once
+- **WHEN** 一张图验证通过并正式发布，随后事件被重放
+- **THEN** 时间线仍只有一个可归属的验证结果和一个正式产物结果
+- **AND** 不从未提交的内部状态或旧候选状态字段推断额外转换
+
+#### Scenario: Failed staged image has bounded context
+- **WHEN** 验证失败且暂存预览可用
+- **THEN** 事件含有生成尝试、来源范围、issues 与预览引用
+- **AND** 不暴露图像字节、私有模型上下文或本地路径
+
+### Requirement: Recovery trace exposes a cursor without controlling execution
+
+Run 历史 SHALL 可见有界 resume 资格、不可用原因、父子 Run 关系及下一动作类别；内部执行记录负责恢复控制。SSE 重放 SHALL 继续以 runId:sequence 去重，并且历史缺口 SHALL 明确呈现。
+
+#### Scenario: Child resume remains attributable
+- **WHEN** 子 Run 从父 Run 的已提交游标继续
+- **THEN** 两个 Run 各自保留事件序号和终态
+- **AND** 历史可识别它们的 resume 关系

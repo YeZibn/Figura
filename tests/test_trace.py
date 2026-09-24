@@ -20,7 +20,7 @@ from chartagent import (
 )
 from chartagent.client.models import NormalizedResult, ToolCall
 from chartagent.trace import TraceEmitter, TraceEvent, TraceLimits
-from chartagent.agent.artifacts import lifecycle_trace_fields
+from chartagent.agent.artifacts import chart_context_trace_fields
 from chartagent.decision_timeline import (
     CORRELATION_VERSION,
     EVENT_STATUS_FIELD_BY_KIND,
@@ -124,34 +124,20 @@ def test_trace_redacts_local_paths_inside_measurement_arguments():
     assert "[PATH_OMITTED]" in encoded
 
 
-def test_lifecycle_trace_fields_keep_candidate_and_measurement_scope_identity():
+def test_chart_trace_summary_keeps_source_scope_and_coverage():
     content = json.dumps({
         "data": {
             "generation_context": {
                 "source_scope": {"attachment_id": "att_1", "panel_ids": ["panel_left"]},
                 "coverage": {"basis": "requested_subset", "represented_series": ["Actual"]},
             },
-            "measurement": {
-                "reference": {"attachment_id": "att_1", "panel_id": "panel_left", "attempt_id": "matt_2"},
-                "attempt": {"parent_attempt_id": "matt_1"},
-            },
-            "review": [{
-                "candidateId": "cand_2",
-                "candidateAttempt": 2,
-                "parentAttempt": "cand_1",
-                "review": {"repairKind": "evidence_needed"},
-            }],
         }
     }, ensure_ascii=False)
 
-    fields = lifecycle_trace_fields(content)
+    fields = chart_context_trace_fields(content)
 
-    assert fields["candidate_id"] == "cand_2"
-    assert fields["attempt"] == 2
-    assert fields["parent_attempt"] == "cand_1"
     assert fields["source_scope"] == {"attachment_id": "att_1", "panel_ids": ["panel_left"]}
     assert fields["coverage"]["basis"] == "requested_subset"
-    assert fields["repair_kind"] == "evidence_needed"
 
 
 def test_trace_event_direct_payload_is_json_safe():
@@ -239,20 +225,20 @@ def test_timeline_v2_rejects_status_aliases_and_old_envelope_versions():
         with pytest.raises(TimelineProtocolError):
             enrich_event_payload("tool_result", {**common, "status": "success", **aliases})
 
-    review = {
-        "unit_id": "review:review-1",
-        "unit_type": "review",
-        "phase": "review",
+    verification = {
+        "unit_id": "verification:ver_result_12345678",
+        "unit_type": "verification",
+        "phase": "verify",
         "actor": "system",
-        "role": "review",
-        "transition_id": "review:review-1:1:passed",
-        "review_id": "review-1",
-        "state": "passed",
-        "review_status": "completed",
+        "role": "verification",
+        "transition_id": "verification:ver_result_12345678:completed",
+        "state": "pass",
+        "staged_ref": "stg_preview_12345678",
+        "verification_ref": "ver_result_12345678",
     }
-    assert enrich_event_payload("review_completed", review)["review_status"] == "completed"
+    assert enrich_event_payload("chart_verification_result", verification)["state"] == "pass"
     with pytest.raises(TimelineProtocolError, match="只能使用 state"):
-        enrich_event_payload("review_completed", {**review, "status": "passed"})
+        enrich_event_payload("chart_verification_result", {**verification, "status": "pass"})
 
 
 def test_persisted_timeline_validator_requires_v2_without_enriching_old_events():
@@ -273,6 +259,8 @@ def test_persisted_timeline_validator_requires_v2_without_enriching_old_events()
         validate_timeline_event("tool_result", {**common, "correlation_version": 1})
     with pytest.raises(TimelineProtocolError):
         validate_timeline_event("tool_result", {**common, "execution_gate": {"blocking": True}})
+    with pytest.raises(TimelineProtocolError):
+        validate_timeline_event("tool_result", {**common, "artifacts": [{"artifactId": "artifact_old"}]})
 
 
 def test_trace_emitter_drops_invalid_timeline_event_without_sequence_gap():
@@ -302,13 +290,13 @@ def test_trace_emitter_drops_invalid_timeline_event_without_sequence_gap():
 def test_malformed_timeline_event_is_rejected_without_fallback_identity():
     with pytest.raises(TimelineProtocolError, match="缺少 unit_id"):
         enrich_event_payload(
-            "review_completed",
-            {"review_id": "review-1", "state": "passed"},
+            "chart_verification_result",
+            {"verification_ref": "ver_result_12345678", "state": "pass"},
             run_id="run-1",
             sequence=7,
         )
 
-    with pytest.raises(TimelineProtocolError, match="已废弃"):
+    with pytest.raises(TimelineProtocolError, match="退役"):
         enrich_event_payload("chart_review_completed", {}, run_id="run-1", sequence=8)
 
 

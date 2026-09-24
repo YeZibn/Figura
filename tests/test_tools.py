@@ -7,6 +7,7 @@ import pytest
 from chartagent import Tool, ToolRegistry, dispatch, to_mcp_tools
 from chartagent.agent import tool_to_openai_schema
 from chartagent.tools import get_tool_presentation
+from chartagent.tools.core import ToolReplayEffect
 
 
 def _add(a: int, b: int) -> int:
@@ -41,6 +42,7 @@ def test_tool_defaults_normalize_schema_and_export_one_definition():
 
     assert tool.display_name is None
     assert tool.group == "general"
+    assert tool.replay_effect is ToolReplayEffect.REPLAY_SAFE
     assert tool.parameters["type"] == "object"
     assert tool.parameters["required"] == []
     assert tool.parameters["additionalProperties"] is False
@@ -50,6 +52,26 @@ def test_tool_defaults_normalize_schema_and_export_one_definition():
         "description": tool.description,
         "parameters": tool.parameters,
     }
+
+
+def test_tool_replay_effect_is_a_runtime_contract():
+    tool = Tool(
+        "external_write",
+        "Use this tool to perform one external write when requested; do not use it for unrelated actions. The write may require reconciliation after interruption.",
+        {"type": "object"},
+        lambda: {"ok": True},
+        replay_effect=ToolReplayEffect.RECONCILE_REQUIRED,
+    )
+
+    assert tool.replay_effect is ToolReplayEffect.RECONCILE_REQUIRED
+    with pytest.raises(ValueError):
+        Tool(
+            "invalid_effect",
+            "Use this tool to return a bounded value when needed; do not use it for other work. The result is data, with no additional guarantees.",
+            {"type": "object"},
+            lambda: None,
+            replay_effect="unknown",
+        )
 
 
 def test_tool_rejects_invalid_bounded_metadata():

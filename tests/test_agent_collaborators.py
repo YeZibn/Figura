@@ -15,7 +15,7 @@ from chartagent.agent.measurement_flow import (
 )
 from chartagent.measurement import MeasurementSession
 from chartagent.agent.panel_routing import layout_arguments, panel_routing_error
-from chartagent.agent.recovery import checkpoint_state, recovery_tool_calls
+from chartagent.agent.recovery import recovery_tool_calls
 from chartagent.agent.turn import execute_model_turn, prepare_and_dispatch_tool_call
 from chartagent.client.models import NormalizedResult, ToolCall
 from chartagent.tools.core.result import DispatchedObservation, GeneratedImage
@@ -25,7 +25,7 @@ def test_agent_data_collaborators_own_their_projection_helpers() -> None:
     assert attach_visual_observation_refs.__module__ == "chartagent.agent.artifacts"
     assert layout_arguments.__module__ == "chartagent.agent.panel_routing"
     assert measurement_data_from_content.__module__ == "chartagent.agent.measurement_flow"
-    assert checkpoint_state.__module__ == "chartagent.agent.recovery"
+    assert recovery_tool_calls.__module__ == "chartagent.agent.recovery"
     assert execute_model_turn.__module__ == "chartagent.agent.turn"
     assert prepare_and_dispatch_tool_call.__module__ == "chartagent.agent.turn"
     assert "Agent" not in vars(__import__("chartagent.agent.artifacts", fromlist=["Agent"]))
@@ -113,7 +113,7 @@ def test_measurement_flow_projects_current_candidate_evidence() -> None:
     assert "measurement_target" not in trace
 
 
-def test_extracted_turn_boundaries_preserve_operation_order() -> None:
+def test_extracted_turn_boundaries_preserve_execution_order() -> None:
     events: list[str] = []
 
     class Client:
@@ -140,17 +140,7 @@ def test_extracted_turn_boundaries_preserve_operation_order() -> None:
     agent = Agent(
         Client(),
         registry,
-        operation_begin=lambda operation_id, kind: events.append(f"begin:{kind}") or {"state": "in_flight"},
-        operation_complete=lambda operation_id, result=None, references=None: events.append("complete"),
     )
 
     assert agent.run("run") == "done"
-    assert events == [
-        "begin:model",
-        "complete",
-        "begin:tool",
-        "tool",
-        "complete",
-        "begin:model",
-        "complete",
-    ]
+    assert events == ["tool"]

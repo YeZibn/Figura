@@ -261,27 +261,15 @@ def _bounded_decision_context(value: object) -> dict[str, Any] | None:
     if not isinstance(value, Mapping):
         return None
     result: dict[str, Any] = {}
-    for key in (
-        "unit_id",
-        "unit_type",
-        "phase",
-        "status",
-        "candidate_id",
-        "repair_hint",
-        "publication_status",
-    ):
+    for key in ("unit_id", "unit_type", "phase", "status"):
         if value.get(key) is not None:
             result[key] = _bounded_text(value.get(key), 240)
     for key in ("hard_constraints",):
         if isinstance(value.get(key), (list, tuple)):
             result[key] = [_bounded_text(item, 96) for item in list(value[key])[:12]]
-    review = value.get("review")
-    if isinstance(review, Mapping):
-        result["review"] = {
-            key: _bounded_text(review.get(key), 240) if key != "publication_blocked" else bool(review.get(key))
-            for key in ("review_id", "candidate_id", "state", "repair_kind", "repair_hint", "publication_blocked")
-            if review.get(key) is not None
-        }
+    verification = value.get("verification")
+    if isinstance(verification, Mapping):
+        result["verification"] = _bounded_verification(verification)
     if value.get("budget_remaining") is not None:
         try:
             result["budget_remaining"] = max(0, int(value.get("budget_remaining") or 0))
@@ -303,6 +291,21 @@ def _bounded_decision_context(value: object) -> dict[str, Any] | None:
     if generation_context is not None:
         result["generation_context"] = generation_context
     return result or None
+
+
+def _bounded_verification(value: Mapping[str, Any]) -> dict[str, Any]:
+    issues = value.get("issues") if isinstance(value.get("issues"), list) else []
+    checks = value.get("checks") if isinstance(value.get("checks"), Mapping) else {}
+    return {
+        "verification_ref": _bounded_text(value.get("verificationRef"), 160),
+        "staged_ref": _bounded_text(value.get("stagedRef"), 160),
+        "status": _bounded_text(value.get("status"), 48),
+        "checks": {str(key)[:64]: _bounded_text(item, 32) for key, item in list(checks.items())[:16]},
+        "issues": [
+            {key: _bounded_text(issue.get(key), 240) for key in ("code", "location", "message", "severity") if issue.get(key) is not None}
+            for issue in issues[:8] if isinstance(issue, Mapping)
+        ],
+    }
 
 
 def _tool_record(tool: Any) -> dict[str, Any]:
@@ -411,7 +414,6 @@ def build_runtime_context(
     runtime_state: Mapping[str, Any] | None = None,
     *,
     panel_inventory: Iterable[Mapping[str, Any]] = (),
-    review_gate: Mapping[str, Any] | None = None,
 ) -> str:
     """Render code-owned Run/Turn state and panel routing facts."""
     state = dict(runtime_state or {})
@@ -424,9 +426,7 @@ def build_runtime_context(
         "pending_action": _bounded_text(state.get("pending_action"), 160) or "等待模型决定下一步",
         "interrupted": bool(state.get("interrupted", False)),
         "recovery_status": _bounded_text(state.get("recovery_status"), 160) or "none",
-        "retry_count": max(0, int(state.get("retry_count", 0) or 0)),
         "retry_budget": max(0, int(state.get("retry_budget", 0) or 0)),
-        "publication_status": _bounded_text(state.get("publication_status"), 64) or "not_published",
         "measurement_evidence": _bounded_measurement_evidence(
             state.get("measurement_evidence")
         ),
@@ -437,78 +437,49 @@ def build_runtime_context(
     payload = {
         "state": safe_state,
         "panel_inventory": inventory,
-        "review_gate": dict(review_gate) if isinstance(review_gate, Mapping) else {"status": "empty"},
     }
     return load_prompt_template("dynamic/runtime.md", runtime_summary=_safe_json(payload, limit=12_000))
 
 
 def build_artifact_index(records: Iterable[Mapping[str, Any]] = ()) -> str:
-    """Render a bounded attributable index without replacing native messages."""
+    """Render bounded staged-chart, verification, and measurement facts."""
     safe_records: list[dict[str, Any]] = []
     for record in list(records)[:_MAX_ARTIFACT_COUNT]:
         if not isinstance(record, Mapping):
             continue
         item = {
-            "artifact_id": _bounded_text(record.get("artifact_id"), 128),
+            "artifact_id": _bounded_text(record.get("artifact_id"), 160) or None,
             "kind": _bounded_text(record.get("kind"), 48) or "unknown",
-            "status": _bounded_text(record.get("status"), 64) or "unknown",
-            "candidate_id": _bounded_text(record.get("candidate_id"), 160) or None,
-            "candidate_attempt": record.get("candidate_attempt"),
-            "parent_attempt": record.get("parent_attempt"),
+            "status": _bounded_text(record.get("status"), 48) or "unknown",
+            "staged_ref": _bounded_text(record.get("staged_ref"), 160) or None,
+            "published_artifact_id": _bounded_text(record.get("artifact_id_published"), 160) or None,
+            "verification": dict(record.get("verification")) if isinstance(record.get("verification"), Mapping) else None,
             "generation_context": _bounded_generation_context(record.get("generation_context")),
-            "coverage": _bounded_generation_context({"coverage": record.get("coverage")}).get("coverage")
-            if isinstance(record.get("coverage"), Mapping)
-            else None,
-            "repair_kind": _bounded_text(record.get("repair_kind"), 32) or None,
-            "repair_phase": _bounded_text(record.get("repair_phase"), 32) or None,
-            "source_attachment_ids": [_bounded_text(value, 96) for value in _bounded_list(record.get("source_attachment_ids"))],
-            "panel_ids": [_bounded_text(value, 96) for value in _bounded_list(record.get("panel_ids"), 32)],
-            "lineage": [_bounded_text(value, 128) for value in _bounded_list(record.get("lineage"))],
-            "confidence": record.get("confidence"),
-            "warnings": [_bounded_text(value, 240) for value in _bounded_list(record.get("warnings"), 12)],
+            "source_attachment_ids": [_bounded_text(value, 96) for value in _bounded_list(record.get("source_attachment_ids"), 16)],
+            "panel_ids": [_bounded_text(value, 96) for value in _bounded_list(record.get("panel_ids"), 16)],
+            "collection_id": _bounded_text(record.get("collection_id"), 128) or None,
+            "child_chart_ids": [_bounded_text(value, 128) for value in _bounded_list(record.get("child_chart_ids"), 16)],
             "measurement_status": _bounded_text(record.get("measurement_status"), 48) or None,
             "measurement_reference": (
-                {
-                    key: _bounded_text(value, 160) if isinstance(value, str) else value
-                    for key, value in record.get("measurement_reference", {}).items()
-                    if key in {"session_id", "attempt_id", "attachment_id", "panel_id"}
-                }
-                if isinstance(record.get("measurement_reference"), Mapping)
-                else None
+                {key: _bounded_text(value, 160) if isinstance(value, str) else value
+                 for key, value in record.get("measurement_reference", {}).items()
+                 if key in {"session_id", "attempt_id", "attachment_id", "panel_id"}}
+                if isinstance(record.get("measurement_reference"), Mapping) else None
             ),
             "measurement_issues": [
-                {
-                    key: _bounded_text(value, 240)
-                    for key, value in issue.items()
-                    if key in {"code", "location", "severity", "message", "next_action"}
-                }
+                {key: _bounded_text(value, 240) for key, value in issue.items()
+                 if key in {"code", "location", "severity", "message"}}
                 for issue in _bounded_list(record.get("measurement_issues"), 8)
                 if isinstance(issue, Mapping)
             ],
             "measurement_evidence_refs": _bounded_ref_list(record.get("measurement_evidence_refs"), 64),
             "measurement_series_metadata": _bounded_ref_list(record.get("measurement_series_metadata"), 64),
-            "measurement_scope": (
-                dict(record.get("measurement_scope"))
-                if isinstance(record.get("measurement_scope"), Mapping)
-                else None
-            ),
-            "measurement_effective_scope": (
-                dict(record.get("measurement_effective_scope"))
-                if isinstance(record.get("measurement_effective_scope"), Mapping)
-                else None
-            ),
-            "measurement_observation_scope": (
-                _bounded_observation_scope(record.get("measurement_observation_scope"))
-                if isinstance(record.get("measurement_observation_scope"), Mapping)
-                else None
-            ),
-            "resource_refs": [
-                {key: _bounded_text(value, 180) for key, value in ref.items() if key in {"resourceKey", "artifactKind", "mediaType"}}
-                for ref in list(record.get("resource_refs") or [])[:8]
-                if isinstance(ref, Mapping)
-            ],
+            "measurement_scope": dict(record.get("measurement_scope")) if isinstance(record.get("measurement_scope"), Mapping) else None,
+            "measurement_effective_scope": dict(record.get("measurement_effective_scope")) if isinstance(record.get("measurement_effective_scope"), Mapping) else None,
+            "measurement_observation_scope": _bounded_observation_scope(record.get("measurement_observation_scope"))
+            if isinstance(record.get("measurement_observation_scope"), Mapping) else None,
         }
-        if item["artifact_id"]:
+        if item["artifact_id"] or item["staged_ref"]:
             safe_records.append(item)
     summary = _safe_json(safe_records, limit=16_000) if safe_records else "[]"
     return load_prompt_template("dynamic/artifacts.md", artifact_summary=summary)
@@ -523,9 +494,9 @@ def build_static_agent_prompt() -> str:
     return "\n\n".join(sections)
 
 
-def build_reviewer_prompt() -> str:
-    """Load the independent tool-free VLM reviewer contract."""
-    return load_prompt_asset("reviewer/chart-review.md")
+def build_chart_verification_prompt() -> str:
+    """Load the independent tool-free chart verification contract."""
+    return load_prompt_asset("verification/chart-verification.md")
 
 
 def prompt_trace_metadata(tools: Iterable[Any] = ()) -> dict[str, Any]:
@@ -549,13 +520,12 @@ def assemble_prompt_context(
     artifacts: Iterable[Mapping[str, Any]] = (),
     runtime_state: Mapping[str, Any] | None = None,
     panel_inventory: Iterable[Mapping[str, Any]] = (),
-    review_gate: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build all four logical layers and a transport-ready system string."""
     tool_list = list(tools)
     static = build_static_agent_prompt()
     tool_surface = build_tool_surface(tool_list)
-    runtime = build_runtime_context(runtime_state, panel_inventory=panel_inventory, review_gate=review_gate)
+    runtime = build_runtime_context(runtime_state, panel_inventory=panel_inventory)
     artifact_index = build_artifact_index(artifacts)
     dynamic = "\n\n".join((tool_surface, runtime, artifact_index))
     return {
@@ -576,7 +546,7 @@ __all__ = [
     "PromptResourceError",
     "assemble_prompt_context",
     "build_artifact_index",
-    "build_reviewer_prompt",
+    "build_chart_verification_prompt",
     "build_runtime_context",
     "build_static_agent_prompt",
     "build_tool_surface",

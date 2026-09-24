@@ -1,12 +1,10 @@
-"""Regression tests for scope-aware generation context and candidate identity."""
+"""Regression tests for scope-aware generation and measurement contracts."""
 
 import json
-from io import BytesIO
 from pathlib import Path
 
 from PIL import Image
 
-from chartagent.review import ChartReviewManager
 from chartagent.attachments import AttachmentRegistry
 from chartagent.panels import PanelHandoff
 from chartagent.spec import (
@@ -32,7 +30,6 @@ from chartagent.source_scope import resolve_generation_scope
 from chartagent.tools.chart.rendering import render_chart
 from chartagent.tools.chart.specification import assemble_spec
 from chartagent.tools.chart.catalog import CHART_TOOLS, register_chart_tools
-from chartagent.tools.core.result import GeneratedImage
 from chartagent.tools.core import ToolRegistry, dispatch_observation
 
 
@@ -143,25 +140,6 @@ def test_legacy_direct_chart_spec_stays_source_free() -> None:
 
     assert rebuilt.generation_context is None
     assert rebuilt.validate() == []
-
-
-def test_source_linked_candidate_without_context_is_marked_unbound() -> None:
-    manager = ChartReviewManager()
-    image = GeneratedImage(content=b"png", media_type="image/png", caption="candidate")
-    candidate = manager.create_candidate(
-        "run-scope",
-        "call-scope",
-        image,
-        ChartSpec(
-            metadata=ChartMetadata(ChartType.PIE, title="Legacy source"),
-            dataset=[DataPoint(category="A", value=1)],
-        ),
-        source_attachment_ids=("att_scope",),
-    )
-
-    assert candidate.context_status == "unbound"
-    assert candidate.generation_context is None
-    assert candidate.safe_metadata()["contextStatus"] == "unbound"
 
 
 class _PanelStore:
@@ -328,47 +306,6 @@ def test_source_scope_resolver_does_not_require_source_for_synthesis() -> None:
     assert resolved.status == "not_applicable"
 
 
-def test_review_manager_uses_resolver_crop_and_fails_closed_after_attachment_change(tmp_path: Path) -> None:
-    attachments, attachment_id = _scoped_attachments(tmp_path)
-    context = GenerationContext(
-        mode=GenerationMode.TRANSFORM,
-        source_scope=GenerationSourceScope(attachment_id, ("panel_left",), revision=1),
-        coverage=GenerationCoverage(
-            basis=CoverageBasis.REQUESTED_SUBSET,
-            represented_series=("Actual",),
-            status=CoverageStatus.COMPLETE,
-        ),
-        selection_basis=SelectionBasis.AGENT_RESOLVED,
-        goal_summary="只审核左侧 panel",
-    )
-    spec = ChartSpec(
-        metadata=ChartMetadata(ChartType.PIE, title="Actual"),
-        dataset=[DataPoint(category="A", value=1), DataPoint(category="B", value=2)],
-        generation_context=context,
-    )
-    rendered = render_chart(spec.to_dict())
-    manager = ChartReviewManager(attachments=attachments)
-    candidate = manager.create_candidate(
-        "run-scope-review",
-        "call-scope-review",
-        rendered.images[0],
-        spec,
-        source_attachment_ids=(attachment_id,),
-    )
-
-    source_payload = manager.source_payload(candidate)
-    assert source_payload is not None
-    with Image.open(BytesIO(source_payload[0])) as crop:
-        assert crop.size == (40, 30)
-    assert manager.source_resolution(candidate).effective_scope["bbox_source_px"] == [12, 12, 40, 30]
-
-    attachment = attachments.get(attachment_id)
-    assert attachment is not None
-    Path(attachment.canonical_path).write_bytes(b"changed")
-    assert manager.source_payload(candidate) is None
-    assert manager.source_resolution(candidate).status == "stale"
-
-
 def test_authorized_measurement_fails_closed_for_cross_panel_and_ambiguous_scope(tmp_path: Path) -> None:
     attachments, attachment_id = _multi_scoped_attachments(tmp_path)
     registry = ToolRegistry()
@@ -483,13 +420,14 @@ def test_source_scope_resolver_rejects_missing_panel_and_stale_revision(tmp_path
     assert missing.content == b"" and stale.content == b""
 
 
-def test_chart_measurement_schemas_share_scope_and_candidate_contracts() -> None:
+def test_chart_measurement_schemas_share_scope_contracts() -> None:
     measurement_names = {"measure_bars", "extract_line_series", "extract_pie_slices", "extract_scatter_points"}
     for tool in CHART_TOOLS:
         if tool.name not in measurement_names:
             continue
         properties = tool.parameters["properties"]
-        assert {"measurement_target", "observation_scope", "generation_context", "candidate_id", "candidate_attempt"}.issubset(properties)
+        assert {"measurement_target", "observation_scope", "generation_context"}.issubset(properties)
+        assert "candidate_id" not in properties and "candidate_attempt" not in properties
         assert tool.parameters["additionalProperties"] is False
         assert properties["measurement_target"]["additionalProperties"] is False
         assert properties["observation_scope"]["additionalProperties"] is False
@@ -505,5 +443,6 @@ def test_authorized_measurement_schema_keeps_the_same_contract() -> None:
         public = registry.get(name)
         assert public is not None
         properties = public.parameters["properties"]
-        assert {"attachment_id", "panel_id", "measurement_target", "observation_scope", "generation_context", "candidate_id", "candidate_attempt"}.issubset(properties)
+        assert {"attachment_id", "panel_id", "measurement_target", "observation_scope", "generation_context"}.issubset(properties)
+        assert "candidate_id" not in properties and "candidate_attempt" not in properties
         assert public.parameters["additionalProperties"] is False

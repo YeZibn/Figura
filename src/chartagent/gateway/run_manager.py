@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from threading import RLock
@@ -50,10 +49,9 @@ class RunManager:
         parent_run_id: str | None = None,
         root_run_id: str | None = None,
         continuation_kind: ContinuationKind | str | None = None,
-        idempotency_operation_kind: str | None = None,
+        idempotency_continuation_kind: str | None = None,
         idempotency_parent_run_id: str | None = None,
-        idempotency_checkpoint_id: str | None = None,
-        execution_gate: Mapping[str, object] | None = None,
+        idempotency_cursor_id: str | None = None,
     ) -> ManagedRun:
         with self._lock:
             self.cleanup()
@@ -71,7 +69,6 @@ class RunManager:
                 parent_run_id=parent_run_id,
                 root_run_id=root_run_id,
                 continuation_kind=continuation_kind,
-                execution_gate=execution_gate,
             )
             self._runs[run.run_id] = run
             if self.history_store is not None:
@@ -87,14 +84,12 @@ class RunManager:
                         parent_run_id=parent_run_id,
                         root_run_id=root_run_id,
                         continuation_kind=continuation_kind,
-                        idempotency_operation_kind=idempotency_operation_kind,
+                        idempotency_continuation_kind=idempotency_continuation_kind,
                         idempotency_parent_run_id=idempotency_parent_run_id,
-                        idempotency_checkpoint_id=idempotency_checkpoint_id,
+                        idempotency_cursor_id=idempotency_cursor_id,
                     )
                 except Exception:  # noqa: BLE001 - keep the live run usable
                     run._mark_history_warning()
-            if isinstance(execution_gate, Mapping):
-                run.update_execution_gate(execution_gate)
             payload = {"status": RunStatus.RUNNING.value}
             if provider:
                 payload["provider"] = provider
@@ -130,10 +125,9 @@ class RunManager:
         parent_run_id: str | None = None,
         root_run_id: str | None = None,
         continuation_kind: ContinuationKind | str | None = None,
-        idempotency_operation_kind: str | None = None,
+        idempotency_continuation_kind: str | None = None,
         idempotency_parent_run_id: str | None = None,
-        idempotency_checkpoint_id: str | None = None,
-        execution_gate: Mapping[str, object] | None = None,
+        idempotency_cursor_id: str | None = None,
     ) -> ManagedRun:
         run = self.create(
             session_id,
@@ -145,10 +139,9 @@ class RunManager:
             parent_run_id=parent_run_id,
             root_run_id=root_run_id,
             continuation_kind=continuation_kind,
-            idempotency_operation_kind=idempotency_operation_kind,
+            idempotency_continuation_kind=idempotency_continuation_kind,
             idempotency_parent_run_id=idempotency_parent_run_id,
-            idempotency_checkpoint_id=idempotency_checkpoint_id,
-            execution_gate=execution_gate,
+            idempotency_cursor_id=idempotency_cursor_id,
         )
         try:
             self._executor.submit(worker, run)

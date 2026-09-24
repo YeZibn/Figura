@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import shutil
 import time
@@ -14,11 +15,9 @@ from typing import Any
 from uuid import uuid4
 
 from ..trace import sanitize_payload, truncate_text
+from ..decision_timeline import validate_timeline_event
 from .protocol import (
-    CHECKPOINT_SCHEMA_VERSION,
-    CheckpointPhase,
     ContinuationKind,
-    GeneratedChartReference,
     MAX_ARTIFACT_CAPTION,
     MAX_ARTIFACT_CHART_TYPE,
     MAX_ARTIFACT_TITLE,
@@ -33,15 +32,18 @@ from .protocol import (
     _truncate_tool_result_payload,
     utc_timestamp,
 )
-from .operation_journal import OperationJournalMixin
+from .execution_persistence import ExecutionPersistenceMixin
+from .execution_record import ExecutionCursor, ExecutionRecordError, execution_cursor_id
 from .persistence_connection import SQLiteGatewayDatabase
 from .persistence_errors import HistoryStoreError
 from .run_persistence import RunPersistenceMixin
-from .recovery import (
-    CheckpointError,
-    RecoveryCheckpoint,
-    deserialize_checkpoint,
-    serialize_checkpoint,
+from ..verification.models import (
+    ChartManifest,
+    PublishedChart,
+    VerificationError,
+    VerificationResult,
+    canonical_json,
+    content_digest,
 )
 
 DEFAULT_MAX_HISTORY_EVENTS = 512
@@ -55,7 +57,7 @@ _SUPPORTED_ARTIFACT_TYPES = frozenset({"image/png", "image/jpeg", "image/gif", "
 MAX_PRIVATE_CHART_SPEC_BYTES = 2 * 1024 * 1024
 
 
-class GatewayHistoryStore(RunPersistenceMixin, OperationJournalMixin):
+class GatewayHistoryStore(RunPersistenceMixin, ExecutionPersistenceMixin):
     """Persist Gateway-owned runs, events, and generated visual artifacts."""
 
     def __init__(
@@ -84,8 +86,10 @@ class GatewayHistoryStore(RunPersistenceMixin, OperationJournalMixin):
         self.max_artifacts = max_artifacts
         self._lock = RLock()
         self._initialize()
+        self._restrict_permissions(self.database, 0o600)
         self.artifact_root.mkdir(parents=True, exist_ok=True)
         self._restrict_permissions(self.artifact_root, 0o700)
+        self.cleanup()
 
     def _connect(self):
         """Compatibility hook for query methods; setup lives in the DB port."""
@@ -120,15 +124,7 @@ class GatewayHistoryStore(RunPersistenceMixin, OperationJournalMixin):
                   retry_of TEXT,
                   parent_run_id TEXT REFERENCES gateway_runs(run_id) ON DELETE SET NULL,
                   root_run_id TEXT,
-                  continuation_kind TEXT,
-                  recovery_status TEXT NOT NULL DEFAULT 'unavailable',
-                  checkpoint_id TEXT,
-                  recovery_phase TEXT,
-                  recovery_next_action TEXT,
-                  recovery_reason TEXT,
-                  recovery_version INTEGER,
-                  recovery_updated_at TEXT,
-                  execution_gate_json TEXT
+                  continuation_kind TEXT
                 );
                 CREATE TABLE IF NOT EXISTS gateway_run_idempotency (
                   idempotency_key TEXT PRIMARY KEY,
@@ -136,34 +132,10 @@ class GatewayHistoryStore(RunPersistenceMixin, OperationJournalMixin):
                   run_id TEXT NOT NULL REFERENCES gateway_runs(run_id) ON DELETE CASCADE,
                   request_fingerprint TEXT NOT NULL,
                   created_at TEXT NOT NULL,
-                  expires_at REAL NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS gateway_run_checkpoints (
-                  checkpoint_id TEXT PRIMARY KEY,
-                  run_id TEXT NOT NULL REFERENCES gateway_runs(run_id) ON DELETE CASCADE,
-                  version INTEGER NOT NULL,
-                  phase TEXT NOT NULL,
-                  next_action TEXT NOT NULL,
-                  state_json TEXT NOT NULL,
-                  digest TEXT NOT NULL,
-                  recovery_status TEXT NOT NULL,
-                  blocked_reason TEXT,
-                  created_at TEXT NOT NULL,
                   expires_at REAL NOT NULL,
-                  sequence INTEGER NOT NULL DEFAULT 0
-                );
-                CREATE TABLE IF NOT EXISTS gateway_run_operations (
-                  run_id TEXT NOT NULL REFERENCES gateway_runs(run_id) ON DELETE CASCADE,
-                  operation_id TEXT NOT NULL,
-                  operation_kind TEXT NOT NULL,
-                  state TEXT NOT NULL,
-                  request_fingerprint TEXT,
-                  result_json TEXT,
-                  reference_json TEXT,
-                  created_at TEXT NOT NULL,
-                  updated_at TEXT NOT NULL,
-                  expires_at REAL NOT NULL,
-                  PRIMARY KEY(run_id, operation_id)
+                  continuation_kind TEXT,
+                  parent_run_id TEXT,
+                  cursor_id TEXT
                 );
                 CREATE TABLE IF NOT EXISTS gateway_run_events (
                   run_id TEXT NOT NULL REFERENCES gateway_runs(run_id) ON DELETE CASCADE,
@@ -172,6 +144,31 @@ class GatewayHistoryStore(RunPersistenceMixin, OperationJournalMixin):
                   payload_json TEXT NOT NULL,
                   created_at TEXT NOT NULL,
                   PRIMARY KEY (run_id, sequence)
+                );
+                CREATE TABLE IF NOT EXISTS gateway_run_execution_entries (
+                  run_id TEXT NOT NULL REFERENCES gateway_runs(run_id) ON DELETE CASCADE,
+                  sequence INTEGER NOT NULL CHECK(sequence > 0),
+                  entry_id TEXT NOT NULL UNIQUE,
+                  entry_kind TEXT NOT NULL CHECK(entry_kind IN (
+                    'input', 'model_response', 'tool_result', 'verification_result',
+                    'promotion_result', 'final_answer'
+                  )),
+                  work_key TEXT,
+                  payload_json TEXT NOT NULL,
+                  payload_sha256 TEXT NOT NULL,
+                  created_at TEXT NOT NULL,
+                  PRIMARY KEY (run_id, sequence),
+                  UNIQUE (run_id, work_key)
+                );
+                CREATE TABLE IF NOT EXISTS gateway_run_execution_cursors (
+                  run_id TEXT PRIMARY KEY REFERENCES gateway_runs(run_id) ON DELETE CASCADE,
+                  version INTEGER NOT NULL,
+                  entry_cursor INTEGER NOT NULL CHECK(entry_cursor >= 0),
+                  turn INTEGER NOT NULL CHECK(turn >= 0),
+                  next_action_json TEXT NOT NULL,
+                  references_json TEXT NOT NULL,
+                  cursor_json TEXT NOT NULL,
+                  updated_at TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS gateway_run_artifacts (
                   observation_id TEXT PRIMARY KEY,
@@ -189,16 +186,13 @@ class GatewayHistoryStore(RunPersistenceMixin, OperationJournalMixin):
                   title TEXT,
                   width INTEGER,
                   height INTEGER,
-                  candidate_id TEXT,
-                  review_id TEXT,
-                  chart_spec_digest TEXT,
-                  candidate_status TEXT,
-                  review_status TEXT,
-                  publication_status TEXT,
-                  review_mode TEXT,
-                  review_json TEXT,
                   figure_metadata_json TEXT,
-                  chart_spec_json TEXT
+                  chart_spec_json TEXT,
+                  staged_ref TEXT,
+                  work_key TEXT,
+                  manifest_json TEXT,
+                  verification_ref TEXT,
+                  verification_json TEXT
                 );
                 CREATE INDEX IF NOT EXISTS idx_gateway_runs_session
                   ON gateway_runs(session_id, created_at);
@@ -208,14 +202,8 @@ class GatewayHistoryStore(RunPersistenceMixin, OperationJournalMixin):
                   ON gateway_run_artifacts(run_id, observation_id);
                 CREATE INDEX IF NOT EXISTS idx_gateway_idempotency_run
                   ON gateway_run_idempotency(run_id);
-                CREATE INDEX IF NOT EXISTS idx_gateway_checkpoints_run
-                  ON gateway_run_checkpoints(run_id, created_at);
-                CREATE INDEX IF NOT EXISTS idx_gateway_checkpoints_expiry
-                  ON gateway_run_checkpoints(expires_at);
-                CREATE INDEX IF NOT EXISTS idx_gateway_operations_run
-                  ON gateway_run_operations(run_id, updated_at);
-                CREATE INDEX IF NOT EXISTS idx_gateway_operations_expiry
-                  ON gateway_run_operations(expires_at);
+                CREATE INDEX IF NOT EXISTS idx_gateway_execution_entries_run
+                  ON gateway_run_execution_entries(run_id, sequence);
                 """
             )
             # Older development databases may contain partially-created
@@ -234,29 +222,18 @@ class GatewayHistoryStore(RunPersistenceMixin, OperationJournalMixin):
                 ("parent_run_id", "TEXT"),
                 ("root_run_id", "TEXT"),
                 ("continuation_kind", "TEXT"),
-                ("recovery_status", "TEXT NOT NULL DEFAULT 'unavailable'"),
-                ("checkpoint_id", "TEXT"),
-                ("recovery_phase", "TEXT"),
-                ("recovery_next_action", "TEXT"),
-                ("recovery_reason", "TEXT"),
-                ("recovery_version", "INTEGER"),
-                ("recovery_updated_at", "TEXT"),
-                ("execution_gate_json", "TEXT"),
                 ("artifact_kind", "TEXT NOT NULL DEFAULT 'visual_observation'"),
                 ("chart_type", "TEXT"),
                 ("title", "TEXT"),
                 ("width", "INTEGER"),
                 ("height", "INTEGER"),
-                ("candidate_id", "TEXT"),
-                ("review_id", "TEXT"),
-                ("chart_spec_digest", "TEXT"),
-                ("candidate_status", "TEXT"),
-                ("review_status", "TEXT"),
-                ("publication_status", "TEXT"),
-                ("review_mode", "TEXT"),
-                ("review_json", "TEXT"),
                 ("figure_metadata_json", "TEXT"),
                 ("chart_spec_json", "TEXT"),
+                ("staged_ref", "TEXT"),
+                ("work_key", "TEXT"),
+                ("manifest_json", "TEXT"),
+                ("verification_ref", "TEXT"),
+                ("verification_json", "TEXT"),
             ):
                 table = "gateway_runs" if name in {
                     "terminal_code",
@@ -270,14 +247,6 @@ class GatewayHistoryStore(RunPersistenceMixin, OperationJournalMixin):
                     "parent_run_id",
                     "root_run_id",
                     "continuation_kind",
-                    "recovery_status",
-                    "checkpoint_id",
-                    "recovery_phase",
-                    "recovery_next_action",
-                    "recovery_reason",
-                    "recovery_version",
-                    "recovery_updated_at",
-                    "execution_gate_json",
                 } else "gateway_run_artifacts"
                 table_columns = columns if table == "gateway_runs" else {
                     row["name"] for row in connection.execute("PRAGMA table_info(gateway_run_artifacts)")
@@ -286,12 +255,16 @@ class GatewayHistoryStore(RunPersistenceMixin, OperationJournalMixin):
                     connection.execute(f"ALTER TABLE {table} ADD COLUMN {name} {declaration}")
             idem_columns = {row["name"] for row in connection.execute("PRAGMA table_info(gateway_run_idempotency)")}
             for name, declaration in (
-                ("operation_kind", "TEXT"),
+                ("continuation_kind", "TEXT"),
                 ("parent_run_id", "TEXT"),
-                ("checkpoint_id", "TEXT"),
+                ("cursor_id", "TEXT"),
             ):
                 if name not in idem_columns:
                     connection.execute(f"ALTER TABLE gateway_run_idempotency ADD COLUMN {name} {declaration}")
+            connection.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_gateway_staged_work_key "
+                "ON gateway_run_artifacts(run_id, work_key) WHERE work_key IS NOT NULL"
+            )
 
     @staticmethod
     def _restrict_permissions(path: Path, mode: int) -> None:
@@ -308,33 +281,13 @@ class GatewayHistoryStore(RunPersistenceMixin, OperationJournalMixin):
             "DELETE FROM gateway_run_idempotency WHERE expires_at <= ?",
             (now,),
         )
-        connection.execute(
-            """UPDATE gateway_runs SET recovery_status = 'unavailable',
-                      recovery_reason = 'checkpoint_expired', recovery_updated_at = ?
-                WHERE checkpoint_id IN (SELECT checkpoint_id FROM gateway_run_checkpoints WHERE expires_at <= ?)""",
-            (utc_timestamp(), now),
-        )
-        connection.execute(
-            "DELETE FROM gateway_run_checkpoints WHERE expires_at <= ?",
-            (now,),
-        )
-        connection.execute(
-            "DELETE FROM gateway_run_operations WHERE expires_at <= ?",
-            (now,),
-        )
         expired_artifacts = connection.execute(
             "SELECT managed_path FROM gateway_run_artifacts WHERE expires_at <= ?", (now,)
         ).fetchall()
         artifact_paths.extend(Path(row["managed_path"]) for row in expired_artifacts if row["managed_path"])
         connection.execute(
-            """UPDATE gateway_run_artifacts SET managed_path = '', candidate_status = 'expired',
-               review_status = 'timed_out', publication_status = 'rejected', expires_at = ?
-               WHERE expires_at <= ? AND artifact_kind = 'generated_candidate' AND managed_path != ''""",
-            (now + self.retention_seconds, now),
-        )
-        connection.execute(
             """DELETE FROM gateway_run_artifacts
-               WHERE expires_at <= ? AND (artifact_kind != 'generated_candidate' OR managed_path = '')""",
+               WHERE expires_at <= ?""",
             (now,),
         )
         expired_runs = connection.execute(
@@ -363,176 +316,117 @@ class GatewayHistoryStore(RunPersistenceMixin, OperationJournalMixin):
             return None
 
 
-    def create_checkpoint(
-        self,
-        session_id: str,
-        run_id: str,
-        state: Mapping[str, Any],
-        *,
-        phase: CheckpointPhase | str,
-        next_action: str,
-        status: RecoveryStatus | str = RecoveryStatus.AVAILABLE,
-        blocked_reason: str | None = None,
-        sequence: int = 0,
-        version: int = CHECKPOINT_SCHEMA_VERSION,
-    ) -> RecoveryCheckpoint:
-        """Commit a versioned checkpoint and its public run projection atomically."""
-        try:
-            normalized_status = RecoveryStatus(status)
-            encoded, digest = serialize_checkpoint(
-                state,
-                phase=phase,
-                next_action=next_action,
-                version=version,
-            )
-            normalized_phase = CheckpointPhase(phase).value
-        except (CheckpointError, TypeError, ValueError) as exc:
-            raise HistoryStoreError(str(exc)) from exc
-        checkpoint_id = f"chk_{uuid4().hex}"
-        now = utc_timestamp()
-        expires_at = time.time() + self.retention_seconds
-        reason = truncate_text(blocked_reason, 240) if blocked_reason else None
-        with self._lock, self._connect() as connection:
-            self._cleanup_connection(connection)
-            run = connection.execute(
-                "SELECT 1 FROM gateway_runs WHERE run_id = ? AND session_id = ?",
-                (run_id, session_id),
-            ).fetchone()
-            if run is None:
-                raise HistoryStoreError("Gateway run is not registered")
-            connection.execute(
-                """INSERT INTO gateway_run_checkpoints(
-                   checkpoint_id, run_id, version, phase, next_action, state_json,
-                   digest, recovery_status, blocked_reason, created_at, expires_at, sequence)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    checkpoint_id, run_id, int(version), normalized_phase,
-                    truncate_text(next_action, 120), encoded, digest,
-                    normalized_status.value, reason, now, expires_at, max(0, int(sequence)),
-                ),
-            )
-            connection.execute(
-                """UPDATE gateway_runs SET checkpoint_id = ?, recovery_status = ?,
-                   recovery_phase = ?, recovery_next_action = ?, recovery_reason = ?,
-                   recovery_version = ?, recovery_updated_at = ?, updated_at = ?
-                   WHERE run_id = ? AND session_id = ?""",
-                (
-                    checkpoint_id, normalized_status.value, normalized_phase,
-                    truncate_text(next_action, 120), reason, int(version), now, now,
-                    run_id, session_id,
-                ),
-            )
-        return RecoveryCheckpoint(
-            checkpoint_id, run_id, int(version), normalized_phase,
-            truncate_text(next_action, 120), json.loads(encoded)["state"], digest,
-            normalized_status, reason, now, expires_at, max(0, int(sequence)),
-        )
-
-    def get_checkpoint(
-        self,
-        session_id: str,
-        run_id: str,
-        checkpoint_id: str | None = None,
-        *,
-        validate: bool = True,
-    ) -> RecoveryCheckpoint | None:
-        """Load the latest authorized checkpoint, optionally validating its digest/version."""
-        with self._lock, self._connect() as connection:
-            self._cleanup_connection(connection)
-            query = """SELECT c.* FROM gateway_run_checkpoints c
-                       JOIN gateway_runs r ON r.run_id = c.run_id
-                       WHERE c.run_id = ? AND r.session_id = ?"""
-            params: list[Any] = [run_id, session_id]
-            if checkpoint_id:
-                query += " AND c.checkpoint_id = ?"
-                params.append(checkpoint_id)
-            query += " ORDER BY c.created_at DESC LIMIT 1"
-            row = connection.execute(query, params).fetchone()
-        if row is None or float(row["expires_at"]) <= time.time():
-            return None
-        try:
-            parsed = deserialize_checkpoint(row["state_json"], row["digest"], version=CHECKPOINT_SCHEMA_VERSION) if validate else json.loads(row["state_json"])
-            if validate and int(row["version"]) != CHECKPOINT_SCHEMA_VERSION:
-                raise CheckpointError("unsupported checkpoint version")
-            state = parsed.get("state", {})
-        except (CheckpointError, TypeError, ValueError, json.JSONDecodeError):
-            if validate:
-                self.mark_recovery(
-                    session_id, run_id, RecoveryStatus.BLOCKED,
-                    reason="unsupported_or_invalid_checkpoint",
-                )
-                return None
-            state = {}
-        return RecoveryCheckpoint(
-            row["checkpoint_id"], row["run_id"], int(row["version"]), row["phase"],
-            row["next_action"], state, row["digest"], RecoveryStatus(row["recovery_status"]),
-            row["blocked_reason"], row["created_at"], float(row["expires_at"]), int(row["sequence"]),
-        )
-
-    def mark_recovery(
-        self,
-        session_id: str,
-        run_id: str,
-        status: RecoveryStatus | str,
-        *,
-        reason: str | None = None,
-    ) -> bool:
-        normalized = RecoveryStatus(status)
-        with self._lock, self._connect() as connection:
-            self._cleanup_connection(connection)
-            now = utc_timestamp()
-            cursor = connection.execute(
-                """UPDATE gateway_runs SET recovery_status = ?, recovery_reason = ?,
-                   recovery_updated_at = ?, updated_at = ?
-                   WHERE run_id = ? AND session_id = ?""",
-                (normalized.value, truncate_text(reason, 240) if reason else None, now, now, run_id, session_id),
-            )
-            if cursor.rowcount:
-                connection.execute(
-                    """UPDATE gateway_run_checkpoints SET recovery_status = ?, blocked_reason = ?
-                       WHERE checkpoint_id = (SELECT checkpoint_id FROM gateway_runs WHERE run_id = ?)""",
-                    (normalized.value, truncate_text(reason, 240) if reason else None, run_id),
-                )
-            return cursor.rowcount > 0
-
     def get_recovery(self, session_id: str, run_id: str) -> dict[str, Any] | None:
-        """Return a safe recovery projection for an authorized run."""
+        """Derive resumability from a validated cursor and committed action."""
         with self._lock, self._connect() as connection:
             self._cleanup_connection(connection)
             row = connection.execute(
-                """SELECT recovery_status, checkpoint_id, recovery_version, recovery_phase,
-                          recovery_next_action, recovery_reason, recovery_updated_at,
-                          (SELECT expires_at FROM gateway_run_checkpoints c
-                            WHERE c.checkpoint_id = r.checkpoint_id) AS checkpoint_expires_at
-                     FROM gateway_runs r WHERE run_id = ? AND session_id = ?""",
+                """SELECT r.status AS run_status, c.cursor_json, c.entry_cursor, c.updated_at
+                     FROM gateway_runs r LEFT JOIN gateway_run_execution_cursors c ON c.run_id = r.run_id
+                    WHERE r.run_id = ? AND r.session_id = ?""",
                 (run_id, session_id),
             ).fetchone()
         if row is None:
             return None
-        status = row["recovery_status"] or RecoveryStatus.UNAVAILABLE.value
-        if status == RecoveryStatus.AVAILABLE.value and row["checkpoint_id"] is None:
-            status = RecoveryStatus.UNAVAILABLE.value
-        result: dict[str, Any] = {"status": status}
-        if row["checkpoint_id"]:
-            result["checkpointId"] = row["checkpoint_id"]
-        if row["recovery_version"] is not None:
-            result["checkpointVersion"] = int(row["recovery_version"])
-        if row["recovery_phase"]:
-            result["phase"] = row["recovery_phase"]
-        if row["recovery_next_action"]:
-            result["nextAction"] = row["recovery_next_action"]
-        if row["recovery_reason"]:
-            result["blockedReason"] = row["recovery_reason"]
-        if row["recovery_updated_at"]:
-            result["updatedAt"] = row["recovery_updated_at"]
-        if row["checkpoint_expires_at"] is not None:
-            result["expiresAt"] = float(row["checkpoint_expires_at"])
-        return result
+        if row["cursor_json"] is None:
+            return {"status": RecoveryStatus.UNAVAILABLE.value}
+        try:
+            cursor = ExecutionCursor.from_json(row["cursor_json"])
+            entries = self._execution_prefix(run_id, cursor.entry_cursor)
+            if len(entries) != cursor.entry_cursor:
+                raise ExecutionRecordError("execution prefix is incomplete")
+        except (ExecutionRecordError, HistoryStoreError, TypeError, ValueError):
+            return {"status": RecoveryStatus.UNAVAILABLE.value, "blockedReason": "execution_record_unavailable"}
+
+        resumable = row["run_status"] in {RunStatus.FAILED.value, RunStatus.INTERRUPTED.value} or (
+            row["run_status"] == RunStatus.COMPLETED.value
+            and not any(entry.kind == "final_answer" for entry in entries)
+        )
+        if not resumable:
+            return {"status": RecoveryStatus.UNAVAILABLE.value}
+
+        blocked_reason = None
+        action_model_entry_id: str | None = None
+        action_call_id: str | None = None
+        if cursor.next_action.kind == "tool":
+            action_model_entry_id = cursor.next_action.message_entry_id
+            action_call_id = cursor.next_action.call_id
+        elif cursor.next_action.kind == "verify":
+            staged_entry = next(
+                (
+                    entry for entry in reversed(entries)
+                    if entry.kind == "tool_result"
+                    and entry.payload.get("stagingCheckpoint") is True
+                    and entry.payload.get("stagedRef") == cursor.next_action.staged_ref
+                ),
+                None,
+            )
+            if staged_entry is None or self.get_staged_chart_by_reference(session_id, cursor.next_action.staged_ref) is None:
+                blocked_reason = "required_staged_chart_unavailable"
+            else:
+                action_model_entry_id = staged_entry.payload.get("modelEntryId")
+                action_call_id = staged_entry.payload.get("callId")
+        elif cursor.next_action.kind == "promote":
+            verification_entry = next(
+                (
+                    entry for entry in reversed(entries)
+                    if entry.kind == "verification_result"
+                    and isinstance(entry.payload.get("verification"), dict)
+                    and entry.payload["verification"].get("stagedRef") == cursor.next_action.staged_ref
+                    and entry.payload["verification"].get("verificationRef") == cursor.next_action.verification_ref
+                    and entry.payload["verification"].get("status") in {"pass", "pass_with_warning"}
+                ),
+                None,
+            )
+            if verification_entry is None or self.get_staged_chart_by_reference(session_id, cursor.next_action.staged_ref) is None:
+                blocked_reason = "verification_result_unavailable"
+            else:
+                action_model_entry_id = verification_entry.payload.get("modelEntryId")
+                action_call_id = verification_entry.payload.get("toolCallId")
+        if action_model_entry_id is not None and action_call_id is not None:
+            response = next((entry for entry in entries if entry.entry_id == action_model_entry_id), None)
+            calls = response.payload.get("toolCalls") if response is not None else None
+            call = next(
+                (item for item in calls if isinstance(item, dict) and item.get("id") == action_call_id),
+                None,
+            ) if isinstance(calls, list) else None
+            if call is None or call.get("replayEffect") not in {"replay_safe", "idempotent_local_write"}:
+                blocked_reason = "tool_effect_requires_reconciliation"
+        elif cursor.next_action.kind in {"tool", "verify", "promote"} and blocked_reason is None:
+            blocked_reason = "execution_record_unavailable"
+        return {
+            "status": RecoveryStatus.BLOCKED.value if blocked_reason else RecoveryStatus.AVAILABLE.value,
+            "cursorId": execution_cursor_id(run_id, cursor.entry_cursor),
+            "nextAction": cursor.next_action.kind,
+            "updatedAt": row["updated_at"] or utc_timestamp(),
+            **({"blockedReason": blocked_reason} if blocked_reason else {}),
+        }
+
+    def _execution_prefix(self, run_id: str, through: int, seen: set[str] | None = None) -> list[ExecutionEntry]:
+        lineage = set() if seen is None else seen
+        if run_id in lineage or len(lineage) >= 16:
+            raise ExecutionRecordError("execution prefix lineage is invalid")
+        lineage.add(run_id)
+        cursor = self.get_execution_cursor(run_id)
+        if cursor is None or through > cursor.entry_cursor:
+            raise ExecutionRecordError("execution prefix is unavailable")
+        parent_run_id = cursor.references.get("parentRunId")
+        parent_cursor = cursor.references.get("parentCursor")
+        prefix: list[ExecutionEntry] = []
+        if parent_run_id is not None or parent_cursor is not None:
+            if not isinstance(parent_run_id, str) or not isinstance(parent_cursor, int) or parent_cursor < 1:
+                raise ExecutionRecordError("execution parent reference is invalid")
+            prefix = self._execution_prefix(parent_run_id, parent_cursor, lineage)
+        own = self.list_execution_entries(run_id, through=through)
+        if len(own) != through:
+            raise ExecutionRecordError("execution entries are incomplete")
+        return prefix + own
 
 
 
     def append_event(self, event: RunEvent) -> None:
         payload = dict(event.payload)
+        validate_timeline_event(event.kind, payload)
         detail_reference = self._persist_evaluation_event_detail(event)
         if detail_reference is not None:
             payload["detail_resource"] = detail_reference
@@ -626,362 +520,250 @@ class GatewayHistoryStore(RunPersistenceMixin, OperationJournalMixin):
 
 
     @staticmethod
-    def _candidate_reference(row, *, artifact_id: str | None = None) -> dict[str, Any]:
-        publication = row["publication_status"] or "unpublished"
-        candidate_status = row["candidate_status"] or "candidate"
-        visible_status = "available" if publication == "published" else (
-            "warning" if publication == "published_with_warning" else (
-                "failed" if candidate_status in {"review_failed", "timed_out", "retry_exhausted", "expired"} else "pending"
-            )
-        )
-        review: Mapping[str, Any] | None = None
-        try:
-            parsed_review = json.loads(row["review_json"] or "{}")
-            if isinstance(parsed_review, Mapping):
-                review = parsed_review
-        except (TypeError, json.JSONDecodeError):
-            review = None
-        review_mode = row["review_mode"] or (review or {}).get("reviewMode")
-        figure_metadata: Mapping[str, Any] = {}
-        if "figure_metadata_json" in row.keys():
-            try:
-                parsed_figure = json.loads(row["figure_metadata_json"] or "{}")
-                if isinstance(parsed_figure, Mapping):
-                    figure_metadata = parsed_figure
-            except (TypeError, json.JSONDecodeError):
-                figure_metadata = {}
-        generation_context = figure_metadata.get("generation_context")
-        if not isinstance(generation_context, Mapping):
-            generation_context = None
-        coverage = figure_metadata.get("coverage")
-        if not isinstance(coverage, Mapping) and generation_context is not None:
-            context_coverage = generation_context.get("coverage")
-            coverage = context_coverage if isinstance(context_coverage, Mapping) else None
-        review_repair_kind = review.get("repairKind") if isinstance(review, Mapping) else None
-        repair_kind = figure_metadata.get("repair_kind") or review_repair_kind
-        reference = GeneratedChartReference(
-            artifact_id=artifact_id,
-            media_type=row["media_type"],
-            caption=row["caption"],
-            byte_count=int(row["byte_count"]),
-            chart_type=row["chart_type"] or "",
-            title=row["title"] or row["caption"],
-            width=int(row["width"] or 0),
-            height=int(row["height"] or 0),
-            status=visible_status,
-            reason=("图表仍在审核中" if visible_status == "pending" else "审核未通过" if visible_status == "failed" else None),
-            candidate_id=row["candidate_id"],
-            review_id=row["review_id"],
-            chart_spec_digest=row["chart_spec_digest"],
-            candidate_status=row["candidate_status"],
-            review_status=row["review_status"],
-            publication_status=publication,
-            review_mode=review_mode,
-            review=review,
-            figure_id=figure_metadata.get("figure_id"),
-            collection_id=figure_metadata.get("collection_id"),
-            child_chart_ids=tuple(item for item in figure_metadata.get("child_chart_ids", []) if isinstance(item, str)),
-            source=figure_metadata.get("source") if isinstance(figure_metadata.get("source"), Mapping) else None,
-            layout=figure_metadata.get("layout") if isinstance(figure_metadata.get("layout"), Mapping) else None,
-            coverage=coverage,
-            chart_types=tuple(item for item in figure_metadata.get("chart_types", []) if isinstance(item, str)),
-            generation_context=generation_context,
-            generation_context_digest=figure_metadata.get("generation_context_digest"),
-            context_status=figure_metadata.get("context_status"),
-            candidate_attempt=figure_metadata.get("candidate_attempt"),
-            review_attempts=figure_metadata.get("review_attempts"),
-            lineage_attempt=figure_metadata.get("lineage_attempt"),
-            parent_candidate_id=figure_metadata.get("parent_candidate_id"),
-            parent_attempt=figure_metadata.get("parent_attempt"),
-            panel_ids=tuple(item for item in figure_metadata.get("panel_ids", []) if isinstance(item, str)),
-            source_attachment_ids=tuple(item for item in figure_metadata.get("source_attachment_ids", []) if isinstance(item, str)),
-            repair_kind=repair_kind if isinstance(repair_kind, str) else None,
-        )
-        return reference.to_dict()
-
-    @staticmethod
     def _chart_figure_metadata(metadata: Mapping[str, Any]) -> dict[str, Any]:
-        """Project bounded candidate context into the durable artifact row."""
+        """Project bounded, non-lifecycle chart attribution metadata."""
         raw_context = metadata.get("generationContext") or metadata.get("generation_context")
         generation_context = sanitize_payload(raw_context) if isinstance(raw_context, Mapping) else None
-        raw_review = metadata.get("review")
-        repair_kind = metadata.get("repairKind") or metadata.get("repair_kind")
-        if not repair_kind and isinstance(raw_review, Mapping):
-            repair_kind = raw_review.get("repairKind") or raw_review.get("repair_kind")
-        figure_metadata: dict[str, Any] = {
+        values = {
             "figure_id": metadata.get("figureId") or metadata.get("figure_id"),
             "collection_id": metadata.get("collectionId") or metadata.get("collection_id"),
             "child_chart_ids": metadata.get("childChartIds") or metadata.get("child_chart_ids") or [],
             "source": metadata.get("source") if isinstance(metadata.get("source"), Mapping) else None,
             "layout": metadata.get("layout") if isinstance(metadata.get("layout"), Mapping) else None,
             "coverage": metadata.get("coverage") if isinstance(metadata.get("coverage"), Mapping) else None,
-            "chart_types": metadata.get("chartTypes") or metadata.get("chart_types") or [],
             "generation_context": generation_context,
-            "generation_context_digest": metadata.get("generationContextDigest") or metadata.get("context_digest"),
-            "context_status": metadata.get("contextStatus") or metadata.get("context_status"),
-            "candidate_attempt": metadata.get("candidateAttempt") or metadata.get("candidate_attempt"),
-            "review_attempts": metadata.get("attempts") or metadata.get("review_attempts"),
-            "lineage_attempt": metadata.get("lineageAttempt") or metadata.get("lineage_attempt"),
-            "parent_candidate_id": metadata.get("parentCandidateId") or metadata.get("parent_candidate_id"),
-            "parent_attempt": metadata.get("parentAttempt") or metadata.get("parent_attempt"),
+            "generation_context_digest": metadata.get("generationContextDigest") or metadata.get("generation_context_digest"),
             "panel_ids": metadata.get("panelIds") or metadata.get("panel_ids") or [],
             "source_attachment_ids": metadata.get("sourceAttachmentIds") or metadata.get("source_attachment_ids") or [],
-            "repair_kind": repair_kind,
         }
-        return {
-            key: value
-            for key, value in figure_metadata.items()
-            if value not in (None, "", [], {})
-        }
+        return {key: value for key, value in values.items() if value not in (None, "", [], {})}
 
-    def add_candidate(
+    @staticmethod
+    def _staged_chart_reference(row: Mapping[str, Any]) -> dict[str, Any]:
+        """Return the bounded staged or published chart facts from one row."""
+        try:
+            figure = json.loads(row["figure_metadata_json"] or "{}")
+            verification = json.loads(row["verification_json"]) if row["verification_json"] else None
+            manifest = ChartManifest.from_dict(json.loads(row["manifest_json"]))
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError, VerificationError):
+            figure, verification, manifest = {}, None, None
+        result: dict[str, Any] = {
+            "artifactKind": "generated_chart",
+            "mediaType": str(row["media_type"]),
+            "caption": truncate_text(row["caption"], MAX_ARTIFACT_CAPTION),
+            "byteCount": max(0, int(row["byte_count"])),
+            "chartType": truncate_text(row["chart_type"] or "", MAX_ARTIFACT_CHART_TYPE),
+            "title": truncate_text(row["title"] or "", MAX_ARTIFACT_TITLE),
+            "width": max(0, int(row["width"] or 0)),
+            "height": max(0, int(row["height"] or 0)),
+            "status": (
+                verification.get("status")
+                if isinstance(verification, Mapping) and verification.get("status") in {"pass", "pass_with_warning", "fail", "unavailable"}
+                else "staged"
+            ),
+        }
+        if row["artifact_kind"] == "generated_chart":
+            result["artifactId"] = str(row["observation_id"])
+        if isinstance(row["staged_ref"], str) and row["staged_ref"]:
+            result["stagedRef"] = row["staged_ref"]
+        if isinstance(row["verification_ref"], str) and row["verification_ref"]:
+            result["verificationRef"] = row["verification_ref"]
+        if isinstance(verification, Mapping):
+            result["verification"] = sanitize_payload(verification)
+        if isinstance(figure, Mapping):
+            aliases = {
+                "figure_id": "figureId",
+                "collection_id": "collectionId",
+                "child_chart_ids": "childChartIds",
+                "panel_ids": "panelIds",
+                "source_attachment_ids": "sourceAttachmentIds",
+                "generation_context": "generationContext",
+                "generation_context_digest": "generationContextDigest",
+            }
+            for source, target in aliases.items():
+                value = figure.get(source)
+                if value not in (None, "", [], {}):
+                    result[target] = sanitize_payload(value)
+            for key in ("source", "layout", "coverage"):
+                if isinstance(figure.get(key), Mapping):
+                    result[key] = sanitize_payload(figure[key])
+        if isinstance(manifest, ChartManifest):
+            result["chartSpecDigest"] = manifest.chart_spec_digest
+        return result
+
+    def stage_chart(
         self,
         run_id: str,
         session_id: str,
         image: Any,
-        *,
-        chart_spec: Mapping[str, Any] | None = None,
+        manifest: ChartManifest,
     ) -> dict[str, Any] | None:
-        """Persist a generated candidate without exposing it as a final artifact."""
+        """Atomically persist bounded render bytes and their immutable manifest."""
         content = getattr(image, "content", None)
-        media_type = str(getattr(image, "media_type", "")).lower()
         caption = getattr(image, "caption", "")
         metadata = getattr(image, "metadata", {})
-        if not isinstance(metadata, Mapping):
+        try:
+            manifest_value = manifest.to_dict()
+            manifest_json = canonical_json(manifest_value, limit=64 * 1024, name="chart manifest")
+        except VerificationError:
             return None
-        candidate_id = metadata.get("candidateId")
-        review_id = metadata.get("reviewId")
-        digest = metadata.get("chartSpecDigest")
         if (
-            not isinstance(candidate_id, str)
-            or not candidate_id.startswith("cand_")
-            or "/" in candidate_id
-            or not isinstance(review_id, str)
-            or not review_id.startswith("review_")
-            or not isinstance(digest, str)
-            or len(digest) != 64
-            or not isinstance(content, bytes)
+            not isinstance(content, bytes)
             or not content
             or len(content) > self.max_artifact_bytes
-            or media_type not in _SUPPORTED_ARTIFACT_TYPES
+            or content_digest(content) != manifest.image_sha256
+            or len(content) != manifest.byte_count
+            or getattr(image, "media_type", "") != manifest.media_type
             or not isinstance(caption, str)
             or not caption.strip()
+            or not isinstance(metadata, Mapping)
+            or not isinstance(metadata.get("width"), int)
+            or not isinstance(metadata.get("height"), int)
+            or (int(metadata["width"]), int(metadata["height"])) != (manifest.width, manifest.height)
         ):
             return None
-        chart_type = str(metadata.get("chartType") or metadata.get("chart_type") or "")[:MAX_ARTIFACT_CHART_TYPE]
-        title = str(metadata.get("title") or caption)[:MAX_ARTIFACT_TITLE]
         try:
-            width = int(metadata.get("width", 0))
-            height = int(metadata.get("height", 0))
-        except (TypeError, ValueError):
+            chart_spec_json = canonical_json(manifest.chart_spec, limit=MAX_PRIVATE_CHART_SPEC_BYTES, name="chart spec")
+        except VerificationError:
             return None
-        if not chart_type or not title or width <= 0 or height <= 0:
-            return None
-        figure_metadata = self._chart_figure_metadata(metadata)
-        content_digest = hashlib.sha256(content).hexdigest()
-        chart_spec_json: str | None = None
-        if chart_spec is not None:
-            try:
-                chart_spec_json = json.dumps(dict(chart_spec), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-            except (TypeError, ValueError):
-                return None
-            if len(chart_spec_json.encode("utf-8")) > MAX_PRIVATE_CHART_SPEC_BYTES:
-                return None
-            try:
-                from ..spec import ChartFigure, ChartSpec, chart_figure_digest, chart_spec_digest
-
-                spec = ChartFigure.from_dict(chart_spec) if chart_spec.get("kind") == "chart_figure" else ChartSpec.from_dict(chart_spec)
-                calculated_digest = chart_figure_digest(spec) if isinstance(spec, ChartFigure) else chart_spec_digest(spec)
-            except (TypeError, ValueError, KeyError):
-                return None
-            if calculated_digest != digest:
-                return None
-        candidate_root = self.artifact_root / session_id
-        candidate_root.mkdir(mode=0o700, parents=True, exist_ok=True)
-        self._restrict_permissions(candidate_root, 0o700)
-        path = candidate_root / f"{candidate_id}.bin"
+        target = self.artifact_root / session_id / f"{manifest.staged_ref}.bin"
+        target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self._restrict_permissions(target.parent, 0o700)
         created = utc_timestamp()
         expires_at = time.time() + self.retention_seconds
         with self._lock, self._connect() as connection:
             self._cleanup_connection(connection)
-            existing = connection.execute(
-                """SELECT * FROM gateway_run_artifacts
-                   WHERE run_id = ? AND session_id = ?
-                     AND (observation_id = ? OR candidate_id = ?)
-                   ORDER BY CASE WHEN artifact_kind = 'generated_chart' THEN 0 ELSE 1 END
-                   LIMIT 1""",
-                (run_id, session_id, candidate_id, candidate_id),
+            prior = connection.execute(
+                "SELECT * FROM gateway_run_artifacts WHERE run_id = ? AND work_key = ?",
+                (run_id, manifest.work_key),
             ).fetchone()
-            if existing is not None:
+            if prior is not None:
+                try:
+                    prior_manifest = json.loads(prior["manifest_json"] or "{}")
+                except (TypeError, json.JSONDecodeError):
+                    return None
+                requested = dict(manifest_value)
+                requested["stagedRef"] = prior_manifest.get("stagedRef")
                 if (
-                    existing["review_id"] != review_id
-                    or existing["chart_spec_digest"] != digest
-                    or existing["sha256"] != content_digest
-                    or int(existing["byte_count"]) != len(content)
-                    or existing["media_type"] != media_type
+                    prior["session_id"] != session_id
+                    or prior["sha256"] != manifest.image_sha256
+                    or prior["chart_spec_json"] != chart_spec_json
+                    or prior["manifest_json"] != canonical_json(requested, limit=64 * 1024, name="chart manifest")
                 ):
                     return None
-                if existing["artifact_kind"] == "generated_chart":
-                    return self._candidate_reference(existing, artifact_id=existing["observation_id"])
-                stored_spec = existing["chart_spec_json"] if "chart_spec_json" in existing.keys() else None
-                if chart_spec_json is not None and stored_spec not in (None, chart_spec_json):
+                path = self._safe_artifact_path(prior["managed_path"], session_id)
+                if path is None or not path.is_file():
                     return None
-                if chart_spec_json is not None and stored_spec is None:
-                    connection.execute(
-                        "UPDATE gateway_run_artifacts SET chart_spec_json = ? WHERE observation_id = ?",
-                        (chart_spec_json, candidate_id),
-                    )
-                connection.execute(
-                    """UPDATE gateway_run_artifacts SET candidate_status = ?, review_status = ?,
-                       publication_status = ?, review_mode = ?, review_json = ?, figure_metadata_json = ?, expires_at = ?
-                       WHERE observation_id = ? AND artifact_kind = 'generated_candidate'""",
-                    (
-                        str(metadata.get("candidateStatus", "review_pending")),
-                        str(metadata.get("reviewStatus", "pending")),
-                        str(metadata.get("publicationStatus", "unpublished")),
-                        str(metadata.get("reviewMode", "safety")),
-                        json.dumps(metadata.get("review", {}), ensure_ascii=False)[:MAX_EVENT_PAYLOAD],
-                        json.dumps(figure_metadata, ensure_ascii=False)[:MAX_EVENT_PAYLOAD],
-                        time.time() + self.retention_seconds,
-                        candidate_id,
-                    ),
-                )
-                existing = connection.execute(
-                    "SELECT * FROM gateway_run_artifacts WHERE observation_id = ?", (candidate_id,)
-                ).fetchone()
-                return self._candidate_reference(existing)
+                try:
+                    prior_bytes = path.read_bytes()
+                except OSError:
+                    return None
+                if len(prior_bytes) != manifest.byte_count or content_digest(prior_bytes) != manifest.image_sha256:
+                    return None
+                return self._staged_chart_reference(prior)
             run = connection.execute(
                 "SELECT 1 FROM gateway_runs WHERE run_id = ? AND session_id = ?", (run_id, session_id)
             ).fetchone()
-            if run is None:
-                return None
             count = connection.execute(
                 "SELECT COUNT(*) FROM gateway_run_artifacts WHERE run_id = ?", (run_id,)
             ).fetchone()[0]
-            if int(count) >= self.max_artifacts:
+            if run is None or int(count) >= self.max_artifacts:
                 return None
-            candidate_status = str(metadata.get("candidateStatus", "review_pending"))
-            # Failed candidates remain previewable for diagnosis and repair. They
-            # are still never promoted unless the publication gate later sees a
-            # verified/warning candidate with a matching review context.
-            managed_path = str(path) if candidate_status != "expired" else ""
+            temporary = target.with_name(f".{target.name}.{uuid4().hex}.tmp")
             try:
-                if managed_path:
-                    path.write_bytes(content)
-                    self._restrict_permissions(path, 0o600)
+                with temporary.open("xb") as handle:
+                    handle.write(content)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                self._restrict_permissions(temporary, 0o600)
+                temporary.replace(target)
+                self._restrict_permissions(target, 0o600)
                 connection.execute(
                     """INSERT INTO gateway_run_artifacts(
-                       observation_id, run_id, session_id, managed_path, media_type,
-                       caption, byte_count, sha256, created_at, expires_at,
-                       artifact_kind, chart_type, title, width, height,
-                       candidate_id, review_id, chart_spec_digest, candidate_status,
-                       review_status, publication_status, review_mode, review_json, figure_metadata_json, chart_spec_json)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'generated_candidate', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       observation_id, run_id, session_id, managed_path, media_type, caption,
+                       byte_count, sha256, created_at, expires_at, artifact_kind, chart_type,
+                       title, width, height, figure_metadata_json, chart_spec_json, staged_ref,
+                       work_key, manifest_json)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'staged_chart', ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
-                        candidate_id, run_id, session_id, managed_path, media_type,
-                        truncate_text(caption, MAX_ARTIFACT_CAPTION), len(content),
-                        content_digest, created, expires_at,
-                        chart_type, title, width, height, candidate_id, review_id,
-                        digest, candidate_status,
-                        str(metadata.get("reviewStatus", "pending")),
-                        str(metadata.get("publicationStatus", "unpublished")),
-                        str(metadata.get("reviewMode", "safety")),
-                        json.dumps(metadata.get("review", {}), ensure_ascii=False)[:MAX_EVENT_PAYLOAD],
-                        json.dumps(figure_metadata, ensure_ascii=False)[:MAX_EVENT_PAYLOAD],
-                        chart_spec_json,
+                        manifest.staged_ref, run_id, session_id, str(target), manifest.media_type,
+                        truncate_text(caption, MAX_ARTIFACT_CAPTION), manifest.byte_count,
+                        manifest.image_sha256, created, expires_at, manifest.chart_type,
+                        manifest.title, manifest.width, manifest.height,
+                        json.dumps(self._chart_figure_metadata(metadata), ensure_ascii=False),
+                        chart_spec_json, manifest.staged_ref, manifest.work_key, manifest_json,
                     ),
                 )
             except Exception:
-                path.unlink(missing_ok=True)
+                temporary.unlink(missing_ok=True)
+                target.unlink(missing_ok=True)
                 raise
             row = connection.execute(
-                "SELECT * FROM gateway_run_artifacts WHERE observation_id = ?", (candidate_id,)
+                "SELECT * FROM gateway_run_artifacts WHERE observation_id = ?", (manifest.staged_ref,)
             ).fetchone()
-        return self._candidate_reference(row) if row is not None else None
+        return self._staged_chart_reference(row) if row is not None else None
 
-    def promote_candidate(
+    def record_verification(self, result: VerificationResult) -> dict[str, Any] | None:
+        """Commit one immutable bounded result for its staged bytes."""
+        try:
+            result_value = result.to_dict()
+            result_json = canonical_json(result_value, limit=16 * 1024, name="verification result")
+        except VerificationError:
+            return None
+        with self._lock, self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM gateway_run_artifacts WHERE observation_id = ? AND staged_ref = ?",
+                (result.staged_ref, result.staged_ref),
+            ).fetchone()
+            if row is None or row["artifact_kind"] not in {"staged_chart", "generated_chart"}:
+                return None
+            manifest_text = row["manifest_json"]
+            if not isinstance(manifest_text, str) or content_digest(manifest_text.encode("utf-8")) != result.manifest_digest:
+                return None
+            if row["verification_json"]:
+                if row["verification_ref"] != result.verification_ref or row["verification_json"] != result_json:
+                    return None
+            else:
+                connection.execute(
+                    "UPDATE gateway_run_artifacts SET verification_ref = ?, verification_json = ? WHERE staged_ref = ?",
+                    (result.verification_ref, result_json, result.staged_ref),
+                )
+                row = connection.execute(
+                    "SELECT * FROM gateway_run_artifacts WHERE staged_ref = ?", (result.staged_ref,)
+                ).fetchone()
+        return self._staged_chart_reference(row) if row is not None else None
+
+    def promote_staged_chart(
         self,
         run_id: str,
         session_id: str,
-        candidate_id: str,
-        review_id: str,
-        chart_spec_digest: str,
-        *,
-        candidate_status: str,
-        review_status: str,
-        publication_status: str,
-        review: Mapping[str, Any] | None = None,
+        staged_ref: str,
+        verification_ref: str,
     ) -> dict[str, Any] | None:
-        """Atomically convert one matching reviewed candidate into an artifact."""
-        if publication_status not in {"published", "published_with_warning"} or review_status != "completed":
-            return None
+        """Publish only the exact staged bytes with their committed allowed result."""
         with self._lock, self._connect() as connection:
             self._cleanup_connection(connection)
             row = connection.execute(
-                "SELECT * FROM gateway_run_artifacts WHERE observation_id = ? AND run_id = ? AND session_id = ?",
-                (candidate_id, run_id, session_id),
+                "SELECT * FROM gateway_run_artifacts WHERE run_id = ? AND session_id = ? AND staged_ref = ?",
+                (run_id, session_id, staged_ref),
             ).fetchone()
             if row is None:
-                # Idempotent replay after the observation ID was promoted.
-                row = connection.execute(
-                    "SELECT * FROM gateway_run_artifacts WHERE candidate_id = ? AND run_id = ? AND session_id = ? AND artifact_kind = 'generated_chart'",
-                    (candidate_id, run_id, session_id),
-                ).fetchone()
-                if row is None:
+                return None
+            if row["artifact_kind"] == "generated_chart":
+                if row["verification_ref"] != verification_ref:
                     return None
-                return self._candidate_reference(row, artifact_id=row["observation_id"])
-            if row["artifact_kind"] != "generated_candidate":
+                return self._staged_chart_reference(row)
+            if row["artifact_kind"] != "staged_chart" or row["verification_ref"] != verification_ref or not row["verification_json"]:
                 return None
-            if row["review_id"] != review_id or row["chart_spec_digest"] != chart_spec_digest:
+            try:
+                result = json.loads(row["verification_json"])
+                manifest = ChartManifest.from_dict(json.loads(row["manifest_json"]))
+            except (TypeError, ValueError, json.JSONDecodeError, VerificationError):
                 return None
-            if row["candidate_status"] not in {"verified", "warning"}:
-                return None
-            artifact_id = f"artifact_{uuid4().hex}"
-            reason = "审核通过并发布" if publication_status == "published" else "审核通过，但包含明确警告"
-            connection.execute(
-                """UPDATE gateway_run_artifacts SET observation_id = ?, artifact_kind = 'generated_chart',
-                   candidate_status = ?, review_status = ?, publication_status = ?, review_json = ?
-                   WHERE observation_id = ? AND artifact_kind = 'generated_candidate'""",
-                (
-                    artifact_id, candidate_status, review_status, publication_status,
-                    json.dumps(review or {}, ensure_ascii=False)[:MAX_EVENT_PAYLOAD], candidate_id,
-                ),
-            )
-            updated = connection.execute(
-                "SELECT * FROM gateway_run_artifacts WHERE observation_id = ?", (artifact_id,)
-            ).fetchone()
-        if updated is None:
-            return None
-        result = self._candidate_reference(updated, artifact_id=artifact_id)
-        result["reason"] = reason
-        result["status"] = "warning" if publication_status == "published_with_warning" else "available"
-        return result
-
-    def get_candidate(self, session_id: str, run_id: str, candidate_id: str) -> tuple[bytes, str] | None:
-        return self.get_artifact(session_id, run_id, candidate_id, artifact_kind="generated_candidate")
-
-    def get_candidate_review_input(
-        self,
-        session_id: str,
-        run_id: str,
-        candidate_id: str,
-        review_id: str,
-        chart_spec_digest: str,
-    ) -> dict[str, Any] | None:
-        """Load private immutable bytes and ChartSpec for canonical review recovery."""
-        with self._lock, self._connect() as connection:
-            self._cleanup_connection(connection)
-            row = connection.execute(
-                """SELECT * FROM gateway_run_artifacts WHERE candidate_id = ? AND run_id = ? AND session_id = ?
-                   AND artifact_kind IN ('generated_candidate', 'generated_chart') ORDER BY created_at DESC LIMIT 1""",
-                (candidate_id, run_id, session_id),
-            ).fetchone()
             if (
-                row is None
-                or row["review_id"] != review_id
-                or row["chart_spec_digest"] != chart_spec_digest
-                or not row["chart_spec_json"]
-                or float(row["expires_at"]) <= time.time()
+                result.get("stagedRef") != staged_ref
+                or result.get("manifestDigest") != content_digest(row["manifest_json"].encode("utf-8"))
+                or result.get("status") not in ({"pass", "pass_with_warning"} if manifest.allow_warnings else {"pass"})
             ):
                 return None
             path = self._safe_artifact_path(row["managed_path"], session_id)
@@ -989,33 +771,90 @@ class GatewayHistoryStore(RunPersistenceMixin, OperationJournalMixin):
                 return None
             try:
                 content = path.read_bytes()
-                if len(row["chart_spec_json"].encode("utf-8")) > MAX_PRIVATE_CHART_SPEC_BYTES:
-                    return None
-                chart_spec = json.loads(row["chart_spec_json"])
-            except (OSError, TypeError, json.JSONDecodeError):
+            except OSError:
                 return None
-            if (
-                not isinstance(chart_spec, Mapping)
-                or len(content) != int(row["byte_count"])
-                or len(content) > self.max_artifact_bytes
-                or hashlib.sha256(content).hexdigest() != row["sha256"]
-            ):
+            if len(content) != manifest.byte_count or content_digest(content) != manifest.image_sha256:
                 return None
-            return {"content": content, "media_type": row["media_type"], "chart_spec": dict(chart_spec)}
+            artifact_id = f"artifact_{uuid4().hex}"
+            connection.execute(
+                """UPDATE gateway_run_artifacts SET observation_id = ?, artifact_kind = 'generated_chart'
+                   WHERE observation_id = ? AND artifact_kind = 'staged_chart'""",
+                (artifact_id, staged_ref),
+            )
+            updated = connection.execute(
+                "SELECT * FROM gateway_run_artifacts WHERE observation_id = ?", (artifact_id,)
+            ).fetchone()
+        return self._staged_chart_reference(updated) if updated is not None else None
+
+    def get_staged_chart(self, session_id: str, run_id: str, staged_ref: str) -> dict[str, Any] | None:
+        with self._lock, self._connect() as connection:
+            self._cleanup_connection(connection)
+            row = connection.execute(
+                """SELECT * FROM gateway_run_artifacts WHERE run_id = ? AND session_id = ? AND staged_ref = ?
+                   AND artifact_kind IN ('staged_chart', 'generated_chart')""",
+                (run_id, session_id, staged_ref),
+            ).fetchone()
+        if row is None:
+            return None
+        return self._read_staged_chart(row, session_id)
+
+    def get_staged_chart_by_reference(self, session_id: str, staged_ref: str) -> dict[str, Any] | None:
+        """Resolve staged bytes by opaque reference within the owning session."""
+        with self._lock, self._connect() as connection:
+            self._cleanup_connection(connection)
+            row = connection.execute(
+                """SELECT * FROM gateway_run_artifacts
+                   WHERE session_id = ? AND staged_ref = ?
+                     AND artifact_kind IN ('staged_chart', 'generated_chart')
+                   ORDER BY created_at DESC LIMIT 1""",
+                (session_id, staged_ref),
+            ).fetchone()
+        if row is None:
+            return None
+        return self._read_staged_chart(row, session_id)
+
+    def get_staged_chart_by_work_key(self, session_id: str, work_key: str) -> dict[str, Any] | None:
+        """Resolve an idempotent staged render attempt across resumed child Runs."""
+        with self._lock, self._connect() as connection:
+            self._cleanup_connection(connection)
+            row = connection.execute(
+                """SELECT * FROM gateway_run_artifacts
+                   WHERE session_id = ? AND work_key = ?
+                     AND artifact_kind IN ('staged_chart', 'generated_chart')
+                   ORDER BY created_at DESC LIMIT 1""",
+                (session_id, work_key),
+            ).fetchone()
+        if row is None:
+            return None
+        return self._read_staged_chart(row, session_id)
+
+    def _read_staged_chart(self, row: Any, session_id: str) -> dict[str, Any] | None:
+        path = self._safe_artifact_path(row["managed_path"], session_id)
+        if path is None or not path.is_file():
+            return None
+        try:
+            content = path.read_bytes()
+            manifest = ChartManifest.from_dict(json.loads(row["manifest_json"]))
+        except (OSError, TypeError, ValueError, json.JSONDecodeError, VerificationError):
+            return None
+        if len(content) != manifest.byte_count or content_digest(content) != manifest.image_sha256:
+            return None
+        return {
+            "content": content,
+            "mediaType": manifest.media_type,
+            "manifest": manifest,
+            "reference": self._staged_chart_reference(row),
+        }
 
     def get_chart_preview(self, session_id: str, run_id: str, reference_id: str) -> tuple[bytes, str] | None:
-        """Read the current bytes for an artifact or candidate reference.
-
-        A candidate reference remains stable for the client-facing preview
-        route even after promotion, when its row becomes a generated artifact.
-        """
+        """Read staged preview bytes or the corresponding published artifact."""
         with self._lock, self._connect() as connection:
             self._cleanup_connection(connection)
             row = connection.execute(
                 """SELECT observation_id, artifact_kind FROM gateway_run_artifacts
                    WHERE run_id = ? AND session_id = ?
-                     AND (observation_id = ? OR candidate_id = ?)
-                     AND artifact_kind IN ('generated_chart', 'generated_candidate')
+                     AND (observation_id = ? OR staged_ref = ?)
+                     AND artifact_kind IN ('generated_chart', 'staged_chart')
                    ORDER BY CASE WHEN artifact_kind = 'generated_chart' THEN 0 ELSE 1 END
                    LIMIT 1""",
                 (run_id, session_id, reference_id, reference_id),
@@ -1038,18 +877,11 @@ class GatewayHistoryStore(RunPersistenceMixin, OperationJournalMixin):
         if media_type not in _SUPPORTED_ARTIFACT_TYPES or not isinstance(caption, str) or not caption.strip():
             return None
         metadata = getattr(image, "metadata", {})
-        generated = isinstance(metadata, Mapping) and metadata.get("kind") == "generated_chart"
-        artifact_kind = "generated_chart" if generated else "visual_observation"
-        observation_id = f"artifact_{uuid4().hex}" if generated else f"obs_{uuid4().hex}"
-        chart_type = str(metadata.get("chart_type", ""))[:MAX_ARTIFACT_CHART_TYPE] if generated else None
-        title = str(metadata.get("title", caption))[:MAX_ARTIFACT_TITLE] if generated else None
-        try:
-            width = int(metadata.get("width", 0)) if generated else None
-            height = int(metadata.get("height", 0)) if generated else None
-        except (TypeError, ValueError):
+        if not isinstance(metadata, Mapping) or metadata.get("kind") == "generated_chart":
             return None
-        if generated and (not chart_type or not title or not width or not height):
-            return None
+        observation_id = f"obs_{uuid4().hex}"
+        artifact_kind = "visual_observation"
+        chart_type = title = width = height = None
         figure_metadata = self._chart_figure_metadata(metadata)
         session_root = self.artifact_root / session_id
         session_root.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -1063,46 +895,12 @@ class GatewayHistoryStore(RunPersistenceMixin, OperationJournalMixin):
             return None
         created = utc_timestamp()
         expires_at = time.time() + self.retention_seconds
-        if generated:
-            reference = GeneratedChartReference(
-                artifact_id=observation_id,
-                media_type=media_type,
-                caption=caption,
-                byte_count=len(content),
-                chart_type=chart_type,
-                title=title,
-                width=width,
-                height=height,
-                figure_id=figure_metadata.get("figure_id"),
-                collection_id=figure_metadata.get("collection_id"),
-                child_chart_ids=tuple(item for item in figure_metadata.get("child_chart_ids", []) if isinstance(item, str)),
-                source=figure_metadata.get("source"),
-                layout=figure_metadata.get("layout"),
-                coverage=figure_metadata.get("coverage") or (
-                    figure_metadata.get("generation_context", {}).get("coverage")
-                    if isinstance(figure_metadata.get("generation_context"), Mapping)
-                    else None
-                ),
-                chart_types=tuple(item for item in figure_metadata.get("chart_types", []) if isinstance(item, str)),
-                generation_context=figure_metadata.get("generation_context"),
-                generation_context_digest=figure_metadata.get("generation_context_digest"),
-                context_status=figure_metadata.get("context_status"),
-                candidate_attempt=figure_metadata.get("candidate_attempt"),
-                review_attempts=figure_metadata.get("review_attempts"),
-                lineage_attempt=figure_metadata.get("lineage_attempt"),
-                parent_candidate_id=figure_metadata.get("parent_candidate_id"),
-                parent_attempt=figure_metadata.get("parent_attempt"),
-                panel_ids=tuple(item for item in figure_metadata.get("panel_ids", []) if isinstance(item, str)),
-                source_attachment_ids=tuple(item for item in figure_metadata.get("source_attachment_ids", []) if isinstance(item, str)),
-                repair_kind=figure_metadata.get("repair_kind"),
-            ).to_dict()
-        else:
-            reference = {
-                "observationId": observation_id,
-                "mediaType": media_type,
-                "caption": truncate_text(caption, MAX_ARTIFACT_CAPTION),
-                "byteCount": len(content),
-            }
+        reference = {
+            "observationId": observation_id,
+            "mediaType": media_type,
+            "caption": truncate_text(caption, MAX_ARTIFACT_CAPTION),
+            "byteCount": len(content),
+        }
         try:
             with self._lock, self._connect() as connection:
                 self._cleanup_connection(connection)
@@ -1174,13 +972,74 @@ class GatewayHistoryStore(RunPersistenceMixin, OperationJournalMixin):
                 path.unlink(missing_ok=True)
         shutil.rmtree(self.artifact_root / session_id, ignore_errors=True)
 
+    def _cleanup_artifact_tree(self, referenced_paths: set[Path]) -> None:
+        """Remove unreferenced Gateway files without entering evaluation details."""
+        root = self.artifact_root
+        if root.is_symlink() or not root.is_dir():
+            return
+        try:
+            canonical_root = root.resolve(strict=True)
+        except OSError:
+            return
+
+        def clean_directory(directory: Path) -> None:
+            try:
+                if directory.is_symlink():
+                    directory.unlink(missing_ok=True)
+                    return
+                canonical_directory = directory.resolve(strict=True)
+                canonical_directory.relative_to(canonical_root)
+                entries = list(os.scandir(directory))
+            except (OSError, ValueError):
+                return
+            for entry in entries:
+                child = Path(entry.path)
+                try:
+                    if entry.is_symlink():
+                        child.unlink(missing_ok=True)
+                    elif entry.is_dir(follow_symlinks=False):
+                        clean_directory(child)
+                    elif entry.is_file(follow_symlinks=False):
+                        resolved = child.resolve(strict=True)
+                        resolved.relative_to(canonical_directory)
+                        if resolved not in referenced_paths:
+                            child.unlink(missing_ok=True)
+                except (OSError, ValueError):
+                    continue
+            try:
+                directory.rmdir()
+            except OSError:
+                pass
+
+        try:
+            entries = list(os.scandir(root))
+        except OSError:
+            return
+        for entry in entries:
+            child = Path(entry.path)
+            if child.name == "history-details":
+                continue
+            try:
+                if entry.is_symlink():
+                    child.unlink(missing_ok=True)
+                elif entry.is_dir(follow_symlinks=False):
+                    clean_directory(child)
+            except OSError:
+                continue
+
     def cleanup(self) -> None:
-        with self._lock, self._connect() as connection:
-            paths = self._cleanup_connection(connection)
-        for path in paths:
-            safe = self._safe_artifact_path(str(path), path.parent.name)
-            if safe is not None:
-                safe.unlink(missing_ok=True)
+        with self._lock:
+            with self._connect() as connection:
+                self._cleanup_connection(connection)
+                rows = connection.execute(
+                    "SELECT session_id, managed_path FROM gateway_run_artifacts"
+                ).fetchall()
+                referenced_paths = {
+                    path
+                    for row in rows
+                    if (path := self._safe_artifact_path(row["managed_path"], row["session_id"])) is not None
+                }
+            self._cleanup_artifact_tree(referenced_paths)
 
     def close(self) -> None:
         with self._lock:

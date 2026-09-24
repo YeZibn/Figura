@@ -13,15 +13,17 @@ from ..memory import SQLiteAgentMemory
 from ..multimodal import build_registered_attachment_turn
 from ..runtime import AgentRuntime, create_agent_runtime, probe_agent_readiness
 from ..storage import StoragePaths, resolve_storage_paths
-from ..agent import AgentInterrupted, AgentRecoveryBlocked, REVIEW_INCOMPLETE_MESSAGE
+from ..agent import AgentInterrupted, AgentRecoveryBlocked
 from ..client.client import classify_provider_error
-from ..agent.review_gate import _BUDGET_MSG, _REVIEW_FAILED_MSG
+from ..verification.models import ChartManifest, VerificationResult
 from ..tools.core.result import GeneratedImage
 from ..trace import TraceSink, truncate_text
 from .attachments import AttachmentStoreError, EphemeralAttachmentStore
 from .evaluation_adapter import EvaluationReaderAdapter
 from .service_evaluation import EvaluationWorkbenchMixin
 from .history import GatewayHistoryStore, HistoryStoreError
+from .execution_context import recovery_state_from_entries
+from .execution_record import ExecutionCursor, ExecutionRecordError, execution_cursor_id
 from .projection import project_completed_runs, session_summary
 from .runs import HistoricalRun, ManagedRun, RunManager
 from .protocol import (
@@ -56,8 +58,7 @@ _MAX_PROVIDER_MODEL = 128
 
 
 VisualObservationSink = Callable[[str, str, Sequence[GeneratedImage]], Sequence[dict[str, Any]]]
-CandidateInputSink = Callable[[GeneratedImage, dict[str, Any]], Any]
-CandidateInputResolver = Callable[[str, str, str, str], dict[str, Any] | None]
+StageChartSink = Callable[[GeneratedImage, ChartManifest], Any]
 
 
 class GatewayRuntimeFactory(Protocol):
@@ -74,13 +75,13 @@ class GatewayRuntimeFactory(Protocol):
         visual_observation_sink: VisualObservationSink,
         interruption_event: Callable[[], bool],
         recovery_context: Mapping[str, Any] | None,
-        checkpoint_sink: Callable[..., bool],
-        operation_begin: Callable[..., dict[str, Any]],
-        operation_complete: Callable[..., dict[str, Any] | None],
-        operation_uncertain: Callable[..., dict[str, Any] | None],
-        execution_gate_sink: Callable[[dict[str, Any]], Any],
-        candidate_input_sink: CandidateInputSink,
-        candidate_input_resolver: CandidateInputResolver,
+        stage_chart_sink: StageChartSink,
+        verification_sink: Callable[[VerificationResult], Any],
+        promotion_sink: Callable[[str, str, str, str], Any],
+        execution_result_resolver: Callable[[str], Any],
+        staged_chart_resolver: Callable[[str, str], Any],
+        staged_work_resolver: Callable[[str, str], Any],
+        execution_commit: Callable[..., Any],
     ) -> AgentRuntime: ...
 
 
@@ -196,18 +197,22 @@ class GatewayService(EvaluationWorkbenchMixin):
         visual_observation_sink: VisualObservationSink,
         interruption_event: Callable[[], bool],
         recovery_context: Mapping[str, Any] | None,
-        checkpoint_sink: Callable[..., bool],
-        operation_begin: Callable[..., dict[str, Any]],
-        operation_complete: Callable[..., dict[str, Any] | None],
-        operation_uncertain: Callable[..., dict[str, Any] | None],
-        execution_gate_sink: Callable[[dict[str, Any]], Any],
-        candidate_input_sink: CandidateInputSink,
-        candidate_input_resolver: CandidateInputResolver,
+        stage_chart_sink: StageChartSink,
+        verification_sink: Callable[[VerificationResult], Any],
+        promotion_sink: Callable[[str, str, str, str], Any],
+        execution_result_resolver: Callable[[str], Any],
+        staged_chart_resolver: Callable[[str, str], Any],
+        staged_work_resolver: Callable[[str, str], Any],
+        execution_commit: Callable[..., Any],
     ) -> AgentRuntime:
         if any(callback is None for callback in (
-            execution_gate_sink,
-            candidate_input_sink,
-            candidate_input_resolver,
+            stage_chart_sink,
+            verification_sink,
+            promotion_sink,
+            execution_result_resolver,
+            staged_chart_resolver,
+            staged_work_resolver,
+            execution_commit,
         )):
             raise GatewayRuntimeIntegrationError
         effective_model = model if model is not None else self.model
@@ -221,13 +226,13 @@ class GatewayService(EvaluationWorkbenchMixin):
             visual_observation_sink=visual_observation_sink,
             interruption_event=interruption_event,
             recovery_context=recovery_context,
-            checkpoint_sink=checkpoint_sink,
-            operation_begin=operation_begin,
-            operation_complete=operation_complete,
-            operation_uncertain=operation_uncertain,
-            execution_gate_sink=execution_gate_sink,
-            candidate_input_sink=candidate_input_sink,
-            candidate_input_resolver=candidate_input_resolver,
+            stage_chart_sink=stage_chart_sink,
+            verification_sink=verification_sink,
+            promotion_sink=promotion_sink,
+            execution_result_resolver=execution_result_resolver,
+            staged_chart_resolver=staged_chart_resolver,
+            staged_work_resolver=staged_work_resolver,
+            execution_commit=execution_commit,
         )
 
     def health(self) -> dict[str, Any]:
@@ -390,17 +395,17 @@ class GatewayService(EvaluationWorkbenchMixin):
         session_id: object,
         run_id: object,
         raw_idempotency_key: object,
-        raw_checkpoint_id: object = None,
+        raw_cursor_id: object = None,
     ) -> dict[str, Any]:
-        """Create an explicit child run from a validated durable checkpoint."""
+        """Create an explicit child run from a validated committed cursor."""
         session = self._resolve_session(session_id)
         parent = self.get_run(session.id, run_id)
         idempotency_key = validate_idempotency_key(raw_idempotency_key, allow_none=False)
-        checkpoint_id = raw_checkpoint_id.strip() if isinstance(raw_checkpoint_id, str) else None
-        if checkpoint_id is not None and (not checkpoint_id.startswith("chk_") or len(checkpoint_id) > 128):
-            raise GatewayFault("invalid_request", 400, "checkpointId is invalid")
+        cursor_id = raw_cursor_id.strip() if isinstance(raw_cursor_id, str) else None
+        if cursor_id is not None and (not cursor_id.startswith("cur_") or len(cursor_id) > 128):
+            raise GatewayFault("invalid_request", 400, "cursorId is invalid")
         fingerprint = hashlib.sha256(
-            f"resume:{session.id}:{parent.run_id}:{checkpoint_id or ''}".encode("utf-8")
+            f"resume:{session.id}:{parent.run_id}:{cursor_id or ''}".encode("utf-8")
         ).hexdigest()
         existing = self._history.get_idempotency(idempotency_key)
         if existing is not None:
@@ -415,31 +420,33 @@ class GatewayService(EvaluationWorkbenchMixin):
             raise GatewayFault("run_unavailable", 404, "原恢复运行记录已不可用")
         if not parent.terminal:
             raise GatewayFault("run_not_terminal", 409, "只有已结束的运行才能继续执行")
-        checkpoint = self._history.get_checkpoint(session.id, parent.run_id, checkpoint_id)
         recovery = self._history.get_recovery(session.id, parent.run_id) or {}
-        if checkpoint is None:
+        execution_cursor = self._history.get_execution_cursor(parent.run_id)
+        if execution_cursor is None:
             if recovery.get("status") == RecoveryStatus.BLOCKED.value:
                 raise GatewayFault(RECOVERY_BLOCKED_CODE, 409, "该运行暂时无法继续执行", recovery.get("blockedReason", "recovery_blocked"))
-            raise GatewayFault(RECOVERY_UNAVAILABLE_CODE, 409, "该运行没有可用的继续执行检查点", recovery.get("blockedReason", "recovery_unavailable"))
-        if recovery.get("status") != RecoveryStatus.AVAILABLE.value or checkpoint.status is not RecoveryStatus.AVAILABLE:
+            raise GatewayFault(RECOVERY_UNAVAILABLE_CODE, 409, "该运行没有可用的继续执行游标", recovery.get("blockedReason", "recovery_unavailable"))
+        current_cursor_id = execution_cursor_id(parent.run_id, execution_cursor.entry_cursor)
+        if cursor_id is not None and cursor_id != current_cursor_id:
+            raise GatewayFault(RECOVERY_UNAVAILABLE_CODE, 409, "继续执行游标已更新", "execution_cursor_stale")
+        if recovery.get("status") != RecoveryStatus.AVAILABLE.value:
             raise GatewayFault(RECOVERY_BLOCKED_CODE, 409, "该运行暂时无法继续执行", recovery.get("blockedReason", "recovery_blocked"))
-        reference_error = self._validate_recovery_references(session, parent.run_id, checkpoint.state)
+        try:
+            recovery_state = self._execution_recovery_state(
+                parent.run_id, execution_cursor, provider=getattr(parent, "provider", None)
+            )
+        except (ExecutionRecordError, HistoryStoreError, ValueError) as exc:
+            raise GatewayFault(RECOVERY_UNAVAILABLE_CODE, 409, "执行记录无法安全恢复", "execution_record_unavailable") from exc
+        reference_error = self._validate_recovery_references(session, parent.run_id, recovery_state)
         if reference_error is not None:
-            self._history.mark_recovery(
-                session.id, parent.run_id, RecoveryStatus.UNAVAILABLE,
-                reason=reference_error,
-            )
             raise GatewayFault(RECOVERY_UNAVAILABLE_CODE, 409, "继续执行所需的图表或附件已不可用", reference_error)
-        uncertain = [
-            item for item in self._history.list_operations(parent.run_id)
-            if item.get("state") in {"in_flight", "uncertain"}
-        ]
-        if uncertain:
-            self._history.mark_recovery(
-                session.id, parent.run_id, RecoveryStatus.BLOCKED,
-                reason="operation_outcome_uncertain",
+        if recovery_state.get("unreconciledToolCall"):
+            raise GatewayFault(
+                RECOVERY_BLOCKED_CODE,
+                409,
+                "该运行包含尚未确认结果的副作用，无法安全重放",
+                "tool_effect_requires_reconciliation",
             )
-            raise GatewayFault(RECOVERY_BLOCKED_CODE, 409, "该运行在操作边界中断，无法安全继续执行", "operation_outcome_uncertain")
         with self._runs.session_operation():
             if self._runs.has_active(session.id):
                 raise GatewayFault("session_busy", 409, "会话正在运行 Agent")
@@ -447,7 +454,12 @@ class GatewayService(EvaluationWorkbenchMixin):
             try:
                 child = self._runs.start(
                     session.id,
-                    lambda run: self._execute_resume_run(run, session.name, checkpoint.state, checkpoint.checkpoint_id),
+                    lambda run: self._execute_resume_run(
+                        run,
+                        session.name,
+                        recovery_state,
+                        current_cursor_id,
+                    ),
                     provider=getattr(parent, "provider", None),
                     model=getattr(parent, "model", None),
                     idempotency_key=idempotency_key,
@@ -455,13 +467,58 @@ class GatewayService(EvaluationWorkbenchMixin):
                     parent_run_id=parent.run_id,
                     root_run_id=root_run_id,
                     continuation_kind=ContinuationKind.RESUME,
-                    idempotency_operation_kind="resume",
+                    idempotency_continuation_kind="resume",
                     idempotency_parent_run_id=parent.run_id,
-                    idempotency_checkpoint_id=checkpoint.checkpoint_id,
+                    idempotency_cursor_id=current_cursor_id,
                 )
             except RuntimeError as exc:
                 raise GatewayFault("run_limit", 429, "Too many Agent runs are active") from exc
         return success({"run": child.accepted.to_dict(), "duplicate": False})
+
+    def _execution_recovery_state(
+        self,
+        run_id: str,
+        cursor: ExecutionCursor,
+        *,
+        provider: str | None,
+    ) -> dict[str, Any]:
+        """Resolve a child run's immutable parent prefix and rebuild its model context."""
+        def collect(current_run_id: str, through: int, seen: set[str], depth: int = 0):
+            if depth > 16 or current_run_id in seen:
+                raise ExecutionRecordError("execution prefix lineage is invalid")
+            seen.add(current_run_id)
+            current_cursor = self._history.get_execution_cursor(current_run_id)
+            if current_cursor is None or through > current_cursor.entry_cursor:
+                raise ExecutionRecordError("execution prefix is unavailable")
+            parent_run_id = current_cursor.references.get("parentRunId")
+            parent_cursor = current_cursor.references.get("parentCursor")
+            prefix = []
+            if parent_run_id is not None or parent_cursor is not None:
+                if not isinstance(parent_run_id, str) or not isinstance(parent_cursor, int) or parent_cursor < 1:
+                    raise ExecutionRecordError("execution parent reference is invalid")
+                prefix = collect(parent_run_id, parent_cursor, seen, depth + 1)
+            own = self._history.list_execution_entries(current_run_id, through=through)
+            if len(own) != through:
+                raise ExecutionRecordError("execution entries are incomplete")
+            return prefix + own
+
+        entries = collect(run_id, cursor.entry_cursor, set())
+        flattened_cursor = ExecutionCursor(
+            run_id=cursor.run_id,
+            entry_cursor=len(entries),
+            turn=cursor.turn,
+            next_action=cursor.next_action,
+            references=cursor.references,
+        )
+        state = recovery_state_from_entries(
+            entries,
+            flattened_cursor,
+            provider=provider,
+            parent_run_id=run_id,
+        )
+        state["executionParentRunId"] = run_id
+        state["executionParentCursor"] = cursor.entry_cursor
+        return state
 
     def _validate_recovery_references(
         self,
@@ -469,36 +526,7 @@ class GatewayService(EvaluationWorkbenchMixin):
         run_id: str,
         state: Mapping[str, Any],
     ) -> str | None:
-        """Re-authorize opaque checkpoint references without reading local paths."""
-        review_state = state.get("reviewState")
-        if "executionGate" in state or (
-            isinstance(review_state, Mapping)
-            and ("records" in review_state or "executionGate" in review_state)
-        ):
-            return "unsupported_review_state_version"
-        if review_state is not None:
-            if not isinstance(review_state, Mapping) or review_state.get("version") != 1:
-                return "unsupported_review_state_version"
-            candidates = review_state.get("candidates")
-            if not isinstance(candidates, list) or len(candidates) > 64:
-                return "invalid_review_state"
-            for candidate in candidates:
-                if not isinstance(candidate, Mapping):
-                    return "invalid_review_candidate"
-                candidate_id = candidate.get("candidateId")
-                review_id = candidate.get("reviewId")
-                digest = candidate.get("chartSpecDigest")
-                input_run_id = candidate.get("inputRunId")
-                if not all(isinstance(item, str) and item for item in (candidate_id, review_id, digest, input_run_id)):
-                    return "invalid_review_candidate_identity"
-                if self._history.get_candidate_review_input(
-                    session.id,
-                    input_run_id,
-                    candidate_id,
-                    review_id,
-                    digest,
-                ) is None:
-                    return "review_candidate_input_unavailable"
+        """Re-authorize opaque committed references without reading local paths."""
         attachment_ids = state.get("attachmentIds") if isinstance(state.get("attachmentIds"), list) else []
         if attachment_ids:
             memory = self._memory_factory(session.name, create=False)
@@ -511,18 +539,22 @@ class GatewayService(EvaluationWorkbenchMixin):
                         return "required_attachment_unavailable"
             finally:
                 memory.close()
+        staged_ref = state.get("resumeStagedRef")
+        if isinstance(staged_ref, str) and self._history.get_staged_chart_by_reference(session.id, staged_ref) is None:
+            return "required_staged_chart_unavailable"
         visual_references = state.get("visualReferences") if isinstance(state.get("visualReferences"), list) else []
         for reference in visual_references[:32]:
             if not isinstance(reference, Mapping):
                 continue
-            reference_id = reference.get("artifactId") or reference.get("candidateId") or reference.get("observationId")
+            reference_run_id = reference.get("runId") if isinstance(reference.get("runId"), str) else run_id
+            reference_id = reference.get("artifactId") or reference.get("stagedRef") or reference.get("observationId")
             if not isinstance(reference_id, str):
                 continue
-            if reference.get("artifactId") and self._history.get_artifact(session.id, run_id, reference_id, artifact_kind="generated_chart") is None:
+            if reference.get("artifactId") and self._history.get_artifact(session.id, reference_run_id, reference_id, artifact_kind="generated_chart") is None:
                 return "required_artifact_unavailable"
-            if reference.get("candidateId") and self._history.get_candidate(session.id, run_id, reference_id) is None:
-                return "required_candidate_unavailable"
-            if reference.get("observationId") and self._history.get_artifact(session.id, run_id, reference_id, artifact_kind="visual_observation") is None:
+            if reference.get("stagedRef") and self._history.get_chart_preview(session.id, reference_run_id, reference_id) is None:
+                return "required_staged_chart_unavailable"
+            if reference.get("observationId") and self._history.get_artifact(session.id, reference_run_id, reference_id, artifact_kind="visual_observation") is None:
                 return "required_observation_unavailable"
         return None
 
@@ -633,28 +665,13 @@ class GatewayService(EvaluationWorkbenchMixin):
             raise GatewayFault("generated_artifact_unavailable", 404, "Generated chart is unavailable")
         return item
 
-    def get_generated_candidate(
-        self,
-        session_id: object,
-        run_id: object,
-        candidate_id: object,
-    ) -> tuple[bytes, str]:
-        session = self._resolve_session(session_id)
-        run = self.get_run(session.id, run_id)
-        if not isinstance(candidate_id, str) or not candidate_id.strip():
-            raise GatewayFault("invalid_request", 400, "Candidate ID is required")
-        item = self._history.get_candidate(session.id, run.run_id, candidate_id)
-        if item is None:
-            raise GatewayFault("generated_candidate_unavailable", 404, "Generated chart candidate is unavailable")
-        return item
-
     def get_generated_chart_preview(
         self,
         session_id: object,
         run_id: object,
         reference_id: object,
     ) -> tuple[bytes, str]:
-        """Resolve either a candidate or its current published artifact."""
+        """Resolve an authorized staged preview or published artifact."""
         session = self._resolve_session(session_id)
         run = self.get_run(session.id, run_id)
         if not isinstance(reference_id, str) or not reference_id.strip():
@@ -836,22 +853,24 @@ class GatewayService(EvaluationWorkbenchMixin):
         *,
         attachment_ids: Sequence[str] = (),
         recovery_context: Mapping[str, Any] | None = None,
-        checkpoint_id: str | None = None,
+        cursor_id: str | None = None,
     ) -> None:
         if run.interruption_requested():
             return
         if recovery_context is None:
-            run.create_checkpoint(
-                {
-                    "prompt": prompt,
-                    "attachmentIds": list(attachment_ids),
-                    "nextAction": "model",
-                },
-                phase="accepted",
-                next_action="model",
-            )
-        elif checkpoint_id:
-            run.publish("resume_started", {"parentCheckpointId": checkpoint_id})
+            try:
+                run.commit_execution_entry(
+                    "input",
+                    {"text": prompt, "attachmentIds": list(attachment_ids[:16])},
+                    turn=0,
+                    next_action_kind="model",
+                    work_key="input:0",
+                )
+            except Exception:
+                run.fail("execution_storage_unavailable", 503, "执行记录无法保存", "execution_record_unavailable")
+                return
+        if recovery_context is not None and cursor_id:
+            run.publish("resume_started", {"parentCursorId": cursor_id})
         visual_sink = lambda tool_name, call_id, images: self._store_observations(
             run,
             images,
@@ -885,22 +904,23 @@ class GatewayService(EvaluationWorkbenchMixin):
         try:
             try:
                 answer = runtime.agent.run(prompt)
-            except AgentRecoveryBlocked:
+            except AgentRecoveryBlocked as exc:
+                reason = str(exc)[:96] or "recovery_blocked"
                 run.publish(
                     "run_failed",
                     {
                         "code": RECOVERY_BLOCKED_CODE,
-                        "reason": "operation_outcome_uncertain",
+                        "reason": reason,
                         "message": "运行无法安全继续执行",
-                        "failure_category": "operation_outcome_uncertain",
+                        "failure_category": reason,
                         "failure_code": RECOVERY_BLOCKED_CODE,
                         "safe_message": "运行无法安全继续执行",
                         "retryable": True,
-                        "outcome_known": False,
-                        "first_failure_ref": {"kind": "recovery_blocked", "stage": "operation"},
+                        "outcome_known": True,
+                        "first_failure_ref": {"kind": "recovery_blocked", "stage": "tool"},
                     },
                 )
-                run.fail(RECOVERY_BLOCKED_CODE, 409, "运行无法安全继续执行", "operation_outcome_uncertain")
+                run.fail(RECOVERY_BLOCKED_CODE, 409, "运行无法安全继续执行", reason)
                 return
             except AgentInterrupted:
                 if not run.terminal:
@@ -916,7 +936,7 @@ class GatewayService(EvaluationWorkbenchMixin):
                 else:
                     code = RECOVERY_BLOCKED_CODE
                     status = 409
-                    reason = "operation_outcome_uncertain"
+                    reason = "model_response_uncommitted"
                     message = "运行无法安全确认模型请求结果"
                 failure_payload = {
                     "code": code,
@@ -938,7 +958,7 @@ class GatewayService(EvaluationWorkbenchMixin):
 
         if run.interruption_requested() or run.terminal:
             return
-        if str(answer) == _BUDGET_MSG:
+        if str(answer) == "*stopped: max_steps reached*":
             if run.has_event("assembly_validation_failure"):
                 failure_code = "assembly_validation_failure"
                 failure_message = "ChartSpec 组装校验未通过，未生成可发布结果"
@@ -957,26 +977,6 @@ class GatewayService(EvaluationWorkbenchMixin):
                 )
                 run.fail(failure_code, 422, failure_message, failure_code)
                 return
-        if str(answer) in {REVIEW_INCOMPLETE_MESSAGE, _REVIEW_FAILED_MSG}:
-            gate = getattr(run, "execution_gate", {})
-            exhausted = isinstance(gate, Mapping) and gate.get("state") == "exhausted"
-            failure_code = "review_retry_exhausted" if exhausted else "review_incomplete" if str(answer) == REVIEW_INCOMPLETE_MESSAGE else "review_failed"
-            failure_message = "审核修复次数已耗尽，未发布任何候选结果" if exhausted else "Generated chart review did not complete within the bounded run" if str(answer) == REVIEW_INCOMPLETE_MESSAGE else "Generated chart review failed; no artifact was published"
-            run.publish(
-                "run_failed",
-                {
-                    "code": failure_code,
-                    "message": failure_message,
-                    "failure_category": "review_terminal",
-                    "failure_code": failure_code,
-                    "safe_message": failure_message,
-                    "retryable": False,
-                    "outcome_known": True,
-                    "first_failure_ref": {"kind": "review_failed", "stage": "review"},
-                },
-            )
-            run.fail(failure_code, 422, failure_message, failure_code)
-            return
         if not run.has_event("final_answer"):
             run.publish("final_answer", {"answer": str(answer)})
         run.complete(str(answer))
@@ -986,8 +986,12 @@ class GatewayService(EvaluationWorkbenchMixin):
         run: ManagedRun,
         session_name: str,
         state: Mapping[str, Any],
-        checkpoint_id: str,
+        cursor_id: str | None,
     ) -> None:
+        parent_run_id = state.get("executionParentRunId")
+        parent_cursor = state.get("executionParentCursor")
+        if isinstance(parent_run_id, str) and isinstance(parent_cursor, int):
+            run.set_execution_prefix(parent_run_id, parent_cursor)
         prompt = state.get("prompt") if isinstance(state.get("prompt"), str) else "继续执行已提交的图表分析"
         attachments = state.get("attachmentIds") if isinstance(state.get("attachmentIds"), list) else []
         self._execute_run(
@@ -996,7 +1000,7 @@ class GatewayService(EvaluationWorkbenchMixin):
             prompt,
             attachment_ids=tuple(item for item in attachments if isinstance(item, str)),
             recovery_context=state,
-            checkpoint_id=checkpoint_id,
+            cursor_id=cursor_id,
         )
 
     @staticmethod
@@ -1023,17 +1027,23 @@ class GatewayService(EvaluationWorkbenchMixin):
             "visual_observation_sink": visual_sink,
             "interruption_event": run.interruption_requested,
             "recovery_context": recovery_context,
-            "checkpoint_sink": run.create_checkpoint,
-            "operation_begin": run.begin_operation,
-            "operation_complete": run.complete_operation,
-            "operation_uncertain": run.mark_operation_uncertain,
-            "execution_gate_sink": run.update_execution_gate,
-            "candidate_input_sink": lambda image, chart_spec: self._history.add_candidate(
-                run.run_id, run.session_id, image, chart_spec=chart_spec,
+            "stage_chart_sink": lambda image, manifest: self._history.stage_chart(
+                manifest.run_id, run.session_id, image, manifest,
             ),
-            "candidate_input_resolver": lambda input_run_id, candidate_id, review_id, digest: self._history.get_candidate_review_input(
-                run.session_id, input_run_id, candidate_id, review_id, digest,
+            "verification_sink": self._history.record_verification,
+            "promotion_sink": self._history.promote_staged_chart,
+            "execution_result_resolver": lambda work_key: (
+                entry.payload
+                if (entry := self._history.get_execution_entry_by_work_key_in_lineage(run.run_id, work_key)) is not None
+                else None
             ),
+            "staged_chart_resolver": lambda session_id, staged_ref: self._history.get_staged_chart_by_reference(
+                session_id, staged_ref,
+            ),
+            "staged_work_resolver": lambda session_id, work_key: self._history.get_staged_chart_by_work_key(
+                session_id, work_key,
+            ),
+            "execution_commit": run.commit_execution_entry,
         }
         try:
             return factory(session_name, **kwargs)
@@ -1050,39 +1060,30 @@ class GatewayService(EvaluationWorkbenchMixin):
             metadata = getattr(image, "metadata", {})
             is_generated_chart = isinstance(metadata, Mapping) and metadata.get("kind") == "generated_chart"
             reference = None
-            publication_operation_id = None
-            if is_generated_chart and metadata.get("candidateId"):
-                publication_operation_id = f"publication:{getattr(image, 'metadata', {}).get('candidateId')}"
-                run.begin_operation(publication_operation_id, "publication")
             try:
-                if is_generated_chart and metadata.get("candidateId"):
-                    reference = self._history.add_candidate(run.run_id, run.session_id, image)
-                    publication = str(metadata.get("publicationStatus", "unpublished"))
-                    if reference is not None and publication in {"published", "published_with_warning"}:
-                        reference = self._history.promote_candidate(
-                            run.run_id,
-                            run.session_id,
-                            str(metadata.get("candidateId")),
-                            str(metadata.get("reviewId", "")),
-                            str(metadata.get("chartSpecDigest", "")),
-                            candidate_status=str(metadata.get("candidateStatus", "")),
-                            review_status=str(metadata.get("reviewStatus", "")),
-                            publication_status=publication,
-                            review=metadata.get("review") if isinstance(metadata.get("review"), Mapping) else None,
-                        )
+                if is_generated_chart:
+                    verification = metadata.get("verification")
+                    reference = {
+                        "artifactKind": "generated_chart",
+                        "status": verification.get("status", "unavailable") if isinstance(verification, Mapping) else "unavailable",
+                        "caption": str(getattr(image, "caption", "生成图表"))[:240],
+                        "stagedRef": metadata.get("stagedRef") if metadata.get("stageCommitted") else None,
+                        "artifactId": metadata.get("artifactId"),
+                        "verification": dict(verification) if isinstance(verification, Mapping) else None,
+                        "chartType": str(metadata.get("chart_type") or "")[:64],
+                        "title": str(metadata.get("title") or "生成图表")[:240],
+                        "width": metadata.get("width"),
+                        "height": metadata.get("height"),
+                        "figureId": metadata.get("figure_id"),
+                        "collectionId": metadata.get("collection_id"),
+                        "childChartIds": metadata.get("child_chart_ids", []),
+                        "sourceAttachmentIds": metadata.get("source_attachment_ids", []),
+                        "panelIds": metadata.get("panel_ids", []),
+                    }
                 else:
                     reference = self._history.add_artifact(run.run_id, run.session_id, image)
             except Exception:  # noqa: BLE001 - visual evidence must not stop the run
-                if publication_operation_id:
-                    run.mark_operation_uncertain(publication_operation_id, reason="publication_outcome_uncertain")
                 reference = None
-            else:
-                if publication_operation_id:
-                    run.complete_operation(
-                        publication_operation_id,
-                        result={"status": "published" if reference and str(metadata.get("publicationStatus")) in {"published", "published_with_warning"} else "recorded"},
-                        references=reference if isinstance(reference, Mapping) else None,
-                    )
             if is_generated_chart:
                 if reference is None:
                     references.append({

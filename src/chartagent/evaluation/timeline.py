@@ -12,7 +12,6 @@ from .timeline_attribution import (
     _detect_assembly_omission,
     _detect_panel_handoff_gap,
     _detect_repeated_decomposition,
-    _detect_review_without_repair,
     _detect_unscoped_measurement,
     _first_failure,
     _observed_panel_count,
@@ -111,7 +110,6 @@ def build_timeline(
         panel_count=panel_count or expected_panel_count,
         anomalies=anomalies,
     )
-    _detect_review_without_repair(events, anomalies)
     final_references = _final_references(final_events)
     _detect_assembly_omission(
         measurement_events,

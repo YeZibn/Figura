@@ -9,6 +9,7 @@ import json
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import quote
 
 import pytest
@@ -33,8 +34,10 @@ from chartagent.trace import TraceEvent
 from chartagent.client.models import NormalizedResult, ToolCall
 from chartagent.tools import Tool, ToolRegistry, ToolResult
 from chartagent.tools.chart import register_chart_tools
-from chartagent.agent.review_gate import _BUDGET_MSG
 from tests.test_dashboard_decomposition import COMPLEX_IMAGE, REGIONS
+from chartagent.verification import ChartManifest, VerificationResult, content_digest
+from chartagent.verification.models import canonical_json
+from chartagent.spec import ChartMetadata, ChartSpec, ChartType, DataPoint, chart_spec_digest
 
 
 def _completed_run(run_id: str, text: str = "问题", answer: str = "答案") -> Run:
@@ -73,7 +76,7 @@ def test_managed_run_drops_invalid_timeline_event_without_changing_completion():
     assert events == []
 
 
-def test_default_gateway_runtime_forwards_review_lifecycle_callbacks(monkeypatch, tmp_path):
+def test_default_gateway_runtime_forwards_execution_and_verification_callbacks(monkeypatch, tmp_path):
     captured = {}
     runtime = object()
     monkeypatch.setattr(
@@ -81,9 +84,12 @@ def test_default_gateway_runtime_forwards_review_lifecycle_callbacks(monkeypatch
         lambda **kwargs: captured.update(kwargs) or runtime,
     )
     service = GatewayService(database=tmp_path / "runtime-contract.db")
-    candidate_input_sink = lambda *_args: {"candidate_id": "cand_test"}
-    candidate_input_resolver = lambda *_args: {"content": b"chart"}
-    execution_gate_sink = lambda _gate: None
+    stage_chart_sink = lambda *_args: {"stagedRef": "stg_preview_12345678"}
+    verification_sink = lambda _result: {"verificationRef": "ver_result_12345678"}
+    promotion_sink = lambda *_args: {"artifactId": "artifact_result_12345678"}
+    execution_result_resolver = lambda _work_key: None
+    staged_chart_resolver = lambda _session_id, _staged_ref: None
+    staged_work_resolver = lambda _session_id, _work_key: None
     arguments = {
         "provider": "qwen",
         "model": "qwen-test",
@@ -92,27 +98,37 @@ def test_default_gateway_runtime_forwards_review_lifecycle_callbacks(monkeypatch
         "visual_observation_sink": lambda *_args: [],
         "interruption_event": lambda: False,
         "recovery_context": None,
-        "checkpoint_sink": lambda *_args, **_kwargs: True,
-        "operation_begin": lambda *_args, **_kwargs: {},
-        "operation_complete": lambda *_args, **_kwargs: {},
-        "operation_uncertain": lambda *_args, **_kwargs: {},
-        "execution_gate_sink": execution_gate_sink,
-        "candidate_input_sink": candidate_input_sink,
-        "candidate_input_resolver": candidate_input_resolver,
+        "stage_chart_sink": stage_chart_sink,
+        "verification_sink": verification_sink,
+        "promotion_sink": promotion_sink,
+        "execution_result_resolver": execution_result_resolver,
+        "staged_chart_resolver": staged_chart_resolver,
+        "staged_work_resolver": staged_work_resolver,
+        "execution_commit": lambda *_args, **_kwargs: None,
     }
 
     assert service._build_runtime("runtime-contract", **arguments) is runtime
-    assert captured["execution_gate_sink"] is execution_gate_sink
-    assert captured["candidate_input_sink"] is candidate_input_sink
-    assert captured["candidate_input_resolver"] is candidate_input_resolver
+    assert captured["stage_chart_sink"] is stage_chart_sink
+    assert captured["verification_sink"] is verification_sink
+    assert captured["promotion_sink"] is promotion_sink
+    assert captured["execution_result_resolver"] is execution_result_resolver
+    assert captured["staged_chart_resolver"] is staged_chart_resolver
+    assert captured["staged_work_resolver"] is staged_work_resolver
+    assert captured["execution_commit"] is arguments["execution_commit"]
 
-    arguments["candidate_input_sink"] = None
+    arguments["stage_chart_sink"] = None
     with pytest.raises(GatewayRuntimeIntegrationError):
         service._build_runtime("runtime-contract", **arguments)
+
+    session_id = service.create_session("default-runtime-wrapper")['session']['id']
+    run = ManagedRun(session_id, provider="qwen", model="qwen-test", history_store=service._history)
+    assert service._build_runtime_for_run(run, "default-runtime-wrapper", lambda *_args: []) is runtime
+    assert callable(captured["staged_chart_resolver"])
+    assert callable(captured["staged_work_resolver"])
     service.close()
 
 
-def test_per_run_review_callbacks_are_bound_for_fresh_and_recovery_runtimes(monkeypatch, tmp_path):
+def test_per_run_staging_and_verification_callbacks_are_bound_for_fresh_and_recovery_runtimes(monkeypatch, tmp_path):
     captured = []
     service = GatewayService(
         database=tmp_path / "runtime-recovery-contract.db",
@@ -120,24 +136,15 @@ def test_per_run_review_callbacks_are_bound_for_fresh_and_recovery_runtimes(monk
     )
     session_id = service.create_session("runtime-recovery-contract")["session"]["id"]
     run = ManagedRun(session_id, provider="openai", model="test-model", history_store=service._history)
-    persisted_inputs = []
-    resolved_inputs = []
-    monkeypatch.setattr(
-        service._history,
-        "add_candidate",
-        lambda run_id, actual_session_id, image, *, chart_spec: persisted_inputs.append(
-            (run_id, actual_session_id, image, chart_spec)
-        ) or {"candidate_id": "cand_test"},
-    )
-    monkeypatch.setattr(
-        service._history,
-        "get_candidate_review_input",
-        lambda actual_session_id, run_id, candidate_id, review_id, digest: resolved_inputs.append(
-            (actual_session_id, run_id, candidate_id, review_id, digest)
-        ) or {"content": b"candidate", "chart_spec": {"metadata": {}}},
-    )
+    staged = []
+    verifications = []
+    promotions = []
+    monkeypatch.setattr(service._history, "stage_chart", lambda actual_run, actual_session, image, manifest: staged.append((actual_run, actual_session, image, manifest)) or {"stagedRef": "stg_preview_12345678"})
+    monkeypatch.setattr(service._history, "record_verification", lambda result: verifications.append(result) or {"verificationRef": "ver_result_12345678"})
+    monkeypatch.setattr(service._history, "promote_staged_chart", lambda *args: promotions.append(args) or {"artifactId": "artifact_result_12345678"})
+    monkeypatch.setattr(service._history, "get_execution_entry_by_work_key_in_lineage", lambda _run_id, work_key: SimpleNamespace(payload={"workKey": work_key}))
 
-    contexts = (None, {"pendingReview": {"candidateIds": ["cand_test"]}})
+    contexts = (None, {"nextAction": {"kind": "verify", "stagedRef": "stg_preview_12345678"}})
     for recovery_context in contexts:
         service._build_runtime_for_run(
             run,
@@ -147,23 +154,23 @@ def test_per_run_review_callbacks_are_bound_for_fresh_and_recovery_runtimes(monk
         )
         dependencies = captured[-1]
         assert dependencies["recovery_context"] is recovery_context
-        assert callable(dependencies["execution_gate_sink"])
-        assert callable(dependencies["candidate_input_sink"])
-        assert callable(dependencies["candidate_input_resolver"])
-        gate = {"state": "open", "blocking": False, "issues": []}
-        dependencies["execution_gate_sink"](gate)
-        assert run.execution_gate == gate
-        image = object()
-        chart_spec = {"title": "test"}
-        assert dependencies["candidate_input_sink"](image, chart_spec) == {"candidate_id": "cand_test"}
-        assert dependencies["candidate_input_resolver"](
-            "input-run", "candidate", "review", "digest",
-        ) == {"content": b"candidate", "chart_spec": {"metadata": {}}}
+        assert callable(dependencies["stage_chart_sink"])
+        assert callable(dependencies["verification_sink"])
+        assert callable(dependencies["promotion_sink"])
+        assert callable(dependencies["execution_result_resolver"])
+        assert callable(dependencies["staged_chart_resolver"])
+        assert callable(dependencies["staged_work_resolver"])
+        assert callable(dependencies["execution_commit"])
+        image, manifest, result = object(), SimpleNamespace(run_id=run.run_id), object()
+        assert dependencies["stage_chart_sink"](image, manifest)["stagedRef"] == "stg_preview_12345678"
+        assert dependencies["verification_sink"](result)["verificationRef"] == "ver_result_12345678"
+        assert dependencies["promotion_sink"]("ignored-run", "ignored-session", "stg_preview_12345678", "ver_result_12345678")["artifactId"] == "artifact_result_12345678"
+        assert dependencies["execution_result_resolver"]("verify:stable-work") == {"workKey": "verify:stable-work"}
 
-    assert len(persisted_inputs) == 2
-    assert all(item[:2] == (run.run_id, session_id) for item in persisted_inputs)
-    assert len(resolved_inputs) == 2
-    assert all(item == (session_id, "input-run", "candidate", "review", "digest") for item in resolved_inputs)
+    assert len(staged) == 2
+    assert all(item[:2] == (run.run_id, session_id) for item in staged)
+    assert len(verifications) == 2
+    assert promotions == [("ignored-run", "ignored-session", "stg_preview_12345678", "ver_result_12345678")] * 2
     service.close()
 
 
@@ -191,8 +198,54 @@ def test_gateway_runtime_factory_contract_failure_is_bounded(tmp_path):
 
 def _png_bytes() -> bytes:
     output = io.BytesIO()
-    Image.new("RGB", (4, 3), (35, 140, 131)).save(output, format="PNG")
+    image = Image.new("RGB", (4, 3), (35, 140, 131))
+    image.putpixel((0, 0), (240, 60, 30))
+    image.putpixel((3, 2), (20, 20, 20))
+    image.save(output, format="PNG")
     return output.getvalue()
+
+
+def _publish_test_chart(store, run_id: str, session_id: str, image: GeneratedImage):
+    metadata = image.metadata
+    suffix = hashlib.sha256(f"{run_id}:{image.caption}".encode()).hexdigest()[:16]
+    chart_type = ChartType(str(metadata["chart_type"]))
+    title = str(metadata["title"])
+    spec = ChartSpec(
+        metadata=ChartMetadata(chart_type, title=title),
+        dataset=[DataPoint(category="甲", value=2), DataPoint(category="乙", value=3)],
+    )
+    manifest = ChartManifest(
+        staged_ref=f"stg_{suffix}",
+        run_id=run_id,
+        session_id=session_id,
+        work_key=f"test-chart:{run_id}:{suffix}",
+        tool_call_id="test-render",
+        output_ordinal=0,
+        image_sha256=content_digest(image.content),
+        media_type=image.media_type,
+        byte_count=len(image.content),
+        chart_spec=spec.to_dict(),
+        chart_spec_digest=chart_spec_digest(spec),
+        chart_type=chart_type.value,
+        title=title,
+        width=int(metadata["width"]),
+        height=int(metadata["height"]),
+    )
+    assert store.stage_chart(run_id, session_id, image, manifest) is not None
+    manifest_json = canonical_json(manifest.to_dict(), limit=64 * 1024, name="manifest")
+    verification = VerificationResult(
+        verification_ref=f"ver_{suffix}",
+        staged_ref=manifest.staged_ref,
+        manifest_digest=content_digest(manifest_json.encode()),
+        policy_version=1,
+        status="pass",
+        checks={"structure": "pass"},
+        decision="pass",
+        confidence=1.0,
+    )
+    assert store.record_verification(verification) is not None
+    published = store.promote_staged_chart(run_id, session_id, manifest.staged_ref, verification.verification_ref)
+    return manifest, verification, published
 
 
 def test_gateway_input_validation_is_bounded():
@@ -503,7 +556,19 @@ def test_gateway_dashboard_follow_up_reuses_panel_and_measures_local_scope(tmp_p
             tool_names.append(name)
             return NormalizedResult(tool_calls=[ToolCall(f"call-{len(tool_names)}", name, json.dumps(arguments, ensure_ascii=False))])
 
-    def runtime_factory(name, *, run_id, trace_sink, visual_observation_sink, **_kwargs):
+    def runtime_factory(
+        name,
+        *,
+        run_id,
+        trace_sink,
+        visual_observation_sink,
+        stage_chart_sink,
+        verification_sink,
+        promotion_sink,
+        execution_result_resolver,
+        execution_commit,
+        **_kwargs,
+    ):
         nonlocal runtime_number
         runtime_number += 1
         memory = SQLiteAgentMemory(name, database=database, create=False)
@@ -523,6 +588,11 @@ def test_gateway_dashboard_follow_up_reuses_panel_and_measures_local_scope(tmp_p
             trace=trace_sink,
             visual_observation_sink=visual_observation_sink,
             attachments=attachments,
+            stage_chart_sink=stage_chart_sink,
+            verification_sink=verification_sink,
+            promotion_sink=promotion_sink,
+            execution_result_resolver=execution_result_resolver,
+            execution_commit=execution_commit,
         )
         return AgentRuntime(agent, memory, attachments)
 
@@ -715,7 +785,7 @@ def test_managed_run_interrupt_is_terminal_and_blocks_late_events(tmp_path):
     manager.close()
 
 
-def test_gateway_replays_measurement_tool_call_result_and_current_attempt(tmp_path):
+def test_gateway_persists_measurement_tool_call_and_result_events(tmp_path):
     database = tmp_path / "measurement-evidence-replay.db"
     store = GatewayHistoryStore(database)
     memory = SQLiteAgentMemory("measurement-evidence-replay", database=database)
@@ -760,22 +830,6 @@ def test_gateway_replays_measurement_tool_call_result_and_current_attempt(tmp_pa
         "evidence_refs": [{"ref": "B1", "kind": "bar", "has_numeric_value": True}],
         "series_metadata": [],
     }
-    checkpoint = run.create_checkpoint(
-        {
-            "measurementSessions": {
-                "ms_eval": {
-                    "session_id": "ms_eval",
-                    "run_id": run.run_id,
-                    "attachment_id": "att_eval",
-                    "panel_id": "panel_bars",
-                    "current_attempt": current_attempt,
-                },
-            },
-        },
-        phase="tool",
-        next_action="model",
-    )
-    assert checkpoint is True
     run.publish(
         "tool_result",
         {
@@ -795,12 +849,6 @@ def test_gateway_replays_measurement_tool_call_result_and_current_attempt(tmp_pa
         },
     )
     run.complete("未发布")
-
-    history = store.get_checkpoint(memory.session.id, run.run_id)
-    assert history is not None
-    assert history.state["measurementSessions"]["ms_eval"]["current_attempt"]["attempt_id"] == "attempt_current"
-    assert "pendingMeasurementRepair" not in history.state
-    assert "/Users/yezibin/Project/Figura" not in json.dumps(history.state)
 
     events = list(run.iter_events(after_sequence=1))
     assert [event.kind for event in events] == ["tool_call", "tool_result"]
@@ -905,9 +953,9 @@ def test_gateway_classifies_bounded_evidence_terminal_failures(tmp_path, event_k
                     payload={
                         "unit_id": "measurement:fake" if event_kind.startswith("measurement_") else "generation:fake",
                         "unit_type": "measurement" if event_kind.startswith("measurement_") else "generation",
-                        "phase": "repair" if event_kind.startswith("measurement_") else "assemble",
-                        "actor": "system" if event_kind.startswith("measurement_") else "tool",
-                        "role": "gate" if event_kind.startswith("measurement_") else "action",
+                        "phase": "assemble",
+                        "actor": "system",
+                        "role": "action",
                         "transition_id": f"fake:{event_kind}",
                         "state": "exhausted" if event_kind.startswith("measurement_") else "failed",
                         "tool_name": "assemble_spec",
@@ -915,7 +963,7 @@ def test_gateway_classifies_bounded_evidence_terminal_failures(tmp_path, event_k
                     },
                 )
             )
-            return _BUDGET_MSG
+            return "*stopped: max_steps reached*"
 
     class FakeRuntime:
         def __init__(self, trace_sink):
@@ -948,6 +996,10 @@ def test_gateway_classifies_bounded_evidence_terminal_failures(tmp_path, event_k
 def test_gateway_run_id_is_shared_by_runtime_memory_trace_and_projection(tmp_path):
     database = tmp_path / "sessions.db"
     captured: dict[str, object] = {}
+    chart_spec = ChartSpec(
+        metadata=ChartMetadata(ChartType.PIE, title="统一身份图表"),
+        dataset=[DataPoint(category="甲", value=2), DataPoint(category="乙", value=3)],
+    )
 
     class FinalClient:
         def __init__(self):
@@ -957,11 +1009,23 @@ def test_gateway_run_id_is_shared_by_runtime_memory_trace_and_projection(tmp_pat
             self.calls += 1
             if self.calls == 1:
                 return NormalizedResult(
-                    tool_calls=[ToolCall("chart-call", "make_chart", "{}")]
+                    tool_calls=[ToolCall("chart-call", "make_chart", json.dumps({"spec": chart_spec.to_dict()}))]
                 )
             return NormalizedResult(content="统一身份完成")
 
-    def runtime_factory(name, *, run_id, trace_sink, visual_observation_sink, **_kwargs):
+    def runtime_factory(
+        name,
+        *,
+        run_id,
+        trace_sink,
+        visual_observation_sink,
+        stage_chart_sink,
+        verification_sink,
+        promotion_sink,
+        execution_result_resolver,
+        execution_commit,
+        **_kwargs,
+    ):
         memory = SQLiteAgentMemory(name, database=database, create=False)
         attachments = AttachmentRegistry(
             session_id=memory.session.id,
@@ -973,8 +1037,8 @@ def test_gateway_run_id_is_shared_by_runtime_memory_trace_and_projection(tmp_pat
             Tool(
                 "make_chart",
                 "生成用于测试的图表",
-                {"type": "object", "properties": {}, "additionalProperties": False},
-                lambda: ToolResult(
+                {"type": "object", "properties": {"spec": {"type": "object"}}, "required": ["spec"], "additionalProperties": False},
+                lambda spec: ToolResult(
                     {"ok": True},
                     images=(
                         GeneratedImage(
@@ -983,7 +1047,7 @@ def test_gateway_run_id_is_shared_by_runtime_memory_trace_and_projection(tmp_pat
                             "生成测试图表",
                             metadata={
                                 "kind": "generated_chart",
-                                "chart_type": "bar",
+                                "chart_type": "pie",
                                 "title": "统一身份图表",
                                 "width": 4,
                                 "height": 3,
@@ -1001,6 +1065,11 @@ def test_gateway_run_id_is_shared_by_runtime_memory_trace_and_projection(tmp_pat
             trace=trace_sink,
             visual_observation_sink=visual_observation_sink,
             attachments=attachments,
+            stage_chart_sink=stage_chart_sink,
+            verification_sink=verification_sink,
+            promotion_sink=promotion_sink,
+            execution_result_resolver=execution_result_resolver,
+            execution_commit=execution_commit,
         )
         captured["run_id"] = run_id
         return AgentRuntime(agent, memory, attachments)
@@ -1014,9 +1083,13 @@ def test_gateway_run_id_is_shared_by_runtime_memory_trace_and_projection(tmp_pat
 
     assert captured["run_id"] == run_id
     assert all(event.run_id == run_id for event in run.iter_events())
-    generated = next(event for event in run.iter_events() if event.kind == "generated_chart")
-    artifact = generated.payload["artifacts"][0]
-    assert service.get_generated_artifact(session_id, run_id, artifact["artifactId"]) == (_png_bytes(), "image/png")
+    events = list(run.iter_events())
+    assert "chart_staged" in [event.kind for event in events]
+    assert "generated_chart" not in [event.kind for event in events]
+    verification = next(event for event in events if event.kind == "chart_verification_result")
+    assert verification.payload["state"] == "pass"
+    promotion = next(event for event in events if event.kind == "chart_promotion_result")
+    assert service.get_generated_artifact(session_id, run_id, promotion.payload["artifact_id"]) == (_png_bytes(), "image/png")
     stored = SQLiteAgentMemory("canonical-run", database=database, create=False)
     try:
         completed = stored.completed_runs()
@@ -1693,7 +1766,11 @@ def test_gateway_history_survives_in_memory_run_expiry_and_scopes_artifacts(tmp_
     session_id = service.create_session("history")['session']['id']
     store = GatewayHistoryStore(database, artifact_root=tmp_path / "run-artifacts")
     store.create_run("run_persisted", session_id)
-    store.append_event(RunEvent("run_persisted", 1, "tool_call", {"tool_name": "inspect", "call_id": "c1"}))
+    store.append_event(RunEvent("run_persisted", 1, "tool_call", {
+        "correlation_version": 2, "unit_id": "observation:c1", "unit_type": "observation",
+        "phase": "action", "actor": "tool", "role": "action", "transition_id": "observation:c1:started",
+        "tool_name": "inspect", "call_id": "c1", "state": "running",
+    }))
     store.append_event(RunEvent("run_persisted", 2, "final_answer", {"answer": "# 已完成"}))
     store.update_run("run_persisted", RunStatus.COMPLETED, answer_source="# 已完成")
 
@@ -1724,7 +1801,7 @@ def test_gateway_history_survives_in_memory_run_expiry_and_scopes_artifacts(tmp_
     service.close()
 
 
-def test_gateway_replays_scope_lifecycle_fields_without_merging_event_kinds(tmp_path):
+def test_gateway_replays_staged_verification_and_promotion_facts(tmp_path):
     database = tmp_path / "scope-history.db"
     service = GatewayService(database=database)
     session_id = service.create_session("scope-history")['session']['id']
@@ -1732,49 +1809,30 @@ def test_gateway_replays_scope_lifecycle_fields_without_merging_event_kinds(tmp_
     run_id = "run_scope_history"
     store.create_run(run_id, session_id)
     scope = {"attachment_id": "att_source", "panel_ids": ["panel_left"], "revision": 3}
-    common = {
-        "correlation_version": 2,
-        "candidate_id": "cand_scope",
-        "attempt": 2,
-        "parent_attempt": "cand_parent",
-        "source_scope": scope,
-    }
+    common = {"correlation_version": 2, "source_scope": scope}
     measurement_unit = {"unit_id": "measurement:call_scope", "unit_type": "measurement", "phase": "action", "actor": "tool", "role": "action", "tool_name": "measure_bars", "call_id": "call_scope"}
     store.append_event(RunEvent(run_id, 1, "tool_call", {**common, **measurement_unit, "state": "running", "transition_id": "measurement:call_scope:started", "arguments": {"panel_id": "panel_left"}}))
     store.append_event(RunEvent(run_id, 2, "tool_result", {**common, **measurement_unit, "status": "success", "transition_id": "measurement:call_scope:completed", "result": {"measurement": {"status": "partial", "evidence": {"refs": [{"ref": "B1"}]}}}}))
-    store.append_event(RunEvent(run_id, 3, "review_started", {**common, "unit_id": "review:review_scope", "unit_type": "review", "phase": "review", "actor": "system", "role": "review", "review_id": "review_scope", "review_type": "generated_chart", "state": "reviewing", "transition_id": "review:review_scope:started", "repair_kind": "evidence_needed"}))
-    store.append_event(RunEvent(run_id, 4, "generated_chart_rejected", {**common, "unit_id": "publication:cand_scope", "unit_type": "publication", "phase": "publish", "actor": "system", "role": "publication", "review_id": "review_scope", "state": "rejected", "publication_status": "rejected", "transition_id": "publication:cand_scope:rejected", "repair_kind": "evidence_needed"}))
+    store.append_event(RunEvent(run_id, 3, "chart_staged", {**common, "unit_id": "generation:stg_preview_12345678", "unit_type": "generation", "phase": "render", "actor": "tool", "role": "action", "call_id": "call_render", "state": "staged", "transition_id": "generation:stg_preview_12345678:staged", "staged_ref": "stg_preview_12345678", "manifest_digest": "a" * 64}))
+    store.append_event(RunEvent(run_id, 4, "chart_verification_result", {**common, "unit_id": "verification:ver_result_12345678", "unit_type": "verification", "parent_unit_id": "generation:stg_preview_12345678", "phase": "verify", "actor": "system", "role": "verification", "state": "pass_with_warning", "transition_id": "verification:ver_result_12345678:completed", "staged_ref": "stg_preview_12345678", "verification_ref": "ver_result_12345678", "verification": {"status": "pass_with_warning", "issues": [{"code": "crowded_labels"}]}}))
+    store.append_event(RunEvent(run_id, 5, "chart_promotion_result", {**common, "unit_id": "artifact:artifact_result_12345678", "unit_type": "artifact", "parent_unit_id": "generation:stg_preview_12345678", "phase": "publish", "actor": "system", "role": "artifact", "state": "published_with_warning", "transition_id": "artifact:artifact_result_12345678:published", "artifact_id": "artifact_result_12345678", "staged_ref": "stg_preview_12345678", "verification_ref": "ver_result_12345678", "warning": True}))
     store.update_run(run_id, RunStatus.COMPLETED, answer_source="已完成")
-    legacy_run_id = "run_legacy_timeline"
-    store.create_run(legacy_run_id, session_id)
-    store.append_event(RunEvent(
-        legacy_run_id,
-        1,
-        "tool_result",
-        {"correlation_version": 1, "status": "success", "state": "completed"},
-    ))
-
     reopened = GatewayHistoryStore(database, artifact_root=tmp_path / "run-artifacts")
     history = reopened.history(session_id, run_id)
     assert history is not None
     assert [event["kind"] for event in history["events"]] == [
         "tool_call",
         "tool_result",
-        "review_started",
-        "generated_chart_rejected",
+        "chart_staged",
+        "chart_verification_result",
+        "chart_promotion_result",
     ]
     assert history["events"][0]["payload"]["source_scope"] == scope
     assert history["events"][1]["payload"]["correlation_version"] == 2
     assert "state" not in history["events"][1]["payload"]
-    assert history["events"][2]["payload"]["repair_kind"] == "evidence_needed"
-    assert history["events"][3]["payload"]["parent_attempt"] == "cand_parent"
-    legacy = reopened.history(session_id, legacy_run_id)
-    assert legacy is not None
-    assert legacy["events"][0]["payload"] == {
-        "correlation_version": 1,
-        "status": "success",
-        "state": "completed",
-    }
+    assert history["events"][2]["payload"]["staged_ref"] == "stg_preview_12345678"
+    assert history["events"][3]["payload"]["verification"]["status"] == "pass_with_warning"
+    assert history["events"][4]["payload"]["warning"] is True
     service.close()
 
 
@@ -1832,8 +1890,17 @@ def test_gateway_history_bounds_payloads_and_cascades_visual_artifacts(tmp_path)
     service = GatewayService(database=database, history_store=GatewayHistoryStore(database, artifact_root=artifact_root, max_events=2))
     session_id = service.create_session("bounded-history")["session"]["id"]
     service._history.create_run("run_bounded", session_id)
-    service._history.append_event(RunEvent("run_bounded", 1, "tool_call", {"credentials": "secret", "value": "data:image/png;base64,hidden"}))
-    service._history.append_event(RunEvent("run_bounded", 2, "tool_result", {"result": "kept"}))
+    service._history.append_event(RunEvent("run_bounded", 1, "tool_call", {
+        "correlation_version": 2, "unit_id": "observation:bounded", "unit_type": "observation",
+        "phase": "action", "actor": "tool", "role": "action", "transition_id": "observation:bounded:started",
+        "tool_name": "inspect", "call_id": "bounded", "state": "running",
+        "credentials": "secret", "value": "data:image/png;base64,hidden",
+    }))
+    service._history.append_event(RunEvent("run_bounded", 2, "tool_result", {
+        "correlation_version": 2, "unit_id": "observation:bounded", "unit_type": "observation",
+        "phase": "action", "actor": "tool", "role": "action", "transition_id": "observation:bounded:completed",
+        "tool_name": "inspect", "call_id": "bounded", "status": "success", "result": "kept",
+    }))
     service._history.append_event(RunEvent("run_bounded", 3, "final_answer", {"answer": "完成"}))
     history = service._history.history(session_id, "run_bounded")
     assert history is not None
@@ -1880,7 +1947,7 @@ def test_generated_chart_artifact_is_distinct_authorized_and_reloadable(tmp_path
             "height": 800,
         },
     )
-    reference = store.add_artifact("run_chart", first_id, image)
+    _, _, reference = _publish_test_chart(store, "run_chart", first_id, image)
     assert reference is not None
     assert reference["artifactKind"] == "generated_chart"
     assert reference["artifactId"].startswith("artifact_")
@@ -1908,15 +1975,14 @@ def test_generated_chart_http_artifact_route_and_session_cascade(tmp_path):
     second_id = service.create_session("chart-safe")["session"]["id"]
     store.create_run("run_http", first_id)
     store.create_run("run_safe", second_id)
-    first = store.add_artifact(
-        "run_http",
-        first_id,
-        GeneratedImage(b"first", "image/png", "第一张", metadata={"kind": "generated_chart", "chart_type": "bar", "title": "第一张", "width": 640, "height": 480}),
-    )
-    second = store.add_artifact(
+    first_image = GeneratedImage(b"first", "image/png", "第一张", metadata={"kind": "generated_chart", "chart_type": "bar", "title": "第一张", "width": 640, "height": 480})
+    second_image = GeneratedImage(b"second", "image/png", "第二张", metadata={"kind": "generated_chart", "chart_type": "pie", "title": "第二张", "width": 640, "height": 480})
+    _, _, first = _publish_test_chart(store, "run_http", first_id, first_image)
+    _, _, second = _publish_test_chart(
+        store,
         "run_safe",
         second_id,
-        GeneratedImage(b"second", "image/png", "第二张", metadata={"kind": "generated_chart", "chart_type": "pie", "title": "第二张", "width": 640, "height": 480}),
+        second_image,
     )
     assert first and second
     server = GatewayHTTPServer(("127.0.0.1", 0), service)
@@ -1930,7 +1996,7 @@ def test_generated_chart_http_artifact_route_and_session_cascade(tmp_path):
         raw = response.read()
         connection.close()
         assert response.status == 200
-        assert raw == b"first"
+        assert raw == first_image.content
         status, body, _ = _request(port, "GET", f"/api/v1/sessions/{first_id}/runs/run_http/observations/{first['artifactId']}")
         assert status == 404
         assert body["error"]["code"] == "observation_not_found"
@@ -1939,41 +2005,60 @@ def test_generated_chart_http_artifact_route_and_session_cascade(tmp_path):
         server.server_close()
         thread.join(timeout=3)
     assert service.delete_session(first_id)["deleted"] is True
-    assert store.get_artifact(second_id, "run_safe", second["artifactId"], artifact_kind="generated_chart") == (b"second", "image/png")
+    assert store.get_artifact(second_id, "run_safe", second["artifactId"], artifact_kind="generated_chart") == (second_image.content, "image/png")
     service.close()
 
 
-def test_chart_preview_route_follows_candidate_promotion_and_exposes_binary_headers(tmp_path):
+def test_chart_preview_route_follows_staged_promotion_and_exposes_binary_headers(tmp_path):
     database = tmp_path / "sessions.db"
     store = GatewayHistoryStore(database, artifact_root=tmp_path / "run-artifacts")
     service = GatewayService(database=database, history_store=store)
     session_id = service.create_session("chart-preview")["session"]["id"]
     other_session_id = service.create_session("chart-preview-other")["session"]["id"]
     store.create_run("run_preview", session_id)
-    candidate_id = "cand_preview"
-    candidate = store.add_candidate(
-        "run_preview",
-        session_id,
-        GeneratedImage(
-            _png_bytes(),
-            "image/png",
-            "待审核图表",
-            metadata={
-                "kind": "generated_chart",
-                "candidateId": candidate_id,
-                "reviewId": "review_preview",
-                "chartSpecDigest": "a" * 64,
-                "candidateStatus": "verified",
-                "reviewStatus": "pending",
-                "publicationStatus": "unpublished",
-                "chart_type": "bar",
-                "title": "待审核图表",
-                "width": 640,
-                "height": 480,
-            },
-        ),
+    staged_ref = "stg_preview_12345678"
+    image_bytes = _png_bytes()
+    image = GeneratedImage(
+        image_bytes,
+        "image/png",
+        "待发布图表",
+        metadata={"kind": "generated_chart", "chart_type": "pie", "title": "待发布图表", "width": 4, "height": 3},
     )
-    assert candidate is not None
+    chart_spec = ChartSpec(
+        metadata=ChartMetadata(ChartType.PIE, title="待发布图表"),
+        dataset=[DataPoint(category="甲", value=2), DataPoint(category="乙", value=3)],
+    )
+    manifest = ChartManifest(
+        staged_ref=staged_ref,
+        run_id="run_preview",
+        session_id=session_id,
+        work_key="chart:entry:call_render:0",
+        tool_call_id="call_render",
+        output_ordinal=0,
+        image_sha256=content_digest(image_bytes),
+        media_type="image/png",
+        byte_count=len(image_bytes),
+        chart_spec=chart_spec.to_dict(),
+        chart_spec_digest=chart_spec_digest(chart_spec),
+        chart_type="pie",
+        title="待发布图表",
+        width=4,
+        height=3,
+    )
+    assert store.stage_chart("run_preview", session_id, image, manifest) is not None
+    manifest_digest = content_digest(canonical_json(manifest.to_dict(), limit=64 * 1024, name="manifest").encode())
+    verification_ref = "ver_preview_12345678"
+    verification = VerificationResult(
+        verification_ref=verification_ref,
+        staged_ref=staged_ref,
+        manifest_digest=manifest_digest,
+        policy_version=1,
+        status="pass",
+        checks={"structure": "pass"},
+        decision="pass",
+        confidence=1.0,
+    )
+    assert store.record_verification(verification) is not None
     server = GatewayHTTPServer(
         ("127.0.0.1", 0),
         service,
@@ -1982,31 +2067,27 @@ def test_chart_preview_route_follows_candidate_promotion_and_exposes_binary_head
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     port = server.server_address[1]
-    preview_path = f"/api/v1/sessions/{session_id}/runs/run_preview/chart-previews/{candidate_id}"
+    preview_path = f"/api/v1/sessions/{session_id}/runs/run_preview/chart-previews/{staged_ref}"
     try:
         connection = http.client.HTTPConnection("127.0.0.1", port, timeout=3)
         connection.request("GET", preview_path, headers={"Origin": "http://tauri.localhost"})
         response = connection.getresponse()
         body = response.read()
         assert response.status == 200
-        assert body == _png_bytes()
+        assert body == image_bytes
         assert response.getheader("Content-Type") == "image/png"
-        assert response.getheader("Content-Length") == str(len(_png_bytes()))
+        assert response.getheader("Content-Length") == str(len(image_bytes))
         assert response.getheader("Content-Disposition") == "inline"
         assert response.getheader("Cache-Control") == "no-store"
         assert response.getheader("X-Content-Type-Options") == "nosniff"
         assert response.getheader("Access-Control-Allow-Origin") == "http://tauri.localhost"
         connection.close()
 
-        promoted = store.promote_candidate(
+        promoted = store.promote_staged_chart(
             "run_preview",
             session_id,
-            candidate_id,
-            "review_preview",
-            "a" * 64,
-            candidate_status="verified",
-            review_status="completed",
-            publication_status="published",
+            staged_ref,
+            verification_ref,
         )
         assert promoted is not None
         assert promoted["artifactId"].startswith("artifact_")
@@ -2015,13 +2096,13 @@ def test_chart_preview_route_follows_candidate_promotion_and_exposes_binary_head
         connection.request("GET", preview_path)
         response = connection.getresponse()
         assert response.status == 200
-        assert response.read() == _png_bytes()
+        assert response.read() == image_bytes
         connection.close()
 
         status, body, _ = _request(
             port,
             "GET",
-            f"/api/v1/sessions/{other_session_id}/runs/run_preview/chart-previews/{candidate_id}",
+            f"/api/v1/sessions/{other_session_id}/runs/run_preview/chart-previews/{staged_ref}",
         )
         assert status == 404
         assert body["error"]["code"] == "run_unavailable"
@@ -2034,63 +2115,18 @@ def test_chart_preview_route_follows_candidate_promotion_and_exposes_binary_head
 
 def test_generated_chart_artifact_expires_without_becoming_readable(tmp_path):
     database = tmp_path / "sessions.db"
-    store = GatewayHistoryStore(database, artifact_root=tmp_path / "run-artifacts", retention_seconds=0)
+    store = GatewayHistoryStore(database, artifact_root=tmp_path / "run-artifacts", retention_seconds=60)
     service = GatewayService(database=database, history_store=store)
     session_id = service.create_session("chart-expiry")["session"]["id"]
     store.create_run("run_expiry", session_id)
-    reference = store.add_artifact(
+    _, _, reference = _publish_test_chart(
+        store,
         "run_expiry",
         session_id,
         GeneratedImage(b"expired", "image/png", "过期图表", metadata={"kind": "generated_chart", "chart_type": "scatter", "title": "过期图表", "width": 640, "height": 480}),
     )
     assert reference is not None
+    with store._connect() as connection:
+        connection.execute("UPDATE gateway_run_artifacts SET expires_at = ? WHERE observation_id = ?", (time.time() - 1, reference["artifactId"]))
     assert store.get_artifact(session_id, "run_expiry", reference["artifactId"], artifact_kind="generated_chart") is None
-    service.close()
-
-
-def test_async_gateway_orders_generated_chart_event_after_tool_result(tmp_path):
-    database = tmp_path / "sessions.db"
-
-    class FakeAgent:
-        def __init__(self, memory, trace_sink, visual_observation_sink):
-            self.memory = memory
-            self.trace_sink = trace_sink
-            self.visual_observation_sink = visual_observation_sink
-
-        def run(self, prompt):
-            run = self.memory.begin_run()
-            image = GeneratedImage(
-                b"generated-chart",
-                "image/png",
-                "生成图表：趋势",
-                metadata={"kind": "generated_chart", "chart_type": "line", "title": "趋势", "width": 1200, "height": 800},
-            )
-            self.trace_sink(TraceEvent("tool_call", run_id="agent", turn=1, payload={"unit_id": "generation:c1", "unit_type": "generation", "phase": "action", "actor": "tool", "role": "action", "transition_id": "generation:c1:started", "state": "running", "tool_name": "render_chart", "call_id": "c1"}))
-            self.trace_sink(TraceEvent("tool_result", run_id="agent", turn=1, payload={"unit_id": "generation:c1", "unit_type": "generation", "phase": "action", "actor": "tool", "role": "action", "transition_id": "generation:c1:completed", "tool_name": "render_chart", "call_id": "c1", "status": "success"}))
-            refs = self.visual_observation_sink("render_chart", "c1", [image])
-            self.trace_sink(TraceEvent("generated_chart", run_id="agent", turn=1, payload={"unit_id": "generation:c1", "unit_type": "generation", "phase": "render", "actor": "tool", "role": "action", "transition_id": "generation:c1:generated", "state": "available", "tool_name": "render_chart", "call_id": "c1", "artifacts": refs}))
-            self.memory.append(run, "final", {"answer": "已重绘"})
-            self.memory.finish(run, RunStatus.COMPLETED, "final")
-            return "已重绘"
-
-    class FakeRuntime:
-        def __init__(self, memory, trace_sink, visual_observation_sink):
-            self.agent = FakeAgent(memory, trace_sink, visual_observation_sink)
-
-        def close(self):
-            self.agent.memory.close()
-
-    def runtime_factory(name, *, trace_sink=None, visual_observation_sink=None, **_kwargs):
-        return FakeRuntime(SQLiteAgentMemory(name, database=database, create=False), trace_sink, visual_observation_sink)
-
-    service = GatewayService(database=database, runtime_factory=runtime_factory)
-    session_id = service.create_session("generated-run")["session"]["id"]
-    accepted = service.start_run(session_id, "生成图表")
-    run = service.get_run(session_id, accepted["run"]["runId"])
-    assert run.wait_terminal(timeout=2)
-    events = list(run.iter_events())
-    assert [event.kind for event in events] == ["run_started", "tool_call", "tool_result", "generated_chart", "final_answer"]
-    reference = events[3].payload["artifacts"][0]
-    assert reference["artifactKind"] == "generated_chart"
-    assert service.get_generated_artifact(session_id, run.run_id, reference["artifactId"]) == (b"generated-chart", "image/png")
     service.close()

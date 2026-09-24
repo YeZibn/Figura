@@ -9,7 +9,6 @@ from ..agent import Agent
 from ..attachments import AttachmentRegistry
 from ..client import LLMClient, load_environment
 from ..memory import SQLiteAgentMemory
-from ..review import ChartReviewManager
 from ..trace import TraceSink
 from ..tools.adapters.attachment import load_image_tool
 from ..tools.builtins import register_builtins
@@ -32,13 +31,13 @@ def create_agent_runtime(
     visual_observation_sink: Optional[VisualObservationSink] = None,
     interruption_event: Any = None,
     recovery_context: dict[str, Any] | None = None,
-    checkpoint_sink: Optional[Callable[..., bool]] = None,
-    operation_begin: Optional[Callable[..., dict[str, Any]]] = None,
-    operation_complete: Optional[Callable[..., dict[str, Any] | None]] = None,
-    operation_uncertain: Optional[Callable[..., dict[str, Any] | None]] = None,
-    execution_gate_sink: Optional[Callable[[dict[str, Any]], Any]] = None,
-    candidate_input_sink: Optional[Callable[[GeneratedImage, dict[str, Any]], Any]] = None,
-    candidate_input_resolver: Optional[Callable[[str, str, str, str], dict[str, Any] | None]] = None,
+    stage_chart_sink: Optional[Callable[[GeneratedImage, Any], Any]] = None,
+    verification_sink: Optional[Callable[[Any], Any]] = None,
+    promotion_sink: Optional[Callable[[str, str, str, str], Any]] = None,
+    execution_result_resolver: Optional[Callable[[str], Any]] = None,
+    staged_chart_resolver: Optional[Callable[[str, str], Any]] = None,
+    staged_work_resolver: Optional[Callable[[str, str], Any]] = None,
+    execution_commit: Optional[Callable[..., Any]] = None,
     session_name: str | None = None,
     database: str | Path | None = None,
     client: Any = None,
@@ -64,10 +63,6 @@ def create_agent_runtime(
         panel_store=memory,
     )
     registry = registry_cls()
-    review_manager = ChartReviewManager(
-        attachments=attachments,
-        candidate_input_resolver=candidate_input_resolver,
-    )
     register_builtins_fn(registry)
     if hasattr(registry, "register"):
         registry.register(load_image_tool(attachments))
@@ -88,19 +83,19 @@ def create_agent_runtime(
     if recovery_context is not None:
         agent_kwargs["recovery_context"] = recovery_context
     for key, value in {
-        "checkpoint_sink": checkpoint_sink,
-        "operation_begin": operation_begin,
-        "operation_complete": operation_complete,
-        "operation_uncertain": operation_uncertain,
-        "execution_gate_sink": execution_gate_sink,
-        "candidate_input_sink": candidate_input_sink,
+        "stage_chart_sink": stage_chart_sink,
+        "verification_sink": verification_sink,
+        "promotion_sink": promotion_sink,
+        "execution_result_resolver": execution_result_resolver,
+        "staged_chart_resolver": staged_chart_resolver,
+        "staged_work_resolver": staged_work_resolver,
+        "execution_commit": execution_commit,
     }.items():
         if value is not None:
             agent_kwargs[key] = value
     if memory is not None:
         agent_kwargs["memory"] = memory
     agent_kwargs["attachments"] = attachments
-    agent_kwargs["review_manager"] = review_manager
     try:
         agent = agent_cls(actual_client, registry, **agent_kwargs)
     except Exception:

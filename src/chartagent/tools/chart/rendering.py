@@ -969,9 +969,9 @@ def render_chart(
 RENDER_CHART = Tool(
     name="render_chart",
     description=(
-        "将已由 assemble_spec 校验的 ChartSpec、同源 ChartFigure 或 ChartSpecCollection 渲染为有界 PNG candidate。"
-        "同一 figure 的多个子图会在一张最终 composite 画布中按受限网格呈现；不要传入不完整 spec，也不要把它替代生成后的强制 VLM review。"
-        "用户需要视觉输出且图表数据已组装后使用；工具返回图片、元数据和校验结果。调用成功只表示渲染和本地 artifact 检查通过，图片仍是 candidate，直到自动审核完成并报告 publication status。"
+        "将已由 assemble_spec 校验的 ChartSpec、同源 ChartFigure 或 ChartSpecCollection 渲染为有界 PNG。"
+        "同一 figure 的多个子图会在一张最终 composite 画布中按受限网格呈现；不要传入不完整 spec，生成图随后会自动执行确定性检查和按策略触发的 VLM 验证。"
+        "用户需要视觉输出且图表数据已组装后使用；工具返回图片、元数据和校验结果。调用成功只表示渲染成功，图像需通过验证后才会发布。"
     ),
     parameters={
         "type": "object",

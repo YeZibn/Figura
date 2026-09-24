@@ -21,21 +21,20 @@ def _event(sequence: int, kind: str, payload: dict | None = None) -> dict:
     event_payload = dict(payload or {})
     unit_type, phase, actor, role = "observation", "action", "tool", "action"
     strict_kinds = {
-        "review_started", "review_completed", "review_repair_required", "review_failed", "review_subcheck",
-        "generated_chart_published", "generated_chart_rejected", "tool_call", "tool_result", "tool_skipped",
-        "visual_observation", "generated_chart", "assembly_validation_failure",
+        "chart_staged", "chart_verification_result", "chart_promotion_result",
+        "tool_call", "tool_result", "tool_skipped", "visual_observation", "assembly_validation_failure",
     }
     if kind in strict_kinds:
         tool_name = event_payload.get("tool_name")
-        if kind.startswith("review_"):
-            unit_type, phase, actor, role = "review", "review", "system", "review"
-            event_payload.setdefault("review_id", f"review_{sequence}")
-        elif kind.startswith("generated_chart_"):
-            unit_type, phase, actor, role = "publication", "publish", "system", "publication"
+        if kind == "chart_verification_result":
+            unit_type, phase, actor, role = "verification", "verify", "system", "verification"
+        elif kind == "chart_promotion_result":
+            unit_type, phase, actor, role = "artifact", "publish", "system", "artifact"
+        elif kind == "chart_staged":
+            unit_type, phase, actor, role = "generation", "render", "tool", "action"
+            event_payload.setdefault("call_id", f"call_{sequence}")
         elif kind == "assembly_validation_failure":
             unit_type, phase, actor, role = "generation", "assemble", "agent", "decision"
-        elif kind == "generated_chart":
-            unit_type, phase = "generation", "render"
         elif kind == "visual_observation":
             unit_type, phase, role = "observation", "observe", "observation"
         else:
@@ -51,7 +50,7 @@ def _event(sequence: int, kind: str, payload: dict | None = None) -> dict:
         event_payload.setdefault("transition_id", f"{kind}:{sequence}")
         unit_identity = event_payload.get("call_id") or f"event_{sequence}"
         event_payload.setdefault("unit_id", f"{unit_type}:{unit_identity}")
-        default_state = "success" if kind == "tool_result" else "failed" if kind in {"review_failed", "generated_chart_rejected", "assembly_validation_failure"} else "passed" if kind == "review_completed" else "published" if kind == "generated_chart_published" else "available" if kind == "generated_chart" else "completed"
+        default_state = "success" if kind == "tool_result" else "failed" if kind == "assembly_validation_failure" else "pass" if kind == "chart_verification_result" else "published" if kind == "chart_promotion_result" else "staged" if kind == "chart_staged" else "completed"
         event_payload.setdefault(state_field, default_state)
         event_payload = enrich_event_payload(kind, event_payload, run_id="run_eval", sequence=sequence)
     return {"runId": "run_eval", "sequence": sequence, "kind": kind, "payload": event_payload}
@@ -137,15 +136,15 @@ def test_timeline_projects_complete_multi_panel_chain_without_false_repeated_spl
             _tool_result(2 + index, "measure_bars", panel_id=f"panel_{index}")
             for index in range(1, 5)
         ],
-        _event(7, "review_started", {"review_id": "review_1", "review_type": "generated_chart", "state": "reviewing"}),
-        _event(8, "review_completed", {"review_id": "review_1", "review_type": "generated_chart", "state": "passed"}),
         _tool_result(
-            9,
+            7,
             "assemble_spec",
             result={"data": {"panel_ids": [f"panel_{index}" for index in range(1, 5)]}},
         ),
-        _tool_result(10, "render_chart", result={"status": "available"}),
-        _event(11, "generated_chart", {"artifacts": [{"artifactId": "artifact_1"}]}),
+        _tool_result(8, "render_chart", result={"status": "available"}),
+        _event(9, "chart_staged", {"staged_ref": "stg_preview_12345678", "call_id": "call_render"}),
+        _event(10, "chart_verification_result", {"staged_ref": "stg_preview_12345678", "verification_ref": "ver_result_12345678", "verification": {"status": "pass"}}),
+        _event(11, "chart_promotion_result", {"staged_ref": "stg_preview_12345678", "verification_ref": "ver_result_12345678", "artifact_id": "artifact_12345678"}),
         _event(12, "final_answer", {"answer": "完成"}),
     ]
 
@@ -156,12 +155,12 @@ def test_timeline_projects_complete_multi_panel_chain_without_false_repeated_spl
     assert stages["decomposition"].status == "completed"
     assert stages["panel_handoff"].status == "completed"
     assert stages["measurement"].status == "completed"
-    assert stages["quality_review"].status == "completed"
+    assert stages["verification"].status == "completed"
     assert stages["assembly"].status == "completed"
     assert stages["render"].status == "completed"
     assert timeline.first_failure is None
     assert timeline.anomalies == []
-    assert timeline.final_references["artifact_ids"] == ["artifact_1"]
+    assert timeline.final_references["artifact_ids"] == ["artifact_12345678"]
 
 
 def test_timeline_distinguishes_reused_split_and_unscoped_measurement():
@@ -194,13 +193,13 @@ def test_timeline_distinguishes_reused_split_and_unscoped_measurement():
     assert timeline.first_failure["stage"] == "measurement"
 
 
-def test_timeline_flags_repeated_split_and_review_failure_without_repair():
+def test_timeline_flags_repeated_split_and_failed_verification():
     manifest = load_manifest(MANIFEST, asset_root=ROOT)
     events = [
         _event(1, "run_started"),
         _tool_result(2, "decompose_chart_image", result={"data": {"panels": [{"id": "panel_1"}]}}),
         _tool_result(3, "decompose_chart_image", result={"data": {"panels": [{"id": "panel_1"}]}}),
-        _event(4, "review_failed", {"review_id": "review_1", "review_type": "generated_chart", "state": "failed", "reason": "缺少右侧图"}),
+        _event(4, "chart_verification_result", {"staged_ref": "stg_preview_12345678", "verification_ref": "ver_failed_12345678", "state": "fail", "verification": {"status": "fail", "issues": [{"code": "missing_series"}]}}),
     ]
 
     timeline = build_timeline(
@@ -210,7 +209,8 @@ def test_timeline_flags_repeated_split_and_review_failure_without_repair():
     codes = {item["code"] for item in timeline.anomalies}
 
     assert "repeated_decomposition" in codes
-    assert "review_failed_without_repair" in codes
+    stages = {stage.name: stage for stage in timeline.stages}
+    assert stages["verification"].status == "failed"
     assert timeline.first_failure["category"] == "decomposition"
 
 
@@ -239,8 +239,6 @@ def test_timeline_uses_only_canonical_outer_status_for_diagnostics():
         "measure_bars",
         result={"status": "failed", "tool_status": "error", "data": {"measurement": {"status": "partial"}}},
     )
-    event["payload"]["review_status"] = "failed"
-
     timeline = build_timeline(_history([event]))
     stages = {stage.name: stage for stage in timeline.stages}
 
@@ -261,7 +259,7 @@ def test_timeline_flags_assembly_omission_after_successful_measurements():
         _tool_result(4, "measure_bars", panel_id="panel_2"),
         _tool_result(5, "assemble_spec", result={"data": {"panel_ids": ["panel_1"]}}),
         _tool_result(6, "render_chart", result={"status": "available"}),
-        _event(7, "generated_chart", {"artifacts": [{"artifactId": "artifact_1"}]}),
+        _event(7, "chart_promotion_result", {"artifact_id": "artifact_12345678", "staged_ref": "stg_preview_12345678", "verification_ref": "ver_result_12345678"}),
     ]
 
     timeline = build_timeline(
@@ -326,7 +324,7 @@ def test_timeline_attributes_provider_failure_to_model_before_assembly_or_render
     stages = {stage.name: stage for stage in timeline.stages}
 
     assert stages["model"].status == "failed"
-    assert stages["quality_review"].status == "not_reached"
+    assert stages["verification"].status == "not_reached"
     assert stages["assembly"].status == "not_reached"
     assert stages["render"].status == "not_reached"
     assert timeline.first_failure["category"] == "transport_runtime"
@@ -334,7 +332,7 @@ def test_timeline_attributes_provider_failure_to_model_before_assembly_or_render
     assert timeline.first_failure["sequence"] == 5
 
 
-def test_timeline_treats_partial_measurement_as_diagnostic_not_repair_gate():
+def test_timeline_treats_partial_measurement_as_diagnostic_without_repair_stage():
     events = [
         _event(1, "run_started"),
         _tool_result(
@@ -355,7 +353,7 @@ def test_timeline_treats_partial_measurement_as_diagnostic_not_repair_gate():
     stages = {stage.name: stage for stage in timeline.stages}
 
     assert stages["measurement"].status == "completed"
-    assert stages["repair"].status == "not_observed"
+    assert "repair" not in stages
     assert timeline.first_failure is None
 
 

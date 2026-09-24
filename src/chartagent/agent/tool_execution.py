@@ -12,16 +12,16 @@ from ..measurement import MEASUREMENT_TOOLS
 from ..multimodal import ToolVisualEvidence
 from ..trace import TraceEmitter, summarize_arguments, summarize_images
 from ..tools.core.presentation import get_tool_presentation
+from ..tools.core.definition import ToolReplayEffect
 from .artifacts import (
     artifact_records_from_observation,
     attach_visual_observation_refs,
-    lifecycle_trace_fields,
+    chart_context_trace_fields,
     trace_result_summary,
 )
 from .execution import (
     DECOMPOSE_TOOL_NAME as _DECOMPOSE_TOOL_NAME,
     LAYOUT_TOOL_NAME as _LAYOUT_TOOL_NAME,
-    RENDER_TOOL_NAMES as _RENDER_TOOL_NAMES,
     RunExecutionContext,
     tool_trace_identity,
 )
@@ -31,12 +31,7 @@ from .observations import observation_status
 from .panel_routing import remember_layout_context
 from .recovery import (
     AgentRecoveryBlocked,
-    begin_work_unit,
-    checkpoint,
-    checkpoint_state,
-    complete_work_unit,
     raise_if_interrupted,
-    uncertain_work_unit,
 )
 from .turn import prepare_and_dispatch_tool_call
 
@@ -62,11 +57,10 @@ class ToolExecutionFlow:
     ) -> ToolExecutionOutcome:
         agent = self.agent
         run = execution.run
-        user_input = execution.user_input
         recovery = execution.recovery
         layout_contexts = execution.layout_contexts
         artifact_records = execution.artifact_records
-        checkpoint_references = execution.checkpoint_references
+        visual_references = execution.visual_references
         measurement_sessions = execution.measurement_sessions
         run_attachment_ids = execution.attachment_ids
         emitter = execution.emitter
@@ -81,49 +75,14 @@ class ToolExecutionFlow:
                 call_arguments = json.loads(call.arguments) if call.arguments.strip() else {}
             except (TypeError, json.JSONDecodeError):
                 call_arguments = {}
-            if not agent._review_flow.allows_tool_call(
-                run.id,
-                call.name,
-                call_arguments if isinstance(call_arguments, Mapping) else {},
-            ):
-                active_gate = agent._review_manager.execution_gate(run.id)
-                self._skip_calls(
-                    execution,
-                    calls[call_index:],
-                    gate=active_gate,
-                    emitter=emitter,
-                    turn=turn,
-                )
-                checkpoint(
-                    agent._checkpoint_sink,
-                    agent._review_manager,
-                    run,
-                    phase="review",
-                    next_action="model",
-                    state=checkpoint_state(
-                        user_input,
-                        agent._current_messages,
-                        layout_contexts,
-                        run_attachment_ids,
-                        turn,
-                        pending_tool_calls=(),
-                        visual_references=checkpoint_references,
-                        artifact_records=artifact_records,
-                        measurement_sessions=measurement_sessions,
-                    ),
-                )
-                stop_batch = True
-                break
             if isinstance(call_arguments, dict) and isinstance(call_arguments.get("panel_id"), str):
                 execution.selected_panel_id = call_arguments["panel_id"]
-            operation_kind = "render" if call.name in _RENDER_TOOL_NAMES else "tool"
-            operation_id = f"{operation_kind}:{turn}:{call.id}"
-            operation_completed = False
+            tool = agent.registry.get(call.name)
+            if isinstance(recovery, dict) and (
+                tool is None or tool.replay_effect is ToolReplayEffect.RECONCILE_REQUIRED
+            ):
+                raise AgentRecoveryBlocked("tool_effect_requires_reconciliation")
             tool_unit_id, tool_unit_type = tool_trace_identity(call.name, call.id)
-            operation = begin_work_unit(agent._operation_begin, operation_id, operation_kind)
-            if isinstance(recovery, dict) and operation.get("state") in {"in_flight", "uncertain"}:
-                uncertain_work_unit(agent._operation_uncertain, operation_id, "operation_outcome_uncertain")
-                raise AgentRecoveryBlocked("operation outcome is uncertain")
             if emitter is not None:
                 presentation = get_tool_presentation(call.name, tool=agent.registry.get(call.name))
                 emitter.emit(
@@ -163,68 +122,64 @@ class ToolExecutionFlow:
                     call.arguments,
                     layout_contexts,
                 )
-                # A source-rebind gate must complete its handoff step
-                # before the model can assemble a new candidate.  The
-                # resolver remains the authority for the actual scope;
-                # this transition only advances the execution phase.
-                try:
-                    handoff_payload = json.loads(observation.content)
-                except (TypeError, json.JSONDecodeError):
-                    handoff_payload = None
-                if isinstance(handoff_payload, Mapping) and not handoff_payload.get("error"):
-                    agent._review_flow.advance_repair_phase(run.id, "assemble")
-            def checkpoint_review(candidate_ids: Sequence[str]) -> None:
-                nonlocal operation_completed
-                if operation_kind == "render" and not operation_completed:
-                    complete_work_unit(
-                        agent._operation_complete,
-                        agent._operation_uncertain,
-                        operation_id,
-                        operation_kind,
-                        {"status": "rendered"},
-                        {"candidateIds": list(candidate_ids[:16])},
-                    )
-                    operation_completed = True
-                state = checkpoint_state(
-                    user_input,
-                    agent._current_messages,
-                    layout_contexts,
-                    run_attachment_ids,
-                    turn,
-                    pending_tool_calls=(),
-                    visual_references=checkpoint_references,
-                    artifact_records=artifact_records,
-                    measurement_sessions=measurement_sessions,
-                )
-                state["pendingReview"] = {
-                    "callId": call.id,
-                    "toolName": call.name,
-                    "turn": turn,
-                    "candidateIds": list(candidate_ids[:16]),
-                }
-                saved = checkpoint(
-                    agent._checkpoint_sink,
-                    agent._review_manager,
-                    run,
-                    phase="review",
-                    next_action="review",
-                    state=state,
-                )
-                if agent._checkpoint_sink is not None and not saved:
-                    raise AgentRecoveryBlocked("review_checkpoint_unavailable")
-
-            observation = agent._review_flow.apply_generation_review(
-                observation,
-                run=run,
+            verified_images, verification_facts = agent._verification_flow.process(
+                observation.images,
+                spec_value=call_arguments.get("spec") if isinstance(call_arguments, Mapping) else None,
                 run_id=run.id,
+                model_entry_id=execution.model_entry_id,
                 call_id=call.id,
-                tool_name=call.name,
-                arguments=call.arguments,
-                source_attachment_ids=run_attachment_ids,
-                emitter=emitter,
                 turn=turn,
-                checkpoint_review=checkpoint_review,
+                emitter=emitter,
+                tool_name=call.name,
             )
+            for fact in verification_facts:
+                verification = fact.get("verification") if isinstance(fact, Mapping) else None
+                if isinstance(verification, Mapping):
+                    agent.memory.append(run, "verification_result", dict(verification))
+                    if isinstance(fact.get("artifactId"), str):
+                        agent.memory.append(run, "promotion_result", {
+                            "artifactId": fact["artifactId"],
+                            "stagedRef": fact.get("stagedRef"),
+                            "verificationRef": verification.get("verificationRef"),
+                        })
+                    reference = {
+                        "artifact_id": fact.get("artifactId") or fact.get("stagedRef"),
+                        "kind": "generated_chart",
+                        "status": verification.get("status", "unavailable"),
+                        "staged_ref": fact.get("stagedRef"),
+                        "artifact_id_published": fact.get("artifactId"),
+                        "verification": dict(verification),
+                        "generation_context": next(
+                            (
+                                dict(item.metadata.get("generation_context"))
+                                for item in verified_images
+                                if isinstance(item.metadata, Mapping)
+                                and item.metadata.get("stagedRef") == fact.get("stagedRef")
+                                and isinstance(item.metadata.get("generation_context"), Mapping)
+                            ),
+                            None,
+                        ),
+                    }
+                    artifact_records.append(reference)
+                    artifact_records[:] = artifact_records[-48:]
+            if verification_facts:
+                try:
+                    response_payload = json.loads(observation.content)
+                except (TypeError, json.JSONDecodeError):
+                    response_payload = None
+                if isinstance(response_payload, dict):
+                    response_payload["chartVerification"] = verification_facts[:16]
+                    data_payload = response_payload.get("data")
+                    if isinstance(data_payload, dict):
+                        data_payload = dict(data_payload)
+                        data_payload["chartVerification"] = verification_facts[:16]
+                        response_payload["data"] = data_payload
+                    observation = type(observation)(
+                        content=json.dumps(response_payload, ensure_ascii=False),
+                        images=verified_images,
+                    )
+                else:
+                    observation = type(observation)(content=observation.content, images=verified_images)
             raise_if_interrupted(agent._interruption_event, agent.memory, run)
             observation_refs: Sequence[dict[str, Any]] = ()
             sink_images = observation.images
@@ -270,15 +225,11 @@ class ToolExecutionFlow:
                     measurement_sessions,
                     observation.content,
                 )
-                if measurement_session is not None:
-                    agent._review_flow.advance_repair_phase(run.id, "assemble")
             if call.name == "assemble_spec":
                 try:
                     assembled_payload = json.loads(observation.content)
                 except (TypeError, json.JSONDecodeError):
                     assembled_payload = None
-                if isinstance(assembled_payload, Mapping) and not assembled_payload.get("error"):
-                    agent._review_flow.advance_repair_phase(run.id, "render")
             artifact_records.extend(
                 artifact_records_from_observation(
                     call.name,
@@ -289,6 +240,30 @@ class ToolExecutionFlow:
                 )
             )
             artifact_records = artifact_records[-48:]
+            remaining_calls = calls[call_index + 1:]
+            if agent._execution_commit is not None:
+                agent._execution_commit(
+                    "tool_result",
+                    {
+                        "toolName": call.name,
+                        "callId": call.id,
+                        "modelEntryId": execution.model_entry_id,
+                        "observation": observation.content,
+                        "visualReferences": list(observation_refs)[:32],
+                    },
+                    turn=turn,
+                    next_action_kind="tool" if remaining_calls else "model",
+                    call_id=remaining_calls[0].id if remaining_calls else None,
+                    message_entry_id=execution.model_entry_id,
+                    work_key=f"tool:{execution.model_entry_id or turn}:{call.id}",
+                    event_kind="tool_result_committed",
+                    event_payload={
+                        "turn": turn,
+                        "call_id": call.id,
+                        "tool_name": call.name,
+                        "status": observation_status(observation.content),
+                    },
+                )
             tool_message = tool_entry(call, observation.content)
             agent._current_messages.append(tool_message)
             agent._messages.append(tool_message)
@@ -302,58 +277,14 @@ class ToolExecutionFlow:
                     **measurement_trace_fields(observation.content),
                 },
             )
-            checkpoint_references.extend(
+            visual_references.extend(
                 item for item in observation_refs if isinstance(item, dict)
-            )
-            if not operation_completed:
-                complete_work_unit(
-                    agent._operation_complete,
-                    agent._operation_uncertain,
-                    operation_id,
-                    operation_kind,
-                    {"status": observation_status(observation.content)},
-                    {"observations": list(observation_refs)},
-                )
-            remaining_calls = calls[call_index + 1:]
-            shared_gate = agent._review_manager.execution_gate(run.id)
-            stop_batch = shared_gate.blocking
-            if stop_batch and remaining_calls:
-                self._skip_calls(
-                    execution,
-                    remaining_calls,
-                    gate=shared_gate,
-                    emitter=emitter,
-                    turn=turn,
-                )
-                remaining_calls = ()
-            checkpoint(
-                agent._checkpoint_sink,
-                agent._review_manager,
-                run,
-                phase="tool",
-                next_action="tool" if remaining_calls else "model",
-                state=checkpoint_state(
-                    user_input,
-                    agent._current_messages,
-                    layout_contexts,
-                    run_attachment_ids,
-                    turn,
-                    pending_tool_calls=remaining_calls,
-                    visual_references=checkpoint_references,
-                    artifact_records=artifact_records,
-                    measurement_sessions=measurement_sessions,
-                ),
             )
             execution.pending_action = "处理工具观察并决定下一步证据或 ChartSpec 操作"
             if emitter is not None:
                 raise_if_interrupted(agent._interruption_event, agent.memory, run)
                 image_payload = {"images": summarize_images(observation.images)}
                 if observation_refs:
-                    generated_refs = [
-                        reference
-                        for reference in observation_refs
-                        if reference.get("artifactKind") == "generated_chart"
-                    ]
                     regular_refs = [
                         reference
                         for reference in observation_refs
@@ -361,8 +292,6 @@ class ToolExecutionFlow:
                     ]
                     if regular_refs:
                         image_payload["observations"] = regular_refs
-                    if generated_refs:
-                        image_payload["artifacts"] = generated_refs
                 emitter.emit(
                     "tool_result",
                     turn=turn,
@@ -379,30 +308,31 @@ class ToolExecutionFlow:
                     status=observation_status(observation.content),
                     result=trace_result_summary(observation.content),
                     image_count=len(observation.images),
-                    **lifecycle_trace_fields(observation.content),
+                    **chart_context_trace_fields(observation.content),
                     **measurement_trace_fields(observation.content),
                 )
                 if observation.images:
-                    visual_kind = "generated_chart" if any(
-                            image.metadata.get("kind") == "generated_chart"
-                            for image in observation.images
-                            if hasattr(image.metadata, "get")
-                        ) else "visual_observation"
-                    emitter.emit(
-                        visual_kind,
-                        turn=turn,
-                        tool_name=call.name,
-                        call_id=call.id,
-                        unit_id=tool_unit_id,
-                        unit_type=tool_unit_type,
-                        phase="render" if visual_kind == "generated_chart" else "observe",
-                        actor="tool",
-                        role="action" if visual_kind == "generated_chart" else "observation",
-                        state="available" if visual_kind == "generated_chart" else "observed",
-                        transition_id=f"{tool_unit_id}:" + ("generated" if visual_kind == "generated_chart" else "observed"),
-                        **image_payload,
-                        **lifecycle_trace_fields(observation.content),
+                    has_generated_chart = any(
+                        image.metadata.get("kind") == "generated_chart"
+                        for image in observation.images
+                        if hasattr(image.metadata, "get")
                     )
+                    if not has_generated_chart:
+                        emitter.emit(
+                            "visual_observation",
+                            turn=turn,
+                            tool_name=call.name,
+                            call_id=call.id,
+                            unit_id=tool_unit_id,
+                            unit_type=tool_unit_type,
+                            phase="observe",
+                            actor="tool",
+                            role="observation",
+                            state="observed",
+                            transition_id=f"{tool_unit_id}:observed",
+                            **image_payload,
+                            **chart_context_trace_fields(observation.content),
+                        )
             visual_evidence.extend(
                 ToolVisualEvidence(call.name, call.id, generated)
                 for generated in observation.images
@@ -410,60 +340,3 @@ class ToolExecutionFlow:
             if stop_batch:
                 break
         return ToolExecutionOutcome(tuple(visual_evidence), stop_batch)
-
-    def _skip_calls(
-        self,
-        execution: RunExecutionContext,
-        calls: Sequence[ToolCall],
-        *,
-        gate: Any,
-        emitter: TraceEmitter | None,
-        turn: int,
-    ) -> None:
-        """Record tool calls that review safety prevented from starting."""
-        if not calls:
-            return
-        agent = self.agent
-        content = json.dumps(
-            {
-                "error": "review gate blocked",
-                "status": "not_started",
-                "review_gate": gate.to_dict(),
-                "next_action": gate.next_action or "等待审核门禁释放",
-            },
-            ensure_ascii=False,
-        )
-        for call in calls:
-            unit_id, unit_type = tool_trace_identity(call.name, call.id)
-            message = tool_entry(call, content)
-            execution.current_messages.append(message)
-            execution.messages.append(message)
-            agent.memory.append(
-                execution.run,
-                "tool",
-                {
-                    "message": message,
-                    "tool_name": call.name,
-                    "status": "not_started",
-                    "reason": "review_gate_blocked",
-                    "review_gate": gate.to_dict(),
-                },
-            )
-            if emitter is not None:
-                presentation = get_tool_presentation(call.name, tool=agent.registry.get(call.name))
-                emitter.emit(
-                    "tool_skipped",
-                    turn=turn,
-                    tool_name=call.name,
-                    tool_display_name=presentation.display_name,
-                    tool_label=presentation.label,
-                    call_id=call.id,
-                    unit_id=unit_id,
-                    unit_type=unit_type,
-                    phase="action",
-                    actor="system",
-                    role="action",
-                    state="not_started",
-                    transition_id=f"{unit_id}:skipped",
-                    reason="review_gate_blocked",
-                )

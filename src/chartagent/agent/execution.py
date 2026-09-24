@@ -28,14 +28,14 @@ def tool_trace_identity(tool_name: str, call_id: str) -> tuple[str, str]:
 
 @dataclass
 class RunExecutionContext:
-    """Mutable coordination state for one run; checkpointing stays elsewhere."""
+    """Mutable state derived for one Agent invocation."""
 
     run: Any
     user_input: str | list[dict[str, Any]]
     recovery: dict[str, Any] | None
     layout_contexts: dict[str, dict[str, Any]] = field(default_factory=dict)
     artifact_records: list[dict[str, Any]] = field(default_factory=list)
-    checkpoint_references: list[dict[str, Any]] = field(default_factory=list)
+    visual_references: list[dict[str, Any]] = field(default_factory=list)
     measurement_sessions: dict[str, MeasurementSession] = field(default_factory=dict)
     max_layout_contexts: int = MAX_LAYOUT_CONTEXTS
     attachment_ids: tuple[str, ...] = ()
@@ -47,3 +47,4 @@ class RunExecutionContext:
     tools: list[dict[str, Any]] = field(default_factory=list)
     emitter: Any = None
     pending_recovery_calls: list[ToolCall] = field(default_factory=list)
+    model_entry_id: str | None = None

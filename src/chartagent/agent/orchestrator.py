@@ -5,36 +5,31 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Mapping
-from functools import partial
-from typing import Any, Optional, Sequence
+from typing import Any, Optional
 
 from ..client.client import LLMClient
-from ..client.models import ToolCall
 from ..decision_context import build_decision_context
 from ..memory import RunStatus
-from ..measurement import MeasurementSession, sessions_from_state
-from ..multimodal import ToolVisualEvidence, build_tool_observation_content
+from ..measurement import sessions_from_state
+from ..multimodal import build_tool_observation_content
 from ..prompting import assemble_prompt_context, panel_inventory_from_layout_contexts
 from ..trace import TraceEmitter
-from ..tools.core.result import GeneratedImage
 from .panel_routing import hydrate_persisted_panel_contexts
-from .artifacts import artifact_records_from_observation
 from .execution import RunExecutionContext
+from .final_answer import guard_final_answer
 from .measurement_flow import measurement_evidence_from_sessions
 from .messages import assistant_entry, tool_entry
 from .recovery import (
-    AgentInterrupted,
     AgentRecoveryBlocked,
-    checkpoint,
-    checkpoint_state,
+    AgentInterrupted,
     interruption_requested,
     raise_if_interrupted,
     recovery_tool_calls,
 )
-from .review_gate import _BUDGET_MSG, _REVIEW_FAILED_MSG, _REVIEW_REQUIRED_MSG
 from .tool_schema import registry_tools
 from .tool_execution import ToolExecutionFlow
 from .turn import assistant_message_for_result, execute_model_turn
+from ..tools.core.definition import ToolReplayEffect
 
 
 class AgentRunOrchestrator:
@@ -56,11 +51,10 @@ class AgentRunOrchestrator:
         recovery = recovery_context if recovery_context is not None else agent._recovery_context
         run = agent.memory.begin_run(agent._run_id) if agent._run_id is not None else agent.memory.begin_run()
         execution = RunExecutionContext(run=run, user_input=user_input, recovery=recovery)
-        persist_checkpoint = partial(checkpoint, agent._checkpoint_sink, agent._review_manager)
         agent._messages = execution.messages
         agent._current_messages = execution.current_messages
         if isinstance(recovery, dict):
-            loader = getattr(agent.memory, "recovery_context", None)
+            loader = getattr(agent.memory, "execution_context", None)
             hydrated = loader(recovery, budget=agent.context_budget) if callable(loader) else []
             if hydrated:
                 agent._current_messages.extend(hydrated)  # type: ignore[arg-type]
@@ -75,25 +69,8 @@ class AgentRunOrchestrator:
                 execution.artifact_records.extend(item for item in raw_artifacts[:48] if isinstance(item, dict))
             raw_visual_refs = recovery.get("visualReferences")
             if isinstance(raw_visual_refs, list):
-                execution.checkpoint_references.extend(item for item in raw_visual_refs[:32] if isinstance(item, dict))
+                execution.visual_references.extend(item for item in raw_visual_refs[:32] if isinstance(item, dict))
             execution.measurement_sessions.update(sessions_from_state(recovery.get("measurementSessions")))
-            review_state = recovery.get("reviewState")
-            legacy_review_state = "executionGate" in recovery or (
-                isinstance(review_state, Mapping)
-                and ("records" in review_state or "executionGate" in review_state)
-            )
-            if review_state is None and legacy_review_state:
-                raise AgentRecoveryBlocked("unsupported_review_state_version")
-            if review_state is not None:
-                try:
-                    agent._review_manager.restore(review_state, active_run_id=run.id)
-                except (TypeError, ValueError) as exc:
-                    raise AgentRecoveryBlocked(str(exc)) from exc
-                if agent._execution_gate_sink is not None:
-                    try:
-                        agent._execution_gate_sink(agent._review_manager.execution_gate(run.id).to_dict())
-                    except Exception:  # noqa: BLE001 - projection failure cannot open the manager gate
-                        pass
         user_message = {"role": "user", "content": user_input}
         agent.memory.append(run, "user", {"message": user_message, "text": user_input if isinstance(user_input, str) else "[image attachment turn]"})
         if isinstance(user_input, str):
@@ -104,9 +81,27 @@ class AgentRunOrchestrator:
                     agent.attachments.bind_run(attachment_id, run.id)
         else:
             execution.attachment_ids = ()
+        existing_execution_cursor = None
+        history_store = getattr(run, "history_store", None)
+        if history_store is not None:
+            try:
+                existing_execution_cursor = history_store.get_execution_cursor(run.id)
+            except Exception:  # noqa: BLE001 - execution callback will surface storage failures
+                existing_execution_cursor = None
+        if agent._execution_commit is not None and not recovery and existing_execution_cursor is None:
+            agent._execution_commit(
+                "input",
+                {
+                    "text": user_input if isinstance(user_input, str) else "[image attachment turn]",
+                    "attachmentIds": list(execution.attachment_ids),
+                },
+                turn=0,
+                next_action_kind="model",
+                work_key="input:0",
+            )
         layout_contexts = execution.layout_contexts
         artifact_records = execution.artifact_records
-        checkpoint_references = execution.checkpoint_references
+        visual_references = execution.visual_references
         measurement_sessions = execution.measurement_sessions
         run_attachment_ids = execution.attachment_ids
         hydrate_persisted_panel_contexts(agent.attachments, layout_contexts, run_attachment_ids)
@@ -114,6 +109,8 @@ class AgentRunOrchestrator:
             agent._current_messages.append(user_message)  # type: ignore[arg-type]
         execution.tools = registry_tools(agent.registry)
         tools = execution.tools
+        if isinstance(recovery, dict) and isinstance(recovery.get("executionModelEntryId"), str):
+            execution.model_entry_id = recovery["executionModelEntryId"]
         execution.emitter = (
             TraceEmitter(agent._trace_sink, run_id=agent._trace_run_id or run.id)
             if agent._trace_sink is not None
@@ -121,54 +118,80 @@ class AgentRunOrchestrator:
         )
         emitter = execution.emitter
 
+        if isinstance(recovery, dict) and recovery.get("resumeCheckpointAction") in {"verify", "promote"}:
+            staged_ref = recovery.get("resumeStagedRef")
+            call_id = recovery.get("resumeToolCallId")
+            model_entry_id = recovery.get("executionModelEntryId")
+            if not all(isinstance(value, str) and value for value in (staged_ref, call_id, model_entry_id)):
+                raise AgentRecoveryBlocked("execution_checkpoint_identity_unavailable")
+            try:
+                agent._verification_flow.resume_checkpoint(
+                    action=str(recovery["resumeCheckpointAction"]),
+                    staged_ref=staged_ref,
+                    run_id=run.id,
+                    model_entry_id=model_entry_id,
+                    call_id=call_id,
+                    turn=max(0, int(recovery.get("currentTurn", 0) or 0)),
+                    emitter=emitter,
+                )
+            except (RuntimeError, TypeError, ValueError) as exc:
+                raise AgentRecoveryBlocked("verification_checkpoint_unavailable") from exc
+
         execution.pending_recovery_calls = recovery_tool_calls(recovery)
-        if isinstance(recovery, dict) and recovery.get("nextAction") == "review":
-            self._resume_pending_review(
-                agent,
-                run,
-                recovery,
-                user_input=user_input,
-                layout_contexts=layout_contexts,
-                attachment_ids=run_attachment_ids,
-                checkpoint_references=checkpoint_references,
-                artifact_records=artifact_records,
-                measurement_sessions=measurement_sessions,
-                emitter=emitter,
-            )
-            execution.pending_recovery_calls = recovery_tool_calls(recovery)
         if isinstance(recovery, dict) and recovery.get("nextAction") == "final" and isinstance(recovery.get("pendingAnswer"), str):
-            answer = str(recovery["pendingAnswer"])
+            answer = guard_final_answer(str(recovery["pendingAnswer"]), run.records)
+            if agent._execution_commit is not None:
+                agent._execution_commit(
+                    "final_answer",
+                    {"answer": answer, "recovered": True},
+                    turn=max(0, int(recovery.get("currentTurn", 0) or 0)),
+                    next_action_kind="model",
+                    work_key=f"final:resume:{execution.model_entry_id or 'answer'}",
+                    event_kind="final_answer_committed",
+                    event_payload={"recovered": True, "answer_length": len(answer)},
+                )
             agent.memory.append(run, "final", {"answer": answer, "recovered": True})
             agent.memory.finish(run, RunStatus.COMPLETED, "recovered_final")
             return answer
-        for step in range(agent.max_steps):
-            turn = step + 1
+        try:
+            completed_model_steps = max(0, int(recovery.get("modelStepCount", 0))) if isinstance(recovery, dict) else 0
+            recovered_turn = max(0, int(recovery.get("currentTurn", 0))) if isinstance(recovery, dict) else 0
+        except (TypeError, ValueError):
+            completed_model_steps = 0
+            recovered_turn = 0
+        remaining_model_steps = max(0, agent.max_steps - completed_model_steps)
+        first_turn = (
+            max(1, recovered_turn)
+            if execution.pending_recovery_calls
+            else max(1, recovered_turn + (1 if isinstance(recovery, dict) else 0))
+        )
+        loop_count = remaining_model_steps + (1 if execution.pending_recovery_calls else 0)
+        for step in range(loop_count):
+            turn = first_turn + step
             system_message = None
             prompt_metadata: dict[str, Any] | None = None
             if agent._system:
-                review_gate = agent._review_manager.gate(run.id)
                 panel_inventory = panel_inventory_from_layout_contexts(layout_contexts)
                 selected_panel = next(
                     (item for item in panel_inventory if item.get("panel_id") == execution.selected_panel_id),
                     None,
                 )
-                active_generation_context = None
-                for candidate_item in (
-                    list(review_gate.get("pending") or []) + list(review_gate.get("failed") or [])
-                ):
-                    if isinstance(candidate_item, Mapping) and isinstance(candidate_item.get("generationContext"), Mapping):
-                        active_generation_context = candidate_item["generationContext"]
-                        break
-                execution_gate = agent._review_manager.execution_gate(run.id).to_dict()
+                active_generation_context = next(
+                    (
+                        item.get("generation_context")
+                        for item in reversed(artifact_records)
+                        if isinstance(item, Mapping) and isinstance(item.get("generation_context"), Mapping)
+                    ),
+                    None,
+                )
                 measurement_evidence = measurement_evidence_from_sessions(measurement_sessions)
                 decision_context = build_decision_context(
                     run_id=run.id,
-                    execution_gate=execution_gate,
                     measurement_evidence=measurement_evidence,
                     selected_panel=selected_panel,
                     generation_context=active_generation_context,
                     phase="model",
-                    retry_budget=agent.max_steps,
+                    retry_budget=max(0, agent.max_steps - completed_model_steps),
                 )
                 prompt_context = assemble_prompt_context(
                     tools=agent.registry.list(),
@@ -182,22 +205,11 @@ class AgentRunOrchestrator:
                         "pending_action": execution.pending_action,
                         "measurement_evidence": measurement_evidence,
                         "recovery_status": "recovery_context_loaded" if recovery else "none",
-                        "retry_count": max(
-                            [
-                                int(item.get("attempts", 0) or 0)
-                                for item in (review_gate.get("failed") or [])
-                                if isinstance(item, dict)
-                            ]
-                            or [0]
-                        ),
-                        "retry_budget": agent.max_steps,
-                        "publication_status": "published" if review_gate.get("published") else "not_published",
-                        "execution_gate": execution_gate,
+                        "retry_budget": max(0, agent.max_steps - completed_model_steps),
                         "generation_context": active_generation_context,
                         "decision_context": decision_context,
                     },
                     panel_inventory=panel_inventory,
-                    review_gate=review_gate,
                 )
                 prompt_metadata = prompt_context["metadata"]
                 dynamic = "\n\n".join(
@@ -222,93 +234,65 @@ class AgentRunOrchestrator:
                     trace_run_id=emitter.run_id,
                     trace_turn=turn,
                 )
+            def commit_model_response(kind, payload, **kwargs):
+                if kind == "model_response" and isinstance(payload, dict):
+                    calls = payload.get("toolCalls")
+                    if isinstance(calls, list):
+                        for call in calls[:16]:
+                            if not isinstance(call, dict):
+                                continue
+                            tool = agent.registry.get(str(call.get("name") or ""))
+                            call["replayEffect"] = (
+                                tool.replay_effect.value
+                                if tool is not None
+                                else ToolReplayEffect.RECONCILE_REQUIRED.value
+                            )
+                entry = agent._execution_commit(kind, payload, **kwargs)
+                execution.model_entry_id = entry.entry_id
+                return entry
+
             result, execution.pending_recovery_calls = execute_model_turn(
                 agent.client,
                 agent._messages,
                 tools,
                 chat_kwargs=chat_kwargs,
                 pending_recovery_calls=execution.pending_recovery_calls,
-                operation_begin=agent._operation_begin,
-                operation_complete=agent._operation_complete,
-                operation_uncertain=agent._operation_uncertain,
                 memory=agent.memory,
                 run=run,
                 interruption_event=agent._interruption_event,
                 emitter=emitter,
                 turn=turn,
                 trace_reasoning=agent._trace_reasoning,
+                execution_commit=commit_model_response if agent._execution_commit is not None else None,
             )
             if not result.tool_calls:
                 raise_if_interrupted(agent._interruption_event, agent.memory, run)
+                result.content = guard_final_answer(result.content, run.records)
                 assistant_message = assistant_entry(result)
-                shared_gate = agent._review_manager.execution_gate(run.id)
-                if shared_gate.blocking:
-                    agent._current_messages.append(assistant_message)
-                    agent._messages.append(assistant_message)
-                    agent.memory.append(run, "assistant", {"message": assistant_message})
-                    gate_message = {
-                        "role": "user",
-                        "content": json.dumps(
-                            {"type": "execution_review_gate", "execution_gate": shared_gate.to_dict()},
-                            ensure_ascii=False,
-                            separators=(",", ":"),
-                        ),
-                    }
-                    agent._current_messages.append(gate_message)  # type: ignore[arg-type]
-                    agent._messages.append(gate_message)  # type: ignore[arg-type]
-                    agent.memory.append(run, "review_gate", {"state": shared_gate.to_dict()})
-                    if shared_gate.state.value in {"failed", "exhausted"} or turn >= agent.max_steps:
-                        agent.memory.append(
-                            run,
-                            "terminal",
-                            {"answer": _REVIEW_FAILED_MSG, "execution_gate": shared_gate.to_dict()},
-                        )
-                        agent.memory.finish(run, RunStatus.FAILED, "review_failed")
-                        return _REVIEW_FAILED_MSG
-                    persist_checkpoint(
-                        run,
-                        phase="review",
-                        next_action=shared_gate.next_action or "repair_review_gate",
-                        state=checkpoint_state(
-                            user_input,
-                            agent._current_messages,
-                            layout_contexts,
-                            run_attachment_ids,
-                            turn,
-                            pending_tool_calls=(),
-                            visual_references=checkpoint_references,
-                            artifact_records=artifact_records,
-                            measurement_sessions=measurement_sessions,
-                        ),
-                    )
-                    continue
                 agent._current_messages.append(assistant_message)
                 agent._messages.append(assistant_message)
                 agent.memory.append(run, "assistant", {"message": assistant_message})
-                persist_checkpoint(
-                    run,
-                    phase="model",
-                    next_action="final",
-                    state=checkpoint_state(
-                        user_input,
-                        agent._current_messages,
-                        layout_contexts,
-                        run_attachment_ids,
-                        turn,
-                        pending_tool_calls=(),
-                        pending_answer=result.content,
-                        visual_references=checkpoint_references,
-                        artifact_records=artifact_records,
-                        measurement_sessions=measurement_sessions,
-                    ),
-                )
-                if isinstance(recovery, dict) and recovery.get("nextAction") == "final" and isinstance(recovery.get("pendingAnswer"), str):
-                    answer = str(recovery["pendingAnswer"])
-                    agent.memory.append(run, "final", {"answer": answer, "recovered": True})
-                    agent.memory.finish(run, RunStatus.COMPLETED, "recovered_final")
-                    return answer
+                if agent._execution_commit is not None:
+                    agent._execution_commit(
+                        "final_answer",
+                        {"answer": result.content, "finishReason": result.finish_reason},
+                        turn=turn,
+                        next_action_kind="model",
+                        work_key=f"final:{execution.model_entry_id or turn}",
+                        event_kind="final_answer_committed",
+                        event_payload={"turn": turn, "answer_length": len(result.content)},
+                    )
                 agent.memory.append(run, "final", {"answer": result.content, "finish_reason": result.finish_reason})
-                agent.memory.finish(run, RunStatus.COMPLETED, "final")
+                unresolved_verification = any(
+                    record.kind == "verification_result"
+                    and record.payload.get("status") == "unavailable"
+                    for record in run.records
+                )
+                agent.memory.finish(
+                    run,
+                    RunStatus.FAILED if unresolved_verification else RunStatus.COMPLETED,
+                    "verification_unavailable" if unresolved_verification else "final",
+                )
                 if emitter is not None:
                     emitter.emit(
                         "final_answer",
@@ -328,22 +312,6 @@ class AgentRunOrchestrator:
             agent._current_messages.append(assistant_message)
             agent._messages.append(assistant_message)
             agent.memory.append(run, "assistant", {"message": assistant_record})
-            persist_checkpoint(
-                run,
-                phase="model",
-                next_action="tool",
-                state=checkpoint_state(
-                    user_input,
-                    agent._current_messages,
-                    layout_contexts,
-                    run_attachment_ids,
-                    turn,
-                    pending_tool_calls=result.tool_calls,
-                    visual_references=checkpoint_references,
-                    artifact_records=artifact_records,
-                    measurement_sessions=measurement_sessions,
-                ),
-            )
             outcome = ToolExecutionFlow(agent).execute(execution, result.tool_calls, turn=turn)
             visual_evidence = list(outcome.visual_evidence)
             if visual_evidence:
@@ -364,27 +332,8 @@ class AgentRunOrchestrator:
                         "image_count": len(visual_evidence),
                     },
                 )
-            persist_checkpoint(
-                run,
-                phase="tool",
-                next_action="model",
-                state=checkpoint_state(
-                    user_input,
-                    agent._current_messages,
-                    layout_contexts,
-                    run_attachment_ids,
-                    turn,
-                    pending_tool_calls=(),
-                    visual_references=checkpoint_references,
-                    artifact_records=artifact_records,
-                    measurement_sessions=measurement_sessions,
-                ),
-            )
         raise_if_interrupted(agent._interruption_event, agent.memory, run)
-        terminal_answer = _BUDGET_MSG
-        shared_terminal_gate = agent._review_manager.execution_gate(run.id)
-        if shared_terminal_gate.blocking:
-            terminal_answer = _REVIEW_FAILED_MSG if shared_terminal_gate.state.value in {"failed", "exhausted"} else _REVIEW_REQUIRED_MSG
+        terminal_answer = "*stopped: max_steps reached*"
         if emitter is not None:
             emitter.emit(
                 "budget_exhausted",
@@ -392,166 +341,22 @@ class AgentRunOrchestrator:
                 max_steps=agent.max_steps,
                 answer=terminal_answer,
             )
-        review_blocked = shared_terminal_gate.blocking
-        agent.memory.append(run, "terminal", {"answer": terminal_answer, "max_steps": agent.max_steps, "execution_gate": shared_terminal_gate.to_dict()})
-        agent.memory.finish(run, RunStatus.FAILED if review_blocked else RunStatus.COMPLETED, "review_failed" if review_blocked else "budget")
+        if agent._execution_commit is not None:
+            agent._execution_commit(
+                "final_answer",
+                {"answer": terminal_answer, "reason": "budget_exhausted"},
+                turn=agent.max_steps,
+                next_action_kind="model",
+                work_key=f"final:budget:{agent.max_steps}",
+                event_kind="final_answer_committed",
+                event_payload={"turn": agent.max_steps, "answer_length": len(terminal_answer)},
+            )
+        agent.memory.append(run, "terminal", {"answer": terminal_answer, "max_steps": agent.max_steps})
+        unresolved_verification = any(
+            isinstance(record.payload, dict)
+            and record.kind == "verification_result"
+            and record.payload.get("status") == "unavailable"
+            for record in run.records
+        )
+        agent.memory.finish(run, RunStatus.FAILED if unresolved_verification else RunStatus.COMPLETED, "verification_unavailable" if unresolved_verification else "budget")
         return terminal_answer
-
-    def _resume_pending_review(
-        self,
-        agent: Any,
-        run: Any,
-        recovery: Mapping[str, Any],
-        *,
-        user_input: str | list[dict],
-        layout_contexts: dict[str, dict[str, Any]],
-        attachment_ids: Sequence[str],
-        checkpoint_references: list[dict[str, Any]],
-        artifact_records: list[dict[str, Any]],
-        measurement_sessions: Mapping[str, MeasurementSession],
-        emitter: TraceEmitter | None,
-    ) -> None:
-        """Finish a staged review before returning to the model after recovery."""
-        pending = recovery.get("pendingReview")
-        if not isinstance(pending, Mapping):
-            raise AgentRecoveryBlocked("pending_review_reference_missing")
-        call_id = pending.get("callId")
-        tool_name = pending.get("toolName")
-        candidate_ids = pending.get("candidateIds")
-        if (
-            not isinstance(call_id, str)
-            or not call_id
-            or not isinstance(tool_name, str)
-            or not tool_name
-            or not isinstance(candidate_ids, list)
-            or not candidate_ids
-            or any(not isinstance(item, str) for item in candidate_ids)
-        ):
-            raise AgentRecoveryBlocked("pending_review_reference_invalid")
-        turn = max(1, int(pending.get("turn", 1)))
-        candidates = agent._review_manager.candidates_for_review(run.id, candidate_ids)
-        if {candidate.candidate_id for candidate, _ in candidates} != set(candidate_ids):
-            raise AgentRecoveryBlocked("review_candidate_input_unavailable")
-        remaining_calls = recovery_tool_calls(dict(recovery))
-        persist_checkpoint = partial(checkpoint, agent._checkpoint_sink, agent._review_manager)
-
-        def save_review_checkpoint(ids: Sequence[str]) -> None:
-            state = checkpoint_state(
-                user_input,
-                agent._current_messages,
-                layout_contexts,
-                attachment_ids,
-                turn,
-                pending_tool_calls=remaining_calls,
-                visual_references=checkpoint_references,
-                artifact_records=artifact_records,
-                measurement_sessions=measurement_sessions,
-            )
-            state["pendingReview"] = {
-                "callId": call_id,
-                "toolName": tool_name,
-                "turn": turn,
-                "candidateIds": list(ids[:16]),
-            }
-            saved = persist_checkpoint(run, phase="review", next_action="review", state=state)
-            if agent._checkpoint_sink is not None and not saved:
-                raise AgentRecoveryBlocked("review_checkpoint_unavailable")
-
-        images: list[GeneratedImage] = []
-        review_payloads = []
-        for candidate, spec in candidates:
-            staged_image = agent._review_manager.decorate_image(
-                GeneratedImage(candidate.content, candidate.media_type, candidate.title),
-                candidate,
-            )
-            if agent._candidate_input_sink is None:
-                raise AgentRecoveryBlocked("review_candidate_store_unavailable")
-            try:
-                staged_reference = agent._candidate_input_sink(staged_image, spec.to_dict())
-            except Exception as exc:  # noqa: BLE001 - recovery remains fail closed
-                raise AgentRecoveryBlocked("review_candidate_store_unavailable") from exc
-            if not staged_reference:
-                raise AgentRecoveryBlocked("review_candidate_store_unavailable")
-            candidate = agent._review_flow.finish_candidate_review(
-                candidate,
-                spec,
-                emitter=emitter,
-                turn=turn,
-                checkpoint_review=save_review_checkpoint,
-                candidate_ids=candidate_ids,
-            )
-            if candidate.run_id != run.id:
-                raise AgentRecoveryBlocked("review_candidate_run_mismatch")
-            if agent._run_id is not None and candidate.run_id != agent._run_id:
-                raise AgentRecoveryBlocked("review_candidate_run_mismatch")
-            staged_image = agent._review_manager.decorate_image(
-                GeneratedImage(candidate.content, candidate.media_type, candidate.title),
-                candidate,
-            )
-            try:
-                updated_reference = agent._candidate_input_sink(staged_image, spec.to_dict())
-            except Exception as exc:  # noqa: BLE001 - recovery remains fail closed
-                raise AgentRecoveryBlocked("review_candidate_store_unavailable") from exc
-            if not updated_reference:
-                raise AgentRecoveryBlocked("review_candidate_store_unavailable")
-            agent._review_flow.record_candidate_review(
-                run,
-                candidate,
-                emitter=emitter,
-                turn=turn,
-                tool_name="generated_chart_review",
-                call_id=call_id,
-                started=False,
-            )
-            images.append(staged_image)
-            review_payloads.append(candidate.safe_metadata())
-
-        result_content = json.dumps(
-            {
-                "status": "success",
-                "data": {"kind": "generated_chart", "review": review_payloads, "recovered": True},
-                "review": review_payloads,
-            },
-            ensure_ascii=False,
-            separators=(",", ":"),
-        )
-        tool_call = ToolCall(call_id, tool_name, "{}")
-        tool_message = tool_entry(tool_call, result_content)
-        agent._current_messages.append(tool_message)
-        agent._messages.append(tool_message)
-        agent.memory.append(run, "tool", {"message": tool_message, "tool_name": tool_name, "status": "success"})
-        references: Sequence[dict[str, Any]] = ()
-        if agent._visual_observation_sink is not None:
-            references = agent._visual_observation_sink(tool_name, call_id, images)
-        checkpoint_references.extend(item for item in references if isinstance(item, dict))
-        artifact_records.extend(
-            artifact_records_from_observation(tool_name, call_id, result_content, attachment_ids, references)
-        )
-        artifact_records[:] = artifact_records[-48:]
-        if images:
-            visual_message = {
-                "role": "user",
-                "content": build_tool_observation_content(
-                    [ToolVisualEvidence(tool_name, call_id, image) for image in images]
-                ),
-            }
-            agent._current_messages.append(visual_message)  # type: ignore[arg-type]
-            agent._messages.append(visual_message)  # type: ignore[arg-type]
-            agent.memory.append(run, "visual_metadata", {"tool_count": 1, "tools": [tool_name], "call_ids": [call_id], "image_count": len(images)})
-        next_action = "tool" if remaining_calls else "model"
-        persist_checkpoint(
-            run,
-            phase="tool",
-            next_action=next_action,
-            state=checkpoint_state(
-                user_input,
-                agent._current_messages,
-                layout_contexts,
-                attachment_ids,
-                turn,
-                pending_tool_calls=remaining_calls,
-                visual_references=checkpoint_references,
-                artifact_records=artifact_records,
-                measurement_sessions=measurement_sessions,
-            ),
-        )

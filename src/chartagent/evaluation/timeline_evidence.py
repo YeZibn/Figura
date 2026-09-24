@@ -33,29 +33,12 @@ def _event_stages(kind: str, payload: Mapping[str, Any]) -> list[str]:
         stages.append("assembly")
     elif tool_name == "render_chart":
         stages.append("render")
-    if kind in {
-        "generated_chart_rejected",
-        "review_started",
-        "review_completed",
-        "review_repair_required",
-        "review_failed",
-    }:
-        stages.append("quality_review")
-    if kind in {
-        "assembly_validation_failure",
-        "review_repair_required",
-    }:
-        stages.append("repair")
-    if kind in {"generated_chart", "generated_chart_published"}:
+    if kind == "chart_verification_result":
+        stages.append("verification")
+    if kind in {"chart_staged", "chart_promotion_result"}:
         stages.append("render")
     if kind == "recovery_blocked":
-        stages.append("repair")
-    if kind == "operation_completed":
-        operation_kind = str(payload.get("operationKind") or "").lower()
-        if operation_kind == "review":
-            stages.append("quality_review")
-        elif operation_kind in {"render", "publication"}:
-            stages.append("render")
+        stages.append("model")
     return _unique(stages)
 
 
@@ -133,7 +116,7 @@ def _reference_field(key: str) -> str | None:
         return "panel_ids"
     if key in {"attempt_id", "attempt_ids", "attemptid", "attemptids", "parent_attempt_id"}:
         return "attempt_ids"
-    if key in {"artifact_id", "artifact_ids", "artifactid", "artifactids", "candidate_id", "candidate_ids", "candidateid", "candidateids"}:
+    if key in {"artifact_id", "artifact_ids", "artifactid", "artifactids"}:
         return "artifact_ids"
     if key in {"observation_id", "observation_ids", "observationid", "observationids"}:
         return "observation_ids"
@@ -222,7 +205,7 @@ def _extract_preview_references(text: str, refs: dict[str, list[str]]) -> None:
     patterns = {
         "panel_ids": r"\bpanel_[A-Za-z0-9]+\b",
         "attempt_ids": r"\b(?:attempt|matt)_[A-Za-z0-9]+\b",
-        "artifact_ids": r"\b(?:artifact|cand)_[A-Za-z0-9]+\b",
+        "artifact_ids": r"\bartifact_[A-Za-z0-9_-]+\b",
         "observation_ids": r"\bobs_[A-Za-z0-9]+\b",
         "figure_ids": r"\bfigure_[A-Za-z0-9]+\b",
         "collection_ids": r"\bcollection_[A-Za-z0-9]+\b",
@@ -246,23 +229,14 @@ def _tool_name(payload: Mapping[str, Any]) -> str | None:
 
 
 def _event_is_failure(kind: str, payload: Mapping[str, Any]) -> bool:
-    if kind in {"run_failed", "run_interrupted", "generated_chart_rejected", "assembly_validation_failure", "review_failed"}:
-        return True
-    if kind in {"review_repair_required", "recovery_blocked"}:
+    if kind in {"run_failed", "run_interrupted", "assembly_validation_failure", "recovery_blocked"}:
         return True
     statuses = _statuses(kind, payload)
     return any(status in FAILURE_STATUSES for status in statuses)
 
 
-def _event_needs_repair(kind: str, payload: Mapping[str, Any]) -> bool:
-    """Identify quality-gate states distinct from tool execution failure."""
-    if kind in {"assembly_validation_failure", "review_repair_required"}:
-        return True
-    return False
-
-
 def _event_is_success(kind: str, payload: Mapping[str, Any]) -> bool:
-    if kind in {"run_started", "resume_started", "generated_chart", "generated_chart_published", "operation_completed", "review_completed"}:
+    if kind in {"run_started", "resume_started"}:
         return not _event_is_failure(kind, payload)
     if kind == "tool_result":
         statuses = _statuses(kind, payload)

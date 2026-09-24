@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import re
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any, Callable, Dict, Mapping
 
 
@@ -13,6 +14,14 @@ MAX_TOOL_DISPLAY_NAME_LENGTH = 80
 MAX_TOOL_GROUP_LENGTH = 48
 MAX_PARAMETER_DESCRIPTION_LENGTH = 512
 _GROUP_PATTERN = re.compile(r"^[a-z][a-z0-9_-]{0,47}$")
+
+
+class ToolReplayEffect(str, Enum):
+    """Replay contract for side effects behind a model-facing tool."""
+
+    REPLAY_SAFE = "replay_safe"
+    IDEMPOTENT_LOCAL_WRITE = "idempotent_local_write"
+    RECONCILE_REQUIRED = "reconcile_required"
 
 
 def _bounded_text(value: Any, *, field: str, maximum: int) -> str:
@@ -124,6 +133,7 @@ class Tool:
     fn: Callable[..., Any]
     display_name: str | None = None
     group: str = "general"
+    replay_effect: ToolReplayEffect | str = ToolReplayEffect.REPLAY_SAFE
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not self.name.strip():
@@ -148,6 +158,10 @@ class Tool:
             )
         if len(self.group) > MAX_TOOL_GROUP_LENGTH:
             raise ValueError(f"Tool group exceeds {MAX_TOOL_GROUP_LENGTH} characters.")
+        try:
+            self.replay_effect = ToolReplayEffect(self.replay_effect)
+        except ValueError as exc:
+            raise ValueError("Tool replay_effect is unsupported.") from exc
         self.parameters = normalise_parameters(self.parameters)
 
     def definition(self) -> dict[str, Any]:
@@ -157,6 +171,7 @@ class Tool:
 
 __all__ = [
     "Tool",
+    "ToolReplayEffect",
     "canonical_tool_definition",
     "normalise_parameters",
     "MAX_PARAMETER_DESCRIPTION_LENGTH",

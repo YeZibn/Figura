@@ -22,9 +22,9 @@ const timelineEventStatusLabels: Record<string, Record<string, string>> = {
   tool_result: { success: '已完成', error: '失败' },
   tool_skipped: { not_started: '未执行' },
   visual_observation: { observed: '已观察' },
-  generated_chart: { available: '已生成', unavailable: '产物不可用' },
-  generated_chart_published: { published: '已发布', published_with_warning: '已发布·有警告' },
-  generated_chart_rejected: { rejected: '未发布', unpublished: '未发布' },
+  chart_staged: { staged: '已暂存', unavailable: '暂不可用' },
+  chart_verification_result: { pass: '验证通过', pass_with_warning: '验证通过·有警告', fail: '验证未通过', unavailable: '验证不可用' },
+  chart_promotion_result: { published: '已发布', published_with_warning: '已发布·有警告' },
   assembly_validation_failure: { failed: '组装校验失败' },
 }
 
@@ -85,18 +85,12 @@ export function eventLabel(event: AgentRunEvent): string {
     resume_started: '继续执行已开始',
     model_started: '模型轮次开始',
     model_completed: '模型轮次完成',
-    operation_completed: '操作结果已保存',
     recovery_blocked: '继续执行被阻止',
     progress: '处理中',
-    generated_chart: '图表已生成',
-    generated_chart_published: '图表已发布',
-    generated_chart_rejected: '图表未发布',
+    chart_staged: '图表已暂存',
+    chart_verification_result: '图表验证结果',
+    chart_promotion_result: '图表已发布',
     assembly_validation_failure: 'ChartSpec 组装校验失败',
-    review_started: '审核已开始',
-    review_completed: '审核已通过',
-    review_repair_required: '审核要求修复',
-    review_failed: '审核未通过',
-    review_subcheck: '审核诊断信息',
     tool_skipped: '工具未执行',
     final_answer: '最终回答已生成',
     budget_exhausted: '达到预算上限',
@@ -119,11 +113,9 @@ export function failureCategoryLabel(value?: string): string {
     provider_transient: 'Provider 临时故障',
     provider_failure: 'Provider 请求失败',
     transport_uncertain: '远端结果未知',
-    operation_outcome_uncertain: '操作结果未知',
     source_scope: '源图范围错误',
     measurement_evidence: '测量证据错误',
     assembly_validation: '图表组装校验失败',
-    review_terminal: '审核终态失败',
     tool_rejected: '工具拒绝执行',
   } as Record<string, string>)[value || ''] || value || '执行失败'
 }
@@ -154,7 +146,6 @@ export function evaluationResourceLabel(resource: EvaluationResource): string {
   if (resource.kind === 'input') return '输入图'
   if (resource.kind === 'report_image') return '报告图片'
   if (resource.kind === 'observation') return '视觉观察'
-  if (resource.kind === 'candidate') return '候选图表'
   if (resource.kind === 'artifact') return '生成结果'
   return resource.label || '评测证据'
 }
@@ -164,8 +155,7 @@ export function evaluationDetailEntryLabel(entry: EvaluationDetailEntry): string
   if (entry.kind === 'tool_message') return '模型可见工具消息'
   if (entry.kind === 'tool_call') return entry.toolLabel || entry.toolName || '工具调用'
   if (entry.kind === 'tool_result') return (entry.toolLabel || entry.toolName || '工具') + ' · 工具结果'
-  if (entry.kind === 'repair') return '审核修复信息'
-  if (entry.kind.startsWith('review')) return '审核诊断信息'
+  if (entry.kind === 'verification_result') return '图表验证结果'
   if (entry.kind === 'visual_observation') return '视觉观察'
   if (entry.kind === 'generated_chart') return '生成结果'
   return '运行记录'

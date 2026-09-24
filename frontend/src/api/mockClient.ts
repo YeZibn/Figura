@@ -69,9 +69,9 @@ export const mockClient: ChartAgentClient = {
     pendingRuns.set(runId, { text, attachmentIds })
     const target = data[sessionId]
     const model = provider === 'qwen' ? 'qwen3.8-flash' : provider === 'deepseek' ? 'deepseek-flash' : 'gpt-4o-mini'
-    if (target) target.runs.push({ runId, sessionId, status: 'running', provider, model, retryOf: options.retryOf, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), eventCount: 0, parentRunId: options.retryOf, rootRunId: options.retryOf || runId, continuationKind: options.retryOf ? 'retry' : null, recovery: { status: 'available', checkpointId: `chk_${runId}`, checkpointVersion: 1, phase: 'accepted', nextAction: 'model' } })
+    if (target) target.runs.push({ runId, sessionId, status: 'running', provider, model, retryOf: options.retryOf, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), eventCount: 0, parentRunId: options.retryOf, rootRunId: options.retryOf || runId, continuationKind: options.retryOf ? 'retry' : null, recovery: { status: 'available', cursorId: `cur_mock_${runId}`, nextAction: 'model' } })
     if (options.idempotencyKey) idempotentRuns.set(options.idempotencyKey, runId)
-    return { runId, sessionId, status: 'running', provider, model, retryOf: options.retryOf, parentRunId: options.retryOf, rootRunId: options.retryOf || runId, continuationKind: options.retryOf ? 'retry' : null, recovery: { status: 'available', checkpointId: `chk_${runId}`, checkpointVersion: 1, phase: 'accepted', nextAction: 'model' } }
+    return { runId, sessionId, status: 'running', provider, model, retryOf: options.retryOf, parentRunId: options.retryOf, rootRunId: options.retryOf || runId, continuationKind: options.retryOf ? 'retry' : null, recovery: { status: 'available', cursorId: `cur_mock_${runId}`, nextAction: 'model' } }
   },
   async interruptRun(sessionId, runId) {
     const target = data[sessionId]
@@ -104,7 +104,7 @@ export const mockClient: ChartAgentClient = {
       error.status = 409
       throw error
     }
-    const request = JSON.stringify({ sessionId, runId, checkpointId: options.checkpointId || parent.recovery.checkpointId || null })
+    const request = JSON.stringify({ sessionId, runId, cursorId: options.cursorId || parent.recovery.cursorId || null })
     const previousRequest = idempotentRequests.get(options.idempotencyKey)
     if (previousRequest && previousRequest !== request) {
       const error = new Error('恢复请求标识已用于其他请求') as Error & { code: string; status: number }
@@ -119,9 +119,9 @@ export const mockClient: ChartAgentClient = {
     const childId = `run_mock_${Date.now()}`
     const model = parent.model || 'gpt-4o-mini'
     pendingRuns.set(childId, { text: '继续执行已提交的图表分析', attachmentIds: [] })
-    target.runs.push({ runId: childId, sessionId, status: 'running', provider: parent.provider, model, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), eventCount: 0, parentRunId: runId, rootRunId: parent.rootRunId || runId, continuationKind: 'resume', recovery: { status: 'available', checkpointId: `chk_${childId}`, checkpointVersion: 1, phase: 'accepted', nextAction: 'model' } })
+    target.runs.push({ runId: childId, sessionId, status: 'running', provider: parent.provider, model, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), eventCount: 0, parentRunId: runId, rootRunId: parent.rootRunId || runId, continuationKind: 'resume', recovery: { status: 'available', cursorId: `cur_mock_${childId}`, nextAction: 'model' } })
     idempotentRuns.set(options.idempotencyKey, childId)
-    return { runId: childId, sessionId, status: 'running', provider: parent.provider, model, parentRunId: runId, rootRunId: parent.rootRunId || runId, continuationKind: 'resume', recovery: { status: 'available', checkpointId: `chk_${childId}`, checkpointVersion: 1, phase: 'accepted', nextAction: 'model' } }
+    return { runId: childId, sessionId, status: 'running', provider: parent.provider, model, parentRunId: runId, rootRunId: parent.rootRunId || runId, continuationKind: 'resume', recovery: { status: 'available', cursorId: `cur_mock_${childId}`, nextAction: 'model' } }
   },
   async getRunHistory(sessionId, runId, afterSequence = 0): Promise<RunHistory> {
     await wait(40)
@@ -164,18 +164,68 @@ export const mockClient: ChartAgentClient = {
       call_id: 'mock-call-1',
       observations: [{ observationId: 'mock-observation', mediaType: 'image/svg+xml', caption: '模拟柱状图测量结果', byteCount: mockImage.length, imageUrl: mockImage }],
     }))
-    schedule(650, () => emit('generated_chart', 6, {
+    schedule(650, () => emit('chart_staged', 6, {
       correlation_version: 2,
-      unit_id: 'generation:mock-candidate-1',
+      unit_id: 'generation:stg_mock_chart_1',
       unit_type: 'generation',
       phase: 'render',
       actor: 'tool',
       role: 'action',
-      transition_id: 'generation:mock-candidate-1:rendered',
-      state: 'available',
-      tool_name: 'render_chart',
+      transition_id: 'generation:stg_mock_chart_1:staged',
+      staged_ref: 'stg_mock_chart_1',
+      state: 'staged',
+      chart_type: 'bar',
+      title: '分析结果重绘',
+      media_type: 'image/png',
+      caption: '生成图表：分析结果重绘',
+      chart_spec_digest: 'mock-chart-spec-digest',
+      manifest_digest: 'mock-chart-manifest-digest',
+      width: 640,
+      height: 360,
       call_id: 'mock-render-1',
-      artifacts: [{ artifactKind: 'generated_chart', artifactId: `artifact_${runId}`, mediaType: 'image/png', caption: '生成图表：分析结果重绘', byteCount: mockImage.length, chartType: 'bar', title: '分析结果重绘', width: 640, height: 360, status: 'available', imageUrl: mockImage, downloadUrl: mockImage }],
+      imageUrl: mockImage,
+    }))
+    schedule(700, () => emit('chart_verification_result', 7, {
+      correlation_version: 2,
+      unit_id: 'verification:ver_mock_chart_1',
+      unit_type: 'verification',
+      parent_unit_id: 'generation:stg_mock_chart_1',
+      phase: 'verify',
+      actor: 'system',
+      role: 'verification',
+      transition_id: 'verification:ver_mock_chart_1:completed',
+      staged_ref: 'stg_mock_chart_1',
+      verification_ref: 'ver_mock_chart_1',
+      state: 'pass_with_warning',
+      verification: {
+        verificationRef: 'ver_mock_chart_1',
+        stagedRef: 'stg_mock_chart_1',
+        manifestDigest: 'mock-chart-manifest-digest',
+        policyVersion: 1,
+        status: 'pass_with_warning',
+        checks: { structure: 'pass', encoded_artifact: 'pass' },
+        issues: [{ code: 'mock_label_review', location: 'labels', message: '部分标签较小', severity: 'warning' }],
+        decision: 'pass_with_warning',
+        confidence: 0.9,
+        attempt: 1,
+      },
+    }))
+    schedule(730, () => emit('chart_promotion_result', 8, {
+      correlation_version: 2,
+      unit_id: `artifact:artifact_${runId}`,
+      unit_type: 'artifact',
+      parent_unit_id: 'generation:stg_mock_chart_1',
+      phase: 'publish',
+      actor: 'system',
+      role: 'artifact',
+      transition_id: `artifact:artifact_${runId}:published`,
+      staged_ref: 'stg_mock_chart_1',
+      verification_ref: 'ver_mock_chart_1',
+      artifact_id: `artifact_${runId}`,
+      state: 'published_with_warning',
+      warning: true,
+      imageUrl: mockImage,
+      downloadUrl: mockImage,
     }))
     const subscription: MockSubscription = {
       interrupt() {
@@ -199,7 +249,7 @@ export const mockClient: ChartAgentClient = {
       if (closed) return
       const pending = pendingRuns.get(runId)
       if (runSummary?.status !== 'running') return
-      emit('final_answer', 7, { answer: '模拟回复：已完成本次图表分析。' })
+      emit('final_answer', 9, { answer: '模拟回复：已完成本次图表分析。' })
       if (target) {
         target.messages.push({ id: `${runId}:user`, kind: 'user', text: pending?.text || '已提交的分析请求', timestamp, attachmentIds: pending?.attachmentIds.length ? pending.attachmentIds : undefined })
         target.messages.push({ id: `${runId}:assistant`, kind: 'assistant', text: '模拟回复：已完成本次图表分析。', timestamp })

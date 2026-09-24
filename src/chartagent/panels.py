@@ -10,7 +10,7 @@ import hashlib
 import json
 import math
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
 MAX_PANEL_ID = 128
@@ -199,26 +199,6 @@ class ActiveSourceContext:
         }
 
 
-@dataclass(frozen=True)
-class CandidateLineage:
-    candidate_id: str
-    parent_candidate_id: str | None = None
-    chart_spec_digest: str | None = None
-    source_attachment_ids: tuple[str, ...] = field(default_factory=tuple)
-    panel_ids: tuple[str, ...] = field(default_factory=tuple)
-    attempt: int = 0
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "candidateId": self.candidate_id,
-            "parentCandidateId": self.parent_candidate_id,
-            "chartSpecDigest": self.chart_spec_digest,
-            "sourceAttachmentIds": list(self.source_attachment_ids[:16]),
-            "panelIds": list(self.panel_ids[:32]),
-            "attempt": max(0, int(self.attempt)),
-        }
-
-
 def handoff_from_panel(
     *,
     session_id: str,
@@ -263,7 +243,6 @@ def handoff_from_panel(
 
 __all__ = [
     "ActiveSourceContext",
-    "CandidateLineage",
     "PANEL_SCHEMA_VERSION",
     "PanelHandoff",
     "bbox_iou",

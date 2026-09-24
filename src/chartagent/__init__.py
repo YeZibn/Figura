@@ -1,7 +1,7 @@
 """Public package exports for Figura's chart-analysis Agent runtime.
 
 The package exposes the LLM client-facing conversation API, the tool system,
-the Agent loop, chart observation and generation helpers, and review services.
+the Agent loop, chart observation and generation helpers, and verification records.
 Lower-level modules remain organized by domain under ``chartagent``.
 """
 
@@ -22,17 +22,7 @@ from .trace import (
     TraceEvent,
     TraceLimits,
 )
-from .review import (
-    CandidateStatus,
-    ChartCandidate,
-    ChartReviewManager,
-    PublicationStatus,
-    ReviewPolicy,
-    ReviewResult,
-    ReviewStatus,
-    chart_spec_digest,
-    select_review_policy,
-)
+from .spec import chart_spec_digest
 from .tools import (
     DispatchedObservation,
     GeneratedImage,
@@ -61,15 +51,7 @@ __all__ = [
     "TraceEvent",
     "TraceEmitter",
     "TraceLimits",
-    "CandidateStatus",
-    "ChartCandidate",
-    "ChartReviewManager",
-    "PublicationStatus",
-    "ReviewPolicy",
-    "ReviewResult",
-    "ReviewStatus",
     "chart_spec_digest",
-    "select_review_policy",
     "TextTraceRenderer",
     "JsonlTraceRenderer",
     "Tool",
