@@ -1,0 +1,6 @@
+schema: spec-driven
+
+context: |
+  This store describes the new Figura implementation in src/figura. The existing implementation remains in src/chartagent and its specifications live in the chartagent store.
+  Treat chartagent specifications as legacy references. Read them only when the user asks for comparison, migration, or compatibility, and do not modify them from a Figura change unless explicitly requested.
+  Use the Conda environment named agent for Python commands and tests. Prefer conda run -n agent <command>.

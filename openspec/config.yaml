@@ -1,46 +1,6 @@
 schema: spec-driven
+store: chartagent
 
 context: |
-  Runtime environment: use the Conda environment named `agent` for all project
-  Python commands, tests, scripts, and dependency operations. Prefer
-  `conda run -n agent <command>` in non-interactive workflows, or activate the
-  environment explicitly before running commands. Do not silently use the
-  system Python interpreter or create another environment unless the user
-  explicitly requests it.
-  Run pytest as `conda run -n agent python -m pytest` so the test runner and
-  installed packages such as `rapidocr` use the same interpreter.
-  The `agent` environment already includes `rapidocr`, a required dependency
-  for OCR and chart-understanding tests. If `rapidocr` cannot be imported,
-  verify the environment with `conda run -n agent python -c "import rapidocr"`
-  before diagnosing a project dependency problem or using another interpreter.
-
-# Project context (optional)
-# This is shown to AI when creating artifacts.
-# Add your tech stack, conventions, style guides, domain knowledge, etc.
-# Example:
-#   context: |
-#     Tech stack: TypeScript, React, Node.js
-#     We use conventional commits
-#     Domain: e-commerce platform
-
-# Per-artifact rules (optional)
-# Add custom rules for specific artifacts.
-# Example:
-#   rules:
-#     proposal:
-#       - Keep proposals under 500 words
-#       - Always include a "Non-goals" section
-#     tasks:
-#       - Break tasks into chunks of max 2 hours
-
-# Per-operation guidance (optional)
-# Add advisory guidance for how apply and archive work should be conducted.
-# This is separate from artifact rules above.
-# Example:
-#   operations:
-#     apply:
-#       guidance:
-#         - Keep test summaries concise
-#     archive:
-#       guidance:
-#         - Summarize the archive outcome before finishing
+  This repository has separate OpenSpec stores for the existing chartagent implementation and the new Figura implementation.
+  Use the chartagent store for legacy implementation work. For work on the new implementation under src/figura, select the figura store explicitly with --store figura.
