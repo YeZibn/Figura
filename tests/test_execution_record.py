@@ -389,6 +389,191 @@ def test_recovery_context_restores_committed_final_action():
     assert state["pendingAnswer"] == "done"
 
 
+def test_recovery_context_restores_committed_final_answer_entry():
+    entries = [
+        ExecutionEntry("run_parent", 1, "input", {"text": "answer", "attachmentIds": []}, entry_id="exe_input").normalized(),
+        ExecutionEntry("run_parent", 2, "model_response", {"content": "candidate", "toolCalls": []}, entry_id="exe_candidate").normalized(),
+        ExecutionEntry("run_parent", 3, "final_answer", {"answer": "guarded answer"}, entry_id="exe_final_answer").normalized(),
+    ]
+    cursor = ExecutionCursor("run_parent", 3, 1, NextAction(kind="final", answer_entry_id="exe_final_answer"), {})
+
+    state = recovery_state_from_entries(entries, cursor)
+
+    assert state["nextAction"] == "final"
+    assert state["pendingAnswer"] == "guarded answer"
+
+
+def test_recovery_context_restores_current_chart_claim_facts():
+    entries = [
+        ExecutionEntry("run_parent", 1, "input", {"text": "render", "attachmentIds": []}, entry_id="exe_input").normalized(),
+        ExecutionEntry(
+            "run_parent",
+            2,
+            "model_response",
+            {"content": "", "toolCalls": [{"id": "call_chart", "name": "render_chart", "arguments": "{}", "replayEffect": "idempotent_local_write"}]},
+            entry_id="exe_render_response",
+        ).normalized(),
+        ExecutionEntry(
+            "run_parent",
+            3,
+            "verification_result",
+            {
+                "verification": {
+                    "verificationRef": "ver_chart_12345678",
+                    "stagedRef": "stg_chart_12345678",
+                    "status": "pass",
+                },
+                "modelEntryId": "exe_render_response",
+                "toolCallId": "call_chart",
+            },
+            entry_id="exe_verification",
+        ).normalized(),
+        ExecutionEntry(
+            "run_parent",
+            4,
+            "promotion_result",
+            {
+                "artifactId": "artifact_0123456789abcdef",
+                "stagedRef": "stg_chart_12345678",
+                "verificationRef": "ver_chart_12345678",
+            },
+            entry_id="exe_promotion",
+        ).normalized(),
+        ExecutionEntry(
+            "run_parent",
+            5,
+            "tool_result",
+            {
+                "toolName": "render_chart",
+                "callId": "call_chart",
+                "modelEntryId": "exe_render_response",
+                "observation": (
+                    '{"data":{"chartVerification":[{"stagedRef":"stg_chart_12345678",'
+                    '"verification":{"verificationRef":"ver_chart_12345678","stagedRef":"stg_chart_12345678",'
+                    '"status":"pass"},"artifactId":"artifact_0123456789abcdef"}]}}'
+                ),
+            },
+            entry_id="exe_tool_result",
+        ).normalized(),
+        ExecutionEntry("run_parent", 6, "model_response", {"content": "done", "toolCalls": []}, entry_id="exe_answer").normalized(),
+        ExecutionEntry("run_parent", 7, "final_answer", {"answer": "done"}, entry_id="exe_final_answer").normalized(),
+    ]
+    cursor = ExecutionCursor(
+        "run_parent",
+        7,
+        2,
+        NextAction(kind="final", answer_entry_id="exe_final_answer"),
+        {},
+    )
+
+    state = recovery_state_from_entries(entries, cursor)
+
+    assert state["currentOutputArtifacts"] == [{
+        "artifact_id": "artifact_0123456789abcdef",
+        "kind": "generated_chart",
+        "status": "pass",
+        "staged_ref": "stg_chart_12345678",
+        "artifact_id_published": "artifact_0123456789abcdef",
+        "verification": {
+            "verificationRef": "ver_chart_12345678",
+            "stagedRef": "stg_chart_12345678",
+            "status": "pass",
+        },
+        "lineage": ["observation:call_chart"],
+    }]
+    assert state["currentOutputRecords"] == [
+        {
+            "kind": "verification_result",
+            "payload": {
+                "stagedRef": "stg_chart_12345678",
+                "verificationRef": "ver_chart_12345678",
+                "status": "pass",
+            },
+        },
+        {
+            "kind": "promotion_result",
+            "payload": {
+                "artifactId": "artifact_0123456789abcdef",
+                "stagedRef": "stg_chart_12345678",
+                "verificationRef": "ver_chart_12345678",
+            },
+        },
+    ]
+
+
+@pytest.mark.parametrize("answer_committed", [False, True])
+def test_resume_from_committed_final_stage_does_not_call_model(execution_store, answer_committed):
+    store, _run_id, session_id = execution_store
+    store.create_run("run_final_parent", session_id)
+    parent = ManagedRun(session_id, history_store=store, run_id="run_final_parent")
+    parent.commit_execution_entry(
+        "input",
+        {"text": "answer", "attachmentIds": []},
+        turn=0,
+        next_action_kind="model",
+        work_key="input:final-parent",
+    )
+    response = parent.commit_execution_entry(
+        "model_response",
+        {"content": "the answer", "toolCalls": []},
+        turn=1,
+        next_action_kind="final",
+        work_key="model:final-parent",
+    )
+    if answer_committed:
+        parent.commit_execution_entry(
+            "final_answer",
+            {"answer": "the answer", "finishReason": "stop"},
+            turn=1,
+            next_action_kind="final",
+            work_key=f"final:{response.entry_id}",
+            event_kind="final_answer_committed",
+            event_payload={"answer_length": 9},
+        )
+    parent.interrupt("test_interruption", "test interruption")
+    parent_cursor = store.get_execution_cursor("run_final_parent")
+    assert parent_cursor is not None
+    recovery = recovery_state_from_entries(
+        store.list_execution_entries("run_final_parent", through=parent_cursor.entry_cursor),
+        parent_cursor,
+    )
+
+    store.create_run("run_final_child", session_id, parent_run_id="run_final_parent", root_run_id="run_final_parent")
+    child = ManagedRun(session_id, history_store=store, run_id="run_final_child", parent_run_id="run_final_parent")
+    child.set_execution_prefix("run_final_parent", parent_cursor.entry_cursor)
+
+    class NoModelClient:
+        def chat(self, *_args, **_kwargs):
+            raise AssertionError("committed final answer must not request the model")
+
+    agent = Agent(
+        NoModelClient(),
+        ToolRegistry(),
+        run_id="run_final_child",
+        memory=InMemoryAgentMemory(),
+        recovery_context=recovery,
+        execution_commit=child.commit_execution_entry,
+    )
+
+    answer = agent.run(recovery["prompt"], recovery_context=recovery)
+
+    assert answer == "the answer"
+    child_entries = store.list_execution_entries("run_final_child")
+    assert [entry.kind for entry in child_entries] == ["final_answer"]
+    child_cursor = store.get_execution_cursor("run_final_child")
+    assert child_cursor is not None
+    assert child_cursor.next_action.kind == "final"
+    assert child_cursor.next_action.answer_entry_id == child_entries[0].entry_id
+
+    if not child.has_event("final_answer"):
+        child.publish("final_answer", {"answer": answer})
+    child.complete(answer)
+    child.complete("different answer")
+    assert child.status.value == "completed"
+    assert child.answer == answer
+    assert len([event for event in store.list_events(session_id, "run_final_child") if event.kind == "final_answer"]) == 1
+
+
 def test_child_execution_cursor_resolves_parent_prefix(tmp_path):
     service = GatewayService(database=tmp_path / "execution-lineage.db")
     session_id = service.create_session("execution-lineage")["session"]["id"]
@@ -433,3 +618,106 @@ def test_child_execution_cursor_resolves_parent_prefix(tmp_path):
     assert state["messages"][-1]["content"] == "ok"
     assert service._history.get_execution_entry_by_work_key_in_lineage("run_child", "model:1").entry_id == model.entry_id
     service.close()
+
+
+def test_get_recovery_accepts_a_resume_child_of_a_resume_child(execution_store):
+    store, _run_id, session_id = execution_store
+
+    store.create_run("run_lineage_root", session_id)
+    root = ManagedRun(session_id, history_store=store, run_id="run_lineage_root")
+    root.commit_execution_entry(
+        "input",
+        {"text": "inspect", "attachmentIds": []},
+        turn=0,
+        next_action_kind="model",
+        work_key="input:0",
+    )
+    root_model = root.commit_execution_entry(
+        "model_response",
+        {"content": "", "toolCalls": [{"id": "call_root", "name": "inspect", "arguments": "{}"}]},
+        turn=1,
+        next_action_kind="tool",
+        call_id="call_root",
+        work_key="model:1",
+    )
+    root_cursor = store.get_execution_cursor("run_lineage_root")
+    assert root_cursor is not None
+
+    store.create_run("run_lineage_child", session_id, parent_run_id="run_lineage_root", root_run_id="run_lineage_root")
+    child = ManagedRun(session_id, history_store=store, run_id="run_lineage_child", parent_run_id="run_lineage_root")
+    child.set_execution_prefix("run_lineage_root", root_cursor.entry_cursor)
+    child.commit_execution_entry(
+        "tool_result",
+        {"callId": "call_root", "modelEntryId": root_model.entry_id, "toolName": "inspect", "observation": "child result"},
+        turn=1,
+        next_action_kind="model",
+        work_key="tool:root:call_root",
+    )
+    child_cursor = store.get_execution_cursor("run_lineage_child")
+    assert child_cursor is not None
+
+    store.create_run("run_lineage_grandchild", session_id, parent_run_id="run_lineage_child", root_run_id="run_lineage_root")
+    grandchild = ManagedRun(
+        session_id,
+        history_store=store,
+        run_id="run_lineage_grandchild",
+        parent_run_id="run_lineage_child",
+    )
+    grandchild.set_execution_prefix("run_lineage_child", child_cursor.entry_cursor)
+    grandchild.commit_execution_entry(
+        "tool_result",
+        {"callId": "call_child", "modelEntryId": root_model.entry_id, "toolName": "inspect", "observation": "grandchild result"},
+        turn=2,
+        next_action_kind="model",
+        work_key="tool:child:call_child",
+    )
+    grandchild.interrupt("test_interruption", "test interruption")
+
+    recovery = store.get_recovery(session_id, "run_lineage_grandchild")
+
+    assert recovery is not None
+    assert recovery["status"] == "available"
+
+
+def test_get_recovery_rejects_a_broken_resume_ancestor(execution_store):
+    store, _run_id, session_id = execution_store
+
+    store.create_run("run_broken_root", session_id)
+    root = ManagedRun(session_id, history_store=store, run_id="run_broken_root")
+    root.commit_execution_entry(
+        "input",
+        {"text": "inspect", "attachmentIds": []},
+        turn=0,
+        next_action_kind="model",
+        work_key="input:broken-root",
+    )
+    store.create_run("run_broken_child", session_id, parent_run_id="run_broken_root", root_run_id="run_broken_root")
+    child = ManagedRun(session_id, history_store=store, run_id="run_broken_child", parent_run_id="run_broken_root")
+    child.set_execution_prefix("run_broken_root", 1)
+    child.commit_execution_entry(
+        "tool_result",
+        {"callId": "call_1", "modelEntryId": "exe_missing_model", "observation": "result"},
+        turn=1,
+        next_action_kind="model",
+        work_key="tool:broken:call_1",
+    )
+    child.interrupt("test_interruption", "test interruption")
+
+    broken_cursor = ExecutionCursor(
+        run_id="run_broken_child",
+        entry_cursor=1,
+        turn=1,
+        next_action=NextAction(kind="model"),
+        references={"parentRunId": "run_broken_root", "parentCursor": 2},
+    )
+    with store._database.transaction() as connection:
+        connection.execute(
+            "UPDATE gateway_run_execution_cursors SET cursor_json = ? WHERE run_id = ?",
+            (broken_cursor.to_json(), "run_broken_child"),
+        )
+
+    recovery = store.get_recovery(session_id, "run_broken_child")
+
+    assert recovery is not None
+    assert recovery["status"] == "unavailable"
+    assert recovery["blockedReason"] == "execution_record_unavailable"

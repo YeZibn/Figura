@@ -333,8 +333,6 @@ class GatewayHistoryStore(RunPersistenceMixin, ExecutionPersistenceMixin):
         try:
             cursor = ExecutionCursor.from_json(row["cursor_json"])
             entries = self._execution_prefix(run_id, cursor.entry_cursor)
-            if len(entries) != cursor.entry_cursor:
-                raise ExecutionRecordError("execution prefix is incomplete")
         except (ExecutionRecordError, HistoryStoreError, TypeError, ValueError):
             return {"status": RecoveryStatus.UNAVAILABLE.value, "blockedReason": "execution_record_unavailable"}
 
@@ -408,7 +406,7 @@ class GatewayHistoryStore(RunPersistenceMixin, ExecutionPersistenceMixin):
             raise ExecutionRecordError("execution prefix lineage is invalid")
         lineage.add(run_id)
         cursor = self.get_execution_cursor(run_id)
-        if cursor is None or through > cursor.entry_cursor:
+        if cursor is None or cursor.run_id != run_id or through > cursor.entry_cursor:
             raise ExecutionRecordError("execution prefix is unavailable")
         parent_run_id = cursor.references.get("parentRunId")
         parent_cursor = cursor.references.get("parentCursor")

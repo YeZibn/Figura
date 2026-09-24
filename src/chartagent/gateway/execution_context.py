@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
+from ..agent.artifacts import artifact_records_from_observation
 from ..agent.measurement_flow import register_measurement_observation
 from ..agent.panel_routing import remember_layout_context
 from ..measurement import MeasurementSession, sessions_to_state
@@ -51,6 +52,8 @@ def recovery_state_from_entries(
     artifact_records: list[dict[str, Any]] = []
     measurement_sessions: dict[str, MeasurementSession] = {}
     layout_contexts: dict[str, dict[str, Any]] = {}
+    current_output_model_entry_id: str | None = None
+    current_output_artifacts: list[dict[str, Any]] = []
     for item in prefix:
         if item.kind == "model_response":
             calls = item.payload.get("toolCalls")
@@ -102,6 +105,27 @@ def recovery_state_from_entries(
                     for reference in references[:32]
                     if isinstance(reference, dict) and reference.get("artifactKind") == "generated_chart"
                 )
+            call_id = item.payload.get("callId")
+            tool_name = item.payload.get("toolName")
+            observation = item.payload.get("observation")
+            if all(isinstance(value, str) for value in (call_id, tool_name, observation)):
+                observed_artifacts = artifact_records_from_observation(
+                    tool_name,
+                    call_id,
+                    observation,
+                    attachment_ids,
+                )
+                generated_artifacts = [
+                    artifact for artifact in observed_artifacts
+                    if artifact.get("kind") == "generated_chart"
+                ]
+                if generated_artifacts:
+                    model_entry_id = item.payload.get("modelEntryId")
+                    if model_entry_id != current_output_model_entry_id:
+                        current_output_artifacts.clear()
+                        current_output_model_entry_id = model_entry_id
+                    current_output_artifacts.extend(generated_artifacts)
+                    current_output_artifacts[:] = current_output_artifacts[-48:]
 
     pending_calls: list[dict[str, str]] = []
     active_model_entry_id: str | None = None
@@ -197,6 +221,8 @@ def recovery_state_from_entries(
         "pendingToolCalls": pending_calls,
         "visualReferences": visual_references[-32:],
         "artifactIndex": artifact_records[-48:],
+        "currentOutputArtifacts": current_output_artifacts,
+        "currentOutputRecords": _current_output_records(prefix, current_output_artifacts),
         "layoutContexts": layout_contexts,
         "measurementSessions": sessions_to_state(measurement_sessions),
         "executionModelEntryId": active_model_entry_id,
@@ -211,11 +237,57 @@ def recovery_state_from_entries(
     if state_unavailable_tool_call is not None:
         state["unreconciledToolCall"] = state_unavailable_tool_call
     if cursor.next_action.kind == "final":
-        model_entry = model_entries.get(cursor.next_action.answer_entry_id)
-        if model_entry is None or not isinstance(model_entry.payload.get("content"), str):
+        answer_entry = next(
+            (item for item in prefix if item.entry_id == cursor.next_action.answer_entry_id),
+            None,
+        )
+        if answer_entry is None:
             raise ExecutionRecordError("final action references an unavailable answer")
-        state["pendingAnswer"] = model_entry.payload["content"]
+        if answer_entry.kind == "model_response":
+            answer = answer_entry.payload.get("content")
+        elif answer_entry.kind == "final_answer":
+            answer = answer_entry.payload.get("answer")
+        else:
+            answer = None
+        if not isinstance(answer, str):
+            raise ExecutionRecordError("final action references an unavailable answer")
+        state["pendingAnswer"] = answer
     return state
+
+
+def _current_output_records(
+    entries: Sequence[ExecutionEntry],
+    artifacts: Sequence[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    output_keys = {
+        (artifact.get("staged_ref"), artifact["verification"].get("verificationRef"))
+        for artifact in artifacts
+        if isinstance(artifact.get("staged_ref"), str)
+        and isinstance(artifact.get("verification"), dict)
+        and isinstance(artifact["verification"].get("verificationRef"), str)
+    }
+    records: list[dict[str, Any]] = []
+    for entry in entries:
+        if entry.kind == "verification_result":
+            verification = entry.payload.get("verification")
+            if not isinstance(verification, dict):
+                continue
+            key = (verification.get("stagedRef"), verification.get("verificationRef"))
+            if key not in output_keys:
+                continue
+            records.append({
+                "kind": "verification_result",
+                "payload": {
+                    "stagedRef": verification.get("stagedRef"),
+                    "verificationRef": verification.get("verificationRef"),
+                    "status": verification.get("status"),
+                },
+            })
+        elif entry.kind == "promotion_result":
+            key = (entry.payload.get("stagedRef"), entry.payload.get("verificationRef"))
+            if key in output_keys:
+                records.append({"kind": "promotion_result", "payload": dict(entry.payload)})
+    return records[-96:]
 
 
 __all__ = ["recovery_state_from_entries"]

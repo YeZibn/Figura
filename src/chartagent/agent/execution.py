@@ -35,6 +35,7 @@ class RunExecutionContext:
     recovery: dict[str, Any] | None
     layout_contexts: dict[str, dict[str, Any]] = field(default_factory=dict)
     artifact_records: list[dict[str, Any]] = field(default_factory=list)
+    current_output_artifacts: list[dict[str, Any]] = field(default_factory=list)
     visual_references: list[dict[str, Any]] = field(default_factory=list)
     measurement_sessions: dict[str, MeasurementSession] = field(default_factory=dict)
     max_layout_contexts: int = MAX_LAYOUT_CONTEXTS

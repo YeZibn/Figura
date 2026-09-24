@@ -30,6 +30,8 @@ _STATIC_ASSETS = (
 )
 _MAX_TOOL_COUNT = 64
 _MAX_ARTIFACT_COUNT = 48
+_MAX_ARTIFACT_SUMMARY_CHARS = 16_000
+_MAX_COMPACT_ARTIFACT_SUMMARY_CHARS = 32_000
 _MAX_PANEL_COUNT = 32
 _MAX_TEXT = 800
 _PATH_PATTERN = re.compile(r"(?:/(?:Users|private|tmp|var|home|opt|etc)/|[A-Za-z]:\\)")
@@ -479,10 +481,74 @@ def build_artifact_index(records: Iterable[Mapping[str, Any]] = ()) -> str:
             "measurement_observation_scope": _bounded_observation_scope(record.get("measurement_observation_scope"))
             if isinstance(record.get("measurement_observation_scope"), Mapping) else None,
         }
-        if item["artifact_id"] or item["staged_ref"]:
+        item = {
+            key: value
+            for key, value in item.items()
+            if key in {"artifact_id", "kind", "status"} or value not in (None, [], {})
+        }
+        if item.get("artifact_id") or item.get("staged_ref"):
             safe_records.append(item)
-    summary = _safe_json(safe_records, limit=16_000) if safe_records else "[]"
+    summary = _artifact_index_json(safe_records)
     return load_prompt_template("dynamic/artifacts.md", artifact_summary=summary)
+
+
+def _artifact_index_json(records: list[dict[str, Any]]) -> str:
+    """Keep every bounded artifact row while shortening detail before JSON is emitted."""
+    summary = json.dumps(records, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    if len(summary) <= _MAX_ARTIFACT_SUMMARY_CHARS:
+        return summary
+
+    compact_records: list[dict[str, Any]] = []
+    for record in records:
+        compact = {
+            key: record[key]
+            for key in ("artifact_id", "kind", "status", "staged_ref", "published_artifact_id", "collection_id")
+            if key in record
+        }
+        verification = record.get("verification")
+        if isinstance(verification, Mapping):
+            compact["verification"] = {
+                key: verification[key]
+                for key in ("verification_ref", "status")
+                if key in verification
+            }
+            issues = verification.get("issues")
+            if isinstance(issues, list) and issues:
+                compact["verification"]["issues"] = [
+                    {
+                        key: _bounded_text(issue.get(key), 120)
+                        for key in ("code", "location", "severity", "message")
+                        if issue.get(key) is not None
+                    }
+                    for issue in issues[:2]
+                    if isinstance(issue, Mapping)
+                ]
+        if record.get("child_chart_ids"):
+            compact["child_chart_ids"] = [
+                _bounded_text(value, 64) for value in record["child_chart_ids"][:8]
+            ]
+        compact_records.append(compact)
+
+    summary = json.dumps(compact_records, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    if len(summary) <= _MAX_COMPACT_ARTIFACT_SUMMARY_CHARS:
+        return summary
+
+    minimal_records = []
+    for record in compact_records:
+        minimal = {
+            key: _bounded_text(record[key], 80 if key in {"artifact_id", "staged_ref", "published_artifact_id", "collection_id"} else 32)
+            for key in ("artifact_id", "kind", "status", "staged_ref", "published_artifact_id", "collection_id")
+            if key in record
+        }
+        verification = record.get("verification")
+        if isinstance(verification, Mapping):
+            minimal["verification"] = {
+                key: _bounded_text(verification[key], 80 if key == "verification_ref" else 24)
+                for key in ("verification_ref", "status")
+                if key in verification
+            }
+        minimal_records.append(minimal)
+    return json.dumps(minimal_records, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
 def build_static_agent_prompt() -> str:

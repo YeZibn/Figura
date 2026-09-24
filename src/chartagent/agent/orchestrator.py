@@ -32,6 +32,24 @@ from .turn import assistant_message_for_result, execute_model_turn
 from ..tools.core.definition import ToolReplayEffect
 
 
+def _final_guard_records(run: Any, recovery: Any) -> list[dict[str, Any]]:
+    records = [
+        {"kind": record.kind, "payload": record.payload}
+        for record in run.records
+    ]
+    if isinstance(recovery, Mapping):
+        inherited_records = recovery.get("currentOutputRecords")
+        if isinstance(inherited_records, list):
+            records.extend(
+                record
+                for record in inherited_records[:96]
+                if isinstance(record, dict)
+                and record.get("kind") in {"verification_result", "promotion_result"}
+                and isinstance(record.get("payload"), Mapping)
+            )
+    return records
+
+
 class AgentRunOrchestrator:
     """Own the per-run recovery, turn scheduling, tool ordering, and termination."""
 
@@ -67,6 +85,11 @@ class AgentRunOrchestrator:
             raw_artifacts = recovery.get("artifactIndex")
             if isinstance(raw_artifacts, list):
                 execution.artifact_records.extend(item for item in raw_artifacts[:48] if isinstance(item, dict))
+            raw_current_outputs = recovery.get("currentOutputArtifacts")
+            if isinstance(raw_current_outputs, list):
+                execution.current_output_artifacts.extend(
+                    item for item in raw_current_outputs[:48] if isinstance(item, dict)
+                )
             raw_visual_refs = recovery.get("visualReferences")
             if isinstance(raw_visual_refs, list):
                 execution.visual_references.extend(item for item in raw_visual_refs[:32] if isinstance(item, dict))
@@ -139,13 +162,17 @@ class AgentRunOrchestrator:
 
         execution.pending_recovery_calls = recovery_tool_calls(recovery)
         if isinstance(recovery, dict) and recovery.get("nextAction") == "final" and isinstance(recovery.get("pendingAnswer"), str):
-            answer = guard_final_answer(str(recovery["pendingAnswer"]), run.records)
+            answer = guard_final_answer(
+                str(recovery["pendingAnswer"]),
+                _final_guard_records(run, recovery),
+                execution.current_output_artifacts,
+            )
             if agent._execution_commit is not None:
                 agent._execution_commit(
                     "final_answer",
                     {"answer": answer, "recovered": True},
                     turn=max(0, int(recovery.get("currentTurn", 0) or 0)),
-                    next_action_kind="model",
+                    next_action_kind="final",
                     work_key=f"final:resume:{execution.model_entry_id or 'answer'}",
                     event_kind="final_answer_committed",
                     event_payload={"recovered": True, "answer_length": len(answer)},
@@ -267,7 +294,11 @@ class AgentRunOrchestrator:
             )
             if not result.tool_calls:
                 raise_if_interrupted(agent._interruption_event, agent.memory, run)
-                result.content = guard_final_answer(result.content, run.records)
+                result.content = guard_final_answer(
+                    result.content,
+                    _final_guard_records(run, recovery),
+                    execution.current_output_artifacts,
+                )
                 assistant_message = assistant_entry(result)
                 agent._current_messages.append(assistant_message)
                 agent._messages.append(assistant_message)
@@ -277,7 +308,7 @@ class AgentRunOrchestrator:
                         "final_answer",
                         {"answer": result.content, "finishReason": result.finish_reason},
                         turn=turn,
-                        next_action_kind="model",
+                        next_action_kind="final",
                         work_key=f"final:{execution.model_entry_id or turn}",
                         event_kind="final_answer_committed",
                         event_payload={"turn": turn, "answer_length": len(result.content)},
@@ -346,7 +377,7 @@ class AgentRunOrchestrator:
                 "final_answer",
                 {"answer": terminal_answer, "reason": "budget_exhausted"},
                 turn=agent.max_steps,
-                next_action_kind="model",
+                next_action_kind="final",
                 work_key=f"final:budget:{agent.max_steps}",
                 event_kind="final_answer_committed",
                 event_payload={"turn": agent.max_steps, "answer_length": len(terminal_answer)},

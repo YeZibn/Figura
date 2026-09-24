@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import io
+import re
 from threading import Event
 from typing import Any, Dict, List
 
@@ -75,32 +76,121 @@ def _registry():
     return reg
 
 
+def _execution_fact(kind: str, payload: dict[str, Any]) -> dict[str, Any]:
+    return {"kind": kind, "payload": payload}
+
+
 def test_final_answer_chart_claims_follow_verification_and_publication_records():
-    from types import SimpleNamespace
-
-    failed = SimpleNamespace(
-        kind="verification_result",
-        payload={"stagedRef": "stg_chart_a", "verificationRef": "ver_chart_a", "status": "fail"},
+    failed_output = {
+        "kind": "generated_chart",
+        "staged_ref": "stg_chart_a",
+        "verification": {"verificationRef": "ver_chart_a"},
+    }
+    failed = _execution_fact(
+        "verification_result",
+        {"stagedRef": "stg_chart_a", "verificationRef": "ver_chart_a", "status": "fail"},
     )
-    assert "未通过验证" in guard_final_answer("图表验证通过，已发布。", [failed])
-    assert "不能报告验证通过" in guard_final_answer("图表验证通过。", [failed])
+    assert "未通过验证" in guard_final_answer("图表验证通过，已发布。", [failed], [failed_output])
+    assert "不能报告验证通过" in guard_final_answer("图表验证通过。", [failed], [failed_output])
 
-    passed = SimpleNamespace(
-        kind="verification_result",
-        payload={"stagedRef": "stg_chart_a", "verificationRef": "ver_chart_a", "status": "pass"},
+    passed = _execution_fact(
+        "verification_result",
+        {"stagedRef": "stg_chart_a", "verificationRef": "ver_chart_a", "status": "pass"},
     )
-    assert "发布尚未确认" in guard_final_answer("图表已发布。", [passed])
+    passed_output = {
+        "kind": "generated_chart",
+        "staged_ref": "stg_chart_a",
+        "verification": {"verificationRef": "ver_chart_a"},
+    }
+    assert "发布尚未全部确认" in guard_final_answer("图表已发布。", [passed], [passed_output])
 
-    promotion = SimpleNamespace(
-        kind="promotion_result",
-        payload={
+    promotion = _execution_fact(
+        "promotion_result",
+        {
             "stagedRef": "stg_chart_a",
             "verificationRef": "ver_chart_a",
             "artifactId": "artifact_0123456789abcdef",
         },
     )
-    assert guard_final_answer("图表验证通过并已发布。", [passed, promotion]) == "图表验证通过并已发布。"
-    assert "没有可确认的已发布图表" in guard_final_answer("请打开 artifact_fedcba9876543210。", [passed, promotion])
+    assert guard_final_answer("图表验证通过并已发布。", [passed, promotion], [passed_output]) == "图表验证通过并已发布。"
+    assert "没有可确认的已发布图表" in guard_final_answer(
+        "请打开 artifact_fedcba9876543210。", [passed, promotion], [passed_output]
+    )
+
+
+def test_final_answer_guard_uses_latest_output_after_failed_attempt():
+    records = [
+        _execution_fact("verification_result", {"stagedRef": "stg_old", "verificationRef": "ver_old", "status": "fail"}),
+        _execution_fact("verification_result", {"stagedRef": "stg_new", "verificationRef": "ver_new", "status": "pass"}),
+        _execution_fact("promotion_result", {"stagedRef": "stg_new", "verificationRef": "ver_new", "artifactId": "artifact_0123456789abcdef"}),
+    ]
+    current_output = [{
+        "kind": "generated_chart",
+        "staged_ref": "stg_new",
+        "artifact_id_published": "artifact_0123456789abcdef",
+        "verification": {"verificationRef": "ver_new"},
+    }]
+
+    assert guard_final_answer("当前图表验证通过并已发布。", records, current_output) == "当前图表验证通过并已发布。"
+
+
+def test_final_answer_guard_rejects_latest_failed_attempt_after_pass():
+    records = [
+        _execution_fact("verification_result", {"stagedRef": "stg_old", "verificationRef": "ver_old", "status": "pass"}),
+        _execution_fact("promotion_result", {"stagedRef": "stg_old", "verificationRef": "ver_old", "artifactId": "artifact_0123456789abcdef"}),
+        _execution_fact("verification_result", {"stagedRef": "stg_new", "verificationRef": "ver_new", "status": "fail"}),
+    ]
+    current_output = [{
+        "kind": "generated_chart",
+        "staged_ref": "stg_new",
+        "verification": {"verificationRef": "ver_new"},
+    }]
+
+    assert "不能报告验证通过" in guard_final_answer("图表验证通过。", records, current_output)
+    assert "未通过验证" in guard_final_answer("图表已发布。", records, current_output)
+
+
+def test_final_answer_guard_does_not_accept_reference_to_failed_artifact():
+    records = [
+        _execution_fact("verification_result", {"stagedRef": "stg_failed", "verificationRef": "ver_failed", "status": "fail"}),
+        _execution_fact(
+            "promotion_result",
+            {
+                "stagedRef": "stg_failed",
+                "verificationRef": "ver_failed",
+                "artifactId": "artifact_fedcba9876543210",
+            },
+        ),
+    ]
+    current_output = [{
+        "kind": "generated_chart",
+        "staged_ref": "stg_failed",
+        "verification": {"verificationRef": "ver_failed"},
+    }]
+
+    answer = guard_final_answer("请打开 artifact_fedcba9876543210。", records, current_output)
+    assert "没有可确认的已发布图表" in answer
+
+
+def test_final_answer_guard_checks_every_current_collection_child():
+    records = [
+        _execution_fact("verification_result", {"stagedRef": "stg_child_a", "verificationRef": "ver_child_a", "status": "pass"}),
+        _execution_fact("verification_result", {"stagedRef": "stg_child_b", "verificationRef": "ver_child_b", "status": "fail"}),
+    ]
+    current_output = [
+        {
+            "kind": "generated_chart",
+            "staged_ref": "stg_child_a",
+            "verification": {"verificationRef": "ver_child_a"},
+        },
+        {
+            "kind": "generated_chart",
+            "staged_ref": "stg_child_b",
+            "verification": {"verificationRef": "ver_child_b"},
+        },
+    ]
+
+    assert "不能报告验证通过" in guard_final_answer("集合中的图表都验证通过。", records, current_output)
 
 
 def test_final_answer_returned_no_tools():
@@ -160,6 +250,71 @@ def test_multi_step_tool_loop(tmp_path):
     assert got == '{"n": 3}'
     # history before final turn: user + assistant(tool_calls) + tool obs = 3
     assert client.calls[-1]["n_messages"] == 3
+
+
+def test_multi_tool_batch_keeps_the_bounded_artifact_context_shared():
+    registry = ToolRegistry()
+
+    def chart_verification(prefix: str) -> dict[str, Any]:
+        return {
+            "data": {
+                "chartVerification": [
+                    {
+                        "stagedRef": f"stg_{prefix}_{index:02d}",
+                        "verification": {
+                            "verificationRef": f"ver_{prefix}_{index:02d}",
+                            "status": "pass",
+                        },
+                    }
+                    for index in range(16)
+                ]
+            }
+        }
+
+    for name, prefix in (("charts_a", "batcha"), ("charts_b", "batchb")):
+        registry.register(
+            Tool(
+                name,
+                "return chart outcomes",
+                {"type": "object"},
+                lambda current_prefix=prefix: chart_verification(current_prefix),
+            )
+        )
+
+    client = ScriptedClient([
+        NormalizedResult(
+            tool_calls=[
+                ToolCall(id="call_a", name="charts_a", arguments="{}"),
+                ToolCall(id="call_b", name="charts_b", arguments="{}"),
+            ]
+        ),
+        _final("本次生成图表尚未发布。"),
+    ])
+    seed_artifacts = [
+        {"artifact_id": f"seed_{index:02d}", "kind": "measurement", "status": "observed"}
+        for index in range(40)
+    ]
+
+    result = Agent(client, registry, system="sys").run(
+        "inspect outcomes",
+        recovery_context={"artifactIndex": seed_artifacts, "currentTurn": 0},
+    )
+
+    assert result == "本次生成图表尚未发布。"
+    system_prompt = next(
+        message["content"]
+        for message in client.calls[-1]["messages"]
+        if message["role"] == "system"
+    )
+    artifact_json = re.search(r"## 过程产物层\s+.*?```json\n(.*?)\n```", system_prompt, re.DOTALL)
+    assert artifact_json is not None
+    retained_artifacts = json.loads(artifact_json.group(1))
+    retained_ids = {item["artifact_id"] for item in retained_artifacts}
+    assert len(retained_artifacts) == 48
+    assert "seed_00" not in retained_ids
+    assert "seed_39" in retained_ids
+    assert {f"stg_batcha_{index:02d}" for index in range(16)}.issubset(retained_ids)
+    assert {f"stg_batchb_{index:02d}" for index in range(16)}.issubset(retained_ids)
 
 
 def test_layout_preflight_context_is_cached_and_injected_into_sensor():

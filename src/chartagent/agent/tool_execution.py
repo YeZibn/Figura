@@ -67,6 +67,7 @@ class ToolExecutionFlow:
 
         stop_batch = False
         visual_evidence: list[ToolVisualEvidence] = []
+        current_output_artifacts: list[dict[str, Any]] = []
         for call_index, call in enumerate(calls):
             raise_if_interrupted(agent._interruption_event, agent.memory, run)
             execution.current_tool_name = call.name
@@ -230,16 +231,19 @@ class ToolExecutionFlow:
                     assembled_payload = json.loads(observation.content)
                 except (TypeError, json.JSONDecodeError):
                     assembled_payload = None
-            artifact_records.extend(
-                artifact_records_from_observation(
-                    call.name,
-                    call.id,
-                    observation.content,
-                    run_attachment_ids,
-                    observation_refs,
-                )
+            observed_artifacts = artifact_records_from_observation(
+                call.name,
+                call.id,
+                observation.content,
+                run_attachment_ids,
+                observation_refs,
             )
-            artifact_records = artifact_records[-48:]
+            artifact_records.extend(observed_artifacts)
+            current_output_artifacts.extend(
+                item for item in observed_artifacts
+                if item.get("kind") == "generated_chart"
+            )
+            artifact_records[:] = artifact_records[-48:]
             remaining_calls = calls[call_index + 1:]
             if agent._execution_commit is not None:
                 agent._execution_commit(
@@ -339,4 +343,6 @@ class ToolExecutionFlow:
             )
             if stop_batch:
                 break
+        if current_output_artifacts:
+            execution.current_output_artifacts[:] = current_output_artifacts[-48:]
         return ToolExecutionOutcome(tuple(visual_evidence), stop_batch)
