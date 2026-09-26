@@ -1,0 +1,3 @@
+interface:
+  display_name: "读取 Figura 实现现状"
+  short_description: "只读核对 Figura 决策、代码和 OpenSpec"

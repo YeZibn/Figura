@@ -1,0 +1,3 @@
+interface:
+  display_name: "记录 Figura 实现方案"
+  short_description: "把已讨论的范围和字段写入实现记录"
