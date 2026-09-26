@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
-import json
-import math
 import re
 from typing import Any, Iterable, Mapping
 from urllib.parse import urlsplit
 
+from ..json_schema import (
+    JsonValueError,
+    SchemaDefinitionError,
+    canonical_json_dumps,
+    validate_schema_definition,
+)
 from .errors import ProviderFailure, ProviderFailureCode, ProviderInputError
 from .models import (
     FunctionTool,
@@ -37,33 +41,6 @@ MAX_IMAGE_BYTES = 24 * 1024 * 1024 - 64
 MAX_TOTAL_IMAGE_BYTES = 32 * 1024 * 1024
 SUPPORTED_MEDIA_TYPES = frozenset({"image/jpeg", "image/png", "image/gif", "image/webp"})
 _TOOL_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
-_SCHEMA_KEYS = frozenset(
-    {
-        "type",
-        "properties",
-        "required",
-        "additionalProperties",
-        "items",
-        "enum",
-        "description",
-        "title",
-        "minimum",
-        "maximum",
-        "exclusiveMinimum",
-        "exclusiveMaximum",
-        "minLength",
-        "maxLength",
-        "pattern",
-        "minItems",
-        "maxItems",
-        "uniqueItems",
-        "anyOf",
-        "const",
-    }
-)
-_SCHEMA_TYPES = {"object", "string", "integer", "number", "boolean", "array", "null"}
-
-
 def fail(
     code: ProviderFailureCode,
     safe_message: str,
@@ -185,8 +162,8 @@ def validate_request(request: ProviderRequest, expected_provider: ProviderId) ->
         _validate_function_tool(tool, provider_id)
         text_bytes += len(tool.description.encode("utf-8"))
         try:
-            text_bytes += len(json.dumps(tool.parameters, ensure_ascii=False).encode("utf-8"))
-        except (TypeError, ValueError):
+            text_bytes += len(canonical_json_dumps(tool.parameters).encode("utf-8"))
+        except JsonValueError:
             raise fail(ProviderFailureCode.INVALID_REQUEST, "工具 Schema 必须是合法 JSON 数据。") from None
     if text_bytes > MAX_TOTAL_TEXT_BYTES:
         raise fail(ProviderFailureCode.INVALID_REQUEST, "请求文本和工具 Schema 总量超出允许范围。")
@@ -232,10 +209,11 @@ def _validate_function_tool(tool: object, provider_id: ProviderId) -> None:
         raise fail(ProviderFailureCode.INVALID_REQUEST, "工具描述无效或超出允许范围。")
     if tool.strict is not None and type(tool.strict) is not bool:
         raise fail(ProviderFailureCode.INVALID_REQUEST, "strict 必须是布尔值。")
-    schema = tool.parameters
-    if not isinstance(schema, Mapping) or schema.get("type") != "object":
-        raise fail(ProviderFailureCode.INVALID_REQUEST, "函数参数 Schema 顶层必须是 object。")
-    _validate_schema_node(schema, depth=0)
+    try:
+        schema = validate_schema_definition(tool.parameters, require_object=True)
+    except SchemaDefinitionError as error:
+        failure_code, safe_message = _provider_schema_error(error)
+        raise fail(failure_code, safe_message) from None
 
     if tool.strict is True:
         if provider_id is ProviderId.QWEN:
@@ -271,68 +249,41 @@ def validate_tools_for_endpoint(
             )
 
 
-def _validate_schema_node(schema: Mapping[str, Any], depth: int) -> None:
-    if depth > 16:
-        raise fail(ProviderFailureCode.INVALID_REQUEST, "工具 Schema 嵌套层级超出允许范围。")
-    if any(key not in _SCHEMA_KEYS for key in schema):
-        raise fail(ProviderFailureCode.UNSUPPORTED_CAPABILITY, "工具 Schema 包含当前适配器不支持的关键字。")
-    schema_type = schema.get("type")
-    if schema_type is not None and (
-        not isinstance(schema_type, str) or schema_type not in _SCHEMA_TYPES
-    ):
-        raise fail(ProviderFailureCode.UNSUPPORTED_CAPABILITY, "工具 Schema 使用了不支持的数据类型。")
-    properties = schema.get("properties", {})
-    if not isinstance(properties, Mapping) or len(properties) > 256:
-        raise fail(ProviderFailureCode.INVALID_REQUEST, "工具 Schema 的 properties 结构无效。")
-    for name, nested in properties.items():
-        if not isinstance(name, str) or not isinstance(nested, Mapping):
-            raise fail(ProviderFailureCode.INVALID_REQUEST, "工具 Schema 的 properties 结构无效。")
-        _validate_schema_node(nested, depth + 1)
-    required = schema.get("required", [])
-    if not isinstance(required, list) or any(not isinstance(item, str) for item in required):
-        raise fail(ProviderFailureCode.INVALID_REQUEST, "工具 Schema 的 required 必须是字符串数组。")
-    if len(required) != len(set(required)) or any(item not in properties for item in required):
-        raise fail(ProviderFailureCode.INVALID_REQUEST, "工具 Schema 的 required 引用了无效字段。")
-    if "items" in schema:
-        items = schema["items"]
-        if not isinstance(items, Mapping):
-            raise fail(ProviderFailureCode.UNSUPPORTED_CAPABILITY, "当前适配器不支持此 items Schema。")
-        _validate_schema_node(items, depth + 1)
-    additional = schema.get("additionalProperties")
-    if isinstance(additional, Mapping):
-        _validate_schema_node(additional, depth + 1)
-    elif additional is not None and type(additional) is not bool:
-        raise fail(ProviderFailureCode.INVALID_REQUEST, "additionalProperties 必须是布尔值或 Schema。")
-    for key in ("enum", "anyOf"):
-        if key in schema and not isinstance(schema[key], list):
-            raise fail(ProviderFailureCode.INVALID_REQUEST, f"工具 Schema 的 {key} 必须是数组。")
-    for key in ("description", "title", "pattern"):
-        if key in schema and (
-            not isinstance(schema[key], str) or len(schema[key]) > 8192
-        ):
-            raise fail(ProviderFailureCode.INVALID_REQUEST, f"工具 Schema 的 {key} 必须是有界字符串。")
-    for key in ("minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum"):
-        if key in schema and (
-            type(schema[key]) not in (int, float)
-            or not math.isfinite(schema[key])
-        ):
-            raise fail(ProviderFailureCode.INVALID_REQUEST, f"工具 Schema 的 {key} 必须是有限数值。")
-    for key in ("minLength", "maxLength", "minItems", "maxItems"):
-        if key in schema and (type(schema[key]) is not int or schema[key] < 0):
-            raise fail(ProviderFailureCode.INVALID_REQUEST, f"工具 Schema 的 {key} 必须是非负整数。")
-    if "uniqueItems" in schema and type(schema["uniqueItems"]) is not bool:
-        raise fail(ProviderFailureCode.INVALID_REQUEST, "工具 Schema 的 uniqueItems 必须是布尔值。")
-    if "enum" in schema and (not schema["enum"] or len(schema["enum"]) > 256):
-        raise fail(ProviderFailureCode.INVALID_REQUEST, "工具 Schema 的 enum 必须包含 1 到 256 个值。")
-    if "anyOf" in schema:
-        if len(schema["anyOf"]) < 2 or any(not isinstance(item, Mapping) for item in schema["anyOf"]):
-            raise fail(ProviderFailureCode.INVALID_REQUEST, "工具 Schema 的 anyOf 结构无效。")
-        for nested in schema["anyOf"]:
-            _validate_schema_node(nested, depth + 1)
+def _provider_schema_error(error: SchemaDefinitionError) -> tuple[ProviderFailureCode, str]:
+    messages = {
+        "top_level_not_object": "函数参数 Schema 顶层必须是 object。",
+        "unsupported_keyword": "工具 Schema 包含当前适配器不支持的关键字。",
+        "unsupported_type": "工具 Schema 使用了不支持的数据类型。",
+        "schema_too_deep": "工具 Schema 嵌套层级超出允许范围。",
+        "schema_too_large": "工具 Schema 超出允许大小。",
+        "schema_not_object": "函数参数 Schema 顶层必须是 object。",
+        "schema_not_json": "工具 Schema 必须是合法 JSON 数据。",
+        "invalid_properties": "工具 Schema 的 properties 结构无效。",
+        "invalid_required": "工具 Schema 的 required 必须是字符串数组。",
+        "invalid_required_reference": "工具 Schema 的 required 引用了无效字段。",
+        "invalid_items": "当前适配器不支持此 items Schema。",
+        "invalid_additional_properties": "additionalProperties 必须是布尔值或 Schema。",
+        "invalid_enum": "工具 Schema 的 enum 必须包含 1 到 256 个值。",
+        "invalid_anyOf": "工具 Schema 的 anyOf 结构无效。",
+        "invalid_description": "工具 Schema 的 description 必须是有界字符串。",
+        "invalid_title": "工具 Schema 的 title 必须是有界字符串。",
+        "invalid_pattern": "工具 Schema 的 pattern 必须是有界有效正则表达式。",
+        "invalid_minimum": "工具 Schema 的 minimum 必须是有限数值。",
+        "invalid_maximum": "工具 Schema 的 maximum 必须是有限数值。",
+        "invalid_exclusiveMinimum": "工具 Schema 的 exclusiveMinimum 必须是有限数值。",
+        "invalid_exclusiveMaximum": "工具 Schema 的 exclusiveMaximum 必须是有限数值。",
+        "invalid_minLength": "工具 Schema 的 minLength 必须是非负整数。",
+        "invalid_maxLength": "工具 Schema 的 maxLength 必须是非负整数。",
+        "invalid_minItems": "工具 Schema 的 minItems 必须是非负整数。",
+        "invalid_maxItems": "工具 Schema 的 maxItems 必须是非负整数。",
+        "invalid_uniqueItems": "工具 Schema 的 uniqueItems 必须是布尔值。",
+    }
+    unsupported = error.code in {"unsupported_keyword", "unsupported_type", "invalid_items"}
+    code = ProviderFailureCode.UNSUPPORTED_CAPABILITY if unsupported else ProviderFailureCode.INVALID_REQUEST
+    return code, messages.get(error.code, "工具 Schema 结构无效。")
 
 
 def _validate_strict_schema(schema: Mapping[str, Any], depth: int) -> None:
-    _validate_schema_node(schema, depth)
     if schema.get("type") == "object":
         properties = schema.get("properties", {})
         if schema.get("additionalProperties") is not False:

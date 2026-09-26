@@ -4,9 +4,19 @@ from __future__ import annotations
 
 import hashlib
 import json
+import uuid
 
-from figura.providers import FinishReason, MODEL_IDS, ProviderFactory, ProviderId, ProviderResponse, ProviderUsage
+from figura.providers import (
+    FinishReason,
+    MODEL_IDS,
+    ProviderFactory,
+    ProviderId,
+    ProviderResponse,
+    ProviderToolCall,
+    ProviderUsage,
+)
 
+from ._codec import validate_tool_call_batch
 from .errors import RunError, RunErrorCode
 from .models import (
     ExecutionRecord,
@@ -17,6 +27,7 @@ from .models import (
     RunState,
     RunStatus,
     Session,
+    ToolCallFact,
     TerminalCode,
 )
 from .store import FiguraRunStore
@@ -90,15 +101,21 @@ class RunCoordinator:
         run_id: str,
         expected_revision: int,
         response: ProviderResponse,
+        *,
+        registry_version: str | None = None,
     ) -> ExecutionRecord:
         if type(expected_revision) is not int or expected_revision < 1:
             raise RunError(RunErrorCode.INVALID_REQUEST)
         fact = self._model_response_fact(response)
+        response_record_id = uuid.uuid4().hex
+        tool_calls = self._tool_call_facts(response, response_record_id, registry_version)
         return self._store.commit_model_response(
             session_id=session_id,
             run_id=run_id,
             expected_revision=expected_revision,
             payload=fact,
+            record_id=response_record_id,
+            tool_calls=tool_calls,
         )
 
     def complete_run(
@@ -168,7 +185,7 @@ class RunCoordinator:
     def _model_response_fact(response: ProviderResponse) -> ModelResponseFact:
         if not isinstance(response, ProviderResponse):
             raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
-        if response.tool_calls or response.continuation is not None:
+        if response.continuation is not None:
             raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
         try:
             provider_id = ProviderId(response.provider_id)
@@ -194,6 +211,48 @@ class RunCoordinator:
             usage=response.usage,
             provider_response_id=response.provider_response_id,
         )
+
+    @staticmethod
+    def _tool_call_facts(
+        response: ProviderResponse,
+        response_record_id: str,
+        registry_version: str | None,
+    ) -> tuple[ToolCallFact, ...]:
+        try:
+            finish_reason = FinishReason(response.finish_reason)
+        except (TypeError, ValueError):
+            raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD) from None
+        if not isinstance(response.tool_calls, (tuple, list)):
+            raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
+        provider_calls = tuple(response.tool_calls)
+        if not provider_calls:
+            if finish_reason is FinishReason.TOOL_CALLS:
+                raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
+            return ()
+        if finish_reason is not FinishReason.TOOL_CALLS:
+            raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
+        if not isinstance(registry_version, str) or not registry_version:
+            raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
+        if _byte_length(registry_version) > 128:
+            raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
+
+        calls: list[ToolCallFact] = []
+        for position, call in enumerate(provider_calls):
+            if not isinstance(call, ProviderToolCall):
+                raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
+            calls.append(
+                ToolCallFact(
+                    response_record_id=response_record_id,
+                    call_id=call.call_id,
+                    tool_name=call.name,
+                    arguments_json=call.arguments,
+                    position=position,
+                    registry_version=registry_version,
+                )
+            )
+        normalized = tuple(calls)
+        validate_tool_call_batch(normalized)
+        return normalized
 
 
 def _request_fingerprint(request: RunCreateRequest) -> str:

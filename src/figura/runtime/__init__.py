@@ -18,14 +18,21 @@ from .models import (
     RunStatus,
     RunStreamEvent,
     Session,
+    ToolAttemptStartedFact,
+    ToolCallFact,
+    ToolExecutionFact,
+    ToolFactKind,
+    ToolResultFact,
     TerminalCode,
 )
 from .store import FiguraRunStore
+from .tool_execution import DurableToolExecutor
 
 __all__ = [
     "ActionKind",
     "EventKind",
     "ExecutionCheckpoint",
+    "DurableToolExecutor",
     "ExecutionRecord",
     "FiguraRunStore",
     "FinalAnswerFact",
@@ -42,5 +49,10 @@ __all__ = [
     "RunStatus",
     "RunStreamEvent",
     "Session",
+    "ToolAttemptStartedFact",
+    "ToolCallFact",
+    "ToolExecutionFact",
+    "ToolFactKind",
+    "ToolResultFact",
     "TerminalCode",
 ]

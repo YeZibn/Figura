@@ -8,6 +8,7 @@ from types import MappingProxyType
 from typing import Mapping, TypeAlias
 
 from figura.providers.models import ProviderUsage
+from figura.tools.contracts import ReplayEffect, ToolExecutionError, ToolOutcome
 
 
 class RunStatus(str, Enum):
@@ -25,7 +26,15 @@ class RecordKind(str, Enum):
 
 class ActionKind(str, Enum):
     MODEL = "model"
+    TOOL_EXECUTION = "tool_execution"
+    TOOL_ATTEMPT = "tool_attempt"
     FINAL = "final"
+
+
+class ToolFactKind(str, Enum):
+    TOOL_CALL = "tool_call"
+    TOOL_ATTEMPT_STARTED = "tool_attempt_started"
+    TOOL_RESULT = "tool_result"
 
 
 class EventKind(str, Enum):
@@ -126,6 +135,53 @@ RecordPayload: TypeAlias = RunInput | ModelResponseFact | FinalAnswerFact
 
 
 @dataclass(frozen=True)
+class ToolCallFact:
+    response_record_id: str
+    call_id: str
+    tool_name: str
+    arguments_json: str = field(repr=False)
+    position: int = 0
+    registry_version: str = ""
+    schema_version: int = 1
+
+
+@dataclass(frozen=True)
+class ToolAttemptStartedFact:
+    tool_call_sequence: int
+    call_id: str
+    attempt_id: str
+    attempt_number: int
+    replay_effect: ReplayEffect
+    registry_version: str
+    schema_version: int = 1
+
+
+@dataclass(frozen=True)
+class ToolResultFact:
+    tool_call_sequence: int
+    attempt_id: str
+    call_id: str
+    tool_name: str
+    outcome: ToolOutcome
+    result: Mapping[str, object] | None = field(default=None, repr=False)
+    error: ToolExecutionError | None = None
+    schema_version: int = 1
+
+
+ToolFactPayload: TypeAlias = ToolCallFact | ToolAttemptStartedFact | ToolResultFact
+
+
+@dataclass(frozen=True)
+class ToolExecutionFact:
+    run_id: str
+    tool_sequence: int
+    fact_kind: ToolFactKind
+    schema_version: int
+    payload: ToolFactPayload = field(repr=False)
+    created_at: str
+
+
+@dataclass(frozen=True)
 class ExecutionRecord:
     record_id: str
     run_id: str
@@ -139,6 +195,8 @@ class ExecutionRecord:
 class NextAction:
     action_kind: ActionKind
     response_record_id: str | None = None
+    tool_call_sequence: int | None = None
+    attempt_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -146,6 +204,7 @@ class ExecutionCheckpoint:
     run_id: str
     revision: int
     last_committed_record_sequence: int
+    last_committed_tool_sequence: int
     next_action: NextAction | None
     schema_version: int
     updated_at: str
@@ -181,6 +240,7 @@ class RunState:
     records: tuple[ExecutionRecord, ...] = field(repr=False)
     checkpoint: ExecutionCheckpoint
     events: tuple[RunStreamEvent, ...]
+    tool_facts: tuple[ToolExecutionFact, ...] = field(default=(), repr=False)
 
 
 @dataclass(frozen=True)
@@ -191,4 +251,3 @@ class RunCreateRequest:
     model_id: str
     idempotency_key: str = field(repr=False)
     attachment_ids: tuple[str, ...] = ()
-

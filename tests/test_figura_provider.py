@@ -286,6 +286,70 @@ def test_unsupported_schema_and_qwen_strict_mode_are_rejected_before_transport()
     assert not transport.calls
 
 
+def test_deepseek_strict_requires_beta_endpoint_and_all_functions_strict() -> None:
+    schema = {"type": "object", "properties": {}, "required": [], "additionalProperties": False}
+    strict_tool = FunctionTool("inspect_chart", schema, strict=True)
+    transport = FakeTransport(_response())
+    regular_factory = _factory(transport)
+
+    with pytest.raises(ProviderInputError) as regular_endpoint_error:
+        regular_factory.create(ProviderId.DEEPSEEK, MODEL_IDS[ProviderId.DEEPSEEK]).complete(
+            _request(ProviderId.DEEPSEEK, tools=(strict_tool,))
+        )
+    assert regular_endpoint_error.value.failure.failure_code is ProviderFailureCode.UNSUPPORTED_CAPABILITY
+
+    beta_factory = _factory(
+        transport,
+        {**_environment(), "FIGURA_DEEPSEEK_BASE_URL": "https://api.deepseek.com/beta"},
+    )
+    with pytest.raises(ProviderInputError) as mixed_error:
+        beta_factory.create(ProviderId.DEEPSEEK, MODEL_IDS[ProviderId.DEEPSEEK]).complete(
+            _request(ProviderId.DEEPSEEK, tools=(strict_tool, _TOOLS[0]))
+        )
+    assert mixed_error.value.failure.failure_code is ProviderFailureCode.UNSUPPORTED_CAPABILITY
+
+    beta_factory.create(ProviderId.DEEPSEEK, MODEL_IDS[ProviderId.DEEPSEEK]).complete(
+        _request(ProviderId.DEEPSEEK, tools=(strict_tool,))
+    )
+    assert len(transport.calls) == 1
+
+
+def test_mimo_strict_requires_closed_objects_and_all_declared_properties_required() -> None:
+    transport = FakeTransport(_response())
+    factory = _factory(transport)
+    invalid = FunctionTool(
+        "inspect_chart",
+        {
+            "type": "object",
+            "properties": {"focus": {"type": "string"}},
+            "required": [],
+            "additionalProperties": False,
+        },
+        strict=True,
+    )
+    valid = FunctionTool(
+        "inspect_chart",
+        {
+            "type": "object",
+            "properties": {"focus": {"type": "string"}},
+            "required": ["focus"],
+            "additionalProperties": False,
+        },
+        strict=True,
+    )
+
+    with pytest.raises(ProviderInputError) as strict_error:
+        factory.create(ProviderId.MIMO, MODEL_IDS[ProviderId.MIMO]).complete(
+            _request(ProviderId.MIMO, tools=(invalid,))
+        )
+    assert strict_error.value.failure.failure_code is ProviderFailureCode.UNSUPPORTED_CAPABILITY
+
+    factory.create(ProviderId.MIMO, MODEL_IDS[ProviderId.MIMO]).complete(
+        _request(ProviderId.MIMO, tools=(valid,))
+    )
+    assert len(transport.calls) == 1
+
+
 def test_nonstreaming_response_normalizes_order_usage_and_hides_continuation() -> None:
     transport = FakeTransport(
         _response(
