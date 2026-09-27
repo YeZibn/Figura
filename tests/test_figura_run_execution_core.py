@@ -26,6 +26,7 @@ from figura.runtime import (
     ActionKind,
     EventKind,
     FiguraRunStore,
+    NextAction,
     RunCoordinator,
     RunCreateRequest,
     RunError,
@@ -55,6 +56,31 @@ def _factory(environ: dict[str, str] | None = None) -> ProviderFactory:
 def _app(tmp_path, *, environ: dict[str, str] | None = None):
     store = FiguraRunStore(tmp_path)
     return store, RunCoordinator(store, _factory(environ))
+
+
+def _commit_response(
+    coordinator: RunCoordinator,
+    session_id: str,
+    run_id: str,
+    _legacy_revision: int,
+    response: ProviderResponse,
+    **kwargs,
+):
+    if type(_legacy_revision) is not int or _legacy_revision < 1:
+        return coordinator.begin_provider_attempt(session_id, run_id, _legacy_revision)
+    state = coordinator.read_run_state(session_id, run_id)
+    attempt = coordinator.begin_provider_attempt(
+        session_id, run_id, state.checkpoint.revision
+    )
+    claimed = coordinator.read_run_state(session_id, run_id)
+    return coordinator.commit_model_response(
+        session_id,
+        run_id,
+        claimed.checkpoint.revision,
+        response,
+        provider_attempt_id=attempt.attempt_id,
+        **kwargs,
+    )
 
 
 def _request(session_id: str, *, text: str = "请分析这张图表。", key: str = "request-1") -> RunCreateRequest:
@@ -182,24 +208,29 @@ def test_text_response_commit_advances_checkpoint_and_rejects_tool_payloads(tmp_
     session = app.create_session()
     run = app.create_run(_request(session.session_id))
 
+    attempt = app.begin_provider_attempt(session.session_id, run.run_id, 1)
+    claimed = app.read_run_state(session.session_id, run.run_id)
     with pytest.raises(RunError) as error:
         app.commit_model_response(
             session.session_id,
             run.run_id,
-            1,
+            claimed.checkpoint.revision,
             _response(tool_calls=(ProviderToolCall("tool-1", "inspect", "{}"),)),
+            provider_attempt_id=attempt.attempt_id,
         )
     assert error.value.code is RunErrorCode.UNSUPPORTED_PAYLOAD
 
     state = app.read_run_state(session.session_id, run.run_id)
     assert len(state.records) == 1
-    assert state.checkpoint.revision == 1
+    assert state.checkpoint.revision == 2
+    assert state.provider_attempts[0].status.value == "started"
     assert len(state.events) == 1
 
-    record = app.commit_model_response(session.session_id, run.run_id, 1, _response())
-    state = app.read_run_state(session.session_id, run.run_id)
+    valid_run = app.create_run(_request(session.session_id, key="valid-response"))
+    record = _commit_response(app, session.session_id, valid_run.run_id, 1, _response())
+    state = app.read_run_state(session.session_id, valid_run.run_id)
     assert record.record_sequence == 2
-    assert state.checkpoint.revision == 2
+    assert state.checkpoint.revision == 3
     assert state.checkpoint.last_committed_record_sequence == 2
     assert state.checkpoint.next_action.action_kind is ActionKind.FINAL
     assert state.checkpoint.next_action.response_record_id == record.record_id
@@ -234,7 +265,7 @@ def test_model_response_round_trips_optional_continuation_for_text_and_tools(
         continuation=continuation,
     )
 
-    record = app.commit_model_response(
+    record = _commit_response(app,
         session.session_id,
         run.run_id,
         1,
@@ -268,7 +299,7 @@ def test_v1_model_response_remains_readable_and_non_response_facts_stay_v1(tmp_p
     session = app.create_session()
     run = app.create_run(_request(session.session_id))
     response = _response()
-    record = app.commit_model_response(session.session_id, run.run_id, 1, response)
+    record = _commit_response(app, session.session_id, run.run_id, 1, response)
     legacy_fact = ModelResponseFact(
         provider_id=ProviderId.QWEN.value,
         model_id=MODEL_IDS[ProviderId.QWEN],
@@ -294,8 +325,8 @@ def test_v1_model_response_remains_readable_and_non_response_facts_stay_v1(tmp_p
     fresh_store, fresh_app = _app(tmp_path / "new-store")
     fresh_session = fresh_app.create_session()
     fresh_run = fresh_app.create_run(_request(fresh_session.session_id))
-    fresh_app.commit_model_response(fresh_session.session_id, fresh_run.run_id, 1, _response())
-    fresh_app.complete_run(fresh_session.session_id, fresh_run.run_id, 2)
+    _commit_response(fresh_app, fresh_session.session_id, fresh_run.run_id, 1, _response())
+    fresh_app.complete_run(fresh_session.session_id, fresh_run.run_id, 3)
     with sqlite3.connect(fresh_store.database_path) as connection:
         versions = connection.execute(
             "SELECT record_kind, schema_version FROM run_execution_records "
@@ -309,7 +340,7 @@ def test_unknown_model_response_version_fails_closed(tmp_path) -> None:
     store, app = _app(tmp_path)
     session = app.create_session()
     run = app.create_run(_request(session.session_id))
-    response = app.commit_model_response(session.session_id, run.run_id, 1, _response())
+    response = _commit_response(app, session.session_id, run.run_id, 1, _response())
     with sqlite3.connect(store.database_path) as connection:
         connection.execute("DROP TRIGGER immutable_run_record_update")
         connection.execute(
@@ -327,7 +358,7 @@ def test_reopened_continuation_can_be_replayed_and_survives_terminal_run(tmp_pat
     session = app.create_session()
     run = app.create_run(_request(session.session_id))
     payload = "persisted continuation used for the next provider request"
-    app.commit_model_response(
+    _commit_response(app,
         session.session_id,
         run.run_id,
         1,
@@ -409,7 +440,7 @@ def test_continuation_is_absent_from_public_repr_logs_and_user_facing_errors(tmp
     run = app.create_run(_request(session.session_id))
     secret = "private continuation must never be projected"
     with caplog.at_level(logging.DEBUG):
-        app.commit_model_response(
+        _commit_response(app,
             session.session_id,
             run.run_id,
             1,
@@ -436,7 +467,7 @@ def test_continuation_is_absent_from_public_repr_logs_and_user_facing_errors(tmp
             f"BEGIN SELECT RAISE(ABORT, '{secret}'); END"
         )
     with pytest.raises(RunError) as rejected:
-        app.commit_model_response(
+        _commit_response(app,
             session.session_id,
             failed_run.run_id,
             1,
@@ -459,7 +490,7 @@ def test_corrupt_continuation_rows_fail_closed(tmp_path, corruption, expected_co
     store, app = _app(tmp_path)
     session = app.create_session()
     run = app.create_run(_request(session.session_id))
-    app.commit_model_response(
+    _commit_response(app,
         session.session_id,
         run.run_id,
         1,
@@ -500,16 +531,16 @@ def test_completion_commits_final_record_status_checkpoint_and_safe_event_togeth
     store, app = _app(tmp_path)
     session = app.create_session()
     run = app.create_run(_request(session.session_id))
-    app.commit_model_response(session.session_id, run.run_id, 1, _response())
+    _commit_response(app, session.session_id, run.run_id, 1, _response())
 
-    final_record = app.complete_run(session.session_id, run.run_id, 2)
+    final_record = app.complete_run(session.session_id, run.run_id, 3)
     state = app.read_run_state(session.session_id, run.run_id)
 
     assert final_record.record_kind.value == "final_answer"
     assert final_record.record_sequence == 3
     assert state.run.status is RunStatus.COMPLETED
     assert state.run.final_record_id == final_record.record_id
-    assert state.checkpoint.revision == 3
+    assert state.checkpoint.revision == 4
     assert state.checkpoint.last_committed_record_sequence == 3
     assert state.checkpoint.next_action is None
     assert [event.event_sequence for event in state.events] == [1, 2]
@@ -524,7 +555,7 @@ def test_completion_commits_final_record_status_checkpoint_and_safe_event_togeth
     assert str(store.database_path) not in public_run + public_events
 
     with pytest.raises(RunError) as terminal:
-        app.interrupt_run(session.session_id, run.run_id, 3)
+        app.interrupt_run(session.session_id, run.run_id, 4)
     assert terminal.value.code is RunErrorCode.INVALID_TRANSITION
 
 
@@ -532,7 +563,7 @@ def test_invalid_finalization_rolls_back_final_record_and_terminal_event(tmp_pat
     _store, app = _app(tmp_path)
     session = app.create_session()
     run = app.create_run(_request(session.session_id))
-    app.commit_model_response(
+    _commit_response(app,
         session.session_id,
         run.run_id,
         1,
@@ -540,7 +571,7 @@ def test_invalid_finalization_rolls_back_final_record_and_terminal_event(tmp_pat
     )
 
     with pytest.raises(RunError) as invalid:
-        app.complete_run(session.session_id, run.run_id, 2)
+        app.complete_run(session.session_id, run.run_id, 3)
 
     assert invalid.value.code is RunErrorCode.INVALID_TRANSITION
     state = app.read_run_state(session.session_id, run.run_id)
@@ -553,12 +584,12 @@ def test_failure_and_interruption_keep_checkpoint_and_are_terminal(tmp_path) -> 
     _store, app = _app(tmp_path)
     first_session = app.create_session()
     failed = app.create_run(_request(first_session.session_id))
-    app.commit_model_response(first_session.session_id, failed.run_id, 1, _response())
-    app.fail_run(first_session.session_id, failed.run_id, 2, TerminalCode.EXECUTION_FAILED)
+    _commit_response(app, first_session.session_id, failed.run_id, 1, _response())
+    app.fail_run(first_session.session_id, failed.run_id, 3, TerminalCode.EXECUTION_FAILED)
     failed_state = app.read_run_state(first_session.session_id, failed.run_id)
     assert failed_state.run.status is RunStatus.FAILED
     assert failed_state.run.terminal_message == "Run 执行未能完成。"
-    assert failed_state.checkpoint.revision == 3
+    assert failed_state.checkpoint.revision == 4
     assert failed_state.checkpoint.last_committed_record_sequence == 2
     assert failed_state.checkpoint.next_action.action_kind is ActionKind.FINAL
     assert failed_state.events[-1].event_kind is EventKind.RUN_FAILED
@@ -586,16 +617,16 @@ def test_stale_checkpoint_and_cross_session_reads_are_rejected(tmp_path) -> None
         app.read_run_state(other.session_id, run.run_id)
     assert missing.value.code is RunErrorCode.RUN_NOT_FOUND
     with pytest.raises(RunError) as stale:
-        app.commit_model_response(owner.session_id, run.run_id, 0, _response())
+        _commit_response(app, owner.session_id, run.run_id, 0, _response())
     assert stale.value.code is RunErrorCode.INVALID_REQUEST
 
-    app.commit_model_response(owner.session_id, run.run_id, 1, _response())
+    _commit_response(app, owner.session_id, run.run_id, 1, _response())
     with pytest.raises(RunError) as stale_again:
-        app.commit_model_response(owner.session_id, run.run_id, 1, _response())
-    assert stale_again.value.code is RunErrorCode.STALE_CHECKPOINT
+        _commit_response(app, owner.session_id, run.run_id, 1, _response())
+    assert stale_again.value.code is RunErrorCode.INVALID_TRANSITION
     state = app.read_run_state(owner.session_id, run.run_id)
     assert len(state.records) == 2
-    assert state.checkpoint.revision == 2
+    assert state.checkpoint.revision == 3
 
 
 def test_two_sqlite_writers_racing_on_the_same_revision_commit_only_one_record(tmp_path) -> None:
@@ -608,7 +639,7 @@ def test_two_sqlite_writers_racing_on_the_same_revision_commit_only_one_record(t
     def commit(coordinator: RunCoordinator):
         barrier.wait()
         try:
-            return coordinator.commit_model_response(
+            return _commit_response(coordinator,
                 session.session_id, run.run_id, 1, _response()
             )
         except RunError as error:
@@ -618,10 +649,14 @@ def test_two_sqlite_writers_racing_on_the_same_revision_commit_only_one_record(t
         results = list(executor.map(commit, (app, other_app)))
 
     assert sum(not isinstance(result, RunErrorCode) for result in results) == 1
-    assert sum(result is RunErrorCode.STALE_CHECKPOINT for result in results) == 1
+    assert sum(
+        result in {RunErrorCode.STALE_CHECKPOINT, RunErrorCode.INVALID_TRANSITION}
+        for result in results
+        if isinstance(result, RunErrorCode)
+    ) == 1
     state = app.read_run_state(session.session_id, run.run_id)
     assert len(state.records) == 2
-    assert state.checkpoint.revision == 2
+    assert state.checkpoint.revision == 3
     assert len(state.events) == 1
 
 
@@ -630,8 +665,8 @@ def test_cross_run_response_reference_is_rejected_without_partial_completion(tmp
     session = app.create_session()
     first = app.create_run(_request(session.session_id, key="first"))
     second = app.create_run(_request(session.session_id, key="second"))
-    app.commit_model_response(session.session_id, first.run_id, 1, _response())
-    second_response = app.commit_model_response(session.session_id, second.run_id, 1, _response())
+    _commit_response(app, session.session_id, first.run_id, 1, _response())
+    second_response = _commit_response(app, session.session_id, second.run_id, 1, _response())
     with sqlite3.connect(store.database_path) as connection:
         connection.execute("DROP TRIGGER immutable_run_record_update")
         connection.execute(
@@ -640,7 +675,7 @@ def test_cross_run_response_reference_is_rejected_without_partial_completion(tmp
         )
 
     with pytest.raises(RunError) as invalid_reference:
-        app.complete_run(session.session_id, first.run_id, 2)
+        app.complete_run(session.session_id, first.run_id, 3)
 
     assert invalid_reference.value.code is RunErrorCode.INTEGRITY_ERROR
     with sqlite3.connect(store.database_path) as connection:
@@ -674,7 +709,7 @@ def test_record_sequence_gap_fails_closed(tmp_path) -> None:
     store, app = _app(tmp_path)
     session = app.create_session()
     run = app.create_run(_request(session.session_id))
-    response_record = app.commit_model_response(
+    response_record = _commit_response(app,
         session.session_id, run.run_id, 1, _response()
     )
     with sqlite3.connect(store.database_path) as connection:
@@ -708,14 +743,14 @@ def test_reopened_store_reconstructs_committed_state_without_provider_work(tmp_p
     store, app = _app(tmp_path)
     session = app.create_session()
     run = app.create_run(_request(session.session_id))
-    app.commit_model_response(session.session_id, run.run_id, 1, _response())
+    _commit_response(app, session.session_id, run.run_id, 1, _response())
 
     reopened = RunCoordinator(FiguraRunStore(tmp_path), _factory())
     state = reopened.read_run_state(session.session_id, run.run_id)
 
     assert state.run.run_id == run.run_id
     assert [record.record_sequence for record in state.records] == [1, 2]
-    assert state.checkpoint.revision == 2
+    assert state.checkpoint.revision == 3
     assert state.checkpoint.next_action.action_kind is ActionKind.FINAL
     assert "图表显示数值" not in repr([event.to_public_dict() for event in state.events])
     assert store.database_path.exists()

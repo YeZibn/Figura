@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Iterator
 
 from figura.providers.models import FinishReason, ProviderContinuation, ProviderId
+from figura.providers.errors import ProviderFailureCode
 from figura.tools.contracts import ReplayEffect, ToolExecutionResult, ToolOutcome
 
 from ._codec import (
@@ -33,6 +34,8 @@ from .models import (
     FinalAnswerFact,
     ModelResponseFact,
     NextAction,
+    ProviderAttempt,
+    ProviderAttemptStatus,
     ProviderContinuationFact,
     RecordKind,
     Run,
@@ -50,7 +53,7 @@ from .models import (
     TERMINAL_MESSAGES,
 )
 
-_SCHEMA_VERSION = 3
+_SCHEMA_VERSION = 4
 _BUSY_TIMEOUT_MS = 5000
 _DB_FILENAME = "figura.sqlite3"
 
@@ -212,18 +215,87 @@ class FiguraRunStore:
         with self._read() as connection:
             return _read_run_state_from_connection(connection, session_id, run_id)
 
+    def begin_provider_attempt(
+        self,
+        *,
+        session_id: str,
+        run_id: str,
+        expected_revision: int,
+        attempt_id: str,
+    ) -> ProviderAttempt:
+        if type(expected_revision) is not int or expected_revision < 1:
+            raise RunError(RunErrorCode.INVALID_REQUEST)
+        _validate_id(attempt_id)
+        now = _utc_now()
+        with self._write() as connection:
+            run = self._scoped_run(connection, session_id, run_id)
+            checkpoint = self._checkpoint_for_write(connection, run_id)
+            if run.status is not RunStatus.RUNNING:
+                raise RunError(RunErrorCode.INVALID_TRANSITION)
+            if checkpoint.revision != expected_revision:
+                raise RunError(RunErrorCode.STALE_CHECKPOINT)
+            if checkpoint.next_action != NextAction(ActionKind.MODEL):
+                raise RunError(RunErrorCode.INVALID_TRANSITION)
+            attempt_sequence = int(
+                connection.execute(
+                    "SELECT COUNT(*) FROM run_provider_attempts WHERE run_id = ?",
+                    (run_id,),
+                ).fetchone()[0]
+            ) + 1
+            if attempt_sequence > 8:
+                raise RunError(RunErrorCode.INVALID_TRANSITION)
+            connection.execute(
+                "INSERT INTO run_provider_attempts(attempt_id, run_id, attempt_sequence, "
+                "base_record_sequence, base_tool_sequence, status, response_record_id, failure_code, "
+                "started_at, finished_at) VALUES (?, ?, ?, ?, ?, 'started', NULL, NULL, ?, NULL)",
+                (
+                    attempt_id,
+                    run_id,
+                    attempt_sequence,
+                    checkpoint.last_committed_record_sequence,
+                    checkpoint.last_committed_tool_sequence,
+                    now,
+                ),
+            )
+            action_json = _encode_action(
+                NextAction(ActionKind.PROVIDER_ATTEMPT, attempt_id=attempt_id)
+            )
+            cursor = connection.execute(
+                "UPDATE run_execution_checkpoints SET revision = revision + 1, next_action_json = ?, "
+                "updated_at = ? WHERE run_id = ? AND revision = ?",
+                (action_json, now, run_id, expected_revision),
+            )
+            if cursor.rowcount != 1:
+                raise RunError(RunErrorCode.STALE_CHECKPOINT)
+        return ProviderAttempt(
+            attempt_id=attempt_id,
+            run_id=run_id,
+            attempt_sequence=attempt_sequence,
+            base_record_sequence=checkpoint.last_committed_record_sequence,
+            base_tool_sequence=checkpoint.last_committed_tool_sequence,
+            status=ProviderAttemptStatus.STARTED,
+            response_record_id=None,
+            failure_code=None,
+            started_at=now,
+            finished_at=None,
+        )
+
     def commit_model_response(
         self,
         *,
         session_id: str,
         run_id: str,
         expected_revision: int,
+        provider_attempt_id: str,
         payload: ModelResponseFact,
         record_id: str | None = None,
         tool_calls: tuple[ToolCallFact, ...] = (),
         continuation: ProviderContinuation | None = None,
         continuation_id: str | None = None,
     ) -> ExecutionRecord:
+        if not isinstance(provider_attempt_id, str) or not provider_attempt_id:
+            raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
+        _validate_id(provider_attempt_id)
         if (
             not isinstance(payload, ModelResponseFact)
             or type(payload.schema_version) is not int
@@ -258,7 +330,21 @@ class FiguraRunStore:
                 raise RunError(RunErrorCode.INVALID_TRANSITION)
             if checkpoint.revision != expected_revision:
                 raise RunError(RunErrorCode.STALE_CHECKPOINT)
-            if checkpoint.next_action != NextAction(ActionKind.MODEL):
+            expected_action = NextAction(
+                ActionKind.PROVIDER_ATTEMPT, attempt_id=provider_attempt_id
+            )
+            if checkpoint.next_action != expected_action:
+                raise RunError(RunErrorCode.INVALID_TRANSITION)
+            attempt_row = connection.execute(
+                "SELECT * FROM run_provider_attempts WHERE run_id = ? AND attempt_id = ?",
+                (run_id, provider_attempt_id),
+            ).fetchone()
+            if (
+                attempt_row is None
+                or attempt_row["status"] != ProviderAttemptStatus.STARTED.value
+                or attempt_row["base_record_sequence"] != checkpoint.last_committed_record_sequence
+                or attempt_row["base_tool_sequence"] != checkpoint.last_committed_tool_sequence
+            ):
                 raise RunError(RunErrorCode.INVALID_TRANSITION)
             if payload.provider_id != run.provider or payload.model_id != run.model:
                 raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
@@ -338,6 +424,13 @@ class FiguraRunStore:
                     "VALUES (?, ?, 'tool_call', 1, ?, ?)",
                     (run_id, first_tool_sequence + offset, raw_fact, now),
                 )
+            attempt_cursor = connection.execute(
+                "UPDATE run_provider_attempts SET status = 'response_committed', response_record_id = ?, "
+                "finished_at = ? WHERE run_id = ? AND attempt_id = ? AND status = 'started'",
+                (record_id, now, run_id, provider_attempt_id),
+            )
+            if attempt_cursor.rowcount != 1:
+                raise RunError(RunErrorCode.INVALID_TRANSITION)
             next_action = _encode_action(
                 NextAction(ActionKind.TOOL_EXECUTION, tool_call_sequence=first_tool_sequence)
                 if tool_calls
@@ -353,6 +446,106 @@ class FiguraRunStore:
             if cursor.rowcount != 1:
                 raise RunError(RunErrorCode.STALE_CHECKPOINT)
         return ExecutionRecord(record_id, run_id, sequence, RecordKind.MODEL_RESPONSE, payload, now)
+
+    def fail_provider_attempt(
+        self,
+        *,
+        session_id: str,
+        run_id: str,
+        expected_revision: int,
+        attempt_id: str,
+        outcome_unknown: bool,
+        failure_code: str | None,
+    ) -> Run:
+        if type(expected_revision) is not int or expected_revision < 1:
+            raise RunError(RunErrorCode.INVALID_REQUEST)
+        _validate_id(attempt_id)
+        if type(outcome_unknown) is not bool:
+            raise RunError(RunErrorCode.INVALID_REQUEST)
+        if failure_code is not None:
+            if not isinstance(failure_code, str):
+                raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
+            try:
+                failure_code = ProviderFailureCode(failure_code).value
+            except ValueError:
+                raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD) from None
+        if not outcome_unknown and failure_code is None:
+            raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
+
+        terminal_code = (
+            TerminalCode.PROVIDER_OUTCOME_UNKNOWN
+            if outcome_unknown
+            else TerminalCode.EXECUTION_FAILED
+        )
+        attempt_status = (
+            ProviderAttemptStatus.OUTCOME_UNKNOWN
+            if outcome_unknown
+            else ProviderAttemptStatus.KNOWN_FAILURE
+        )
+        now = _utc_now()
+        message = TERMINAL_MESSAGES[terminal_code]
+        event_json = encode_event_payload(
+            EventKind.RUN_FAILED, {"terminal_code": terminal_code.value}
+        )
+        with self._write() as connection:
+            run = self._scoped_run(connection, session_id, run_id)
+            checkpoint = self._checkpoint_for_write(connection, run_id)
+            expected_action = NextAction(
+                ActionKind.PROVIDER_ATTEMPT, attempt_id=attempt_id
+            )
+            if run.status is not RunStatus.RUNNING:
+                raise RunError(RunErrorCode.INVALID_TRANSITION)
+            if checkpoint.revision != expected_revision:
+                raise RunError(RunErrorCode.STALE_CHECKPOINT)
+            if checkpoint.next_action != expected_action:
+                raise RunError(RunErrorCode.INVALID_TRANSITION)
+            attempt_row = connection.execute(
+                "SELECT status FROM run_provider_attempts WHERE run_id = ? AND attempt_id = ?",
+                (run_id, attempt_id),
+            ).fetchone()
+            if attempt_row is None or attempt_row["status"] != ProviderAttemptStatus.STARTED.value:
+                raise RunError(RunErrorCode.INVALID_TRANSITION)
+            cursor = connection.execute(
+                "UPDATE run_provider_attempts SET status = ?, failure_code = ?, finished_at = ? "
+                "WHERE run_id = ? AND attempt_id = ? AND status = 'started'",
+                (attempt_status.value, failure_code, now, run_id, attempt_id),
+            )
+            if cursor.rowcount != 1:
+                raise RunError(RunErrorCode.INVALID_TRANSITION)
+            cursor = connection.execute(
+                "UPDATE runs SET status = 'failed', finished_at = ?, terminal_code = ?, terminal_message = ? "
+                "WHERE run_id = ? AND session_id = ? AND status = 'running'",
+                (now, terminal_code.value, message, run_id, session_id),
+            )
+            if cursor.rowcount != 1:
+                raise RunError(RunErrorCode.INVALID_TRANSITION)
+            cursor = connection.execute(
+                "UPDATE run_execution_checkpoints SET revision = revision + 1, updated_at = ? "
+                "WHERE run_id = ? AND revision = ?",
+                (now, run_id, expected_revision),
+            )
+            if cursor.rowcount != 1:
+                raise RunError(RunErrorCode.STALE_CHECKPOINT)
+            event_sequence = _next_event_sequence(connection, run_id)
+            connection.execute(
+                "INSERT INTO run_stream_events(run_id, event_sequence, event_kind, payload_json, created_at) "
+                "VALUES (?, ?, 'run_failed', ?, ?)",
+                (run_id, event_sequence, event_json, now),
+            )
+        return Run(
+            run_id=run.run_id,
+            session_id=run.session_id,
+            ordinal=run.ordinal,
+            input_record_id=run.input_record_id,
+            status=RunStatus.FAILED,
+            provider=run.provider,
+            model=run.model,
+            created_at=run.created_at,
+            started_at=run.started_at,
+            finished_at=now,
+            terminal_code=terminal_code.value,
+            terminal_message=message,
+        )
 
     def begin_tool_attempt(
         self,
@@ -839,8 +1032,15 @@ class FiguraRunStore:
                             connection.execute(statement)
                         for statement in _CONTINUATION_SCHEMA:
                             connection.execute(statement)
+                        for statement in _PROVIDER_ATTEMPT_SCHEMA:
+                            connection.execute(statement)
                     elif version == 2:
                         for statement in _CONTINUATION_SCHEMA:
+                            connection.execute(statement)
+                        for statement in _PROVIDER_ATTEMPT_SCHEMA:
+                            connection.execute(statement)
+                    elif version == 3:
+                        for statement in _PROVIDER_ATTEMPT_SCHEMA:
                             connection.execute(statement)
                     else:
                         raise RunError(RunErrorCode.UNSUPPORTED_VERSION)
@@ -957,6 +1157,10 @@ def _read_run_state_from_connection(
         "WHERE record_id = continuation.response_record_id AND run_id = continuation.run_id)",
         (run_id,),
     ).fetchall()
+    provider_attempt_rows = connection.execute(
+        "SELECT * FROM run_provider_attempts WHERE run_id = ? ORDER BY attempt_sequence",
+        (run_id,),
+    ).fetchall()
     state = RunState(
         run=_run_from_row(run_row),
         records=tuple(_record_from_row(row) for row in record_rows),
@@ -965,6 +1169,9 @@ def _read_run_state_from_connection(
         tool_facts=tuple(_tool_fact_from_row(row) for row in tool_fact_rows),
         provider_continuations=tuple(
             _continuation_fact_from_row(row) for row in continuation_rows
+        ),
+        provider_attempts=tuple(
+            _provider_attempt_from_row(row) for row in provider_attempt_rows
         ),
     )
     _validate_state(state)
@@ -1093,7 +1300,59 @@ _CONTINUATION_SCHEMA = (
         BEGIN SELECT RAISE(ABORT, 'immutable provider continuation'); END""",
 )
 
-_SCHEMA = (*_CORE_SCHEMA, *_TOOL_SCHEMA, *_CONTINUATION_SCHEMA)
+_PROVIDER_ATTEMPT_SCHEMA = (
+    """CREATE TABLE run_provider_attempts (
+        attempt_id TEXT PRIMARY KEY CHECK (length(CAST(attempt_id AS BLOB)) BETWEEN 1 AND 128),
+        run_id TEXT NOT NULL REFERENCES runs(run_id) ON DELETE RESTRICT,
+        attempt_sequence INTEGER NOT NULL CHECK (attempt_sequence BETWEEN 1 AND 8),
+        base_record_sequence INTEGER NOT NULL CHECK (base_record_sequence > 0),
+        base_tool_sequence INTEGER NOT NULL CHECK (base_tool_sequence >= 0),
+        status TEXT NOT NULL CHECK (status IN ('started', 'response_committed', 'known_failure', 'outcome_unknown')),
+        response_record_id TEXT NULL,
+        failure_code TEXT NULL CHECK (failure_code IS NULL OR failure_code IN (
+            'configuration_missing', 'invalid_configuration', 'unsupported_provider', 'unsupported_model',
+            'invalid_request', 'unsupported_capability', 'provider_rejected', 'provider_unavailable',
+            'timeout', 'connection_error', 'incomplete_stream', 'invalid_provider_response', 'transport_error'
+        )),
+        started_at TEXT NOT NULL,
+        finished_at TEXT NULL,
+        UNIQUE(run_id, attempt_sequence),
+        UNIQUE(run_id, base_record_sequence, base_tool_sequence),
+        UNIQUE(run_id, response_record_id),
+        FOREIGN KEY(response_record_id, run_id)
+            REFERENCES run_execution_records(record_id, run_id) ON DELETE RESTRICT,
+        CHECK (
+            (status = 'started' AND response_record_id IS NULL AND failure_code IS NULL AND finished_at IS NULL)
+            OR (status = 'response_committed' AND response_record_id IS NOT NULL AND failure_code IS NULL AND finished_at IS NOT NULL)
+            OR (status = 'known_failure' AND response_record_id IS NULL AND failure_code IS NOT NULL AND finished_at IS NOT NULL)
+            OR (status = 'outcome_unknown' AND response_record_id IS NULL AND finished_at IS NOT NULL)
+        )
+    )""",
+    """CREATE TRIGGER provider_attempt_response_matches_model_response
+        BEFORE UPDATE OF response_record_id ON run_provider_attempts
+        WHEN NEW.response_record_id IS NOT NULL AND NOT EXISTS (
+            SELECT 1 FROM run_execution_records
+            WHERE record_id = NEW.response_record_id
+              AND run_id = NEW.run_id
+              AND record_kind = 'model_response'
+        )
+        BEGIN SELECT RAISE(ABORT, 'provider attempt response mismatch'); END""",
+    """CREATE TRIGGER provider_attempt_has_one_terminal_transition
+        BEFORE UPDATE ON run_provider_attempts
+        WHEN OLD.status <> 'started'
+          OR NEW.status = 'started'
+          OR NEW.attempt_id <> OLD.attempt_id
+          OR NEW.run_id <> OLD.run_id
+          OR NEW.attempt_sequence <> OLD.attempt_sequence
+          OR NEW.base_record_sequence <> OLD.base_record_sequence
+          OR NEW.base_tool_sequence <> OLD.base_tool_sequence
+          OR NEW.started_at <> OLD.started_at
+        BEGIN SELECT RAISE(ABORT, 'invalid provider attempt transition'); END""",
+    """CREATE TRIGGER immutable_run_provider_attempt_delete BEFORE DELETE ON run_provider_attempts
+        BEGIN SELECT RAISE(ABORT, 'immutable provider attempt'); END""",
+)
+
+_SCHEMA = (*_CORE_SCHEMA, *_TOOL_SCHEMA, *_CONTINUATION_SCHEMA, *_PROVIDER_ATTEMPT_SCHEMA)
 
 
 def _validate_migration(connection: sqlite3.Connection) -> None:
@@ -1181,6 +1440,25 @@ def _continuation_fact_from_row(row: sqlite3.Row) -> ProviderContinuationFact:
     return validate_provider_continuation_fact(fact, persisted=True)
 
 
+def _provider_attempt_from_row(row: sqlite3.Row) -> ProviderAttempt:
+    try:
+        status = ProviderAttemptStatus(row["status"])
+    except ValueError:
+        raise RunError(RunErrorCode.INTEGRITY_ERROR) from None
+    return ProviderAttempt(
+        attempt_id=row["attempt_id"],
+        run_id=row["run_id"],
+        attempt_sequence=row["attempt_sequence"],
+        base_record_sequence=row["base_record_sequence"],
+        base_tool_sequence=row["base_tool_sequence"],
+        status=status,
+        response_record_id=row["response_record_id"],
+        failure_code=row["failure_code"],
+        started_at=row["started_at"],
+        finished_at=row["finished_at"],
+    )
+
+
 def _checkpoint_from_row(row: sqlite3.Row) -> ExecutionCheckpoint:
     if row["schema_version"] != 1:
         raise RunError(RunErrorCode.UNSUPPORTED_VERSION)
@@ -1265,6 +1543,15 @@ def _encode_action(action: NextAction | None) -> str | None:
     ):
         value = {"action_kind": "model"}
     elif (
+        action.action_kind is ActionKind.PROVIDER_ATTEMPT
+        and action.response_record_id is None
+        and action.tool_call_sequence is None
+        and isinstance(action.attempt_id, str)
+        and action.attempt_id
+        and len(action.attempt_id.encode("utf-8")) <= 128
+    ):
+        value = {"action_kind": "provider_attempt", "attempt_id": action.attempt_id}
+    elif (
         action.action_kind is ActionKind.FINAL
         and action.response_record_id
         and action.tool_call_sequence is None
@@ -1307,6 +1594,15 @@ def _decode_action(raw: str | None) -> NextAction | None:
         value = json.loads(raw)
         if value == {"action_kind": "model"}:
             return NextAction(ActionKind.MODEL)
+        if (
+            isinstance(value, dict)
+            and set(value) == {"action_kind", "attempt_id"}
+            and value["action_kind"] == "provider_attempt"
+            and isinstance(value["attempt_id"], str)
+            and value["attempt_id"]
+            and len(value["attempt_id"].encode("utf-8")) <= 128
+        ):
+            return NextAction(ActionKind.PROVIDER_ATTEMPT, attempt_id=value["attempt_id"])
         if (
             isinstance(value, dict)
             and set(value) == {"action_kind", "response_record_id"}
@@ -1512,6 +1808,16 @@ def _validate_state(state: RunState) -> None:
         if right > left + 1:
             raise RunError(RunErrorCode.INTEGRITY_ERROR)
 
+    _validate_provider_attempts(
+        run=run,
+        checkpoint=checkpoint,
+        response_records=response_records,
+        response_by_id=response_by_id,
+        provider_attempts=state.provider_attempts,
+        tool_facts=tool_facts,
+        calls_by_sequence=calls_by_sequence,
+    )
+
     unresolved_action: NextAction | None = None
     for rank, response_id in enumerate(batch_response_ids):
         call_pairs = calls_by_response[response_id]
@@ -1588,6 +1894,22 @@ def _validate_state(state: RunState) -> None:
     else:
         expected_action = NextAction(ActionKind.MODEL)
 
+    if state.provider_attempts and state.provider_attempts[-1].status is ProviderAttemptStatus.STARTED:
+        expected_action = NextAction(
+            ActionKind.PROVIDER_ATTEMPT,
+            attempt_id=state.provider_attempts[-1].attempt_id,
+        )
+    elif (
+        run.status is RunStatus.FAILED
+        and state.provider_attempts
+        and state.provider_attempts[-1].status
+        in {ProviderAttemptStatus.KNOWN_FAILURE, ProviderAttemptStatus.OUTCOME_UNKNOWN}
+    ):
+        expected_action = NextAction(
+            ActionKind.PROVIDER_ATTEMPT,
+            attempt_id=state.provider_attempts[-1].attempt_id,
+        )
+
     if run.status is RunStatus.RUNNING:
         if (
             run.finished_at is not None
@@ -1648,6 +1970,162 @@ def _validate_state(state: RunState) -> None:
             expected_kind = EventKind.RUN_INTERRUPTED if run.status is RunStatus.INTERRUPTED else EventKind.RUN_FAILED
             if terminal_event.event_kind is not expected_kind or terminal_event.payload != {"terminal_code": run.terminal_code}:
                 raise RunError(RunErrorCode.INTEGRITY_ERROR)
+
+
+def _validate_provider_attempts(
+    *,
+    run: Run,
+    checkpoint: ExecutionCheckpoint,
+    response_records: list[ExecutionRecord],
+    response_by_id: dict[str, ExecutionRecord],
+    provider_attempts: tuple[ProviderAttempt, ...],
+    tool_facts: tuple[ToolExecutionFact, ...],
+    calls_by_sequence: dict[int, tuple[ToolExecutionFact, ToolCallFact]],
+) -> None:
+    if len(provider_attempts) > 8:
+        raise RunError(RunErrorCode.INTEGRITY_ERROR)
+    if [attempt.attempt_sequence for attempt in provider_attempts] != list(
+        range(1, len(provider_attempts) + 1)
+    ):
+        raise RunError(RunErrorCode.INTEGRITY_ERROR)
+
+    attempt_ids: set[str] = set()
+    linked_response_ids: set[str] = set()
+    for index, attempt in enumerate(provider_attempts):
+        if (
+            attempt.run_id != run.run_id
+            or not isinstance(attempt.attempt_id, str)
+            or not attempt.attempt_id
+            or _utf8_length(attempt.attempt_id) > 128
+            or attempt.attempt_id in attempt_ids
+            or type(attempt.base_record_sequence) is not int
+            or attempt.base_record_sequence < 1
+            or attempt.base_record_sequence > checkpoint.last_committed_record_sequence
+            or type(attempt.base_tool_sequence) is not int
+            or attempt.base_tool_sequence < 0
+            or attempt.base_tool_sequence > checkpoint.last_committed_tool_sequence
+            or not isinstance(attempt.started_at, str)
+            or not attempt.started_at
+        ):
+            raise RunError(RunErrorCode.INTEGRITY_ERROR)
+        attempt_ids.add(attempt.attempt_id)
+        if attempt.status is ProviderAttemptStatus.STARTED:
+            if (
+                index != len(provider_attempts) - 1
+                or attempt.response_record_id is not None
+                or attempt.failure_code is not None
+                or attempt.finished_at is not None
+                or run.status is not RunStatus.RUNNING
+            ):
+                raise RunError(RunErrorCode.INTEGRITY_ERROR)
+        elif attempt.status is ProviderAttemptStatus.RESPONSE_COMMITTED:
+            if (
+                not isinstance(attempt.response_record_id, str)
+                or not attempt.response_record_id
+                or attempt.failure_code is not None
+                or not isinstance(attempt.finished_at, str)
+                or not attempt.finished_at
+            ):
+                raise RunError(RunErrorCode.INTEGRITY_ERROR)
+            response_record = response_by_id.get(attempt.response_record_id)
+            if response_record is None or attempt.response_record_id in linked_response_ids:
+                raise RunError(RunErrorCode.INTEGRITY_ERROR)
+            linked_response_ids.add(attempt.response_record_id)
+        elif attempt.status is ProviderAttemptStatus.KNOWN_FAILURE:
+            if (
+                index != len(provider_attempts) - 1
+                or attempt.response_record_id is not None
+                or not isinstance(attempt.failure_code, str)
+                or not isinstance(attempt.finished_at, str)
+                or not attempt.finished_at
+                or run.status is not RunStatus.FAILED
+                or run.terminal_code != TerminalCode.EXECUTION_FAILED.value
+            ):
+                raise RunError(RunErrorCode.INTEGRITY_ERROR)
+        elif attempt.status is ProviderAttemptStatus.OUTCOME_UNKNOWN:
+            if (
+                index != len(provider_attempts) - 1
+                or attempt.response_record_id is not None
+                or not isinstance(attempt.finished_at, str)
+                or not attempt.finished_at
+                or run.status is not RunStatus.FAILED
+                or run.terminal_code != TerminalCode.PROVIDER_OUTCOME_UNKNOWN.value
+            ):
+                raise RunError(RunErrorCode.INTEGRITY_ERROR)
+        else:
+            raise RunError(RunErrorCode.INTEGRITY_ERROR)
+        if attempt.failure_code is not None:
+            try:
+                ProviderFailureCode(attempt.failure_code)
+            except ValueError:
+                raise RunError(RunErrorCode.INTEGRITY_ERROR) from None
+
+    # Responses written before schema v4 form an unlinked prefix. All later
+    # responses must have exactly one attempt row.
+    legacy_prefix: list[ExecutionRecord] = []
+    saw_linked_response = False
+    for response in response_records:
+        if response.record_id in linked_response_ids:
+            saw_linked_response = True
+        elif saw_linked_response:
+            raise RunError(RunErrorCode.INTEGRITY_ERROR)
+        else:
+            legacy_prefix.append(response)
+
+    response_sequence_by_id = {record.record_id: record.record_sequence for record in response_records}
+    fact_response_sequence: dict[int, int] = {}
+    for fact in tool_facts:
+        if isinstance(fact.payload, ToolCallFact):
+            response_record_id = fact.payload.response_record_id
+        else:
+            call_pair = calls_by_sequence.get(fact.payload.tool_call_sequence)
+            if call_pair is None:
+                raise RunError(RunErrorCode.INTEGRITY_ERROR)
+            response_record_id = call_pair[1].response_record_id
+        if response_record_id not in response_sequence_by_id:
+            raise RunError(RunErrorCode.INTEGRITY_ERROR)
+        fact_response_sequence[fact.tool_sequence] = response_sequence_by_id[response_record_id]
+
+    expected_base_record_sequence = (
+        legacy_prefix[-1].record_sequence if legacy_prefix else 1
+    )
+    for index, attempt in enumerate(provider_attempts):
+        if attempt.base_record_sequence != expected_base_record_sequence:
+            raise RunError(RunErrorCode.INTEGRITY_ERROR)
+        expected_base_tool_sequence = max(
+            (
+                fact.tool_sequence
+                for fact in tool_facts
+                if fact_response_sequence[fact.tool_sequence] <= expected_base_record_sequence
+            ),
+            default=0,
+        )
+        if attempt.base_tool_sequence != expected_base_tool_sequence:
+            raise RunError(RunErrorCode.INTEGRITY_ERROR)
+
+        if attempt.status is ProviderAttemptStatus.RESPONSE_COMMITTED:
+            response_record = response_by_id[attempt.response_record_id]
+            if response_record.record_sequence != attempt.base_record_sequence + 1:
+                raise RunError(RunErrorCode.INTEGRITY_ERROR)
+            expected_base_record_sequence = response_record.record_sequence
+        elif index != len(provider_attempts) - 1:
+            raise RunError(RunErrorCode.INTEGRITY_ERROR)
+
+    if provider_attempts:
+        last_attempt = provider_attempts[-1]
+        if last_attempt.status is ProviderAttemptStatus.STARTED and (
+            last_attempt.base_record_sequence != checkpoint.last_committed_record_sequence
+            or last_attempt.base_tool_sequence != checkpoint.last_committed_tool_sequence
+        ):
+            raise RunError(RunErrorCode.INTEGRITY_ERROR)
+        if last_attempt.status in {
+            ProviderAttemptStatus.KNOWN_FAILURE,
+            ProviderAttemptStatus.OUTCOME_UNKNOWN,
+        } and (
+            last_attempt.base_record_sequence != checkpoint.last_committed_record_sequence
+            or last_attempt.base_tool_sequence != checkpoint.last_committed_tool_sequence
+        ):
+            raise RunError(RunErrorCode.INTEGRITY_ERROR)
 
 
 def _validate_continuation_state(

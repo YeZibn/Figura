@@ -1,0 +1,326 @@
+"""Checkpoint-driven ReAct scheduling for one durable Figura Run."""
+
+from __future__ import annotations
+
+from figura.providers import ProviderFactory, ProviderResponse
+from figura.providers.errors import ProviderCallError, ProviderFailureCode
+from figura.runtime import (
+    ActionKind,
+    DurableToolExecutor,
+    RunCoordinator,
+    RunError,
+    RunErrorCode,
+    RunState,
+    RunStatus,
+    TerminalCode,
+)
+from figura.runtime._run_lock import PerRunExecutionLock, RunExecutionLockUnavailable
+from figura.runtime.models import (
+    ModelResponseFact,
+    ToolAttemptStartedFact,
+    ToolCallFact,
+    ToolFactKind,
+)
+
+from .request import AgentRequestBuilder
+
+
+_MAX_PROVIDER_ATTEMPTS = 8
+_MAX_STARTED_TOOL_CALLS = 32
+
+
+class AgentExecutor:
+    """Advance the action currently named by a Run's durable checkpoint."""
+
+    __slots__ = ("_coordinator", "_provider_factory", "_tools", "_lock", "_requests")
+
+    def __init__(
+        self,
+        coordinator: RunCoordinator,
+        provider_factory: ProviderFactory,
+        tools: DurableToolExecutor,
+        execution_lock: PerRunExecutionLock,
+        request_builder: AgentRequestBuilder | None = None,
+    ) -> None:
+        if not isinstance(coordinator, RunCoordinator):
+            raise TypeError("coordinator must be a RunCoordinator")
+        if not isinstance(tools, DurableToolExecutor):
+            raise TypeError("tools must be a DurableToolExecutor")
+        if not isinstance(execution_lock, PerRunExecutionLock):
+            raise TypeError("execution_lock must be a PerRunExecutionLock")
+        if request_builder is not None and not isinstance(request_builder, AgentRequestBuilder):
+            raise TypeError("request_builder must be an AgentRequestBuilder")
+        object.__setattr__(self, "_coordinator", coordinator)
+        object.__setattr__(self, "_provider_factory", provider_factory)
+        object.__setattr__(self, "_tools", tools)
+        object.__setattr__(self, "_lock", execution_lock)
+        object.__setattr__(self, "_requests", request_builder or AgentRequestBuilder())
+
+    def __setattr__(self, name: str, value: object) -> None:
+        raise AttributeError("AgentExecutor is immutable")
+
+    def execute(self, session_id: str, run_id: str) -> RunState:
+        """Advance until terminal, externally unresolved, or another owner holds the Run."""
+        state = self._coordinator.read_run_state(session_id, run_id)
+        while state.run.status is RunStatus.RUNNING:
+            action = state.checkpoint.next_action
+            if action is None:
+                raise RunError(RunErrorCode.INTEGRITY_ERROR)
+            if action.action_kind is ActionKind.MODEL:
+                next_state = self._execute_model_action(state)
+            elif action.action_kind is ActionKind.TOOL_EXECUTION:
+                next_state = self._execute_tool_action(state)
+            elif action.action_kind is ActionKind.TOOL_ATTEMPT:
+                return state
+            elif action.action_kind is ActionKind.PROVIDER_ATTEMPT:
+                next_state = self._resolve_provider_attempt(state)
+            elif action.action_kind is ActionKind.FINAL:
+                next_state = self._finalize(state)
+            else:
+                raise RunError(RunErrorCode.INTEGRITY_ERROR)
+
+            if (
+                next_state.run.status is RunStatus.RUNNING
+                and next_state.checkpoint.revision == state.checkpoint.revision
+                and next_state.checkpoint.next_action == state.checkpoint.next_action
+            ):
+                return next_state
+            state = next_state
+        return state
+
+    def _execute_model_action(self, state: RunState) -> RunState:
+        session_id, run_id = state.run.session_id, state.run.run_id
+        if len(state.provider_attempts) >= _MAX_PROVIDER_ATTEMPTS:
+            return self._fail_run(state)
+        try:
+            request = self._requests.build(state, self._tools.registry)
+        except RunError:
+            return self._fail_run(state)
+
+        try:
+            client = self._provider_factory.create(state.run.provider, state.run.model)
+        except Exception:
+            return self._fail_run(state)
+
+        try:
+            with self._lock.acquire(run_id):
+                current = self._coordinator.read_run_state(session_id, run_id)
+                if (
+                    current.run.status is not RunStatus.RUNNING
+                    or current.checkpoint.revision != state.checkpoint.revision
+                    or current.checkpoint.next_action != state.checkpoint.next_action
+                ):
+                    return current
+
+                attempt = self._coordinator.begin_provider_attempt(
+                    session_id, run_id, current.checkpoint.revision
+                )
+                claimed = self._coordinator.read_run_state(session_id, run_id)
+                try:
+                    response = client.complete(request)
+                except ProviderCallError as error:
+                    self._coordinator.fail_provider_attempt(
+                        session_id,
+                        run_id,
+                        claimed.checkpoint.revision,
+                        attempt.attempt_id,
+                        outcome_unknown=not error.failure.outcome_known,
+                        failure_code=error.failure.failure_code.value,
+                    )
+                    return self._coordinator.read_run_state(session_id, run_id)
+                except Exception:
+                    self._coordinator.fail_provider_attempt(
+                        session_id,
+                        run_id,
+                        claimed.checkpoint.revision,
+                        attempt.attempt_id,
+                        outcome_unknown=True,
+                        failure_code=None,
+                    )
+                    return self._coordinator.read_run_state(session_id, run_id)
+
+                try:
+                    self._coordinator.commit_model_response(
+                        session_id,
+                        run_id,
+                        claimed.checkpoint.revision,
+                        response,
+                        provider_attempt_id=attempt.attempt_id,
+                        registry_version=self._tools.registry.version,
+                    )
+                except RunError as error:
+                    if error.code not in {
+                        RunErrorCode.UNSUPPORTED_PAYLOAD,
+                        RunErrorCode.UNSUPPORTED_VERSION,
+                    }:
+                        raise
+                    self._coordinator.fail_provider_attempt(
+                        session_id,
+                        run_id,
+                        claimed.checkpoint.revision,
+                        attempt.attempt_id,
+                        outcome_unknown=False,
+                        failure_code=ProviderFailureCode.INVALID_PROVIDER_RESPONSE.value,
+                    )
+                    return self._coordinator.read_run_state(session_id, run_id)
+
+                committed = self._coordinator.read_run_state(session_id, run_id)
+                if not _accepted_provider_response(response):
+                    return self._fail_run(committed, TerminalCode.INVALID_RESPONSE)
+                return committed
+        except RunExecutionLockUnavailable:
+            return self._coordinator.read_run_state(session_id, run_id)
+        finally:
+            close = getattr(client, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:
+                    pass
+
+    def _execute_tool_action(self, state: RunState) -> RunState:
+        action = state.checkpoint.next_action
+        if action is None or type(action.tool_call_sequence) is not int:
+            raise RunError(RunErrorCode.INTEGRITY_ERROR)
+        call = next(
+            (
+                fact.payload
+                for fact in state.tool_facts
+                if fact.tool_sequence == action.tool_call_sequence
+                and fact.fact_kind is ToolFactKind.TOOL_CALL
+                and isinstance(fact.payload, ToolCallFact)
+            ),
+            None,
+        )
+        if call is None:
+            raise RunError(RunErrorCode.INTEGRITY_ERROR)
+        if (
+            call.registry_version != self._tools.registry.version
+            or self._tools.registry.get(call.tool_name) is None
+        ):
+            return self._fail_run(state)
+
+        started_calls = {
+            fact.payload.tool_call_sequence
+            for fact in state.tool_facts
+            if fact.fact_kind is ToolFactKind.TOOL_ATTEMPT_STARTED
+            and isinstance(fact.payload, ToolAttemptStartedFact)
+        }
+        remaining = _MAX_STARTED_TOOL_CALLS - len(started_calls)
+        if remaining <= 0:
+            return self._fail_run(state)
+        try:
+            progressed = self._tools.execute_pending(
+                state.run.session_id,
+                state.run.run_id,
+                max_calls=remaining,
+            )
+        except RunError as error:
+            current = self._coordinator.read_run_state(state.run.session_id, state.run.run_id)
+            if (
+                current.run.status is not RunStatus.RUNNING
+                or current.checkpoint.revision != state.checkpoint.revision
+                or current.checkpoint.next_action != state.checkpoint.next_action
+                or (
+                    current.checkpoint.next_action is not None
+                    and current.checkpoint.next_action.action_kind is ActionKind.TOOL_ATTEMPT
+                )
+            ):
+                return current
+            if error.code is RunErrorCode.INVALID_TRANSITION:
+                return current
+            raise
+        except Exception:
+            current = self._coordinator.read_run_state(state.run.session_id, state.run.run_id)
+            if (
+                current.checkpoint.next_action is not None
+                and current.checkpoint.next_action.action_kind is ActionKind.TOOL_ATTEMPT
+            ):
+                return current
+            raise
+
+        if (
+            progressed.checkpoint.next_action is not None
+            and progressed.checkpoint.next_action.action_kind is ActionKind.TOOL_EXECUTION
+            and len(
+                {
+                    fact.payload.tool_call_sequence
+                    for fact in progressed.tool_facts
+                    if fact.fact_kind is ToolFactKind.TOOL_ATTEMPT_STARTED
+                    and isinstance(fact.payload, ToolAttemptStartedFact)
+                }
+            ) >= _MAX_STARTED_TOOL_CALLS
+        ):
+            return self._fail_run(progressed)
+        return progressed
+
+    def _resolve_provider_attempt(self, state: RunState) -> RunState:
+        try:
+            return self._coordinator.resolve_orphaned_provider_attempt(
+                state.run.session_id, state.run.run_id
+            )
+        except RunError as error:
+            current = self._coordinator.read_run_state(state.run.session_id, state.run.run_id)
+            if error.code is RunErrorCode.INVALID_TRANSITION:
+                return current
+            raise
+
+    def _finalize(self, state: RunState) -> RunState:
+        action = state.checkpoint.next_action
+        response = next(
+            (
+                record.payload
+                for record in state.records
+                if record.record_id == (action.response_record_id if action is not None else None)
+            ),
+            None,
+        )
+        if (
+            not isinstance(response, ModelResponseFact)
+            or response.finish_reason != "stop"
+            or not response.assistant_content.strip()
+        ):
+            return self._fail_run(state, TerminalCode.INVALID_RESPONSE)
+        try:
+            self._coordinator.complete_run(
+                state.run.session_id,
+                state.run.run_id,
+                state.checkpoint.revision,
+            )
+        except RunError as error:
+            current = self._coordinator.read_run_state(state.run.session_id, state.run.run_id)
+            if current.checkpoint.revision != state.checkpoint.revision:
+                return current
+            if error.code is RunErrorCode.INVALID_TRANSITION:
+                return self._fail_run(current, TerminalCode.INVALID_RESPONSE)
+            raise
+        return self._coordinator.read_run_state(state.run.session_id, state.run.run_id)
+
+    def _fail_run(
+        self,
+        state: RunState,
+        terminal_code: TerminalCode = TerminalCode.EXECUTION_FAILED,
+    ) -> RunState:
+        try:
+            self._coordinator.fail_run(
+                state.run.session_id,
+                state.run.run_id,
+                state.checkpoint.revision,
+                terminal_code,
+            )
+        except RunError as error:
+            if error.code not in {RunErrorCode.STALE_CHECKPOINT, RunErrorCode.INVALID_TRANSITION}:
+                raise
+        return self._coordinator.read_run_state(state.run.session_id, state.run.run_id)
+
+
+def _accepted_provider_response(response: object) -> bool:
+    if not isinstance(response, ProviderResponse):
+        return False
+    if response.finish_reason.value == "tool_calls":
+        return bool(response.tool_calls)
+    return (
+        response.finish_reason.value == "stop"
+        and not response.tool_calls
+        and bool(response.assistant_content.strip())
+    )

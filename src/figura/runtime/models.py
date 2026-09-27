@@ -26,9 +26,17 @@ class RecordKind(str, Enum):
 
 class ActionKind(str, Enum):
     MODEL = "model"
+    PROVIDER_ATTEMPT = "provider_attempt"
     TOOL_EXECUTION = "tool_execution"
     TOOL_ATTEMPT = "tool_attempt"
     FINAL = "final"
+
+
+class ProviderAttemptStatus(str, Enum):
+    STARTED = "started"
+    RESPONSE_COMMITTED = "response_committed"
+    KNOWN_FAILURE = "known_failure"
+    OUTCOME_UNKNOWN = "outcome_unknown"
 
 
 class ToolFactKind(str, Enum):
@@ -49,6 +57,7 @@ class TerminalCode(str, Enum):
     INVALID_RESPONSE = "invalid_response"
     STORAGE_ERROR = "storage_error"
     INTERRUPTED = "interrupted"
+    PROVIDER_OUTCOME_UNKNOWN = "provider_outcome_unknown"
 
 
 TERMINAL_MESSAGES: Mapping[TerminalCode, str] = MappingProxyType(
@@ -57,6 +66,7 @@ TERMINAL_MESSAGES: Mapping[TerminalCode, str] = MappingProxyType(
         TerminalCode.INVALID_RESPONSE: "Run 收到无法接受的模型结果。",
         TerminalCode.STORAGE_ERROR: "Run 执行结果未能保存。",
         TerminalCode.INTERRUPTED: "Run 已中断。",
+        TerminalCode.PROVIDER_OUTCOME_UNKNOWN: "模型服务商的结果状态未知，当前 Run 已停止。",
     }
 )
 
@@ -136,6 +146,20 @@ class ProviderContinuationFact:
     schema_version: int
     reasoning_content: str = field(repr=False)
     created_at: str
+
+
+@dataclass(frozen=True)
+class ProviderAttempt:
+    attempt_id: str
+    run_id: str
+    attempt_sequence: int
+    base_record_sequence: int
+    base_tool_sequence: int
+    status: ProviderAttemptStatus
+    response_record_id: str | None
+    failure_code: str | None
+    started_at: str
+    finished_at: str | None
 
 
 @dataclass(frozen=True)
@@ -257,6 +281,7 @@ class RunState:
     events: tuple[RunStreamEvent, ...]
     tool_facts: tuple[ToolExecutionFact, ...] = field(default=(), repr=False)
     provider_continuations: tuple[ProviderContinuationFact, ...] = field(default=(), repr=False)
+    provider_attempts: tuple[ProviderAttempt, ...] = field(default=(), repr=False)
 
 
 @dataclass(frozen=True)

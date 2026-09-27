@@ -56,17 +56,35 @@ class DurableToolExecutor:
     def __setattr__(self, name: str, value: object) -> None:
         raise AttributeError("DurableToolExecutor is immutable")
 
-    def execute_pending(self, session_id: str, run_id: str) -> RunState:
+    @property
+    def registry(self) -> ToolRegistry:
+        return self._registry
+
+    def execute_pending(
+        self,
+        session_id: str,
+        run_id: str,
+        *,
+        max_calls: int | None = None,
+    ) -> RunState:
         """Run all consecutive pending calls; unknown attempts require recovery."""
+        if max_calls is not None and (type(max_calls) is not int or max_calls < 0):
+            raise RunError(RunErrorCode.INVALID_REQUEST)
         try:
             with self._lock.acquire(run_id):
-                return self._execute_pending_locked(session_id, run_id)
+                return self._execute_pending_locked(session_id, run_id, max_calls=max_calls)
         except RunExecutionLockUnavailable:
             raise RunError(RunErrorCode.INVALID_TRANSITION) from None
 
-    def _execute_pending_locked(self, session_id: str, run_id: str) -> RunState:
+    def _execute_pending_locked(
+        self,
+        session_id: str,
+        run_id: str,
+        *,
+        max_calls: int | None = None,
+    ) -> RunState:
         state = self._store.read_run_state(session_id, run_id)
-        return self._execute_from_state_locked(state)
+        return self._execute_from_state_locked(state, max_calls=max_calls)
 
     def recover_unknown_attempt(self, session_id: str, run_id: str) -> RunState:
         """Recover an orphaned attempt only after acquiring its Run process lock."""
@@ -150,12 +168,19 @@ class DurableToolExecutor:
         except RunExecutionLockUnavailable:
             raise RunError(RunErrorCode.INVALID_TRANSITION) from None
 
-    def _execute_from_state_locked(self, state: RunState) -> RunState:
+    def _execute_from_state_locked(
+        self,
+        state: RunState,
+        *,
+        max_calls: int | None = None,
+    ) -> RunState:
         session_id, run_id = state.run.session_id, state.run.run_id
+        calls_started = 0
         while (
             state.run.status is RunStatus.RUNNING
             and state.checkpoint.next_action is not None
             and state.checkpoint.next_action.action_kind is ActionKind.TOOL_EXECUTION
+            and (max_calls is None or calls_started < max_calls)
         ):
             action = state.checkpoint.next_action
             call_fact = _call_fact_at(state, action.tool_call_sequence)
@@ -182,6 +207,7 @@ class DurableToolExecutor:
                 expected_revision=state.checkpoint.revision + 1,
                 replay_effect=definition.replay_effect,
             )
+            calls_started += 1
         return state
 
     def _invoke_and_commit(

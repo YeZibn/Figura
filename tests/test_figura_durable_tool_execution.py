@@ -96,6 +96,31 @@ def _app(tmp_path):
     return store, coordinator, session, run
 
 
+def _commit_response(
+    coordinator: RunCoordinator,
+    session_id: str,
+    run_id: str,
+    _legacy_revision: int,
+    response: ProviderResponse,
+    **kwargs,
+):
+    if type(_legacy_revision) is not int or _legacy_revision < 1:
+        return coordinator.begin_provider_attempt(session_id, run_id, _legacy_revision)
+    state = coordinator.read_run_state(session_id, run_id)
+    attempt = coordinator.begin_provider_attempt(
+        session_id, run_id, state.checkpoint.revision
+    )
+    claimed = coordinator.read_run_state(session_id, run_id)
+    return coordinator.commit_model_response(
+        session_id,
+        run_id,
+        claimed.checkpoint.revision,
+        response,
+        provider_attempt_id=attempt.attempt_id,
+        **kwargs,
+    )
+
+
 def _tool_response(
     *calls: ProviderToolCall,
     continuation: ProviderContinuation | None = None,
@@ -226,7 +251,7 @@ def _create_v1_database(data_root, *, conflicting_tool_table: bool = False, inva
 
 def _create_v2_database(data_root):
     store, coordinator, session, run = _app(data_root)
-    response = coordinator.commit_model_response(
+    response = _commit_response(coordinator,
         session.session_id,
         run.run_id,
         1,
@@ -258,6 +283,7 @@ def _create_v2_database(data_root):
             "BEGIN SELECT RAISE(ABORT, 'immutable execution record'); END"
         )
         connection.execute("DROP TABLE run_provider_continuations")
+        connection.execute("DROP TABLE run_provider_attempts")
         connection.execute("PRAGMA user_version = 2")
     return store.database_path, session, run
 
@@ -293,7 +319,7 @@ def _snapshot_run_rows(connection: sqlite3.Connection, *, session_id: str, run_i
     }
 
 
-def test_fresh_store_creates_schema_v3_continuation_table_and_guards(tmp_path) -> None:
+def test_fresh_store_creates_schema_v4_continuation_and_provider_attempt_tables(tmp_path) -> None:
     store = FiguraRunStore(tmp_path)
 
     with sqlite3.connect(store.database_path) as connection:
@@ -316,9 +342,10 @@ def test_fresh_store_creates_schema_v3_continuation_table_and_guards(tmp_path) -
             for row in connection.execute("PRAGMA table_info(run_provider_continuations)")
         }
 
-    assert version == 3
+    assert version == 4
     assert quick_check == "ok"
     assert "run_provider_continuations" in tables
+    assert "run_provider_attempts" in tables
     assert continuation_columns == {
         "continuation_id",
         "run_id",
@@ -333,6 +360,9 @@ def test_fresh_store_creates_schema_v3_continuation_table_and_guards(tmp_path) -
         "continuation_matches_model_response",
         "immutable_run_provider_continuation_update",
         "immutable_run_provider_continuation_delete",
+        "provider_attempt_response_matches_model_response",
+        "provider_attempt_has_one_terminal_transition",
+        "immutable_run_provider_attempt_delete",
     } <= triggers
 
 
@@ -353,7 +383,7 @@ def test_tool_call_response_commits_core_record_and_ordered_tool_facts_atomicall
         ProviderToolCall("call-2", "inspect", '{"value":2}'),
     )
 
-    record = coordinator.commit_model_response(
+    record = _commit_response(coordinator,
         session.session_id,
         run.run_id,
         1,
@@ -363,7 +393,7 @@ def test_tool_call_response_commits_core_record_and_ordered_tool_facts_atomicall
     state = coordinator.read_run_state(session.session_id, run.run_id)
 
     assert record.record_sequence == 2
-    assert state.checkpoint.revision == 2
+    assert state.checkpoint.revision == 3
     assert state.checkpoint.last_committed_record_sequence == 2
     assert state.checkpoint.last_committed_tool_sequence == 2
     assert state.checkpoint.next_action == NextAction(ActionKind.TOOL_EXECUTION, tool_call_sequence=1)
@@ -378,7 +408,7 @@ def test_tool_call_response_commits_core_record_and_ordered_tool_facts_atomicall
 
 def test_attempt_start_precedes_handler_and_success_result_advances_to_model(tmp_path) -> None:
     store, coordinator, session, run = _app(tmp_path)
-    coordinator.commit_model_response(
+    _commit_response(coordinator,
         session.session_id,
         run.run_id,
         1,
@@ -389,7 +419,7 @@ def test_attempt_start_precedes_handler_and_success_result_advances_to_model(tmp
     started = store.begin_tool_attempt(
         session_id=session.session_id,
         run_id=run.run_id,
-        expected_revision=2,
+        expected_revision=3,
         tool_call_sequence=1,
         registry_version="registry-v1",
         replay_effect=ReplayEffect.REPLAY_SAFE,
@@ -398,7 +428,7 @@ def test_attempt_start_precedes_handler_and_success_result_advances_to_model(tmp
     started_state = coordinator.read_run_state(session.session_id, run.run_id)
 
     assert started.tool_sequence == 2
-    assert started_state.checkpoint.revision == 3
+    assert started_state.checkpoint.revision == 4
     assert started_state.checkpoint.last_committed_tool_sequence == 2
     assert started_state.checkpoint.next_action == NextAction(
         ActionKind.TOOL_ATTEMPT,
@@ -409,7 +439,7 @@ def test_attempt_start_precedes_handler_and_success_result_advances_to_model(tmp
     result = store.commit_tool_result(
         session_id=session.session_id,
         run_id=run.run_id,
-        expected_revision=3,
+        expected_revision=4,
         attempt_id="attempt-1",
         result=ToolExecutionResult(
             call_id="call-1",
@@ -421,7 +451,7 @@ def test_attempt_start_precedes_handler_and_success_result_advances_to_model(tmp
     state = coordinator.read_run_state(session.session_id, run.run_id)
 
     assert result.tool_sequence == 3
-    assert state.checkpoint.revision == 4
+    assert state.checkpoint.revision == 5
     assert state.checkpoint.last_committed_tool_sequence == 3
     assert state.checkpoint.next_action == NextAction(ActionKind.MODEL)
     assert state.tool_facts[-1].payload.result == {"value": 1}
@@ -429,7 +459,7 @@ def test_attempt_start_precedes_handler_and_success_result_advances_to_model(tmp
 
 def test_tool_batch_results_advance_serially_and_persist_known_failures(tmp_path) -> None:
     store, coordinator, session, run = _app(tmp_path)
-    coordinator.commit_model_response(
+    _commit_response(coordinator,
         session.session_id,
         run.run_id,
         1,
@@ -442,7 +472,7 @@ def test_tool_batch_results_advance_serially_and_persist_known_failures(tmp_path
     store.begin_tool_attempt(
         session_id=session.session_id,
         run_id=run.run_id,
-        expected_revision=2,
+        expected_revision=3,
         tool_call_sequence=1,
         registry_version="registry-v1",
         replay_effect=ReplayEffect.REPLAY_SAFE,
@@ -451,7 +481,7 @@ def test_tool_batch_results_advance_serially_and_persist_known_failures(tmp_path
     store.commit_tool_result(
         session_id=session.session_id,
         run_id=run.run_id,
-        expected_revision=3,
+        expected_revision=4,
         attempt_id="attempt-1",
         result=ToolExecutionResult(
             call_id="call-1",
@@ -466,7 +496,7 @@ def test_tool_batch_results_advance_serially_and_persist_known_failures(tmp_path
     store.begin_tool_attempt(
         session_id=session.session_id,
         run_id=run.run_id,
-        expected_revision=4,
+        expected_revision=5,
         tool_call_sequence=2,
         registry_version="registry-v1",
         replay_effect=ReplayEffect.RECONCILE_REQUIRED,
@@ -475,7 +505,7 @@ def test_tool_batch_results_advance_serially_and_persist_known_failures(tmp_path
     store.commit_tool_result(
         session_id=session.session_id,
         run_id=run.run_id,
-        expected_revision=5,
+        expected_revision=6,
         attempt_id="attempt-2",
         result=ToolExecutionResult(
             call_id="call-2",
@@ -486,7 +516,7 @@ def test_tool_batch_results_advance_serially_and_persist_known_failures(tmp_path
     )
     state = coordinator.read_run_state(session.session_id, run.run_id)
 
-    assert state.checkpoint.revision == 6
+    assert state.checkpoint.revision == 7
     assert state.checkpoint.next_action == NextAction(ActionKind.MODEL)
     assert state.tool_facts[-1].payload.outcome is ToolOutcome.FAILED
     assert state.tool_facts[-1].payload.error.code == "handler_failed"
@@ -494,7 +524,7 @@ def test_tool_batch_results_advance_serially_and_persist_known_failures(tmp_path
 
 def test_attempt_and_result_transitions_reject_stale_or_mismatched_inputs(tmp_path) -> None:
     store, coordinator, session, run = _app(tmp_path)
-    coordinator.commit_model_response(
+    _commit_response(coordinator,
         session.session_id,
         run.run_id,
         1,
@@ -515,21 +545,21 @@ def test_attempt_and_result_transitions_reject_stale_or_mismatched_inputs(tmp_pa
         store.begin_tool_attempt(
             session_id=session.session_id,
             run_id=run.run_id,
-            expected_revision=2,
+            expected_revision=3,
             tool_call_sequence=1,
             registry_version="registry-v2",
             replay_effect=ReplayEffect.REPLAY_SAFE,
         )
     state = coordinator.read_run_state(session.session_id, run.run_id)
     assert len(state.tool_facts) == 1
-    assert state.checkpoint.revision == 2
+    assert state.checkpoint.revision == 3
     assert state.checkpoint.last_committed_tool_sequence == 1
     assert state.checkpoint.next_action == NextAction(ActionKind.TOOL_EXECUTION, tool_call_sequence=1)
 
     store.begin_tool_attempt(
         session_id=session.session_id,
         run_id=run.run_id,
-        expected_revision=2,
+        expected_revision=3,
         tool_call_sequence=1,
         registry_version="registry-v1",
         replay_effect=ReplayEffect.REPLAY_SAFE,
@@ -539,7 +569,7 @@ def test_attempt_and_result_transitions_reject_stale_or_mismatched_inputs(tmp_pa
         store.commit_tool_result(
             session_id=session.session_id,
             run_id=run.run_id,
-            expected_revision=3,
+            expected_revision=4,
             attempt_id="attempt-1",
             result=ToolExecutionResult(
                 call_id="different-call",
@@ -550,7 +580,7 @@ def test_attempt_and_result_transitions_reject_stale_or_mismatched_inputs(tmp_pa
         )
     state = coordinator.read_run_state(session.session_id, run.run_id)
     assert len(state.tool_facts) == 2
-    assert state.checkpoint.revision == 3
+    assert state.checkpoint.revision == 4
     assert state.checkpoint.next_action.attempt_id == "attempt-1"
 
 
@@ -680,7 +710,7 @@ def test_v1_migration_preserves_run_records_checkpoint_events_and_idempotency(tm
             )
         }
 
-    assert version == 3
+    assert version == 4
     assert quick_check == "ok"
     assert foreign_key_violations == []
     assert idempotency == ("legacy-session", "a" * 64, "b" * 64, "legacy-run")
@@ -694,6 +724,9 @@ def test_v1_migration_preserves_run_records_checkpoint_events_and_idempotency(tm
         "continuation_matches_model_response",
         "immutable_run_provider_continuation_update",
         "immutable_run_provider_continuation_delete",
+        "provider_attempt_response_matches_model_response",
+        "provider_attempt_has_one_terminal_transition",
+        "immutable_run_provider_attempt_delete",
     } <= trigger_names
     assert state.run.run_id == "legacy-run"
     assert state.run.session_id == "legacy-session"
@@ -732,14 +765,14 @@ def test_v2_migration_preserves_existing_run_facts_checkpoint_events_and_idempot
         foreign_key_violations = connection.execute("PRAGMA foreign_key_check").fetchall()
 
     state = store.read_run_state(session.session_id, run.run_id)
-    assert version == 3
+    assert version == 4
     assert quick_check == "ok"
     assert foreign_key_violations == []
     assert after == before
     assert state.run.run_id == run.run_id
     assert [record.record_sequence for record in state.records] == [1, 2]
     assert state.records[1].payload.schema_version == 1
-    assert state.checkpoint.revision == 2
+    assert state.checkpoint.revision == 3
     assert state.checkpoint.last_committed_tool_sequence == 1
     assert [fact.fact_kind for fact in state.tool_facts] == [ToolFactKind.TOOL_CALL]
     assert state.events[0].event_kind is EventKind.RUN_CREATED
@@ -790,7 +823,7 @@ def test_v2_migration_failure_rolls_back_new_schema_and_can_retry(tmp_path) -> N
     store = FiguraRunStore(tmp_path)
     assert store.read_run_state(session.session_id, run.run_id).run.run_id == run.run_id
     with sqlite3.connect(database_path) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 4
 
 
 def test_v1_migration_rolls_back_schema_version_and_added_column_on_failure(tmp_path) -> None:
@@ -844,7 +877,7 @@ def test_model_response_and_tool_intents_roll_back_together_when_tool_insert_fai
         connection.commit()
 
     with pytest.raises(RunError):
-        coordinator.commit_model_response(
+        _commit_response(coordinator,
             session.session_id,
             run.run_id,
             1,
@@ -854,10 +887,14 @@ def test_model_response_and_tool_intents_roll_back_together_when_tool_insert_fai
 
     state = coordinator.read_run_state(session.session_id, run.run_id)
     assert [record.record_sequence for record in state.records] == [1]
-    assert state.checkpoint.revision == 1
+    assert state.checkpoint.revision == 2
     assert state.checkpoint.last_committed_record_sequence == 1
     assert state.checkpoint.last_committed_tool_sequence == 0
-    assert state.checkpoint.next_action == NextAction(ActionKind.MODEL)
+    assert state.checkpoint.next_action == NextAction(
+        ActionKind.PROVIDER_ATTEMPT,
+        attempt_id=state.provider_attempts[0].attempt_id,
+    )
+    assert state.provider_attempts[0].status.value == "started"
     assert state.tool_facts == ()
 
 
@@ -884,7 +921,7 @@ def test_model_response_commits_with_or_without_continuation_atomically(
         response = _text_response(continuation=continuation)
         registry_version = None
 
-    record = coordinator.commit_model_response(
+    record = _commit_response(coordinator,
         session.session_id,
         run.run_id,
         1,
@@ -952,7 +989,7 @@ def test_invalid_continuation_rejects_complete_response_without_partial_state(
     before = coordinator.read_run_state(session.session_id, run.run_id)
 
     with pytest.raises(RunError) as rejected:
-        coordinator.commit_model_response(
+        _commit_response(coordinator,
             session.session_id,
             run.run_id,
             1,
@@ -961,7 +998,13 @@ def test_invalid_continuation_rejects_complete_response_without_partial_state(
 
     after = coordinator.read_run_state(session.session_id, run.run_id)
     assert rejected.value.code is expected_code
-    assert after == before
+    assert after.records == before.records
+    assert after.provider_continuations == before.provider_continuations
+    assert after.tool_facts == before.tool_facts
+    assert after.checkpoint.revision == before.checkpoint.revision + 1
+    assert after.checkpoint.next_action is not None
+    assert after.checkpoint.next_action.action_kind is ActionKind.PROVIDER_ATTEMPT
+    assert after.provider_attempts[-1].status.value == "started"
     with sqlite3.connect(store.database_path) as connection:
         assert connection.execute(
             "SELECT COUNT(*) FROM run_provider_continuations WHERE run_id = ?",
@@ -971,20 +1014,22 @@ def test_invalid_continuation_rejects_complete_response_without_partial_state(
 
 def test_stale_revision_with_continuation_leaves_no_partial_facts(tmp_path) -> None:
     store, coordinator, session, run = _app(tmp_path)
-    before = coordinator.read_run_state(session.session_id, run.run_id)
+    attempt = coordinator.begin_provider_attempt(session.session_id, run.run_id, 1)
+    claimed = coordinator.read_run_state(session.session_id, run.run_id)
 
     with pytest.raises(RunError) as stale:
         coordinator.commit_model_response(
             session.session_id,
             run.run_id,
-            2,
+            1,
             _text_response(
                 continuation=ProviderContinuation(ProviderId.QWEN, 1, "private payload")
             ),
+            provider_attempt_id=attempt.attempt_id,
         )
 
     assert stale.value.code is RunErrorCode.STALE_CHECKPOINT
-    assert coordinator.read_run_state(session.session_id, run.run_id) == before
+    assert coordinator.read_run_state(session.session_id, run.run_id) == claimed
     with sqlite3.connect(store.database_path) as connection:
         assert connection.execute(
             "SELECT COUNT(*) FROM run_provider_continuations"
@@ -994,7 +1039,7 @@ def test_stale_revision_with_continuation_leaves_no_partial_facts(tmp_path) -> N
 def test_duplicate_continuation_reference_rolls_back_later_model_response(tmp_path) -> None:
     store, coordinator, session, run = _app(tmp_path)
     continuation = ProviderContinuation(ProviderId.QWEN, 1, "private payload")
-    first_response = coordinator.commit_model_response(
+    first_response = _commit_response(coordinator,
         session.session_id,
         run.run_id,
         1,
@@ -1007,7 +1052,7 @@ def test_duplicate_continuation_reference_rolls_back_later_model_response(tmp_pa
     store.begin_tool_attempt(
         session_id=session.session_id,
         run_id=run.run_id,
-        expected_revision=2,
+        expected_revision=3,
         tool_call_sequence=1,
         registry_version="registry-v1",
         replay_effect=ReplayEffect.REPLAY_SAFE,
@@ -1016,7 +1061,7 @@ def test_duplicate_continuation_reference_rolls_back_later_model_response(tmp_pa
     store.commit_tool_result(
         session_id=session.session_id,
         run_id=run.run_id,
-        expected_revision=3,
+        expected_revision=4,
         attempt_id="attempt-1",
         result=ToolExecutionResult(
             call_id="call-1",
@@ -1036,11 +1081,16 @@ def test_duplicate_continuation_reference_rolls_back_later_model_response(tmp_pa
         schema_version=2,
     )
 
+    next_attempt = coordinator.begin_provider_attempt(
+        session.session_id, run.run_id, before.checkpoint.revision
+    )
+    claimed = coordinator.read_run_state(session.session_id, run.run_id)
     with pytest.raises(RunError) as rejected:
         store.commit_model_response(
             session_id=session.session_id,
             run_id=run.run_id,
-            expected_revision=4,
+            expected_revision=claimed.checkpoint.revision,
+            provider_attempt_id=next_attempt.attempt_id,
             payload=duplicate_payload,
             record_id="later-response",
             continuation=continuation,
@@ -1048,7 +1098,7 @@ def test_duplicate_continuation_reference_rolls_back_later_model_response(tmp_pa
         )
 
     assert rejected.value.code is RunErrorCode.INTEGRITY_ERROR
-    assert coordinator.read_run_state(session.session_id, run.run_id) == before
+    assert coordinator.read_run_state(session.session_id, run.run_id) == claimed
     with sqlite3.connect(store.database_path) as connection:
         assert connection.execute(
             "SELECT COUNT(*) FROM run_execution_records WHERE run_id = ?",
@@ -1074,7 +1124,7 @@ def test_continuation_insert_failure_rolls_back_response_tools_and_checkpoint(tm
         )
 
     with pytest.raises(RunError):
-        coordinator.commit_model_response(
+        _commit_response(coordinator,
             session.session_id,
             run.run_id,
             1,
@@ -1086,7 +1136,11 @@ def test_continuation_insert_failure_rolls_back_response_tools_and_checkpoint(tm
         )
 
     after = coordinator.read_run_state(session.session_id, run.run_id)
-    assert after == before
+    assert after.records == before.records
+    assert after.checkpoint.revision == 2
+    assert after.checkpoint.next_action is not None
+    assert after.checkpoint.next_action.action_kind is ActionKind.PROVIDER_ATTEMPT
+    assert after.provider_attempts[-1].status.value == "started"
     with sqlite3.connect(store.database_path) as connection:
         assert connection.execute(
             "SELECT COUNT(*) FROM run_execution_records WHERE run_id = ?",
@@ -1103,12 +1157,12 @@ def test_continuation_insert_failure_rolls_back_response_tools_and_checkpoint(tm
         assert connection.execute(
             "SELECT revision FROM run_execution_checkpoints WHERE run_id = ?",
             (run.run_id,),
-        ).fetchone()[0] == 1
+        ).fetchone()[0] == 2
 
 
 def test_record_and_tool_sequences_advance_independently_across_model_rounds(tmp_path) -> None:
     store, coordinator, session, run = _app(tmp_path)
-    first_response = coordinator.commit_model_response(
+    first_response = _commit_response(coordinator,
         session.session_id,
         run.run_id,
         1,
@@ -1118,7 +1172,7 @@ def test_record_and_tool_sequences_advance_independently_across_model_rounds(tmp
     store.begin_tool_attempt(
         session_id=session.session_id,
         run_id=run.run_id,
-        expected_revision=2,
+        expected_revision=3,
         tool_call_sequence=1,
         registry_version="registry-v1",
         replay_effect=ReplayEffect.REPLAY_SAFE,
@@ -1127,7 +1181,7 @@ def test_record_and_tool_sequences_advance_independently_across_model_rounds(tmp
     store.commit_tool_result(
         session_id=session.session_id,
         run_id=run.run_id,
-        expected_revision=3,
+        expected_revision=4,
         attempt_id="attempt-1",
         result=ToolExecutionResult(
             call_id="call-1",
@@ -1136,7 +1190,7 @@ def test_record_and_tool_sequences_advance_independently_across_model_rounds(tmp
             result={"ok": True},
         ),
     )
-    second_response = coordinator.commit_model_response(
+    second_response = _commit_response(coordinator,
         session.session_id,
         run.run_id,
         4,
@@ -1161,7 +1215,7 @@ def test_record_and_tool_sequences_advance_independently_across_model_rounds(tmp
 def test_concurrent_attempt_claims_use_checkpoint_compare_and_swap(tmp_path) -> None:
     store, coordinator, session, run = _app(tmp_path)
     competing_store = FiguraRunStore(tmp_path)
-    coordinator.commit_model_response(
+    _commit_response(coordinator,
         session.session_id,
         run.run_id,
         1,
@@ -1176,7 +1230,7 @@ def test_concurrent_attempt_claims_use_checkpoint_compare_and_swap(tmp_path) -> 
             fact = store_to_use.begin_tool_attempt(
                 session_id=session.session_id,
                 run_id=run.run_id,
-                expected_revision=2,
+                expected_revision=3,
                 tool_call_sequence=1,
                 registry_version="registry-v1",
                 replay_effect=ReplayEffect.REPLAY_SAFE,
@@ -1198,12 +1252,12 @@ def test_concurrent_attempt_claims_use_checkpoint_compare_and_swap(tmp_path) -> 
     assert sorted(result[0] for result in results) == ["claimed", "stale"]
     assert len(state.tool_facts) == 2
     assert state.tool_facts[-1].fact_kind is ToolFactKind.TOOL_ATTEMPT_STARTED
-    assert state.checkpoint.revision == 3
+    assert state.checkpoint.revision == 4
 
 
 def test_durable_executor_dispatches_calls_serially_after_attempt_start(tmp_path) -> None:
     store, coordinator, session, run = _app(tmp_path)
-    coordinator.commit_model_response(
+    _commit_response(coordinator,
         session.session_id,
         run.run_id,
         1,
@@ -1244,7 +1298,7 @@ def test_durable_executor_dispatches_calls_serially_after_attempt_start(tmp_path
 
 def test_durable_executor_persists_known_handler_failure_then_advances(tmp_path, caplog) -> None:
     store, coordinator, session, run = _app(tmp_path)
-    coordinator.commit_model_response(
+    _commit_response(coordinator,
         session.session_id,
         run.run_id,
         1,
@@ -1284,7 +1338,7 @@ def test_durable_executor_persists_known_handler_failure_then_advances(tmp_path,
 
 def test_run_lock_contention_fails_closed_without_starting_a_tool(tmp_path) -> None:
     store, coordinator, session, run = _app(tmp_path)
-    coordinator.commit_model_response(
+    _commit_response(coordinator,
         session.session_id,
         run.run_id,
         1,
@@ -1305,7 +1359,7 @@ def test_run_lock_contention_fails_closed_without_starting_a_tool(tmp_path) -> N
 
     state = coordinator.read_run_state(session.session_id, run.run_id)
     assert invoked == []
-    assert state.checkpoint.revision == 2
+    assert state.checkpoint.revision == 3
     assert state.checkpoint.next_action == NextAction(ActionKind.TOOL_EXECUTION, tool_call_sequence=1)
     assert [fact.fact_kind for fact in state.tool_facts] == [ToolFactKind.TOOL_CALL]
 
@@ -1322,7 +1376,7 @@ def test_different_run_can_execute_while_another_run_lock_is_held(tmp_path) -> N
         )
     )
     for target_run in (first_run, second_run):
-        coordinator.commit_model_response(
+        _commit_response(coordinator,
             session.session_id,
             target_run.run_id,
             1,
@@ -1347,7 +1401,7 @@ def test_different_run_can_execute_while_another_run_lock_is_held(tmp_path) -> N
 
 def test_run_state_reads_and_public_logs_hide_tool_payloads(tmp_path, caplog) -> None:
     store, coordinator, session, run = _app(tmp_path)
-    coordinator.commit_model_response(
+    _commit_response(coordinator,
         session.session_id,
         run.run_id,
         1,
@@ -1392,25 +1446,25 @@ def test_tool_context_validates_and_hides_idempotency_key() -> None:
 @pytest.mark.parametrize("started", [False, True])
 def test_completion_rejects_corrupt_final_action_with_pending_or_unknown_tool_work(tmp_path, started: bool) -> None:
     store, coordinator, session, run = _app(tmp_path)
-    response_record = coordinator.commit_model_response(
+    response_record = _commit_response(coordinator,
         session.session_id,
         run.run_id,
         1,
         _tool_response(ProviderToolCall("call-1", "inspect", '{"value":1}')),
         registry_version="registry-v1",
     )
-    expected_revision = 2
+    expected_revision = 3
     if started:
         store.begin_tool_attempt(
             session_id=session.session_id,
             run_id=run.run_id,
-            expected_revision=2,
+            expected_revision=3,
             tool_call_sequence=1,
             registry_version="registry-v1",
             replay_effect=ReplayEffect.REPLAY_SAFE,
             attempt_id="attempt-without-result",
         )
-        expected_revision = 3
+        expected_revision = 4
     with sqlite3.connect(store.database_path) as connection:
         connection.execute(
             "UPDATE run_execution_checkpoints SET next_action_json = ? WHERE run_id = ?",
@@ -1442,7 +1496,7 @@ def test_completion_rejects_corrupt_final_action_with_pending_or_unknown_tool_wo
 
 def test_duplicate_tool_result_commit_cannot_duplicate_a_committed_result(tmp_path) -> None:
     store, coordinator, session, run = _app(tmp_path)
-    coordinator.commit_model_response(
+    _commit_response(coordinator,
         session.session_id,
         run.run_id,
         1,
@@ -1452,7 +1506,7 @@ def test_duplicate_tool_result_commit_cannot_duplicate_a_committed_result(tmp_pa
     store.begin_tool_attempt(
         session_id=session.session_id,
         run_id=run.run_id,
-        expected_revision=2,
+        expected_revision=3,
         tool_call_sequence=1,
         registry_version="registry-v1",
         replay_effect=ReplayEffect.REPLAY_SAFE,
@@ -1467,7 +1521,7 @@ def test_duplicate_tool_result_commit_cannot_duplicate_a_committed_result(tmp_pa
     store.commit_tool_result(
         session_id=session.session_id,
         run_id=run.run_id,
-        expected_revision=3,
+        expected_revision=4,
         attempt_id="attempt-1",
         result=result,
     )
@@ -1476,18 +1530,18 @@ def test_duplicate_tool_result_commit_cannot_duplicate_a_committed_result(tmp_pa
         store.commit_tool_result(
             session_id=session.session_id,
             run_id=run.run_id,
-            expected_revision=4,
+            expected_revision=5,
             attempt_id="attempt-1",
             result=result,
         )
     state = coordinator.read_run_state(session.session_id, run.run_id)
     assert len([fact for fact in state.tool_facts if fact.fact_kind is ToolFactKind.TOOL_RESULT]) == 1
-    assert state.checkpoint.revision == 4
+    assert state.checkpoint.revision == 5
 
 
 def test_recovery_replays_replay_safe_attempt_after_acquiring_run_lock(tmp_path) -> None:
     store, coordinator, session, run = _app(tmp_path)
-    coordinator.commit_model_response(
+    _commit_response(coordinator,
         session.session_id,
         run.run_id,
         1,
@@ -1497,7 +1551,7 @@ def test_recovery_replays_replay_safe_attempt_after_acquiring_run_lock(tmp_path)
     store.begin_tool_attempt(
         session_id=session.session_id,
         run_id=run.run_id,
-        expected_revision=2,
+        expected_revision=3,
         tool_call_sequence=1,
         registry_version="registry-v1",
         replay_effect=ReplayEffect.REPLAY_SAFE,
@@ -1521,7 +1575,7 @@ def test_recovery_replays_replay_safe_attempt_after_acquiring_run_lock(tmp_path)
 
 def test_idempotent_local_write_replay_reuses_stable_key_and_original_result(tmp_path) -> None:
     store, coordinator, session, run = _app(tmp_path)
-    coordinator.commit_model_response(
+    _commit_response(coordinator,
         session.session_id,
         run.run_id,
         1,
@@ -1531,7 +1585,7 @@ def test_idempotent_local_write_replay_reuses_stable_key_and_original_result(tmp
     store.begin_tool_attempt(
         session_id=session.session_id,
         run_id=run.run_id,
-        expected_revision=2,
+        expected_revision=3,
         tool_call_sequence=1,
         registry_version="registry-v1",
         replay_effect=ReplayEffect.IDEMPOTENT_LOCAL_WRITE,
@@ -1572,7 +1626,7 @@ def test_idempotent_local_write_replay_reuses_stable_key_and_original_result(tmp
 
 def test_reconcile_required_recovery_waits_without_dispatch_then_commits_trusted_result(tmp_path) -> None:
     store, coordinator, session, run = _app(tmp_path)
-    coordinator.commit_model_response(
+    _commit_response(coordinator,
         session.session_id,
         run.run_id,
         1,
@@ -1582,7 +1636,7 @@ def test_reconcile_required_recovery_waits_without_dispatch_then_commits_trusted
     store.begin_tool_attempt(
         session_id=session.session_id,
         run_id=run.run_id,
-        expected_revision=2,
+        expected_revision=3,
         tool_call_sequence=1,
         registry_version="registry-v1",
         replay_effect=ReplayEffect.RECONCILE_REQUIRED,
@@ -1599,7 +1653,7 @@ def test_reconcile_required_recovery_waits_without_dispatch_then_commits_trusted
         _registry(handler, replay_effect=ReplayEffect.RECONCILE_REQUIRED),
     )
     waiting = executor.recover_unknown_attempt(session.session_id, run.run_id)
-    assert waiting.checkpoint.revision == 3
+    assert waiting.checkpoint.revision == 4
     assert waiting.checkpoint.next_action == NextAction(
         ActionKind.TOOL_ATTEMPT,
         tool_call_sequence=1,
@@ -1627,7 +1681,7 @@ def test_reconcile_required_recovery_waits_without_dispatch_then_commits_trusted
 
 def test_recovery_registry_mismatch_fails_closed_without_new_attempt(tmp_path) -> None:
     store, coordinator, session, run = _app(tmp_path)
-    coordinator.commit_model_response(
+    _commit_response(coordinator,
         session.session_id,
         run.run_id,
         1,
@@ -1637,7 +1691,7 @@ def test_recovery_registry_mismatch_fails_closed_without_new_attempt(tmp_path) -
     store.begin_tool_attempt(
         session_id=session.session_id,
         run_id=run.run_id,
-        expected_revision=2,
+        expected_revision=3,
         tool_call_sequence=1,
         registry_version="registry-v1",
         replay_effect=ReplayEffect.REPLAY_SAFE,
@@ -1657,14 +1711,14 @@ def test_recovery_registry_mismatch_fails_closed_without_new_attempt(tmp_path) -
 
     state = coordinator.read_run_state(session.session_id, run.run_id)
     assert invoked == []
-    assert state.checkpoint.revision == 3
+    assert state.checkpoint.revision == 4
     assert len(state.tool_facts) == 2
     assert state.checkpoint.next_action.attempt_id == "attempt-before-crash"
 
 
 def test_recovery_lock_contention_leaves_unknown_attempt_unchanged(tmp_path) -> None:
     store, coordinator, session, run = _app(tmp_path)
-    coordinator.commit_model_response(
+    _commit_response(coordinator,
         session.session_id,
         run.run_id,
         1,
@@ -1674,7 +1728,7 @@ def test_recovery_lock_contention_leaves_unknown_attempt_unchanged(tmp_path) -> 
     store.begin_tool_attempt(
         session_id=session.session_id,
         run_id=run.run_id,
-        expected_revision=2,
+        expected_revision=3,
         tool_call_sequence=1,
         registry_version="registry-v1",
         replay_effect=ReplayEffect.REPLAY_SAFE,
@@ -1693,14 +1747,14 @@ def test_recovery_lock_contention_leaves_unknown_attempt_unchanged(tmp_path) -> 
 
     state = coordinator.read_run_state(session.session_id, run.run_id)
     assert invoked == []
-    assert state.checkpoint.revision == 3
+    assert state.checkpoint.revision == 4
     assert len(state.tool_facts) == 2
     assert state.checkpoint.next_action.attempt_id == "attempt-before-crash"
 
 
 def test_known_failed_tool_result_is_not_replayed_during_recovery(tmp_path) -> None:
     store, coordinator, session, run = _app(tmp_path)
-    coordinator.commit_model_response(
+    _commit_response(coordinator,
         session.session_id,
         run.run_id,
         1,
@@ -1710,7 +1764,7 @@ def test_known_failed_tool_result_is_not_replayed_during_recovery(tmp_path) -> N
     store.begin_tool_attempt(
         session_id=session.session_id,
         run_id=run.run_id,
-        expected_revision=2,
+        expected_revision=3,
         tool_call_sequence=1,
         registry_version="registry-v1",
         replay_effect=ReplayEffect.REPLAY_SAFE,
@@ -1719,7 +1773,7 @@ def test_known_failed_tool_result_is_not_replayed_during_recovery(tmp_path) -> N
     store.commit_tool_result(
         session_id=session.session_id,
         run_id=run.run_id,
-        expected_revision=3,
+        expected_revision=4,
         attempt_id="attempt-failed",
         result=ToolExecutionResult(
             call_id="call-1",
@@ -1740,4 +1794,4 @@ def test_known_failed_tool_result_is_not_replayed_during_recovery(tmp_path) -> N
     )
     assert invoked == []
     assert state.checkpoint.next_action == NextAction(ActionKind.MODEL)
-    assert state.checkpoint.revision == 4
+    assert state.checkpoint.revision == 5

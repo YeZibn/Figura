@@ -19,9 +19,12 @@ from figura.providers import (
 
 from ._codec import MAX_PROVIDER_CONTINUATION_BYTES, validate_tool_call_batch
 from .errors import RunError, RunErrorCode
+from ._run_lock import PerRunExecutionLock, RunExecutionLockUnavailable
 from .models import (
+    ActionKind,
     ExecutionRecord,
     ModelResponseFact,
+    ProviderAttempt,
     Run,
     RunCreateRequest,
     RunInput,
@@ -96,6 +99,18 @@ class RunCoordinator:
     def read_run_state(self, session_id: str, run_id: str) -> RunState:
         return self._store.read_run_state(session_id, run_id)
 
+    def begin_provider_attempt(
+        self, session_id: str, run_id: str, expected_revision: int
+    ) -> ProviderAttempt:
+        if type(expected_revision) is not int or expected_revision < 1:
+            raise RunError(RunErrorCode.INVALID_REQUEST)
+        return self._store.begin_provider_attempt(
+            session_id=session_id,
+            run_id=run_id,
+            expected_revision=expected_revision,
+            attempt_id=uuid.uuid4().hex,
+        )
+
     def commit_model_response(
         self,
         session_id: str,
@@ -103,10 +118,13 @@ class RunCoordinator:
         expected_revision: int,
         response: ProviderResponse,
         *,
+        provider_attempt_id: str,
         registry_version: str | None = None,
     ) -> ExecutionRecord:
         if type(expected_revision) is not int or expected_revision < 1:
             raise RunError(RunErrorCode.INVALID_REQUEST)
+        if not isinstance(provider_attempt_id, str) or not provider_attempt_id:
+            raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
         continuation_ref = (
             uuid.uuid4().hex
             if isinstance(response, ProviderResponse) and response.continuation is not None
@@ -119,6 +137,7 @@ class RunCoordinator:
             session_id=session_id,
             run_id=run_id,
             expected_revision=expected_revision,
+            provider_attempt_id=provider_attempt_id,
             payload=fact,
             record_id=response_record_id,
             tool_calls=tool_calls,
@@ -136,6 +155,52 @@ class RunCoordinator:
             run_id=run_id,
             expected_revision=expected_revision,
         )
+
+    def fail_provider_attempt(
+        self,
+        session_id: str,
+        run_id: str,
+        expected_revision: int,
+        attempt_id: str,
+        *,
+        outcome_unknown: bool,
+        failure_code: str | None,
+    ) -> Run:
+        if type(expected_revision) is not int or expected_revision < 1:
+            raise RunError(RunErrorCode.INVALID_REQUEST)
+        return self._store.fail_provider_attempt(
+            session_id=session_id,
+            run_id=run_id,
+            expected_revision=expected_revision,
+            attempt_id=attempt_id,
+            outcome_unknown=outcome_unknown,
+            failure_code=failure_code,
+        )
+
+    def resolve_orphaned_provider_attempt(self, session_id: str, run_id: str) -> RunState:
+        try:
+            with PerRunExecutionLock(self._store.data_root).acquire(run_id):
+                state = self._store.read_run_state(session_id, run_id)
+                action = state.checkpoint.next_action
+                if (
+                    state.run.status is not RunStatus.RUNNING
+                    or action is None
+                    or action.action_kind is not ActionKind.PROVIDER_ATTEMPT
+                ):
+                    return state
+                if action.attempt_id is None:
+                    raise RunError(RunErrorCode.INTEGRITY_ERROR)
+                self._store.fail_provider_attempt(
+                    session_id=session_id,
+                    run_id=run_id,
+                    expected_revision=state.checkpoint.revision,
+                    attempt_id=action.attempt_id,
+                    outcome_unknown=True,
+                    failure_code=None,
+                )
+                return self._store.read_run_state(session_id, run_id)
+        except RunExecutionLockUnavailable:
+            raise RunError(RunErrorCode.INVALID_TRANSITION) from None
 
     def fail_run(
         self,
