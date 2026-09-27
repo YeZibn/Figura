@@ -10,13 +10,14 @@ from figura.providers import (
     FinishReason,
     MODEL_IDS,
     ProviderFactory,
+    ProviderContinuation,
     ProviderId,
     ProviderResponse,
     ProviderToolCall,
     ProviderUsage,
 )
 
-from ._codec import validate_tool_call_batch
+from ._codec import MAX_PROVIDER_CONTINUATION_BYTES, validate_tool_call_batch
 from .errors import RunError, RunErrorCode
 from .models import (
     ExecutionRecord,
@@ -106,7 +107,12 @@ class RunCoordinator:
     ) -> ExecutionRecord:
         if type(expected_revision) is not int or expected_revision < 1:
             raise RunError(RunErrorCode.INVALID_REQUEST)
-        fact = self._model_response_fact(response)
+        continuation_ref = (
+            uuid.uuid4().hex
+            if isinstance(response, ProviderResponse) and response.continuation is not None
+            else None
+        )
+        fact = self._model_response_fact(response, continuation_ref=continuation_ref)
         response_record_id = uuid.uuid4().hex
         tool_calls = self._tool_call_facts(response, response_record_id, registry_version)
         return self._store.commit_model_response(
@@ -116,6 +122,8 @@ class RunCoordinator:
             payload=fact,
             record_id=response_record_id,
             tool_calls=tool_calls,
+            continuation=response.continuation,
+            continuation_id=continuation_ref,
         )
 
     def complete_run(
@@ -182,16 +190,43 @@ class RunCoordinator:
             raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
 
     @staticmethod
-    def _model_response_fact(response: ProviderResponse) -> ModelResponseFact:
+    def _model_response_fact(
+        response: ProviderResponse,
+        *,
+        continuation_ref: str | None = None,
+    ) -> ModelResponseFact:
         if not isinstance(response, ProviderResponse):
-            raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
-        if response.continuation is not None:
             raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
         try:
             provider_id = ProviderId(response.provider_id)
             finish_reason = FinishReason(response.finish_reason)
         except (TypeError, ValueError):
             raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD) from None
+        continuation = response.continuation
+        if continuation is None:
+            if continuation_ref is not None:
+                raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
+        else:
+            if not isinstance(continuation, ProviderContinuation):
+                raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
+            try:
+                continuation_provider = ProviderId(continuation.provider_id)
+            except (TypeError, ValueError):
+                raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD) from None
+            if continuation_provider is not provider_id:
+                raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
+            if type(continuation.format_version) is not int:
+                raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
+            if continuation.format_version != 1:
+                raise RunError(RunErrorCode.UNSUPPORTED_VERSION)
+            if (
+                not isinstance(continuation.reasoning_content, str)
+                or _byte_length(continuation.reasoning_content) == 0
+                or _byte_length(continuation.reasoning_content) > MAX_PROVIDER_CONTINUATION_BYTES
+            ):
+                raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
+            if not isinstance(continuation_ref, str) or not continuation_ref or _byte_length(continuation_ref) > 128:
+                raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
         if not isinstance(response.model_id, str) or not response.model_id or _byte_length(response.model_id) > 128:
             raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
         if not isinstance(response.assistant_content, str) or _byte_length(response.assistant_content) > _MAX_RESPONSE_BYTES:
@@ -210,6 +245,8 @@ class RunCoordinator:
             finish_reason=finish_reason.value,
             usage=response.usage,
             provider_response_id=response.provider_response_id,
+            continuation_ref=continuation_ref,
+            schema_version=2,
         )
 
     @staticmethod

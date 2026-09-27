@@ -120,7 +120,22 @@ class ModelResponseFact:
     finish_reason: str
     usage: ProviderUsage | None = None
     provider_response_id: str | None = None
-    schema_version: int = 1
+    continuation_ref: str | None = field(default=None, repr=False)
+    schema_version: int = 2
+
+
+@dataclass(frozen=True)
+class ProviderContinuationFact:
+    """Private continuation payload attached to its originating model response."""
+
+    continuation_id: str = field(repr=False)
+    run_id: str
+    response_record_id: str
+    provider_id: str
+    format_version: int
+    schema_version: int
+    reasoning_content: str = field(repr=False)
+    created_at: str
 
 
 @dataclass(frozen=True)
@@ -241,6 +256,7 @@ class RunState:
     checkpoint: ExecutionCheckpoint
     events: tuple[RunStreamEvent, ...]
     tool_facts: tuple[ToolExecutionFact, ...] = field(default=(), repr=False)
+    provider_continuations: tuple[ProviderContinuationFact, ...] = field(default=(), repr=False)
 
 
 @dataclass(frozen=True)

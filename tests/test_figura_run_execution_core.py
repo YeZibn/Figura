@@ -1,17 +1,23 @@
 from __future__ import annotations
 
 import sqlite3
+import logging
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
+from types import SimpleNamespace
 
 import pytest
 
 from figura.providers import (
     MODEL_IDS,
     FinishReason,
+    MessageRole,
     ProviderContinuation,
     ProviderFactory,
     ProviderId,
+    ProviderMessage,
+    ProviderOptions,
+    ProviderRequest,
     ProviderResponse,
     ProviderToolCall,
     ProviderUsage,
@@ -27,6 +33,8 @@ from figura.runtime import (
     RunStatus,
     TerminalCode,
 )
+from figura.runtime._codec import encode_payload
+from figura.runtime.models import ModelResponseFact, RecordKind
 
 
 def _factory(environ: dict[str, str] | None = None) -> ProviderFactory:
@@ -169,19 +177,19 @@ def test_same_key_with_changed_content_conflicts_without_mutating_original(tmp_p
     assert app.read_run_state(session.session_id, original.run_id).run.ordinal == 1
 
 
-def test_text_response_commit_advances_checkpoint_and_rejects_private_or_tool_payloads(tmp_path) -> None:
+def test_text_response_commit_advances_checkpoint_and_rejects_tool_payloads(tmp_path) -> None:
     _store, app = _app(tmp_path)
     session = app.create_session()
     run = app.create_run(_request(session.session_id))
 
-    unsupported = [
-        _response(tool_calls=(ProviderToolCall("tool-1", "inspect", "{}"),)),
-        _response(continuation=ProviderContinuation(ProviderId.QWEN, 1, "private reasoning")),
-    ]
-    for response in unsupported:
-        with pytest.raises(RunError) as error:
-            app.commit_model_response(session.session_id, run.run_id, 1, response)
-        assert error.value.code is RunErrorCode.UNSUPPORTED_PAYLOAD
+    with pytest.raises(RunError) as error:
+        app.commit_model_response(
+            session.session_id,
+            run.run_id,
+            1,
+            _response(tool_calls=(ProviderToolCall("tool-1", "inspect", "{}"),)),
+        )
+    assert error.value.code is RunErrorCode.UNSUPPORTED_PAYLOAD
 
     state = app.read_run_state(session.session_id, run.run_id)
     assert len(state.records) == 1
@@ -196,6 +204,296 @@ def test_text_response_commit_advances_checkpoint_and_rejects_private_or_tool_pa
     assert state.checkpoint.next_action.action_kind is ActionKind.FINAL
     assert state.checkpoint.next_action.response_record_id == record.record_id
     assert [event.event_sequence for event in state.events] == [1]
+    assert state.records[-1].payload.schema_version == 2
+    assert state.records[-1].payload.continuation_ref is None
+
+
+@pytest.mark.parametrize(
+    "with_tools, with_continuation",
+    [(False, False), (False, True), (True, False), (True, True)],
+    ids=["text-no-continuation", "text-with-continuation", "tools-no-continuation", "tools-with-continuation"],
+)
+def test_model_response_round_trips_optional_continuation_for_text_and_tools(
+    tmp_path,
+    with_tools: bool,
+    with_continuation: bool,
+) -> None:
+    _store, app = _app(tmp_path)
+    session = app.create_session()
+    run = app.create_run(_request(session.session_id))
+    continuation = (
+        ProviderContinuation(ProviderId.QWEN, 1, "exact private continuation")
+        if with_continuation
+        else None
+    )
+    calls = (ProviderToolCall("call-1", "inspect", '{"value":1}'),) if with_tools else ()
+    response = _response(
+        content="" if with_tools else "已完成分析",
+        finish_reason=FinishReason.TOOL_CALLS if with_tools else FinishReason.STOP,
+        tool_calls=calls,
+        continuation=continuation,
+    )
+
+    record = app.commit_model_response(
+        session.session_id,
+        run.run_id,
+        1,
+        response,
+        registry_version="registry-v1" if with_tools else None,
+    )
+    state = app.read_run_state(session.session_id, run.run_id)
+    response_fact = state.records[-1].payload
+
+    assert isinstance(response_fact, ModelResponseFact)
+    assert response_fact.schema_version == 2
+    assert (response_fact.continuation_ref is not None) is with_continuation
+    assert len(state.provider_continuations) == int(with_continuation)
+    assert len(state.tool_facts) == int(with_tools)
+    if with_continuation:
+        persisted = state.provider_continuations[0]
+        assert persisted.run_id == run.run_id
+        assert persisted.response_record_id == record.record_id
+        assert persisted.provider_id == ProviderId.QWEN.value
+        assert persisted.format_version == 1
+        assert persisted.schema_version == 1
+        assert persisted.reasoning_content == "exact private continuation"
+        assert persisted.created_at == record.created_at
+        assert response_fact.continuation_ref == persisted.continuation_id
+    else:
+        assert response_fact.continuation_ref is None
+
+
+def test_v1_model_response_remains_readable_and_non_response_facts_stay_v1(tmp_path) -> None:
+    store, app = _app(tmp_path)
+    session = app.create_session()
+    run = app.create_run(_request(session.session_id))
+    response = _response()
+    record = app.commit_model_response(session.session_id, run.run_id, 1, response)
+    legacy_fact = ModelResponseFact(
+        provider_id=ProviderId.QWEN.value,
+        model_id=MODEL_IDS[ProviderId.QWEN],
+        assistant_content=response.assistant_content,
+        finish_reason=FinishReason.STOP.value,
+        usage=response.usage,
+        provider_response_id=response.provider_response_id,
+        schema_version=1,
+    )
+    with sqlite3.connect(store.database_path) as connection:
+        connection.execute("DROP TRIGGER immutable_run_record_update")
+        connection.execute(
+            "UPDATE run_execution_records SET schema_version = 1, payload_json = ? WHERE record_id = ?",
+            (encode_payload(RecordKind.MODEL_RESPONSE, legacy_fact), record.record_id),
+        )
+
+    legacy_state = app.read_run_state(session.session_id, run.run_id)
+    legacy_response = legacy_state.records[-1].payload
+    assert isinstance(legacy_response, ModelResponseFact)
+    assert legacy_response == legacy_fact
+    assert legacy_response.continuation_ref is None
+
+    fresh_store, fresh_app = _app(tmp_path / "new-store")
+    fresh_session = fresh_app.create_session()
+    fresh_run = fresh_app.create_run(_request(fresh_session.session_id))
+    fresh_app.commit_model_response(fresh_session.session_id, fresh_run.run_id, 1, _response())
+    fresh_app.complete_run(fresh_session.session_id, fresh_run.run_id, 2)
+    with sqlite3.connect(fresh_store.database_path) as connection:
+        versions = connection.execute(
+            "SELECT record_kind, schema_version FROM run_execution_records "
+            "WHERE run_id = ? ORDER BY record_sequence",
+            (fresh_run.run_id,),
+        ).fetchall()
+    assert versions == [("input", 1), ("model_response", 2), ("final_answer", 1)]
+
+
+def test_unknown_model_response_version_fails_closed(tmp_path) -> None:
+    store, app = _app(tmp_path)
+    session = app.create_session()
+    run = app.create_run(_request(session.session_id))
+    response = app.commit_model_response(session.session_id, run.run_id, 1, _response())
+    with sqlite3.connect(store.database_path) as connection:
+        connection.execute("DROP TRIGGER immutable_run_record_update")
+        connection.execute(
+            "UPDATE run_execution_records SET schema_version = 9 WHERE record_id = ?",
+            (response.record_id,),
+        )
+
+    with pytest.raises(RunError) as unsupported:
+        app.read_run_state(session.session_id, run.run_id)
+    assert unsupported.value.code is RunErrorCode.UNSUPPORTED_VERSION
+
+
+def test_reopened_continuation_can_be_replayed_and_survives_terminal_run(tmp_path) -> None:
+    _store, app = _app(tmp_path)
+    session = app.create_session()
+    run = app.create_run(_request(session.session_id))
+    payload = "persisted continuation used for the next provider request"
+    app.commit_model_response(
+        session.session_id,
+        run.run_id,
+        1,
+        _response(continuation=ProviderContinuation(ProviderId.QWEN, 1, payload)),
+    )
+
+    reopened = RunCoordinator(FiguraRunStore(tmp_path), _factory())
+    recovered = reopened.read_run_state(session.session_id, run.run_id)
+    assert len(recovered.provider_continuations) == 1
+    persisted = recovered.provider_continuations[0]
+    assert persisted.reasoning_content == payload
+    checkpoint_before_replay = recovered.checkpoint
+
+    captured_requests: list[dict[str, object]] = []
+
+    class CapturingTransport:
+        def create(self, **request_payload: object) -> object:
+            captured_requests.append(request_payload)
+            return SimpleNamespace(
+                id="replayed-response",
+                choices=(
+                    SimpleNamespace(
+                        index=0,
+                        message=SimpleNamespace(
+                            content="后续响应",
+                            reasoning_content=None,
+                            tool_calls=(),
+                        ),
+                        finish_reason="stop",
+                    ),
+                ),
+                usage=SimpleNamespace(prompt_tokens=3, completion_tokens=2, total_tokens=5),
+            )
+
+    replay_factory = ProviderFactory.from_env(
+        {
+            "FIGURA_QWEN_API_KEY": "qwen-secret",
+            "FIGURA_QWEN_BASE_URL": "https://qwen.example.test/v1",
+        },
+        transport_factory=lambda _profile: CapturingTransport(),
+    )
+    replay_request = ProviderRequest(
+        provider_id=ProviderId.QWEN,
+        model_id=MODEL_IDS[ProviderId.QWEN],
+        instructions=(),
+        messages=(
+            ProviderMessage(MessageRole.USER, "原始问题"),
+            ProviderMessage(
+                MessageRole.ASSISTANT,
+                "",
+                continuation=ProviderContinuation(
+                    ProviderId(persisted.provider_id),
+                    persisted.format_version,
+                    persisted.reasoning_content,
+                ),
+            ),
+        ),
+        options=ProviderOptions(max_completion_tokens=64),
+    )
+    replay_factory.create(ProviderId.QWEN, MODEL_IDS[ProviderId.QWEN]).complete(replay_request)
+
+    assert captured_requests[0]["messages"][1]["reasoning_content"] == payload
+    after_replay = reopened.read_run_state(session.session_id, run.run_id)
+    assert after_replay.checkpoint == checkpoint_before_replay
+    assert after_replay.provider_continuations == recovered.provider_continuations
+    assert after_replay.tool_facts == ()
+
+    reopened.complete_run(session.session_id, run.run_id, checkpoint_before_replay.revision)
+    terminal_state = reopened.read_run_state(session.session_id, run.run_id)
+    assert terminal_state.run.status is RunStatus.COMPLETED
+    assert terminal_state.provider_continuations == recovered.provider_continuations
+    restarted_again = RunCoordinator(FiguraRunStore(tmp_path), _factory())
+    assert restarted_again.read_run_state(session.session_id, run.run_id).provider_continuations == recovered.provider_continuations
+
+
+def test_continuation_is_absent_from_public_repr_logs_and_user_facing_errors(tmp_path, caplog) -> None:
+    store, app = _app(tmp_path)
+    session = app.create_session()
+    run = app.create_run(_request(session.session_id))
+    secret = "private continuation must never be projected"
+    with caplog.at_level(logging.DEBUG):
+        app.commit_model_response(
+            session.session_id,
+            run.run_id,
+            1,
+            _response(continuation=ProviderContinuation(ProviderId.QWEN, 1, secret)),
+        )
+        state = app.read_run_state(session.session_id, run.run_id)
+
+    response = state.records[-1].payload
+    reference = response.continuation_ref
+    assert reference is not None
+    public_surfaces = repr(state.run.to_public_dict()) + repr(
+        [event.to_public_dict() for event in state.events]
+    )
+    internal_reprs = repr(state) + repr(response) + repr(state.provider_continuations)
+    assert secret not in public_surfaces + internal_reprs
+    assert reference not in public_surfaces + internal_reprs
+    assert secret not in caplog.text
+    assert reference not in caplog.text
+
+    failed_run = app.create_run(_request(session.session_id, key="error-run"))
+    with sqlite3.connect(store.database_path) as connection:
+        connection.execute(
+            "CREATE TRIGGER reject_private_continuation BEFORE INSERT ON run_provider_continuations "
+            f"BEGIN SELECT RAISE(ABORT, '{secret}'); END"
+        )
+    with pytest.raises(RunError) as rejected:
+        app.commit_model_response(
+            session.session_id,
+            failed_run.run_id,
+            1,
+            _response(continuation=ProviderContinuation(ProviderId.QWEN, 1, secret)),
+        )
+    assert secret not in str(rejected.value) + repr(rejected.value)
+    assert secret not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "corruption, expected_code",
+    [
+        ("missing", RunErrorCode.INTEGRITY_ERROR),
+        ("wrong_provider", RunErrorCode.INTEGRITY_ERROR),
+        ("unknown_schema", RunErrorCode.UNSUPPORTED_VERSION),
+        ("unknown_format", RunErrorCode.UNSUPPORTED_VERSION),
+    ],
+)
+def test_corrupt_continuation_rows_fail_closed(tmp_path, corruption, expected_code) -> None:
+    store, app = _app(tmp_path)
+    session = app.create_session()
+    run = app.create_run(_request(session.session_id))
+    app.commit_model_response(
+        session.session_id,
+        run.run_id,
+        1,
+        _response(continuation=ProviderContinuation(ProviderId.QWEN, 1, "private")),
+    )
+    with sqlite3.connect(store.database_path) as connection:
+        if corruption == "missing":
+            connection.execute("DROP TRIGGER immutable_run_provider_continuation_delete")
+            connection.execute(
+                "DELETE FROM run_provider_continuations WHERE run_id = ?",
+                (run.run_id,),
+            )
+        elif corruption == "wrong_provider":
+            connection.execute("DROP TRIGGER immutable_run_provider_continuation_update")
+            connection.execute(
+                "UPDATE run_provider_continuations SET provider_id = 'deepseek' WHERE run_id = ?",
+                (run.run_id,),
+            )
+        elif corruption == "unknown_schema":
+            connection.execute("DROP TRIGGER immutable_run_provider_continuation_update")
+            connection.execute(
+                "UPDATE run_provider_continuations SET schema_version = 2 WHERE run_id = ?",
+                (run.run_id,),
+            )
+        else:
+            connection.execute("DROP TRIGGER immutable_run_provider_continuation_update")
+            connection.execute(
+                "UPDATE run_provider_continuations SET format_version = 2 WHERE run_id = ?",
+                (run.run_id,),
+            )
+
+    with pytest.raises(RunError) as corrupt:
+        app.read_run_state(session.session_id, run.run_id)
+    assert corrupt.value.code is expected_code
 
 
 def test_completion_commits_final_record_status_checkpoint_and_safe_event_together(tmp_path) -> None:

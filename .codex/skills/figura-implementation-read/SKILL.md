@@ -1,50 +1,42 @@
 ---
 name: figura-implementation-read
-description: Read Figura's implementation index, per-change record, code, and relevant OpenSpec context before discussing or planning work; read-only.
+description: Read Figura's current implementation overview and verify relevant code and OpenSpec facts before discussing the architecture or next change; read-only.
 ---
 
-# 阅读 Figura 实现现状
+# 读取 Figura 当前实现
 
-在讨论新方向、编写方案或回答“目前实现/决定了什么”之前，整理 Figura 当前实现事实和已有决定。此 skill 只读取，不写文件。
+用于回答“现在实现了什么、下一步做什么、某字段归谁、某流程如何运转”。从仓库根目录执行命令。此 skill 只读取；用户要更新总览时使用 `$figura-implementation-overview`，要写新 change 方案时使用 OpenSpec。
 
-## 读取方式
+## 读取顺序
 
-1. 先读 `../../../docs/figura-implementation-content.md` 的文档约定和 change 索引，再跟随目标 change 的链接读取详细记录。详细记录位于 `../../../docs/figura-implementation/changes/`。可用 `rg --files docs | rg '^docs/figura-implementation/'` 查看现有文件。
-2. 当前 Provider、Run 记录可能仍以内嵌旧格式存在于索引文档中。若索引没有详细记录链接，按 change 标题定位对应的旧章节并只读；不要把新五部分模板误认为这些旧记录已经迁移。
-3. 对“已实现”字段和行为，检查相关 `../../../src/figura/` 代码；不能把计划文档、OpenSpec 状态或历史测试记录当成代码实现证据。
-4. 涉及行为合同或 OpenSpec change 时，执行 `openspec store list --json` 确认 Figura store，并对支持 store 参数的命令使用实际 store id（当前通常是 `figura`）。活动 change 路径以 status 输出为准；历史 change 从 archive 文件列表定位。
-5. `docs/figura-architecture-design.md` 和 `src/chartagent/` 是参考材料。只有用户要求比较、迁移或兼容性分析时才深入读取；不能把参考内容自动当成 Figura 决策。
+1. 读 `docs/figura-implementation-overview.md` 的状态、总图、组件、核心数据和流程；先确定用户问题涉及的模块。
+2. 查看相关 `src/figura/` 代码和 `openspec/figura/openspec/specs/` 主规格。具体字段以实际类型、编解码及持久化读写代码核对；接口行为同时核对调用方和实现方。
+3. 问题涉及进行中的 change 时，查看该 change 的 proposal、design、specs、tasks 和 `openspec status`；涉及历史决定时，按 change 名称查 archive。只打开相关文件。
+4. 检查 `git status --short`。未提交代码可以描述为“当前工作树已实现”，但不能因此声称 change 已归档或验证已通过。
+5. 设计草案 `docs/figura-architecture-design.md` 和旧版 `src/chartagent/` 仅在比较、迁移或兼容性问题中查阅。草案中的对象或字段不自动属于当前实现。
 
-## 常用只读命令
-
-从 Figura 仓库根目录执行：
+## 命令
 
 ```sh
-git status --short -- docs/figura-implementation-content.md docs/figura-implementation src/figura
-rg -n "^##|^###" docs/figura-implementation-content.md
-rg --files docs | rg '^docs/figura-implementation/'
+git status --short
+sed -n '1,240p' docs/figura-implementation-overview.md
 rg --files src/figura
-rg -n "class |def |Provider|Run|Session|Checkpoint" src/figura
+rg -n '^(class |def |    def )' src/figura
+rg --files openspec/figura/openspec/specs
 openspec store list --json
 openspec list --json --store figura
-openspec status --change "change-id" --json --store figura
+openspec status --change <change-id> --json --store figura
+rg --files openspec/figura/openspec/changes/archive | rg '<change-id>'
 ```
 
-OpenSpec store id 以查询结果为准。只读相关规格和工件；不要读取 `.env` 或打印密钥。
+先通过 `openspec store list --json` 确定真实 store id，再替换示例中的 `figura`。`<change-id>` 是占位符，不要原样执行。代码搜索先限定相关模块，再打开具体文件。不要读取 `.env`、密钥或生成的会话数据。
 
-## 事实分类
+## 回答规则
 
-按需要区分并给出来源：
+- **实现事实**：说明代码位置、字段 owner 和流转；必要时指出仅存在于工作树。
+- **规格合同**：说明主规格或活动 change 的要求，以及与代码是否一致。
+- **计划内容**：明确标记为计划，不画成已运行组件。
+- **验证结果**：只引用本次实际执行或有明确来源的历史结果，注明时间范围。
+- Overview 与代码冲突时，先按代码说明现状并指出总览待更新；不要在只读任务中改写文档。
 
-- **当前实现**：从 `src/figura/` 代码核对到的行为和字段。
-- **已确认决定**：用户明确确认且未被后续修订的选择。
-- **计划/暂定**：尚未实现或仍属暂定的内容。
-- **差异/待确认**：计划、OpenSpec 与当前代码间的冲突或信息缺口。
-
-代码描述实际行为；主规格描述已同步的行为合同；活动 change 描述拟实现范围；实现记录索引说明各 change 的状态和入口。不要将这些事实合并成单一状态。实现记录模板见 [方案写入 skill](../figura-implementation-plan/SKILL.md)，其五部分为：概览与决定、实现合同、核心流程、实现对照、验证与交接。旧式内嵌记录若未迁移，应指出结构差距，但不要猜补或静默改写。
-
-## 输出
-
-围绕用户的问题给出现状、证据路径、计划与实现差异，以及真正阻碍后续方案的待确认项。没有重要歧义时直接给结论，不为套模板而提出问题。
-
-不得修改实现索引、change 记录、OpenSpec 工件、代码或其他文件。用户要求写入新方案时使用 `$figura-implementation-plan`；要求按已完成实现回填时使用 `$figura-implementation-reconcile`。
+输出围绕用户的问题给出结论和可核查路径，不复述完整 Overview。

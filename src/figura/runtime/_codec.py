@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime, timezone
 from typing import Any
 
 from figura.json_schema import JsonValueError, canonical_json_dumps, normalize_json_value
-from figura.providers.models import ProviderUsage
+from figura.providers.models import ProviderId, ProviderUsage
 from figura.tools.contracts import (
     ReplayEffect,
     ToolExecutionError,
@@ -21,6 +22,7 @@ from .models import (
     ExecutionRecord,
     FinalAnswerFact,
     ModelResponseFact,
+    ProviderContinuationFact,
     RecordKind,
     RunInput,
     RunStreamEvent,
@@ -37,6 +39,7 @@ MAX_TOOL_CALLS_PER_RESPONSE = 64
 MAX_TOOL_CALL_ARGUMENT_BYTES = 64 * 1024
 MAX_TOOL_CALL_AGGREGATE_ARGUMENT_BYTES = 1024 * 1024
 MAX_TOOL_RESULT_JSON_BYTES = 256 * 1024
+MAX_PROVIDER_CONTINUATION_BYTES = 512 * 1024
 _TOOL_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _ERROR_CODE = re.compile(r"^[a-z][a-z0-9_.-]{0,63}$")
 
@@ -47,13 +50,23 @@ def encode_payload(kind: RecordKind, payload: object) -> str:
     return _dump_bounded(value, MAX_RECORD_JSON_BYTES)
 
 
-def decode_payload(kind: RecordKind, raw: str) -> RunInput | ModelResponseFact | FinalAnswerFact:
+def decode_payload(
+    kind: RecordKind,
+    raw: str,
+    *,
+    expected_schema_version: int | None = None,
+) -> RunInput | ModelResponseFact | FinalAnswerFact:
     value = _load_bounded(raw, MAX_RECORD_JSON_BYTES)
     if not isinstance(value, dict):
         raise RunError(RunErrorCode.INTEGRITY_ERROR)
     schema_version = value.get("schema_version")
-    if schema_version != 1:
+    if type(schema_version) is not int:
         raise RunError(RunErrorCode.UNSUPPORTED_VERSION)
+    supported_versions = {1, 2} if kind is RecordKind.MODEL_RESPONSE else {1}
+    if schema_version not in supported_versions:
+        raise RunError(RunErrorCode.UNSUPPORTED_VERSION)
+    if expected_schema_version is not None and schema_version != expected_schema_version:
+        raise RunError(RunErrorCode.INTEGRITY_ERROR)
 
     if kind is RecordKind.INPUT:
         _require_keys(value, {"schema_version", "text", "attachment_ids", "requested_provider", "requested_model"})
@@ -66,7 +79,18 @@ def decode_payload(kind: RecordKind, raw: str) -> RunInput | ModelResponseFact |
         return RunInput(text, tuple(attachments), provider, model, schema_version)
 
     if kind is RecordKind.MODEL_RESPONSE:
-        _require_keys(value, {"schema_version", "provider_id", "model_id", "assistant_content", "finish_reason", "usage", "provider_response_id"})
+        expected_keys = {
+            "schema_version",
+            "provider_id",
+            "model_id",
+            "assistant_content",
+            "finish_reason",
+            "usage",
+            "provider_response_id",
+        }
+        if schema_version == 2:
+            expected_keys.add("continuation_ref")
+        _require_keys(value, expected_keys)
         usage_raw = value["usage"]
         usage: ProviderUsage | None = None
         if usage_raw is not None:
@@ -82,6 +106,9 @@ def decode_payload(kind: RecordKind, raw: str) -> RunInput | ModelResponseFact |
         response_id = value["provider_response_id"]
         if response_id is not None:
             response_id = _bounded_string(response_id, 512)
+        continuation_ref = value.get("continuation_ref")
+        if continuation_ref is not None:
+            continuation_ref = _nonempty_string(continuation_ref, 128)
         return ModelResponseFact(
             provider_id=_bounded_string(value["provider_id"], 64),
             model_id=_bounded_string(value["model_id"], 128),
@@ -89,6 +116,7 @@ def decode_payload(kind: RecordKind, raw: str) -> RunInput | ModelResponseFact |
             finish_reason=_bounded_string(value["finish_reason"], 32),
             usage=usage,
             provider_response_id=response_id,
+            continuation_ref=continuation_ref,
             schema_version=schema_version,
         )
 
@@ -120,8 +148,10 @@ def payload_to_dict(kind: RecordKind, payload: object) -> dict[str, Any]:
             "requested_model": _bounded_string(payload.requested_model, 128),
         }
     if kind is RecordKind.MODEL_RESPONSE and isinstance(payload, ModelResponseFact):
-        if payload.schema_version != 1:
+        if type(payload.schema_version) is not int or payload.schema_version not in {1, 2}:
             raise RunError(RunErrorCode.UNSUPPORTED_VERSION)
+        if payload.schema_version == 1 and payload.continuation_ref is not None:
+            raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
         usage = payload.usage
         usage_dict = None
         if usage is not None:
@@ -133,8 +163,8 @@ def payload_to_dict(kind: RecordKind, payload: object) -> dict[str, Any]:
         response_id = payload.provider_response_id
         if response_id is not None:
             response_id = _bounded_string(response_id, 512)
-        return {
-            "schema_version": 1,
+        result: dict[str, Any] = {
+            "schema_version": payload.schema_version,
             "provider_id": _bounded_string(payload.provider_id, 64),
             "model_id": _bounded_string(payload.model_id, 128),
             "assistant_content": _bounded_string(payload.assistant_content, 128 * 1024),
@@ -142,6 +172,13 @@ def payload_to_dict(kind: RecordKind, payload: object) -> dict[str, Any]:
             "usage": usage_dict,
             "provider_response_id": response_id,
         }
+        if payload.schema_version == 2:
+            result["continuation_ref"] = (
+                _nonempty_string(payload.continuation_ref, 128)
+                if payload.continuation_ref is not None
+                else None
+            )
+        return result
     if kind is RecordKind.FINAL_ANSWER and isinstance(payload, FinalAnswerFact):
         if payload.schema_version != 1:
             raise RunError(RunErrorCode.UNSUPPORTED_VERSION)
@@ -154,6 +191,59 @@ def payload_to_dict(kind: RecordKind, payload: object) -> dict[str, Any]:
             "guard_version": "text-only-v1",
         }
     raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
+
+
+def validate_provider_continuation_fact(
+    fact: object,
+    *,
+    persisted: bool = False,
+) -> ProviderContinuationFact:
+    """Validate one private continuation payload before write or after read."""
+    invalid_code = RunErrorCode.INTEGRITY_ERROR if persisted else RunErrorCode.UNSUPPORTED_PAYLOAD
+    if not isinstance(fact, ProviderContinuationFact):
+        raise RunError(invalid_code)
+    try:
+        ProviderId(fact.provider_id)
+    except (TypeError, ValueError):
+        raise RunError(invalid_code) from None
+    for value in (fact.continuation_id, fact.run_id, fact.response_record_id):
+        if not isinstance(value, str) or not value:
+            raise RunError(invalid_code)
+        try:
+            if len(value.encode("utf-8")) > 128:
+                raise RunError(invalid_code)
+        except UnicodeEncodeError:
+            raise RunError(invalid_code) from None
+    if type(fact.format_version) is not int:
+        raise RunError(invalid_code)
+    if fact.format_version != 1:
+        raise RunError(RunErrorCode.UNSUPPORTED_VERSION)
+    if type(fact.schema_version) is not int:
+        raise RunError(invalid_code)
+    if fact.schema_version != 1:
+        raise RunError(RunErrorCode.UNSUPPORTED_VERSION)
+    for value, maximum in (
+        (fact.reasoning_content, MAX_PROVIDER_CONTINUATION_BYTES),
+        (fact.created_at, 64),
+    ):
+        if not isinstance(value, str) or not value:
+            raise RunError(invalid_code)
+        try:
+            if len(value.encode("utf-8")) > maximum:
+                raise RunError(invalid_code)
+        except UnicodeEncodeError:
+            raise RunError(invalid_code) from None
+    try:
+        timestamp = datetime.fromisoformat(
+            fact.created_at[:-1] + "+00:00"
+            if fact.created_at.endswith("Z")
+            else fact.created_at
+        )
+    except ValueError:
+        raise RunError(invalid_code) from None
+    if timestamp.utcoffset() != timezone.utc.utcoffset(None):
+        raise RunError(invalid_code)
+    return fact
 
 
 def encode_tool_fact(kind: ToolFactKind, payload: object) -> str:

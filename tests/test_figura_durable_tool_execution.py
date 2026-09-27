@@ -4,6 +4,7 @@ import sqlite3
 import threading
 import hashlib
 import logging
+from dataclasses import replace
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
@@ -18,6 +19,7 @@ from figura.runtime import (
     RunCoordinator,
     RunCreateRequest,
     RunError,
+    RunErrorCode,
     RunStatus,
     ToolAttemptStartedFact,
     ToolCallFact,
@@ -25,17 +27,19 @@ from figura.runtime import (
     ToolResultFact,
 )
 from figura.runtime._codec import (
+    decode_payload,
     decode_tool_fact,
     encode_event_payload,
     encode_payload,
     encode_tool_fact,
     validate_tool_call_batch,
 )
-from figura.runtime.models import EventKind, RecordKind, RunInput
+from figura.runtime.models import EventKind, ModelResponseFact, RecordKind, RunInput
 from figura.runtime.store import _CORE_SCHEMA
 from figura.providers import (
     MODEL_IDS,
     FinishReason,
+    ProviderContinuation,
     ProviderFactory,
     ProviderId,
     ProviderResponse,
@@ -92,13 +96,30 @@ def _app(tmp_path):
     return store, coordinator, session, run
 
 
-def _tool_response(*calls: ProviderToolCall) -> ProviderResponse:
+def _tool_response(
+    *calls: ProviderToolCall,
+    continuation: ProviderContinuation | None = None,
+) -> ProviderResponse:
     return ProviderResponse(
         provider_id=ProviderId.QWEN,
         model_id=MODEL_IDS[ProviderId.QWEN],
         assistant_content="",
         tool_calls=tuple(calls),
         finish_reason=FinishReason.TOOL_CALLS,
+        continuation=continuation,
+    )
+
+
+def _text_response(
+    *, continuation: ProviderContinuation | None = None, content: str = "分析完成"
+) -> ProviderResponse:
+    return ProviderResponse(
+        provider_id=ProviderId.QWEN,
+        model_id=MODEL_IDS[ProviderId.QWEN],
+        assistant_content=content,
+        tool_calls=(),
+        finish_reason=FinishReason.STOP,
+        continuation=continuation,
     )
 
 
@@ -201,6 +222,118 @@ def _create_v1_database(data_root, *, conflicting_tool_table: bool = False, inva
         connection.commit()
     connection.close()
     return database_path
+
+
+def _create_v2_database(data_root):
+    store, coordinator, session, run = _app(data_root)
+    response = coordinator.commit_model_response(
+        session.session_id,
+        run.run_id,
+        1,
+        _tool_response(ProviderToolCall("legacy-call", "inspect", '{"value":1}')),
+        registry_version="registry-v1",
+    )
+    with sqlite3.connect(store.database_path) as connection:
+        connection.execute("DROP TRIGGER immutable_run_record_update")
+        row = connection.execute(
+            "SELECT payload_json FROM run_execution_records WHERE record_id = ?",
+            (response.record_id,),
+        ).fetchone()
+        current_payload = decode_payload(
+            RecordKind.MODEL_RESPONSE,
+            row[0],
+            expected_schema_version=2,
+        )
+        assert isinstance(current_payload, ModelResponseFact)
+        legacy_payload = encode_payload(
+            RecordKind.MODEL_RESPONSE,
+            replace(current_payload, continuation_ref=None, schema_version=1),
+        )
+        connection.execute(
+            "UPDATE run_execution_records SET schema_version = 1, payload_json = ? WHERE record_id = ?",
+            (legacy_payload, response.record_id),
+        )
+        connection.execute(
+            "CREATE TRIGGER immutable_run_record_update BEFORE UPDATE ON run_execution_records "
+            "BEGIN SELECT RAISE(ABORT, 'immutable execution record'); END"
+        )
+        connection.execute("DROP TABLE run_provider_continuations")
+        connection.execute("PRAGMA user_version = 2")
+    return store.database_path, session, run
+
+
+def _snapshot_run_rows(connection: sqlite3.Connection, *, session_id: str, run_id: str):
+    queries = {
+        "session": ("SELECT * FROM sessions WHERE session_id = ?", (session_id,)),
+        "run": ("SELECT * FROM runs WHERE run_id = ?", (run_id,)),
+        "records": (
+            "SELECT * FROM run_execution_records WHERE run_id = ? ORDER BY record_sequence",
+            (run_id,),
+        ),
+        "tool_facts": (
+            "SELECT * FROM run_tool_execution_facts WHERE run_id = ? ORDER BY tool_sequence",
+            (run_id,),
+        ),
+        "checkpoint": (
+            "SELECT * FROM run_execution_checkpoints WHERE run_id = ?",
+            (run_id,),
+        ),
+        "events": (
+            "SELECT * FROM run_stream_events WHERE run_id = ? ORDER BY event_sequence",
+            (run_id,),
+        ),
+        "idempotency": (
+            "SELECT * FROM run_idempotency WHERE session_id = ? ORDER BY idempotency_key_digest",
+            (session_id,),
+        ),
+    }
+    return {
+        name: connection.execute(query, params).fetchall()
+        for name, (query, params) in queries.items()
+    }
+
+
+def test_fresh_store_creates_schema_v3_continuation_table_and_guards(tmp_path) -> None:
+    store = FiguraRunStore(tmp_path)
+
+    with sqlite3.connect(store.database_path) as connection:
+        version = connection.execute("PRAGMA user_version").fetchone()[0]
+        quick_check = connection.execute("PRAGMA quick_check").fetchone()[0]
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+        triggers = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'trigger'"
+            )
+        }
+        continuation_columns = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info(run_provider_continuations)")
+        }
+
+    assert version == 3
+    assert quick_check == "ok"
+    assert "run_provider_continuations" in tables
+    assert continuation_columns == {
+        "continuation_id",
+        "run_id",
+        "response_record_id",
+        "provider_id",
+        "format_version",
+        "schema_version",
+        "reasoning_content",
+        "created_at",
+    }
+    assert {
+        "continuation_matches_model_response",
+        "immutable_run_provider_continuation_update",
+        "immutable_run_provider_continuation_delete",
+    } <= triggers
 
 
 def test_tool_call_fact_codec_preserves_bounded_provider_arguments() -> None:
@@ -534,6 +667,7 @@ def test_v1_migration_preserves_run_records_checkpoint_events_and_idempotency(tm
     state = store.read_run_state("legacy-session", "legacy-run")
     with sqlite3.connect(store.database_path) as connection:
         version = connection.execute("PRAGMA user_version").fetchone()[0]
+        quick_check = connection.execute("PRAGMA quick_check").fetchone()[0]
         foreign_key_violations = connection.execute("PRAGMA foreign_key_check").fetchall()
         idempotency = connection.execute(
             "SELECT session_id, idempotency_key_digest, request_fingerprint, run_id "
@@ -546,7 +680,8 @@ def test_v1_migration_preserves_run_records_checkpoint_events_and_idempotency(tm
             )
         }
 
-    assert version == 2
+    assert version == 3
+    assert quick_check == "ok"
     assert foreign_key_violations == []
     assert idempotency == ("legacy-session", "a" * 64, "b" * 64, "legacy-run")
     assert {
@@ -556,6 +691,9 @@ def test_v1_migration_preserves_run_records_checkpoint_events_and_idempotency(tm
         "immutable_run_event_delete",
         "immutable_run_tool_fact_update",
         "immutable_run_tool_fact_delete",
+        "continuation_matches_model_response",
+        "immutable_run_provider_continuation_update",
+        "immutable_run_provider_continuation_delete",
     } <= trigger_names
     assert state.run.run_id == "legacy-run"
     assert state.run.session_id == "legacy-session"
@@ -568,6 +706,91 @@ def test_v1_migration_preserves_run_records_checkpoint_events_and_idempotency(tm
     assert len(state.events) == 1
     assert state.events[0].event_kind is EventKind.RUN_CREATED
     assert state.tool_facts == ()
+    assert state.provider_continuations == ()
+
+
+def test_v2_migration_preserves_existing_run_facts_checkpoint_events_and_idempotency(tmp_path) -> None:
+    database_path, session, run = _create_v2_database(tmp_path)
+    with sqlite3.connect(database_path) as connection:
+        before = _snapshot_run_rows(
+            connection,
+            session_id=session.session_id,
+            run_id=run.run_id,
+        )
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
+
+    store = FiguraRunStore(tmp_path)
+
+    with sqlite3.connect(database_path) as connection:
+        after = _snapshot_run_rows(
+            connection,
+            session_id=session.session_id,
+            run_id=run.run_id,
+        )
+        version = connection.execute("PRAGMA user_version").fetchone()[0]
+        quick_check = connection.execute("PRAGMA quick_check").fetchone()[0]
+        foreign_key_violations = connection.execute("PRAGMA foreign_key_check").fetchall()
+
+    state = store.read_run_state(session.session_id, run.run_id)
+    assert version == 3
+    assert quick_check == "ok"
+    assert foreign_key_violations == []
+    assert after == before
+    assert state.run.run_id == run.run_id
+    assert [record.record_sequence for record in state.records] == [1, 2]
+    assert state.records[1].payload.schema_version == 1
+    assert state.checkpoint.revision == 2
+    assert state.checkpoint.last_committed_tool_sequence == 1
+    assert [fact.fact_kind for fact in state.tool_facts] == [ToolFactKind.TOOL_CALL]
+    assert state.events[0].event_kind is EventKind.RUN_CREATED
+    assert state.provider_continuations == ()
+
+
+def test_v2_migration_failure_rolls_back_new_schema_and_can_retry(tmp_path) -> None:
+    database_path, session, run = _create_v2_database(tmp_path)
+    with sqlite3.connect(database_path) as connection:
+        before = _snapshot_run_rows(
+            connection,
+            session_id=session.session_id,
+            run_id=run.run_id,
+        )
+        connection.execute("CREATE TABLE run_provider_continuations (collision INTEGER)")
+        connection.commit()
+
+    with pytest.raises(RunError):
+        FiguraRunStore(tmp_path)
+
+    with sqlite3.connect(database_path) as connection:
+        version = connection.execute("PRAGMA user_version").fetchone()[0]
+        after_failure = _snapshot_run_rows(
+            connection,
+            session_id=session.session_id,
+            run_id=run.run_id,
+        )
+        collision_columns = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info(run_provider_continuations)")
+        }
+        continuation_triggers = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'trigger' "
+                "AND name LIKE '%provider_continuation%' OR name = 'continuation_matches_model_response'"
+            )
+        }
+
+    assert version == 2
+    assert after_failure == before
+    assert collision_columns == {"collision"}
+    assert continuation_triggers == set()
+
+    with sqlite3.connect(database_path) as connection:
+        connection.execute("DROP TABLE run_provider_continuations")
+        connection.commit()
+    store = FiguraRunStore(tmp_path)
+    assert store.read_run_state(session.session_id, run.run_id).run.run_id == run.run_id
+    with sqlite3.connect(database_path) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 3
 
 
 def test_v1_migration_rolls_back_schema_version_and_added_column_on_failure(tmp_path) -> None:
@@ -636,6 +859,251 @@ def test_model_response_and_tool_intents_roll_back_together_when_tool_insert_fai
     assert state.checkpoint.last_committed_tool_sequence == 0
     assert state.checkpoint.next_action == NextAction(ActionKind.MODEL)
     assert state.tool_facts == ()
+
+
+@pytest.mark.parametrize("has_tool_calls", [False, True], ids=["text", "tool_calls"])
+@pytest.mark.parametrize("has_continuation", [False, True], ids=["without_continuation", "with_continuation"])
+def test_model_response_commits_with_or_without_continuation_atomically(
+    tmp_path,
+    has_tool_calls: bool,
+    has_continuation: bool,
+) -> None:
+    store, coordinator, session, run = _app(tmp_path)
+    continuation = (
+        ProviderContinuation(ProviderId.QWEN, 1, "private continuation payload")
+        if has_continuation
+        else None
+    )
+    if has_tool_calls:
+        response = _tool_response(
+            ProviderToolCall("call-1", "inspect", '{"value":1}'),
+            continuation=continuation,
+        )
+        registry_version = "registry-v1"
+    else:
+        response = _text_response(continuation=continuation)
+        registry_version = None
+
+    record = coordinator.commit_model_response(
+        session.session_id,
+        run.run_id,
+        1,
+        response,
+        registry_version=registry_version,
+    )
+    state = coordinator.read_run_state(session.session_id, run.run_id)
+    response_fact = state.records[-1].payload
+    assert isinstance(response_fact, ModelResponseFact)
+    assert response_fact.schema_version == 2
+    assert (response_fact.continuation_ref is not None) is has_continuation
+    assert len(state.provider_continuations) == int(has_continuation)
+    assert len(state.tool_facts) == int(has_tool_calls)
+    assert state.checkpoint.last_committed_record_sequence == 2
+    assert state.checkpoint.last_committed_tool_sequence == int(has_tool_calls)
+    if has_continuation:
+        stored = state.provider_continuations[0]
+        assert stored.run_id == run.run_id
+        assert stored.response_record_id == record.record_id
+        assert stored.provider_id == ProviderId.QWEN.value
+        assert stored.format_version == 1
+        assert stored.reasoning_content == "private continuation payload"
+        assert response_fact.continuation_ref == stored.continuation_id
+    else:
+        assert response_fact.continuation_ref is None
+    with sqlite3.connect(store.database_path) as connection:
+        persisted_count = connection.execute(
+            "SELECT COUNT(*) FROM run_provider_continuations WHERE run_id = ?",
+            (run.run_id,),
+        ).fetchone()[0]
+    assert persisted_count == int(has_continuation)
+
+
+@pytest.mark.parametrize(
+    "continuation, expected_code",
+    [
+        pytest.param(
+            ProviderContinuation(ProviderId.DEEPSEEK, 1, "wrong provider"),
+            RunErrorCode.UNSUPPORTED_PAYLOAD,
+            id="provider-mismatch",
+        ),
+        pytest.param(
+            ProviderContinuation(ProviderId.QWEN, 2, "unsupported format"),
+            RunErrorCode.UNSUPPORTED_VERSION,
+            id="unsupported-format",
+        ),
+        pytest.param(
+            ProviderContinuation(ProviderId.QWEN, 1, "界" * (512 * 1024 // 3 + 1)),
+            RunErrorCode.UNSUPPORTED_PAYLOAD,
+            id="oversized-utf8",
+        ),
+        pytest.param(
+            ProviderContinuation(ProviderId.QWEN, 1, "\ud800"),
+            RunErrorCode.UNSUPPORTED_PAYLOAD,
+            id="invalid-utf8",
+        ),
+    ],
+)
+def test_invalid_continuation_rejects_complete_response_without_partial_state(
+    tmp_path,
+    continuation: ProviderContinuation,
+    expected_code: RunErrorCode,
+) -> None:
+    store, coordinator, session, run = _app(tmp_path)
+    before = coordinator.read_run_state(session.session_id, run.run_id)
+
+    with pytest.raises(RunError) as rejected:
+        coordinator.commit_model_response(
+            session.session_id,
+            run.run_id,
+            1,
+            _text_response(continuation=continuation),
+        )
+
+    after = coordinator.read_run_state(session.session_id, run.run_id)
+    assert rejected.value.code is expected_code
+    assert after == before
+    with sqlite3.connect(store.database_path) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM run_provider_continuations WHERE run_id = ?",
+            (run.run_id,),
+        ).fetchone()[0] == 0
+
+
+def test_stale_revision_with_continuation_leaves_no_partial_facts(tmp_path) -> None:
+    store, coordinator, session, run = _app(tmp_path)
+    before = coordinator.read_run_state(session.session_id, run.run_id)
+
+    with pytest.raises(RunError) as stale:
+        coordinator.commit_model_response(
+            session.session_id,
+            run.run_id,
+            2,
+            _text_response(
+                continuation=ProviderContinuation(ProviderId.QWEN, 1, "private payload")
+            ),
+        )
+
+    assert stale.value.code is RunErrorCode.STALE_CHECKPOINT
+    assert coordinator.read_run_state(session.session_id, run.run_id) == before
+    with sqlite3.connect(store.database_path) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM run_provider_continuations"
+        ).fetchone()[0] == 0
+
+
+def test_duplicate_continuation_reference_rolls_back_later_model_response(tmp_path) -> None:
+    store, coordinator, session, run = _app(tmp_path)
+    continuation = ProviderContinuation(ProviderId.QWEN, 1, "private payload")
+    first_response = coordinator.commit_model_response(
+        session.session_id,
+        run.run_id,
+        1,
+        _tool_response(
+            ProviderToolCall("call-1", "inspect", '{"value":1}'),
+            continuation=continuation,
+        ),
+        registry_version="registry-v1",
+    )
+    store.begin_tool_attempt(
+        session_id=session.session_id,
+        run_id=run.run_id,
+        expected_revision=2,
+        tool_call_sequence=1,
+        registry_version="registry-v1",
+        replay_effect=ReplayEffect.REPLAY_SAFE,
+        attempt_id="attempt-1",
+    )
+    store.commit_tool_result(
+        session_id=session.session_id,
+        run_id=run.run_id,
+        expected_revision=3,
+        attempt_id="attempt-1",
+        result=ToolExecutionResult(
+            call_id="call-1",
+            tool_name="inspect",
+            outcome=ToolOutcome.SUCCEEDED,
+            result={"value": 1},
+        ),
+    )
+    before = coordinator.read_run_state(session.session_id, run.run_id)
+    duplicate_reference = before.provider_continuations[0].continuation_id
+    duplicate_payload = ModelResponseFact(
+        provider_id=ProviderId.QWEN.value,
+        model_id=MODEL_IDS[ProviderId.QWEN],
+        assistant_content="later response",
+        finish_reason=FinishReason.STOP.value,
+        continuation_ref=duplicate_reference,
+        schema_version=2,
+    )
+
+    with pytest.raises(RunError) as rejected:
+        store.commit_model_response(
+            session_id=session.session_id,
+            run_id=run.run_id,
+            expected_revision=4,
+            payload=duplicate_payload,
+            record_id="later-response",
+            continuation=continuation,
+            continuation_id=duplicate_reference,
+        )
+
+    assert rejected.value.code is RunErrorCode.INTEGRITY_ERROR
+    assert coordinator.read_run_state(session.session_id, run.run_id) == before
+    with sqlite3.connect(store.database_path) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM run_execution_records WHERE run_id = ?",
+            (run.run_id,),
+        ).fetchone()[0] == 2
+        assert connection.execute(
+            "SELECT COUNT(*) FROM run_provider_continuations WHERE run_id = ?",
+            (run.run_id,),
+        ).fetchone()[0] == 1
+        assert connection.execute(
+            "SELECT COUNT(*) FROM run_tool_execution_facts WHERE run_id = ?",
+            (run.run_id,),
+        ).fetchone()[0] == 3
+
+
+def test_continuation_insert_failure_rolls_back_response_tools_and_checkpoint(tmp_path) -> None:
+    store, coordinator, session, run = _app(tmp_path)
+    before = coordinator.read_run_state(session.session_id, run.run_id)
+    with sqlite3.connect(store.database_path) as connection:
+        connection.execute(
+            "CREATE TRIGGER reject_provider_continuation BEFORE INSERT ON run_provider_continuations "
+            "BEGIN SELECT RAISE(ABORT, 'injected continuation write failure'); END"
+        )
+
+    with pytest.raises(RunError):
+        coordinator.commit_model_response(
+            session.session_id,
+            run.run_id,
+            1,
+            _tool_response(
+                ProviderToolCall("call-1", "inspect", '{"value":1}'),
+                continuation=ProviderContinuation(ProviderId.QWEN, 1, "private payload"),
+            ),
+            registry_version="registry-v1",
+        )
+
+    after = coordinator.read_run_state(session.session_id, run.run_id)
+    assert after == before
+    with sqlite3.connect(store.database_path) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM run_execution_records WHERE run_id = ?",
+            (run.run_id,),
+        ).fetchone()[0] == 1
+        assert connection.execute(
+            "SELECT COUNT(*) FROM run_provider_continuations WHERE run_id = ?",
+            (run.run_id,),
+        ).fetchone()[0] == 0
+        assert connection.execute(
+            "SELECT COUNT(*) FROM run_tool_execution_facts WHERE run_id = ?",
+            (run.run_id,),
+        ).fetchone()[0] == 0
+        assert connection.execute(
+            "SELECT revision FROM run_execution_checkpoints WHERE run_id = ?",
+            (run.run_id,),
+        ).fetchone()[0] == 1
 
 
 def test_record_and_tool_sequences_advance_independently_across_model_rounds(tmp_path) -> None:

@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
 
-from figura.providers.models import FinishReason
+from figura.providers.models import FinishReason, ProviderContinuation, ProviderId
 from figura.tools.contracts import ReplayEffect, ToolExecutionResult, ToolOutcome
 
 from ._codec import (
@@ -21,6 +21,7 @@ from ._codec import (
     encode_event_payload,
     encode_payload,
     encode_tool_fact,
+    validate_provider_continuation_fact,
     validate_tool_call_batch,
 )
 from .errors import RunError, RunErrorCode
@@ -32,6 +33,7 @@ from .models import (
     FinalAnswerFact,
     ModelResponseFact,
     NextAction,
+    ProviderContinuationFact,
     RecordKind,
     Run,
     RunInput,
@@ -48,7 +50,7 @@ from .models import (
     TERMINAL_MESSAGES,
 )
 
-_SCHEMA_VERSION = 2
+_SCHEMA_VERSION = 3
 _BUSY_TIMEOUT_MS = 5000
 _DB_FILENAME = "figura.sqlite3"
 
@@ -219,7 +221,20 @@ class FiguraRunStore:
         payload: ModelResponseFact,
         record_id: str | None = None,
         tool_calls: tuple[ToolCallFact, ...] = (),
+        continuation: ProviderContinuation | None = None,
+        continuation_id: str | None = None,
     ) -> ExecutionRecord:
+        if (
+            not isinstance(payload, ModelResponseFact)
+            or type(payload.schema_version) is not int
+            or payload.schema_version != 2
+        ):
+            raise RunError(RunErrorCode.UNSUPPORTED_VERSION)
+        if (
+            (continuation is None) != (continuation_id is None)
+            or payload.continuation_ref != continuation_id
+        ):
+            raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
         raw_payload = encode_payload(RecordKind.MODEL_RESPONSE, payload)
         if not isinstance(tool_calls, tuple):
             raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
@@ -231,7 +246,6 @@ class FiguraRunStore:
                 raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
         elif payload.finish_reason == FinishReason.TOOL_CALLS.value:
             raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
-        now = _utc_now()
         record_id = record_id or uuid.uuid4().hex
         _validate_id(record_id)
         raw_tool_facts = tuple(
@@ -247,6 +261,35 @@ class FiguraRunStore:
             if checkpoint.next_action != NextAction(ActionKind.MODEL):
                 raise RunError(RunErrorCode.INVALID_TRANSITION)
             if payload.provider_id != run.provider or payload.model_id != run.model:
+                raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
+            now = _utc_now()
+            continuation_fact: ProviderContinuationFact | None = None
+            if continuation is not None:
+                if not isinstance(continuation, ProviderContinuation):
+                    raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
+                if not isinstance(continuation_id, str) or not continuation_id:
+                    raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
+                try:
+                    continuation_provider = ProviderId(continuation.provider_id)
+                except (TypeError, ValueError):
+                    raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD) from None
+                continuation_fact = ProviderContinuationFact(
+                    continuation_id=continuation_id,
+                    run_id=run_id,
+                    response_record_id=record_id,
+                    provider_id=continuation_provider.value,
+                    format_version=continuation.format_version,
+                    schema_version=1,
+                    reasoning_content=continuation.reasoning_content,
+                    created_at=now,
+                )
+                validate_provider_continuation_fact(continuation_fact)
+            if continuation_fact is not None and (
+                continuation_fact.run_id != run_id
+                or continuation_fact.response_record_id != record_id
+                or continuation_fact.provider_id != run.provider
+                or payload.continuation_ref != continuation_fact.continuation_id
+            ):
                 raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
             if any(call.response_record_id != record_id for call in tool_calls):
                 raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
@@ -269,9 +312,25 @@ class FiguraRunStore:
             sequence = checkpoint.last_committed_record_sequence + 1
             connection.execute(
                 "INSERT INTO run_execution_records(record_id, run_id, record_sequence, record_kind, schema_version, payload_json, created_at) "
-                "VALUES (?, ?, ?, 'model_response', 1, ?, ?)",
-                (record_id, run_id, sequence, raw_payload, now),
+                "VALUES (?, ?, ?, 'model_response', ?, ?, ?)",
+                (record_id, run_id, sequence, payload.schema_version, raw_payload, now),
             )
+            if continuation_fact is not None:
+                connection.execute(
+                    "INSERT INTO run_provider_continuations(continuation_id, run_id, response_record_id, provider_id, "
+                    "format_version, schema_version, reasoning_content, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        continuation_fact.continuation_id,
+                        continuation_fact.run_id,
+                        continuation_fact.response_record_id,
+                        continuation_fact.provider_id,
+                        continuation_fact.format_version,
+                        continuation_fact.schema_version,
+                        continuation_fact.reasoning_content,
+                        continuation_fact.created_at,
+                    ),
+                )
             first_tool_sequence = checkpoint.last_committed_tool_sequence + 1
             for offset, (call, raw_fact) in enumerate(zip(tool_calls, raw_tool_facts)):
                 connection.execute(
@@ -760,7 +819,7 @@ class FiguraRunStore:
                 connection.execute("BEGIN IMMEDIATE")
                 try:
                     # Read the migration version after acquiring the writer
-                    # lock so concurrent first opens cannot both create v1.
+                    # lock so concurrent first opens cannot race migrations.
                     version = connection.execute("PRAGMA user_version").fetchone()[0]
                     if version > _SCHEMA_VERSION:
                         raise RunError(RunErrorCode.UNSUPPORTED_VERSION)
@@ -777,6 +836,11 @@ class FiguraRunStore:
                             "CHECK (last_committed_tool_sequence >= 0)"
                         )
                         for statement in _TOOL_SCHEMA:
+                            connection.execute(statement)
+                        for statement in _CONTINUATION_SCHEMA:
+                            connection.execute(statement)
+                    elif version == 2:
+                        for statement in _CONTINUATION_SCHEMA:
                             connection.execute(statement)
                     else:
                         raise RunError(RunErrorCode.UNSUPPORTED_VERSION)
@@ -886,12 +950,22 @@ def _read_run_state_from_connection(
         "SELECT * FROM run_tool_execution_facts WHERE run_id = ? ORDER BY tool_sequence",
         (run_id,),
     ).fetchall()
+    continuation_rows = connection.execute(
+        "SELECT continuation.* FROM run_provider_continuations AS continuation "
+        "WHERE continuation.run_id = ? "
+        "ORDER BY (SELECT record_sequence FROM run_execution_records "
+        "WHERE record_id = continuation.response_record_id AND run_id = continuation.run_id)",
+        (run_id,),
+    ).fetchall()
     state = RunState(
         run=_run_from_row(run_row),
         records=tuple(_record_from_row(row) for row in record_rows),
         checkpoint=_checkpoint_from_row(checkpoint_row),
         events=tuple(_event_from_row(row) for row in event_rows),
         tool_facts=tuple(_tool_fact_from_row(row) for row in tool_fact_rows),
+        provider_continuations=tuple(
+            _continuation_fact_from_row(row) for row in continuation_rows
+        ),
     )
     _validate_state(state)
     return state
@@ -986,7 +1060,40 @@ _TOOL_SCHEMA = (
         BEGIN SELECT RAISE(ABORT, 'immutable tool execution fact'); END""",
 )
 
-_SCHEMA = (*_CORE_SCHEMA, *_TOOL_SCHEMA)
+_CONTINUATION_SCHEMA = (
+    """CREATE TABLE run_provider_continuations (
+        continuation_id TEXT PRIMARY KEY CHECK (length(CAST(continuation_id AS BLOB)) BETWEEN 1 AND 128),
+        run_id TEXT NOT NULL REFERENCES runs(run_id) ON DELETE RESTRICT,
+        response_record_id TEXT NOT NULL,
+        provider_id TEXT NOT NULL CHECK (provider_id IN ('qwen', 'deepseek', 'mimo')),
+        format_version INTEGER NOT NULL CHECK (format_version > 0),
+        schema_version INTEGER NOT NULL CHECK (schema_version > 0),
+        reasoning_content TEXT NOT NULL CHECK (
+            length(reasoning_content) > 0 AND length(CAST(reasoning_content AS BLOB)) <= 524288
+        ),
+        created_at TEXT NOT NULL,
+        UNIQUE(run_id, response_record_id),
+        FOREIGN KEY(response_record_id, run_id)
+            REFERENCES run_execution_records(record_id, run_id) ON DELETE RESTRICT
+    )""",
+    """CREATE TRIGGER continuation_matches_model_response BEFORE INSERT ON run_provider_continuations
+        WHEN NOT EXISTS (
+            SELECT 1 FROM run_execution_records
+            WHERE record_id = NEW.response_record_id
+              AND run_id = NEW.run_id
+              AND record_kind = 'model_response'
+              AND schema_version = 2
+              AND json_extract(payload_json, '$.continuation_ref') = NEW.continuation_id
+              AND json_extract(payload_json, '$.provider_id') = NEW.provider_id
+        )
+        BEGIN SELECT RAISE(ABORT, 'continuation response mismatch'); END""",
+    """CREATE TRIGGER immutable_run_provider_continuation_update BEFORE UPDATE ON run_provider_continuations
+        BEGIN SELECT RAISE(ABORT, 'immutable provider continuation'); END""",
+    """CREATE TRIGGER immutable_run_provider_continuation_delete BEFORE DELETE ON run_provider_continuations
+        BEGIN SELECT RAISE(ABORT, 'immutable provider continuation'); END""",
+)
+
+_SCHEMA = (*_CORE_SCHEMA, *_TOOL_SCHEMA, *_CONTINUATION_SCHEMA)
 
 
 def _validate_migration(connection: sqlite3.Connection) -> None:
@@ -1039,9 +1146,17 @@ def _record_from_row(row: sqlite3.Row) -> ExecutionRecord:
         kind = RecordKind(row["record_kind"])
     except ValueError:
         raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD) from None
-    if row["schema_version"] != 1:
+    schema_version = row["schema_version"]
+    if type(schema_version) is not int:
         raise RunError(RunErrorCode.UNSUPPORTED_VERSION)
-    payload = decode_payload(kind, row["payload_json"])
+    supported_versions = {1, 2} if kind is RecordKind.MODEL_RESPONSE else {1}
+    if schema_version not in supported_versions:
+        raise RunError(RunErrorCode.UNSUPPORTED_VERSION)
+    payload = decode_payload(
+        kind,
+        row["payload_json"],
+        expected_schema_version=schema_version,
+    )
     return ExecutionRecord(
         record_id=row["record_id"],
         run_id=row["run_id"],
@@ -1050,6 +1165,20 @@ def _record_from_row(row: sqlite3.Row) -> ExecutionRecord:
         payload=payload,
         created_at=row["created_at"],
     )
+
+
+def _continuation_fact_from_row(row: sqlite3.Row) -> ProviderContinuationFact:
+    fact = ProviderContinuationFact(
+        continuation_id=row["continuation_id"],
+        run_id=row["run_id"],
+        response_record_id=row["response_record_id"],
+        provider_id=row["provider_id"],
+        format_version=row["format_version"],
+        schema_version=row["schema_version"],
+        reasoning_content=row["reasoning_content"],
+        created_at=row["created_at"],
+    )
+    return validate_provider_continuation_fact(fact, persisted=True)
 
 
 def _checkpoint_from_row(row: sqlite3.Row) -> ExecutionCheckpoint:
@@ -1283,6 +1412,7 @@ def _validate_state(state: RunState) -> None:
             last_non_tool_response = response_index
     if last_non_tool_response >= 0 and last_non_tool_response != len(response_records) - 1:
         raise RunError(RunErrorCode.INTEGRITY_ERROR)
+    _validate_continuation_state(run, response_records, state.provider_continuations)
 
     calls_by_response: dict[str, list[tuple[ToolExecutionFact, ToolCallFact]]] = {}
     calls_by_sequence: dict[int, tuple[ToolExecutionFact, ToolCallFact]] = {}
@@ -1518,3 +1648,54 @@ def _validate_state(state: RunState) -> None:
             expected_kind = EventKind.RUN_INTERRUPTED if run.status is RunStatus.INTERRUPTED else EventKind.RUN_FAILED
             if terminal_event.event_kind is not expected_kind or terminal_event.payload != {"terminal_code": run.terminal_code}:
                 raise RunError(RunErrorCode.INTEGRITY_ERROR)
+
+
+def _validate_continuation_state(
+    run: Run,
+    response_records: list[ExecutionRecord],
+    continuation_facts: tuple[ProviderContinuationFact, ...],
+) -> None:
+    referenced_by_response: dict[str, str] = {}
+    seen_references: set[str] = set()
+    for record in response_records:
+        response = record.payload
+        if not isinstance(response, ModelResponseFact):
+            raise RunError(RunErrorCode.INTEGRITY_ERROR)
+        reference = response.continuation_ref
+        if reference is None:
+            continue
+        if (
+            response.schema_version != 2
+            or not isinstance(reference, str)
+            or not reference
+            or _utf8_length(reference) > 128
+            or reference in seen_references
+        ):
+            raise RunError(RunErrorCode.INTEGRITY_ERROR)
+        seen_references.add(reference)
+        referenced_by_response[record.record_id] = reference
+
+    if [fact.response_record_id for fact in continuation_facts] != list(referenced_by_response):
+        raise RunError(RunErrorCode.INTEGRITY_ERROR)
+
+    records_by_id = {record.record_id: record for record in response_records}
+    seen_continuation_ids: set[str] = set()
+    for fact in continuation_facts:
+        validate_provider_continuation_fact(fact, persisted=True)
+        record = records_by_id.get(fact.response_record_id)
+        if (
+            fact.run_id != run.run_id
+            or record is None
+            or fact.continuation_id in seen_continuation_ids
+            or fact.continuation_id != referenced_by_response[fact.response_record_id]
+        ):
+            raise RunError(RunErrorCode.INTEGRITY_ERROR)
+        response = record.payload
+        if (
+            not isinstance(response, ModelResponseFact)
+            or fact.provider_id != run.provider
+            or fact.provider_id != response.provider_id
+            or fact.created_at != record.created_at
+        ):
+            raise RunError(RunErrorCode.INTEGRITY_ERROR)
+        seen_continuation_ids.add(fact.continuation_id)
