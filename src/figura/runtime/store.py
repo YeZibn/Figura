@@ -19,6 +19,8 @@ from .domain.models import (
     RunState,
     RunStatus,
     Session,
+    SessionListEntry,
+    SessionSnapshot,
     TerminalCode,
     ToolCallFact,
     ToolExecutionFact,
@@ -45,6 +47,21 @@ class FiguraRunStore:
 
     def assert_session(self, session_id: str) -> None:
         self._sessions.assert_session(session_id)
+
+    def list_sessions(self) -> tuple[Session, ...]:
+        return self._sessions.list_sessions()
+
+    def list_session_entries(self) -> tuple[SessionListEntry, ...]:
+        return self._sessions.list_session_entries()
+
+    def get_session(self, session_id: str) -> Session:
+        return self._sessions.get_session(session_id)
+
+    def read_session_snapshot(self, session_id: str) -> SessionSnapshot:
+        return self._runs.read_session_snapshot(session_id)
+
+    def list_running_runs(self) -> tuple[Run, ...]:
+        return self._runs.list_running_runs()
 
     def register_attachment(
         self,

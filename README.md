@@ -37,6 +37,32 @@ terminating an unrelated listener. Plain `npm run dev` remains the offline
 mock/frontend-only workflow. From the repository root, the equivalent
 one-line command is `npm --prefix frontend run dev:gateway`.
 
+### Figura browser workspace
+
+Figura's implemented runtime has a separate local browser path. Start it from
+the repository root with:
+
+```bash
+npm --prefix frontend run dev:figura
+```
+
+The launcher starts `python -m figura.gateway` in the `agent` Conda environment
+and Vite on loopback. Its default ports are `8766` for Figura Gateway and
+`1421` for Vite; ChartAgent continues to use its existing `8765`/`1420` path.
+The Figura process loads the repository `.env` with inherited process values
+taking precedence and stores its SQLite data and uploaded images in the ignored
+`.figura/` directory by default. Set `FIGURA_DATA_DIR` to choose another local
+data directory or `FIGURA_GATEWAY_PORT` to change the Gateway port. `VITE_DEV_PORT`
+changes the Vite port; the launcher adds that exact frontend Origin to the local
+Gateway allowlist.
+
+Configure one or more of `FIGURA_QWEN_API_KEY`, `FIGURA_DEEPSEEK_API_KEY`, and
+`FIGURA_MIMO_API_KEY` in `.env`. Model IDs are fixed by the Figura runtime:
+`qwen3.8-flash`, `deepseek-flash`, and `mimo-v2.6-flash`. Vite receives the
+Figura mode, local Gateway URL, and local bind settings; Provider keys and
+endpoints stay in the Python process. This workflow connects the browser client directly to the
+Figura Gateway and does not start Tauri.
+
 To verify the complete npm signal and port-release lifecycle, run
 `npm run smoke:launcher` from `frontend/`. This uses isolated ports and does
 not replace the regular static `npm run smoke` checks.

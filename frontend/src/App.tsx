@@ -18,6 +18,7 @@ import { ConfirmDeleteDialog, CreateSessionDialog, type ConfirmAction } from './
 import type { PendingAttachment, PreviewDescriptor } from './components/types'
 import './styles/global.css'
 import './styles/error.css'
+import { FiguraApp } from './FiguraApp'
 
 function newIdempotencyKey(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID()
@@ -25,6 +26,11 @@ function newIdempotencyKey(): string {
 }
 
 export default function App() {
+  if (import.meta.env.VITE_FIGURA_MODE === 'true') return <FiguraApp />
+  return <ChartAgentApp />
+}
+
+function ChartAgentApp() {
   const mode = import.meta.env.VITE_CHARTAGENT_MODE === 'gateway' ? 'gateway' : 'mock'
   const client: ChartAgentClient = useMemo(() => mode === 'gateway' ? gatewayClient : mockClient, [mode])
   const workspaceApi = useMemo(() => createWorkspaceApi(client), [client])

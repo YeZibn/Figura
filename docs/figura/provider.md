@@ -8,7 +8,7 @@
 
 ## 2. 内部流转
 
-1. **可用性与选择**：`ProviderSettings` 为三个 allowlist provider 各保存一份 profile；Factory 对 provider/model、配置及能力进行检查，并可返回安全的 `ProviderAvailability`。
+1. **可用性与选择**：`ProviderSettings` 为三个 allowlist provider 各保存一份 profile；Factory 对 provider/model、配置及能力进行检查，并可返回安全的 `ProviderAvailability`。Web Gateway 的 health 路由消费该值，只返回 provider ID、固定 model ID、配置是否可用和有界 reason code，不发起 Provider 网络请求；HTTP 字段定义见[Web 边界](web-boundary.md#4-web-dto-字段)。
 2. **请求**：Agent 提交 `ProviderRequest`，包含指令、按角色排列的消息、可选工具投影和选项。消息内容可为字符串或有序 TextBlock/ImageBlock。图片字节只在调用期；超界请求在远端调用前被拒绝。
 3. **响应**：adapter 将模型内容、工具调用、finish reason、usage 与可选 continuation 归一化。公开响应投影省略私有 continuation；Runtime 将其与已提交响应绑定为私有持久事实。
 4. **失败**：配置、输入、远端与传输失败映射到有界 `ProviderFailure`；`outcome_known` 供 Runtime/Agent 区分确定失败与结果未知。Provider 不能自行重发已被 Runtime claim 的请求。

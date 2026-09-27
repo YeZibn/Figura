@@ -39,7 +39,7 @@ Runtime 在一个 SQLite 读快照内读取目标 Run 的所有较早 ordinal，
 
 ## 4. 完整模型字段
 
-以下模型均为 `frozen=True` dataclass，按请求临时创建，不序列化到 SQLite，也不通过 Gateway/API 独立公开。写入者一栏指内存投影函数；权威位置一栏指字段的持久来源，Memory 对象本身不拥有持久权威。任何投影字段变更都需回到其 Run 源事实，而不是原地修订 Memory 对象。
+以下模型均为 `frozen=True` dataclass，按请求临时创建，不序列化到 SQLite，也不通过 Gateway/API 独立公开。Gateway 的 Session 详情另有面向用户的只读对话投影，仅包含持久用户输入和已接受最终答案；它不是本页完整 Agent 上下文，也不公开工具消息、模型中间响应或 continuation，字段见[Web 边界](web-boundary.md#4-web-dto-字段)。写入者一栏指内存投影函数；权威位置一栏指字段的持久来源，Memory 对象本身不拥有持久权威。任何投影字段变更都需回到其 Run 源事实，而不是原地修订 Memory 对象。
 
 ### MemoryToolCall
 

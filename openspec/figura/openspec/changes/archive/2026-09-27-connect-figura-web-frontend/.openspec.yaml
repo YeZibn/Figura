@@ -1,0 +1,4 @@
+schema: spec-driven
+created: 2026-09-27
+goal: Provide a local browser workflow for Figura sessions, image attachments,
+  provider selection, durable Runs, and complete cross-Run conversation history.

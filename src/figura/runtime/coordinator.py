@@ -32,6 +32,8 @@ from .domain.models import (
     RunState,
     RunStatus,
     Session,
+    SessionListEntry,
+    SessionSnapshot,
     ToolCallFact,
     TerminalCode,
 )
@@ -54,6 +56,21 @@ class RunCoordinator:
         if name is not None and (not isinstance(name, str) or _byte_length(name) > _MAX_SESSION_NAME_BYTES):
             raise RunError(RunErrorCode.INVALID_REQUEST)
         return self._store.create_session(name)
+
+    def list_sessions(self) -> tuple[Session, ...]:
+        return self._store.list_sessions()
+
+    def list_session_entries(self) -> tuple[SessionListEntry, ...]:
+        return self._store.list_session_entries()
+
+    def get_session(self, session_id: str) -> Session:
+        return self._store.get_session(session_id)
+
+    def read_session_snapshot(self, session_id: str) -> SessionSnapshot:
+        return self._store.read_session_snapshot(session_id)
+
+    def list_running_runs(self) -> tuple[Run, ...]:
+        return self._store.list_running_runs()
 
     def create_run(self, request: RunCreateRequest) -> Run:
         self._validate_create_request(request)

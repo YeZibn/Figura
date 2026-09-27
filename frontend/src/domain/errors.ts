@@ -1,6 +1,13 @@
 import { GatewayClientError } from '../api/gateway/transport'
 
 export function toUserMessage(error: unknown): string {
+  if (error instanceof Error && error.name === 'FiguraClientError') {
+    const code = (error as Error & { code?: unknown }).code
+    if (code === 'gateway_unavailable' || code === 'gateway_stream_unavailable') {
+      return '无法连接到本地 Figura Gateway，请确认本地服务已启动，并通过允许的本机地址访问网页。'
+    }
+    return error.message || 'Figura 本地服务处理失败，请稍后重试。'
+  }
   if (error instanceof GatewayClientError) {
     if (error.code === 'gateway_unavailable') return '无法连接到本地 Gateway，请先启动 Python 服务。'
     if (error.code === 'agent_unavailable' && error.reason === 'missing_configuration') return 'Agent 未配置，请检查项目根目录 .env 中的模型配置。'

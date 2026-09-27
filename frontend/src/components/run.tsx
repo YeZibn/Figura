@@ -53,9 +53,12 @@ export function RunTimeline({ timeline, expanded, onToggle, previewLoader, onPre
   const userItems = projectUserTimeline(timeline.events)
   const summary = timeline.summary
   const status = summary.status
-  const statusText = status === 'completed' ? '已完成' : status === 'failed' ? '失败' : status === 'interrupted' ? '已中断' : summary.cancelRequested ? '正在中断' : '运行中'
+  const needsReconciliation = summary.executionState === 'needs_reconciliation'
+  const statusText = needsReconciliation ? '等待工具核对' : status === 'completed' ? '已完成' : status === 'failed' ? '失败' : status === 'interrupted' ? '已中断' : summary.cancelRequested ? '正在中断' : '运行中'
   return <section className={'run-timeline ' + status + (expanded ? ' expanded' : '')}>
     {showSummary && <button className="run-summary" onClick={onToggle} aria-expanded={expanded} aria-controls={`trace-${summary.runId}`}><span className="run-arrow">{expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}</span><span className="run-summary-icon"><Terminal size={14} /></span><span className="run-summary-copy"><strong>执行过程</strong><small>{timestampLabel(summary.createdAt)} · {summary.eventCount || timeline.events.length} 个事件{summary.provider ? ` · ${providerLabel(summary.provider)}${summary.model ? ` · ${summary.model}` : ''}` : ''}{summary.retryOf ? ` · 重试自 ${summary.retryOf}` : ''}</small></span><span className={'run-status ' + status}>{statusText}</span></button>}
+    {needsReconciliation && <div className="trace-warning" role="status">工具执行结果尚未核对。Figura 会保留当前 Run，暂不自动重放该工具。</div>}
+    {status === 'failed' && summary.terminalMessage && <div className="trace-warning" role="status">{summary.terminalMessage}</div>}
     {(status === 'running' && onInterrupt) || ((status === 'failed' || status === 'interrupted') && (onRetry || onResume)) ? <div className="run-actions">
       {status === 'running' && onInterrupt && <button type="button" className="small-action" onClick={onInterrupt} disabled={summary.cancelRequested}>{summary.cancelRequested ? '正在中断' : '中断运行'}</button>}
       {status !== 'running' && onResume && summary.recovery?.status === 'available' && <button type="button" className="small-action" onClick={onResume}>继续执行</button>}

@@ -11,7 +11,7 @@ export type RunControllerCallbacks = {
 }
 
 export type RunControllerOptions = {
-  client: ChartAgentClient
+  client: Pick<ChartAgentClient, 'getRunHistory' | 'subscribeRun'>
   sessionId: string
   runId: string
   callbacks: RunControllerCallbacks
@@ -152,4 +152,3 @@ export function createRunController(options: RunControllerOptions): RunControlle
     close,
   }
 }
-

@@ -1,0 +1,105 @@
+import type { AgentRunEvent, Attachment, RunHandle, RunHistory, Session, SessionData } from '../../types/protocol'
+import type { RunSubscription } from '../client'
+
+export type FiguraProviderId = 'qwen' | 'deepseek' | 'mimo'
+export type FiguraProviderAvailability = {
+  providerId: FiguraProviderId
+  modelId: string
+  available: boolean
+  reasonCode: string | null
+}
+export type FiguraHealth = {
+  version: 'v1'
+  status: 'ok'
+  service: 'figura'
+  providers: FiguraProviderAvailability[]
+}
+export type FiguraSessionDto = {
+  id: string
+  name: string | null
+  createdAt: string
+  updatedAt: string
+  runCount: number
+}
+export type FiguraAttachmentDto = {
+  id: string
+  filename: string
+  mediaType: string
+  byteCount: number
+  createdAt: string
+}
+export type FiguraMessageDto = {
+  id: string
+  runId: string
+  kind: 'user' | 'assistant'
+  text: string
+  timestamp: string
+  attachmentIds?: string[]
+}
+export type FiguraRunDto = {
+  runId: string
+  sessionId: string
+  ordinal: number
+  status: 'running' | 'completed' | 'failed' | 'interrupted'
+  provider: FiguraProviderId
+  model: string
+  createdAt: string
+  startedAt: string
+  finishedAt: string | null
+  terminalCode: string | null
+  terminalMessage: string | null
+  executionState: 'active' | 'needs_reconciliation'
+}
+export type FiguraSessionDataDto = {
+  session: FiguraSessionDto
+  messages: FiguraMessageDto[]
+  attachments: FiguraAttachmentDto[]
+  runs: FiguraRunDto[]
+}
+export type FiguraEventDto = {
+  runId: string
+  sequence: number
+  kind: string
+  timestamp: string
+  payload: Record<string, unknown>
+}
+export type FiguraRunHistoryDto = {
+  run: FiguraRunDto
+  events: FiguraEventDto[]
+  historyGap: boolean
+}
+export type FiguraRunHandleDto = Omit<FiguraRunDto, 'executionState'>
+
+export type FiguraClient = {
+  readonly baseUrl: string
+  getHealth(): Promise<FiguraHealth>
+  listSessions(): Promise<FiguraSessionDto[]>
+  getSession(sessionId: string): Promise<FiguraSessionDataDto>
+  createSession(name: string): Promise<FiguraSessionDto>
+  listAttachments(sessionId: string): Promise<FiguraAttachmentDto[]>
+  uploadAttachment(sessionId: string, file: File): Promise<FiguraAttachmentDto>
+  deleteAttachment(sessionId: string, attachmentId: string): Promise<void>
+  startRun(sessionId: string, text: string, attachmentIds: string[], providerId: FiguraProviderId, idempotencyKey: string): Promise<FiguraRunHandleDto>
+  getRunHistory(sessionId: string, runId: string, afterSequence?: number): Promise<FiguraRunHistoryDto>
+  subscribeRun(sessionId: string, runId: string, callbacks: { onEvent(event: AgentRunEvent): void; onError(error: Error): void; onComplete(): void }, afterSequence?: number): RunSubscription
+  attachmentContentUrl(sessionId: string, attachmentId: string): string
+}
+
+export type FiguraWorkspaceApi = {
+  health: { get(): Promise<FiguraHealth> }
+  sessions: {
+    list(): Promise<Session[]>
+    get(sessionId: string): Promise<SessionData>
+    create(name: string): Promise<Session>
+  }
+  attachments: {
+    list(sessionId: string): Promise<Attachment[]>
+    upload(sessionId: string, file: File): Promise<Attachment>
+    remove(sessionId: string, attachmentId: string): Promise<void>
+  }
+  runs: {
+    start(sessionId: string, text: string, attachmentIds: string[], providerId: FiguraProviderId, idempotencyKey: string): Promise<RunHandle>
+    history(sessionId: string, runId: string, afterSequence?: number): Promise<RunHistory>
+    subscribe(sessionId: string, runId: string, callbacks: { onEvent(event: AgentRunEvent): void; onError(error: Error): void; onComplete(): void }, afterSequence?: number): RunSubscription
+  }
+}

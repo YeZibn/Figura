@@ -17,10 +17,12 @@ from ..domain.models import (
     RunInput,
     RunState,
     RunStatus,
+    SessionSnapshot,
 )
 from ..errors import RunError, RunErrorCode
 from .database import SqliteDatabase, _utc_now
 from .mappers import (
+    _attachment_from_row,
     _checkpoint_from_row,
     _continuation_fact_from_row,
     _encode_action,
@@ -28,6 +30,7 @@ from .mappers import (
     _provider_attempt_from_row,
     _record_from_row,
     _run_from_row,
+    _session_from_row,
     _tool_fact_from_row,
 )
 from .session_repository import SessionRepository
@@ -252,6 +255,54 @@ class RunRepository:
                     raise
                 raise RunError(RunErrorCode.INTEGRITY_ERROR) from None
             return state
+
+    def list_running_runs(self) -> tuple[Run, ...]:
+        with self._database.read() as connection:
+            rows = connection.execute(
+                "SELECT * FROM runs WHERE status = ? ORDER BY session_id, ordinal",
+                (RunStatus.RUNNING.value,),
+            ).fetchall()
+        return tuple(_run_from_row(row) for row in rows)
+
+    def read_session_snapshot(self, session_id: str) -> SessionSnapshot:
+        _validate_id(session_id)
+        with self._database.read_snapshot() as connection:
+            session_row = connection.execute(
+                "SELECT * FROM sessions WHERE session_id = ?", (session_id,)
+            ).fetchone()
+            if session_row is None:
+                raise RunError(RunErrorCode.SESSION_NOT_FOUND)
+            run_rows = connection.execute(
+                "SELECT run_id FROM runs WHERE session_id = ? ORDER BY ordinal",
+                (session_id,),
+            ).fetchall()
+            states: list[RunState] = []
+            for row in run_rows:
+                state = self._read_run_state_from_connection(
+                    connection, session_id, row["run_id"]
+                )
+                input_payload = state.records[0].payload
+                if not isinstance(input_payload, RunInput):
+                    raise RunError(RunErrorCode.INTEGRITY_ERROR)
+                self._sessions._require_attachment_ownership(
+                    connection,
+                    session_id,
+                    input_payload.attachment_ids,
+                    integrity=True,
+                )
+                states.append(state)
+            if [state.run.ordinal for state in states] != list(range(1, len(states) + 1)):
+                raise RunError(RunErrorCode.INTEGRITY_ERROR)
+            attachment_rows = connection.execute(
+                "SELECT * FROM attachments WHERE session_id = ? "
+                "ORDER BY created_at, attachment_id",
+                (session_id,),
+            ).fetchall()
+        return SessionSnapshot(
+            session=_session_from_row(session_row),
+            run_states=tuple(states),
+            attachments=tuple(_attachment_from_row(row) for row in attachment_rows),
+        )
 
     def read_prior_run_states(self, session_id: str, run_id: str) -> tuple[RunState, ...]:
         """Load every earlier Run in one Session snapshot, in ordinal order."""

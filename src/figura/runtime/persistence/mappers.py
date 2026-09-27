@@ -25,6 +25,7 @@ from ..domain.models import (
     Run,
     RunStatus,
     RunStreamEvent,
+    Session,
     ToolExecutionFact,
     ToolFactKind,
 )
@@ -39,6 +40,18 @@ def _attachment_from_row(row: sqlite3.Row) -> AttachmentMetadata:
             media_type=row["media_type"],
             byte_count=row["byte_count"],
             created_at=row["created_at"],
+        )
+    except (KeyError, TypeError, ValueError):
+        raise RunError(RunErrorCode.INTEGRITY_ERROR) from None
+
+
+def _session_from_row(row: sqlite3.Row) -> Session:
+    try:
+        return Session(
+            session_id=row["session_id"],
+            name=row["name"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
         )
     except (KeyError, TypeError, ValueError):
         raise RunError(RunErrorCode.INTEGRITY_ERROR) from None

@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { spawn } from 'node:child_process'
-import { resolve } from 'node:path'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { join, resolve } from 'node:path'
+import { tmpdir } from 'node:os'
 import process from 'node:process'
 import net from 'node:net'
 
@@ -136,7 +138,115 @@ async function runFrontendConflictScenario() {
   }
 }
 
+function startFiguraLauncher(frontendPort, gatewayPort, dataDir, environment = {}) {
+  let output = ''
+  const child = spawn(npmExecutable, ['run', 'dev:figura'], {
+    cwd: root,
+    env: {
+      ...process.env,
+      ...environment,
+      VITE_DEV_PORT: String(frontendPort),
+      FIGURA_GATEWAY_PORT: String(gatewayPort),
+      FIGURA_GATEWAY_STARTUP_MS: '10000',
+      FIGURA_GATEWAY_SHUTDOWN_MS: '1000',
+      FIGURA_DATA_DIR: dataDir,
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+    detached: process.platform !== 'win32',
+  })
+  child.stdout.setEncoding('utf8')
+  child.stderr.setEncoding('utf8')
+  child.stdout.on('data', (chunk) => { output += chunk })
+  child.stderr.on('data', (chunk) => { output += chunk })
+  return { child, getOutput: () => output }
+}
+
+async function waitForFiguraReady(frontendPort, gatewayPort, launcher) {
+  await waitFor(async () => {
+    if (launcher.child.exitCode !== null || launcher.child.signalCode !== null) return false
+    try {
+      const healthResponse = await fetch(`http://127.0.0.1:${gatewayPort}/api/v1/health`)
+      const health = await healthResponse.json()
+      const frontendResponse = await fetch(`http://127.0.0.1:${frontendPort}/`)
+      return healthResponse.ok && health.service === 'figura' && frontendResponse.ok
+    } catch {
+      return false
+    }
+  }, 'Figura Gateway and Vite readiness')
+}
+
+async function runFiguraSignalScenario(signal) {
+  const frontendPort = await findFreePort()
+  const gatewayPort = await findFreePort()
+  const dataDir = await mkdtemp(join(tmpdir(), 'figura-web-smoke-'))
+  const launcher = startFiguraLauncher(frontendPort, gatewayPort, dataDir)
+  try {
+    await waitForFiguraReady(frontendPort, gatewayPort, launcher)
+    signalLauncher(launcher.child, signal)
+    await waitForLauncherExit(launcher.child, `Figura ${signal} launcher exit`)
+    await waitFor(async () => !(await portAcceptsConnections(frontendPort)), `Figura ${signal} frontend port release`)
+    await waitFor(async () => !(await portAcceptsConnections(gatewayPort)), `Figura ${signal} Gateway port release`)
+  } catch (error) {
+    throw new Error(`Figura ${signal} scenario failed: ${error instanceof Error ? error.message : String(error)}\n${launcher.getOutput()}`)
+  } finally {
+    forceStopLauncher(launcher.child)
+    await rm(dataDir, { recursive: true, force: true })
+  }
+}
+
+async function runFiguraFrontendConflictScenario() {
+  const frontendPort = await findFreePort()
+  const gatewayPort = await findFreePort()
+  const dataDir = await mkdtemp(join(tmpdir(), 'figura-web-smoke-'))
+  const external = createServer((_request, response) => response.end('external listener'))
+  await new Promise((resolveListen, reject) => {
+    external.once('error', reject)
+    external.listen(frontendPort, '127.0.0.1', resolveListen)
+  })
+  const launcher = startFiguraLauncher(frontendPort, gatewayPort, dataDir)
+  try {
+    await waitForLauncherExit(launcher.child, 'Figura frontend conflict launcher exit')
+    assert.equal(await portAcceptsConnections(frontendPort), true, 'the unrelated Vite listener must remain alive')
+    await waitFor(async () => !(await portAcceptsConnections(gatewayPort)), 'Figura Gateway cleanup after Vite conflict')
+    const response = await fetch(`http://127.0.0.1:${frontendPort}/`)
+    assert.equal(await response.text(), 'external listener')
+  } finally {
+    forceStopLauncher(launcher.child)
+    await new Promise((resolveClose) => external.close(resolveClose))
+    await rm(dataDir, { recursive: true, force: true })
+  }
+}
+
+async function runFiguraGatewayStartupFailureScenario() {
+  const frontendPort = await findFreePort()
+  const gatewayPort = await findFreePort()
+  const dataDir = await mkdtemp(join(tmpdir(), 'figura-web-smoke-'))
+  const external = createServer((_request, response) => {
+    response.setHeader('Content-Type', 'application/json')
+    response.end(JSON.stringify({ version: 'v1', status: 'ok', service: 'not-figura' }))
+  })
+  await new Promise((resolveListen, reject) => {
+    external.once('error', reject)
+    external.listen(gatewayPort, '127.0.0.1', resolveListen)
+  })
+  const launcher = startFiguraLauncher(frontendPort, gatewayPort, dataDir, { FIGURA_GATEWAY_STARTUP_MS: '2500' })
+  try {
+    await waitForLauncherExit(launcher.child, 'Figura Gateway startup failure exit')
+    assert.equal(await portAcceptsConnections(frontendPort), false, 'Vite must not start before Figura health succeeds')
+    assert.equal(await portAcceptsConnections(gatewayPort), true, 'the unrelated Gateway listener must remain alive')
+    assert.match(launcher.getOutput(), /exited before becoming ready|did not become ready/)
+  } finally {
+    forceStopLauncher(launcher.child)
+    await new Promise((resolveClose) => external.close(resolveClose))
+    await rm(dataDir, { recursive: true, force: true })
+  }
+}
+
 await runSignalScenario('SIGINT')
 await runSignalScenario('SIGTERM')
 await runFrontendConflictScenario()
-console.log('launcher lifecycle smoke passed (npm signal cleanup, port release, and external listener protection)')
+await runFiguraSignalScenario('SIGINT')
+await runFiguraSignalScenario('SIGTERM')
+await runFiguraFrontendConflictScenario()
+await runFiguraGatewayStartupFailureScenario()
+console.log('launcher lifecycle smoke passed (ChartAgent and Figura readiness, failure, signal cleanup, port release, and ownership)')

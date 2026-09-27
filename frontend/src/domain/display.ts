@@ -54,8 +54,10 @@ export const providerLabels: Record<Provider, string> = {
   deepseek: 'DeepSeek（V4.1 Flash）',
 }
 
-export function providerLabel(provider?: Provider | null): string {
-  return provider ? providerLabels[provider] : ''
+export function providerLabel(provider?: string | null): string {
+  if (!provider) return ''
+  if (provider === 'mimo') return '小米 MiMo'
+  return providerLabels[provider as Provider] || provider
 }
 
 export function providerStatus(health: GatewayHealth | null, provider: Provider, mode: 'mock' | 'gateway'): 'ready' | 'unavailable' | 'unknown' {

@@ -80,6 +80,20 @@ class Session:
 
 
 @dataclass(frozen=True)
+class SessionListEntry:
+    session: Session
+    run_count: int
+    latest_activity: str
+
+
+@dataclass(frozen=True)
+class SessionSnapshot:
+    session: Session
+    run_states: tuple[RunState, ...]
+    attachments: tuple[AttachmentMetadata, ...]
+
+
+@dataclass(frozen=True)
 class AttachmentMetadata:
     attachment_id: str
     session_id: str
@@ -326,6 +340,8 @@ __all__ = [
     "RunStatus",
     "RunStreamEvent",
     "Session",
+    "SessionListEntry",
+    "SessionSnapshot",
     "TERMINAL_MESSAGES",
     "TerminalCode",
     "ToolAttemptStartedFact",

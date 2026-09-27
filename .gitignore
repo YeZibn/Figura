@@ -32,3 +32,4 @@ coverage/
 
 # Local ChartAgent runtime data and evaluation artifacts
 .chartagent/
+.figura/

@@ -4,7 +4,7 @@
 
 ## 1. 职责与边界
 
-RunCoordinator 校验并推进 Session/Run；`FiguraRunStore` 是保持原调用方式的兼容门面，实际持久化由领域 Repository 完成；DurableToolExecutor 记录工具尝试与结果。同一 Session 同时最多有一个 running Run。Runtime 还向 Agent 提供同一 Session 中目标 Run 之前的终态 RunState 一致快照，供[Session Memory](session-memory.md)只读投影。Agent 只能通过这些协调入口推进 Run，不能绕过 Checkpoint 直接更新执行历史。Provider 凭据、图片字节、调用期请求和 Memory 消息投影不进入 Run 事实。当前无 Figura Gateway，因此 `RunStreamEvent` 已持久化但尚无新 Figura SSE 入口。
+RunCoordinator 校验并推进 Session/Run；`FiguraRunStore` 是保持原调用方式的兼容门面，实际持久化由领域 Repository 完成；DurableToolExecutor 记录工具尝试与结果。同一 Session 同时最多有一个 running Run。Runtime 向 Agent 提供同一 Session 中目标 Run 之前的终态 RunState 一致快照，供[Session Memory](session-memory.md)只读投影；也向本地 Gateway 提供轻量 Session 列表聚合、Session 全量读取快照和 running Run 恢复列表。Agent 只能通过这些协调入口推进 Run，不能绕过 Checkpoint 直接更新执行历史。Provider 凭据、图片字节、调用期请求和 Memory 消息投影不进入 Run 事实。`RunStreamEvent` 是持久生命周期事实，经 Gateway 安全投影为历史响应和 SSE；公开字段见[网页端边界](web-boundary.md)。
 
 ```mermaid
 flowchart LR
@@ -19,6 +19,10 @@ flowchart LR
     Database --> SQLite[(SQLite schema v5)]
     RunRepo --> Run[(Run and initial input)]
     RunRepo --> State[RunState hydration]
+    SessionRepo -->|SessionListEntry aggregate| Gateway[Figura Gateway]
+    RunRepo -->|SessionSnapshot read snapshot| Gateway
+    RunRepo -->|ordered running Runs| Gateway
+    Gateway -->|async dispatch| Agent
     Agent -->|read_prior_run_states| Coordinator
     RunRepo -->|ordered prior RunState snapshot| Store
     Store -->|read result| Coordinator
@@ -36,19 +40,20 @@ flowchart LR
     State --> Agent[AgentExecutor]
 ```
 
-实现按领域与持久化职责拆分：[`runtime/domain/models.py`](../../src/figura/runtime/domain/models.py) 是模型和枚举的权威定义，[`runtime/domain/invariants.py`](../../src/figura/runtime/domain/invariants.py) 保存纯 Run 状态校验；[`runtime/models.py`](../../src/figura/runtime/models.py) 仅重导出旧导入路径。[`runtime/persistence/database.py`](../../src/figura/runtime/persistence/database.py) 管理 SQLite 连接与读写事务，[`schema.py`](../../src/figura/runtime/persistence/schema.py) 管理 schema v5 和迁移，[`mappers.py`](../../src/figura/runtime/persistence/mappers.py) 负责数据库行与领域值的转换。Session/附件元数据由 `SessionRepository` 写入，Run 创建与聚合读取由 `RunRepository` 负责，Provider、工具事实及后续 checkpoint/终态转移由 `ExecutionRepository` 负责。`FiguraRunStore` 只组合并委托这些对象，调用方接口保持不变。
+实现按领域与持久化职责拆分：[`runtime/domain/models.py`](../../src/figura/runtime/domain/models.py) 是模型和枚举的权威定义，[`runtime/domain/invariants.py`](../../src/figura/runtime/domain/invariants.py) 保存纯 Run 状态校验；[`runtime/models.py`](../../src/figura/runtime/models.py) 仅重导出旧导入路径。[`runtime/persistence/database.py`](../../src/figura/runtime/persistence/database.py) 管理 SQLite 连接与读写事务，[`schema.py`](../../src/figura/runtime/persistence/schema.py) 管理 schema v5 和迁移，[`mappers.py`](../../src/figura/runtime/persistence/mappers.py) 负责数据库行与领域值的转换。Session/附件元数据由 `SessionRepository` 写入，Session 列表聚合由 `SessionRepository` 读取；Run 创建、RunState/SessionSnapshot 聚合读取和 running Run 恢复列表由 `RunRepository` 负责，Provider、工具事实及后续 checkpoint/终态转移由 `ExecutionRepository` 负责。`FiguraRunStore` 只组合并委托这些对象，调用方接口保持不变。
 
 ## 2. 内部流转
 
 1. **创建**：`RunCreateRequest` 带 Session、文本、显式 provider/model、幂等键及有序附件 ID。Coordinator 校验请求；`RunRepository` 在一个写事务内先查幂等映射，匹配则返回原 Run；否则若 Session 已有 running Run 则拒绝新建。事务随后校验附件归属，并写 `Run`、唯一 input `ExecutionRecord`（payload 为 `RunInput`）、初始 `ExecutionCheckpoint`、幂等映射及 created event。图片只以 ID 引用，字段见[附件文档](attachments.md#3-完整模型字段)。
 2. **读取历史 Run**：Agent 在每个 model action 前请求目标 Run 的 `read_prior_run_states`。`RunRepository` 在一个 SQLite 读事务/快照中按 Session ordinal 查询全部较早 Run，校验 ordinal 从 1 连续、先前 Run 已终态、RunState 完整且附件元数据仍属该 Session，再返回完整 tuple。图像文件可读性随后由 Agent 请求构建阶段验证。此读取不写历史副本；消息投影由[Session Memory](session-memory.md)负责。
-3. **模型尝试**：Agent 将完整历史、当前 Run 已提交前缀和已解析附件组装成 `ProviderRequest`，先运行 Provider 全量限制校验。只有校验通过后，才经 `FiguraRunStore` 委托 `ExecutionRepository` claim `ProviderAttempt` 并发送请求。成功时，响应事实、私有 `ProviderContinuationFact`（如有）、工具调用意图、attempt 状态及下一 checkpoint 在同一事务中提交。确定失败与未知结果走不同状态；读取不重发已启动请求。完整消息不得为满足 Provider 限制而裁剪，超限时不 claim。
-4. **工具尝试**：`ToolCallFact` 是模型提出的逻辑调用；`ToolAttemptStartedFact` 表示 handler 已启动；`ToolResultFact` 记录成功或有界失败。DurableToolExecutor 执行 handler 并通过 `ExecutionRepository` 追加事实和推进 checkpoint；批次完成后才继续模型轮次。未知副作用需显式处理，不由 Agent 自动 replay。
-5. **终结与恢复**：Checkpoint 的 `revision` 用于拒绝过期推进；`next_action` 指明 model、provider_attempt、tool_execution、tool_attempt 或 final。终态提交 `FinalAnswerFact` 或失败/中断状态，并写安全生命周期事件。`RunRepository` 从 SQLite 重建 `RunState`；事件、历史展示和未来评测从已提交事实投影，不反向成为权威状态。
+3. **网页读取**：Gateway 的 Session 列表使用 `SessionListEntry`，由 SQL 聚合计算每个 Session 的 Run 数与最近活动时间，不逐个 hydrate `RunState`。Session 详情使用 `read_session_snapshot`，在同一个 SQLite 读快照中读取 Session、按 ordinal 排列的完整 RunState 和保留的附件元数据；Repository 检查 Run ordinal 连续、输入形状有效、附件都归属该 Session。Gateway 再把快照转换为有限 Web DTO；HTTP/SSE 与前端接口见[网页端边界](web-boundary.md#3-http-与前端接口)，完整 DTO 字段见[第 4 节](web-boundary.md#4-web-dto-字段)。
+4. **模型尝试**：Agent 将完整历史、当前 Run 已提交前缀和已解析附件组装成 `ProviderRequest`，先运行 Provider 全量限制校验。只有校验通过后，才经 `FiguraRunStore` 委托 `ExecutionRepository` claim `ProviderAttempt` 并发送请求。成功时，响应事实、私有 `ProviderContinuationFact`（如有）、工具调用意图、attempt 状态及下一 checkpoint 在同一事务中提交。确定失败与未知结果走不同状态；读取不重发已启动请求。完整消息不得为满足 Provider 限制而裁剪，超限时不 claim。
+5. **工具尝试**：`ToolCallFact` 是模型提出的逻辑调用；`ToolAttemptStartedFact` 表示 handler 已启动；`ToolResultFact` 记录成功或有界失败。DurableToolExecutor 执行 handler 并通过 `ExecutionRepository` 追加事实和推进 checkpoint；批次完成后才继续模型轮次。未知副作用需显式处理，不由 Agent 自动 replay。
+6. **终结与恢复**：Checkpoint 的 `revision` 用于拒绝过期推进；`next_action` 指明 model、provider_attempt、tool_execution、tool_attempt 或 final。终态提交 `FinalAnswerFact` 或失败/中断状态，并写安全生命周期事件。Gateway 启动时通过 `list_running_runs` 按 Session ID、ordinal 稳定排序发现 running Run，并通过有界 Dispatcher 交给既有 Agent 恢复路径。`RunRepository` 从 SQLite 重建 `RunState`；事件、历史展示和未来评测从已提交事实投影，不反向成为权威状态。
 
 ## 3. 模型关系与共同规则
 
-Session 拥有 Run 和附件元数据；Run 只引用附件 ID，`AttachmentMetadata` 的权威模型和完整字段见[附件专题](attachments.md#3-完整模型字段)。一个 Session 同时至多有一个 `running` Run；幂等重放在 active-Run 拒绝检查之前。Run 还拥有自己的执行记录、工具事实、Provider attempts、continuation、Checkpoint 与事件。`ExecutionRecord.payload` 是 `RunInput | ModelResponseFact | FinalAnswerFact`；`ToolExecutionFact.payload` 是 `ToolCallFact | ToolAttemptStartedFact | ToolResultFact`。这些联合类型按 kind 判别，不能只凭同名 ID 猜测类型。事件的 `event_sequence` 与记录的 `record_sequence`、工具事实的 `tool_sequence` 分属不同序列。事件 `payload` 的 `EventValue` 仅允许 `str | int | tuple[str, ...]`。
+Session 拥有 Run 和附件元数据；Run 只引用附件 ID，`AttachmentMetadata` 的权威模型和完整字段见[附件专题](attachments.md#3-完整模型字段)。`SessionListEntry` 是列表查询聚合，`SessionSnapshot` 是一次一致的 Session 读取视图；两者引用既有 owner 模型，不另建持久事实。一个 Session 同时至多有一个 `running` Run；幂等重放在 active-Run 拒绝检查之前。Run 还拥有自己的执行记录、工具事实、Provider attempts、continuation、Checkpoint 与事件。`ExecutionRecord.payload` 是 `RunInput | ModelResponseFact | FinalAnswerFact`；`ToolExecutionFact.payload` 是 `ToolCallFact | ToolAttemptStartedFact | ToolResultFact`。这些联合类型按 kind 判别，不能只凭同名 ID 猜测类型。事件的 `event_sequence` 与记录的 `record_sequence`、工具事实的 `tool_sequence` 分属不同序列。事件 `payload` 的 `EventValue` 仅允许 `str | int | tuple[str, ...]`。
 
 Runtime 提供较早 Run 的一致读取，不负责将其转成消息。`SessionHistory` 与 role-specific Memory 消息是每次 Agent 请求时的不可变投影；它们没有 SQLite 表，不改变 Run 的字段合同。完整字段和投影来源见[Session Memory 专题](session-memory.md#4-完整模型字段)。
 
@@ -68,6 +73,26 @@ Runtime 提供较早 Run 的一致读取，不负责将其转成消息。`Sessio
 | Session.name | str \| None | 必传 | 可选的会话显示名称；不参与 Session 身份判定 | RunCoordinator / Store → sessions 表 → Session 查询、Run 创建；安全元数据可公开 |
 | Session.created_at | str | 必传 | 创建时的 UTC 时间 | RunCoordinator / Store → sessions 表 → Session 查询、Run 创建；安全元数据可公开 |
 | Session.updated_at | str | 必传 | 最后更新时的 UTC 时间 | RunCoordinator / Store → sessions 表 → Session 查询、Run 创建；安全元数据可公开 |
+
+### SessionListEntry
+
+Session 列表的查询聚合值，不独立持久化。**写入者：**`SessionRepository.list_session_entries`。**权威位置：**调用期查询结果；Session 字段仍由 `sessions` 表权威，Run 数与最近活动由 SQL 聚合计算。**读取与公开：**Gateway Session 列表；经 [Web DTO](web-boundary.md#4-web-dto-字段) 安全投影。[定义](../../src/figura/runtime/domain/models.py)。
+
+| 完整字段路径 | 类型 | 构造默认 | 含义与约束 | 写入 → 权威 → 读取/公开 |
+|---|---|---|---|---|
+| SessionListEntry.session | Session | 必传 | Session 持久身份与元数据；完整字段见本页 `Session` | SessionRepository → sessions 表 → Gateway 列表投影；只公开安全 Session 元数据 |
+| SessionListEntry.run_count | int | 必传 | 该 Session 当前持久 Run 总数；由 SQL `COUNT(*)` 计算，不另存 | SessionRepository → 查询聚合 → Gateway `runCount`；只公开数量 |
+| SessionListEntry.latest_activity | str | 必传 | `session.updated_at`、Run `finished_at`/`created_at` 和附件 `created_at` 的最大时间 | SessionRepository → 查询聚合 → Gateway `updatedAt`；只公开 UTC 时间 |
+
+### SessionSnapshot
+
+Session 详情的一致读取视图，不独立持久化。**写入者：**`RunRepository.read_session_snapshot`。**权威位置：**调用期 SQLite 读快照；各嵌套对象由各自 owner 持久化。**读取与公开：**Gateway 详情投影；经 [Web DTO](web-boundary.md#4-web-dto-字段) 限定后公开。[定义](../../src/figura/runtime/domain/models.py)。
+
+| 完整字段路径 | 类型 | 构造默认 | 含义与约束 | 写入 → 权威 → 读取/公开 |
+|---|---|---|---|---|
+| SessionSnapshot.session | Session | 必传 | 被读取的 Session；完整字段见本页 `Session` | RunRepository → sessions 表中的同一读快照 → Gateway Session 投影；安全字段公开 |
+| SessionSnapshot.run_states | tuple[RunState, ...] | 必传 | 同一 Session 全部 RunState，按 ordinal 升序；Repository 要求序号连续并验证输入事实 | RunRepository → 各 Run 权威表的同一读快照 → Gateway Run/消息投影；RunState 整体不公开 |
+| SessionSnapshot.attachments | tuple[AttachmentMetadata, ...] | 必传 | 该 Session 保留的附件元数据，按 `created_at, attachment_id` 排序；Run 引用归属在快照内验证 | RunRepository 读取、AttachmentMetadata 由 SessionRepository 写入 → attachments 表的同一读快照 → Gateway 附件 DTO；图像字节与本机路径不公开 |
 
 ### Run
 
@@ -255,15 +280,15 @@ Run 唯一推进点和 CAS 修订。 **写入者：**Store / Runtime 提交。**
 
 ### RunStreamEvent
 
-可重放的安全生命周期事件。 **写入者：**Store。**权威位置：**run_stream_events 表。**读取与公开：**未来 Gateway/客户端；to_public_dict 有界投影。[定义](../../src/figura/runtime/domain/models.py)。
+可重放的安全生命周期事件。 **写入者：**Store。**权威位置：**run_stream_events 表。**读取与公开：**Gateway 历史/SSE；通过 `to_public_dict` 和 Web DTO 再做有界投影。[定义](../../src/figura/runtime/domain/models.py)。
 
 | 完整字段路径 | 类型 | 构造默认 | 含义与约束 | 写入 → 权威 → 读取/公开 |
 |---|---|---|---|---|
-| RunStreamEvent.run_id | str | 必传 | 所属 Run 的不透明身份 | Store → run_stream_events 表 → 未来 Gateway/客户端；to_public_dict 有界投影 |
-| RunStreamEvent.event_sequence | int | 必传 | Run 内公开事件序号，与事实序号独立 | Store → run_stream_events 表 → 未来 Gateway/客户端；to_public_dict 有界投影 |
-| RunStreamEvent.event_kind | EventKind | 必传 | 安全生命周期事件种类 | Store → run_stream_events 表 → 未来 Gateway/客户端；to_public_dict 有界投影 |
-| RunStreamEvent.payload | Mapping[str, EventValue] | 必传 | 安全事件 payload；值限 str/int/字符串元组；不复制执行事实原文 | Store → run_stream_events 表 → 未来 Gateway/客户端；to_public_dict 有界投影 |
-| RunStreamEvent.created_at | str | 必传 | 创建时的 UTC 时间 | Store → run_stream_events 表 → 未来 Gateway/客户端；to_public_dict 有界投影 |
+| RunStreamEvent.run_id | str | 必传 | 所属 Run 的不透明身份 | Store → run_stream_events 表 → Gateway 历史/SSE；Web 投影保留 opaque ID |
+| RunStreamEvent.event_sequence | int | 必传 | Run 内公开事件序号，与事实序号独立；SSE ID 由 Run ID 与此序号组成 | Store → run_stream_events 表 → Gateway 历史/SSE；Web 投影保留稳定游标 |
+| RunStreamEvent.event_kind | EventKind | 必传 | 安全生命周期事件种类 | Store → run_stream_events 表 → Gateway 历史/SSE；值映射见[Web Event DTO](web-boundary.md#4-web-dto-字段) |
+| RunStreamEvent.payload | Mapping[str, EventValue] | 必传 | 安全事件 payload；值限 str/int/字符串元组；不复制执行事实原文 | Store → run_stream_events 表 → Gateway 历史/SSE；按事件种类映射 allowlist 字段 |
+| RunStreamEvent.created_at | str | 必传 | 创建时的 UTC 时间 | Store → run_stream_events 表 → Gateway 历史/SSE；公开为事件时间戳 |
 
 ### RunState
 

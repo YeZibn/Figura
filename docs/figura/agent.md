@@ -1,13 +1,14 @@
 # Agent：Run 决策与编排
 
-> [返回总览](../figura-implementation-overview.md)。本篇只描述 Agent 的编排责任；Provider 与 Tool 的完整字段分别见[Provider](provider.md)和[Tool](tools.md)，持久执行事实见[Run Runtime](runtime.md)。
+> [返回总览](../figura-implementation-overview.md)。本篇只描述 Agent 的编排责任；Provider 与 Tool 的完整字段分别见[Provider](provider.md)和[Tool](tools.md)，持久执行事实见[Run Runtime](runtime.md)，网页调用和公开投影见[Web 边界](web-boundary.md)。
 
 ## 1. 职责与边界
 
-`AgentExecutor` 从当前 `RunState.checkpoint.next_action` 选择一步动作；`AgentRequestBuilder` 调用 Session Memory 投影，将同 Session 较早终态 Run 和当前 Run 的已提交前缀组装为完整 Provider 请求。Agent 协调 Provider、Tool、Runtime 和 Memory 投影，但不拥有它们的事实或另存一份历史。当前是内部同步、非流式文本/图像 ReAct；没有独立的 Agent 持久模型。
+`AgentExecutor` 从当前 `RunState.checkpoint.next_action` 选择一步动作；`AgentRequestBuilder` 调用 Session Memory 投影，将同 Session 较早终态 Run 和当前 Run 的已提交前缀组装为完整 Provider 请求。Agent 协调 Provider、Tool、Runtime 和 Memory 投影，但不拥有它们的事实或另存一份历史。当前 Agent 执行本身是同步、非流式文本/图像 ReAct；Web Gateway 通过有界 `RunDispatcher` 异步调用 `execute(session_id, run_id)`，HTTP handler 不运行模型请求。Agent 没有独立持久模型。
 
 ```mermaid
 flowchart LR
+    Gateway[Web Gateway / RunDispatcher] -->|异步 execute(session_id, run_id)| Agent[AgentExecutor]
     State[Runtime: RunState + Checkpoint] --> Agent[AgentExecutor]
     Agent -->|读取较早的终态 RunState| State
     Agent --> Build[AgentRequestBuilder]
@@ -40,8 +41,8 @@ flowchart LR
 | `ProviderRequest`、`ProviderResponse` | [Provider](provider.md#4-完整模型字段) | 组装请求、消费规范化结果；字段合同由 Provider 边界定义 |
 | `ToolDefinition`、`ToolInvocation`、`ToolExecutionResult` | [Tool](tools.md#4-完整模型字段) | 投影可用工具、提交调用、消费结果 |
 
-当前 `src/figura/agent/` 没有 Agent 自有 dataclass，因而本篇没有为编排过程虚构字段表；未来若出现独立 Agent 领域值，应先按[维护 skill](../../.codex/skills/figura-implementation-overview/SKILL.md)的归属规则判断。
+当前 `src/figura/agent/` 没有 Agent 自有 dataclass，因而本篇没有为编排过程虚构字段表；网页创建 Run 后由 Gateway Dispatcher 调度，但 Session、Run 生命周期和恢复事实仍归 Runtime。Gateway 组合目前注册空 ToolRegistry，所以网页入口没有生产图表工具。未来若出现独立 Agent 领域值，应先按[维护 skill](../../.codex/skills/figura-implementation-overview/SKILL.md)的归属规则判断。
 
 ## 4. 不变量、状态与依据
 
-请求必须从同一 Session 的已提交 Run 事实重建；先前 Run 必须全部终态，且 Session Memory 投影不持久化、不裁剪。图片字节只存在于调用期 Provider 消息；请求的图片、文本和 Schema 等全部 Provider 限制在 attempt claim 前验证。Provider 和工具的不确定外部效果不会因读取或普通执行循环而自动重试。当前新 Figura 无图表分析工具或 Gateway 调用入口。代码：[AgentExecutor](../../src/figura/agent/executor.py)、[AgentRequestBuilder](../../src/figura/agent/request.py)；主规格：[Agent ReAct](../../openspec/figura/openspec/specs/agent-react-execution/spec.md)、[Session Memory](../../openspec/figura/openspec/specs/session-memory/spec.md)。
+请求必须从同一 Session 的已提交 Run 事实重建；先前 Run 必须全部终态，且 Session Memory 投影不持久化、不裁剪。图片字节只存在于调用期 Provider 消息；请求的图片、文本和 Schema 等全部 Provider 限制在 attempt claim 前验证。Provider 和工具的不确定外部效果不会因读取或普通执行循环而自动重试。Gateway 入口目前只连接持久执行、附件和 Provider 能力，没有来源/证据或生产图表工具。代码：[AgentExecutor](../../src/figura/agent/executor.py)、[AgentRequestBuilder](../../src/figura/agent/request.py)、[Run Dispatcher](../../src/figura/gateway/dispatcher.py)；主规格：[Agent ReAct](../../openspec/figura/openspec/specs/agent-react-execution/spec.md)、[Session Memory](../../openspec/figura/openspec/specs/session-memory/spec.md)、[Web Gateway](../../openspec/figura/openspec/specs/figura-web-gateway/spec.md)。

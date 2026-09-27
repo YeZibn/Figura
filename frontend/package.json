@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "dev:gateway": "node scripts/dev-gateway.mjs",
+    "dev:figura": "node scripts/dev-figura.mjs",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "tauri": "tauri",

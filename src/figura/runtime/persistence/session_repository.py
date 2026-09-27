@@ -8,10 +8,10 @@ from contextlib import contextmanager
 from typing import Callable, Iterator
 
 from ..domain.invariants import _utf8_length, _validate_attachment_metadata, _validate_id
-from ..domain.models import AttachmentMetadata, Session
+from ..domain.models import AttachmentMetadata, Session, SessionListEntry
 from ..errors import RunError, RunErrorCode
 from .database import SqliteDatabase, _utc_now
-from .mappers import _attachment_from_row
+from .mappers import _attachment_from_row, _session_from_row
 
 
 def _require_attachment_ownership(
@@ -91,6 +91,45 @@ class SessionRepository:
             ).fetchone()
         if row is None:
             raise RunError(RunErrorCode.SESSION_NOT_FOUND)
+
+    def list_sessions(self) -> tuple[Session, ...]:
+        with self._database.read() as connection:
+            rows = connection.execute(
+                "SELECT * FROM sessions ORDER BY updated_at DESC, session_id"
+            ).fetchall()
+        return tuple(_session_from_row(row) for row in rows)
+
+    def list_session_entries(self) -> tuple[SessionListEntry, ...]:
+        with self._database.read() as connection:
+            rows = connection.execute(
+                "SELECT session.*, "
+                "(SELECT COUNT(*) FROM runs WHERE runs.session_id = session.session_id) AS run_count, "
+                "MAX(session.updated_at, "
+                "COALESCE((SELECT MAX(COALESCE(finished_at, created_at)) FROM runs "
+                "WHERE runs.session_id = session.session_id), session.updated_at), "
+                "COALESCE((SELECT MAX(created_at) FROM attachments "
+                "WHERE attachments.session_id = session.session_id), session.updated_at)"
+                ") AS latest_activity "
+                "FROM sessions AS session ORDER BY latest_activity DESC, session.session_id"
+            ).fetchall()
+        return tuple(
+            SessionListEntry(
+                session=_session_from_row(row),
+                run_count=int(row["run_count"]),
+                latest_activity=row["latest_activity"],
+            )
+            for row in rows
+        )
+
+    def get_session(self, session_id: str) -> Session:
+        _validate_id(session_id)
+        with self._database.read() as connection:
+            row = connection.execute(
+                "SELECT * FROM sessions WHERE session_id = ?", (session_id,)
+            ).fetchone()
+        if row is None:
+            raise RunError(RunErrorCode.SESSION_NOT_FOUND)
+        return _session_from_row(row)
 
     def register_attachment(
         self,

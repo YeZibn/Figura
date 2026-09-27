@@ -49,6 +49,7 @@ export type RunSummary = {
   rootRunId?: string | null
   continuationKind?: ContinuationKind | null
   recovery?: RunRecovery | null
+  executionState?: 'active' | 'needs_reconciliation'
 }
 
 export type RunHandle = {
