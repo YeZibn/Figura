@@ -9,10 +9,11 @@ import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterator
+from typing import Callable, Iterator
 
 from figura.providers.models import FinishReason, ProviderContinuation, ProviderId
 from figura.providers.errors import ProviderFailureCode
+from figura.providers.validation import MAX_IMAGE_BYTES
 from figura.tools.contracts import ReplayEffect, ToolExecutionResult, ToolOutcome
 
 from ._codec import (
@@ -28,6 +29,7 @@ from ._codec import (
 from .errors import RunError, RunErrorCode
 from .models import (
     ActionKind,
+    AttachmentMetadata,
     EventKind,
     ExecutionCheckpoint,
     ExecutionRecord,
@@ -53,7 +55,7 @@ from .models import (
     TERMINAL_MESSAGES,
 )
 
-_SCHEMA_VERSION = 4
+_SCHEMA_VERSION = 5
 _BUSY_TIMEOUT_MS = 5000
 _DB_FILENAME = "figura.sqlite3"
 
@@ -93,6 +95,99 @@ class FiguraRunStore:
             ).fetchone()
         if row is None:
             raise RunError(RunErrorCode.SESSION_NOT_FOUND)
+
+    def register_attachment(
+        self,
+        metadata: AttachmentMetadata,
+        install_file: Callable[[], None],
+    ) -> None:
+        _validate_attachment_metadata(metadata)
+        if not callable(install_file):
+            raise RunError(RunErrorCode.INVALID_REQUEST)
+        with self._write() as connection:
+            if connection.execute(
+                "SELECT 1 FROM sessions WHERE session_id = ?", (metadata.session_id,)
+            ).fetchone() is None:
+                raise RunError(RunErrorCode.SESSION_NOT_FOUND)
+            install_file()
+            connection.execute(
+                "INSERT INTO attachments(attachment_id, session_id, filename, media_type, byte_count, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    metadata.attachment_id,
+                    metadata.session_id,
+                    metadata.filename,
+                    metadata.media_type,
+                    metadata.byte_count,
+                    metadata.created_at,
+                ),
+            )
+
+    def list_attachments(self, session_id: str) -> tuple[AttachmentMetadata, ...]:
+        _validate_id(session_id)
+        with self._read() as connection:
+            if connection.execute(
+                "SELECT 1 FROM sessions WHERE session_id = ?", (session_id,)
+            ).fetchone() is None:
+                raise RunError(RunErrorCode.SESSION_NOT_FOUND)
+            rows = connection.execute(
+                "SELECT * FROM attachments WHERE session_id = ? "
+                "ORDER BY created_at, attachment_id",
+                (session_id,),
+            ).fetchall()
+        return tuple(_attachment_from_row(row) for row in rows)
+
+    def get_attachment_metadata(
+        self,
+        session_id: str,
+        attachment_id: str,
+    ) -> AttachmentMetadata:
+        _validate_id(session_id)
+        _validate_id(attachment_id)
+        with self._read() as connection:
+            row = connection.execute(
+                "SELECT * FROM attachments WHERE session_id = ? AND attachment_id = ?",
+                (session_id, attachment_id),
+            ).fetchone()
+        if row is None:
+            raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
+        return _attachment_from_row(row)
+
+    @contextmanager
+    def delete_attachment_transaction(
+        self,
+        session_id: str,
+        attachment_id: str,
+    ) -> Iterator[AttachmentMetadata]:
+        _validate_id(session_id)
+        _validate_id(attachment_id)
+        with self._write() as connection:
+            row = connection.execute(
+                "SELECT * FROM attachments WHERE session_id = ? AND attachment_id = ?",
+                (session_id, attachment_id),
+            ).fetchone()
+            if row is None:
+                raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
+            if _attachment_is_referenced(connection, session_id, attachment_id):
+                raise RunError(RunErrorCode.INVALID_TRANSITION)
+            metadata = _attachment_from_row(row)
+            yield metadata
+            cursor = connection.execute(
+                "DELETE FROM attachments WHERE session_id = ? AND attachment_id = ?",
+                (session_id, attachment_id),
+            )
+            if cursor.rowcount != 1:
+                raise RunError(RunErrorCode.INTEGRITY_ERROR)
+
+    def reconcile_attachment_files(
+        self,
+        reconcile: Callable[[frozenset[str]], None],
+    ) -> None:
+        if not callable(reconcile):
+            raise RunError(RunErrorCode.INVALID_REQUEST)
+        with self._write() as connection:
+            rows = connection.execute("SELECT attachment_id FROM attachments").fetchall()
+            reconcile(frozenset(row["attachment_id"] for row in rows))
 
     def find_idempotent_run(
         self, session_id: str, key_digest: str, request_fingerprint: str
@@ -161,6 +256,12 @@ class FiguraRunStore:
                     raise RunError(RunErrorCode.INTEGRITY_ERROR)
                 return _run_from_row(run_row)
 
+            _require_attachment_ownership(
+                connection,
+                session_id,
+                input_payload.attachment_ids,
+            )
+
             ordinal_row = connection.execute(
                 "SELECT COALESCE(MAX(ordinal), 0) + 1 FROM runs WHERE session_id = ?",
                 (session_id,),
@@ -213,7 +314,22 @@ class FiguraRunStore:
         _validate_id(session_id)
         _validate_id(run_id)
         with self._read() as connection:
-            return _read_run_state_from_connection(connection, session_id, run_id)
+            state = _read_run_state_from_connection(connection, session_id, run_id)
+            input_payload = state.records[0].payload
+            if not isinstance(input_payload, RunInput):
+                raise RunError(RunErrorCode.INTEGRITY_ERROR)
+            try:
+                _require_attachment_ownership(
+                    connection,
+                    session_id,
+                    input_payload.attachment_ids,
+                    integrity=True,
+                )
+            except RunError as error:
+                if error.code is RunErrorCode.INTEGRITY_ERROR:
+                    raise
+                raise RunError(RunErrorCode.INTEGRITY_ERROR) from None
+            return state
 
     def begin_provider_attempt(
         self,
@@ -1042,8 +1158,13 @@ class FiguraRunStore:
                     elif version == 3:
                         for statement in _PROVIDER_ATTEMPT_SCHEMA:
                             connection.execute(statement)
+                    elif version == 4:
+                        pass
                     else:
                         raise RunError(RunErrorCode.UNSUPPORTED_VERSION)
+                    if version > 0:
+                        for statement in _ATTACHMENT_SCHEMA:
+                            connection.execute(statement)
                     _validate_migration(connection)
                     connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
                     connection.commit()
@@ -1352,7 +1473,28 @@ _PROVIDER_ATTEMPT_SCHEMA = (
         BEGIN SELECT RAISE(ABORT, 'immutable provider attempt'); END""",
 )
 
-_SCHEMA = (*_CORE_SCHEMA, *_TOOL_SCHEMA, *_CONTINUATION_SCHEMA, *_PROVIDER_ATTEMPT_SCHEMA)
+_ATTACHMENT_SCHEMA = (
+    """CREATE TABLE attachments (
+        attachment_id TEXT PRIMARY KEY CHECK (
+            length(CAST(attachment_id AS BLOB)) = 32
+            AND attachment_id NOT GLOB '*[^0-9a-f]*'
+        ),
+        session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE RESTRICT,
+        filename TEXT NOT NULL CHECK (length(CAST(filename AS BLOB)) BETWEEN 1 AND 255),
+        media_type TEXT NOT NULL CHECK (media_type IN ('image/jpeg', 'image/png', 'image/gif', 'image/webp')),
+        byte_count INTEGER NOT NULL CHECK (byte_count BETWEEN 1 AND 25165760),
+        created_at TEXT NOT NULL
+    )""",
+    "CREATE INDEX attachments_by_session_created ON attachments(session_id, created_at, attachment_id)",
+)
+
+_SCHEMA = (
+    *_CORE_SCHEMA,
+    *_TOOL_SCHEMA,
+    *_CONTINUATION_SCHEMA,
+    *_PROVIDER_ATTEMPT_SCHEMA,
+    *_ATTACHMENT_SCHEMA,
+)
 
 
 def _validate_migration(connection: sqlite3.Connection) -> None:
@@ -1369,6 +1511,88 @@ def _utc_now() -> str:
 def _validate_id(value: object) -> None:
     if not isinstance(value, str) or not value or _utf8_length(value) > 128:
         raise RunError(RunErrorCode.INVALID_REQUEST)
+
+
+def _validate_attachment_metadata(metadata: object) -> AttachmentMetadata:
+    if not isinstance(metadata, AttachmentMetadata):
+        raise RunError(RunErrorCode.INVALID_REQUEST)
+    try:
+        parsed_id = uuid.UUID(metadata.attachment_id)
+    except (AttributeError, TypeError, ValueError):
+        raise RunError(RunErrorCode.INVALID_REQUEST) from None
+    if parsed_id.hex != metadata.attachment_id:
+        raise RunError(RunErrorCode.INVALID_REQUEST)
+    _validate_id(metadata.session_id)
+    if (
+        not isinstance(metadata.filename, str)
+        or not metadata.filename
+        or _utf8_length(metadata.filename) > 255
+        or "/" in metadata.filename
+        or "\\" in metadata.filename
+    ):
+        raise RunError(RunErrorCode.INVALID_REQUEST)
+    if not isinstance(metadata.media_type, str) or metadata.media_type not in {
+        "image/jpeg",
+        "image/png",
+        "image/gif",
+        "image/webp",
+    }:
+        raise RunError(RunErrorCode.INVALID_REQUEST)
+    if type(metadata.byte_count) is not int or not 1 <= metadata.byte_count <= MAX_IMAGE_BYTES:
+        raise RunError(RunErrorCode.INVALID_REQUEST)
+    if not isinstance(metadata.created_at, str) or not metadata.created_at:
+        raise RunError(RunErrorCode.INVALID_REQUEST)
+    return metadata
+
+
+def _attachment_from_row(row: sqlite3.Row) -> AttachmentMetadata:
+    try:
+        return AttachmentMetadata(
+            attachment_id=row["attachment_id"],
+            session_id=row["session_id"],
+            filename=row["filename"],
+            media_type=row["media_type"],
+            byte_count=row["byte_count"],
+            created_at=row["created_at"],
+        )
+    except (KeyError, TypeError, ValueError):
+        raise RunError(RunErrorCode.INTEGRITY_ERROR) from None
+
+
+def _require_attachment_ownership(
+    connection: sqlite3.Connection,
+    session_id: str,
+    attachment_ids: tuple[str, ...],
+    *,
+    integrity: bool = False,
+) -> None:
+    if not attachment_ids:
+        return
+    placeholders = ", ".join("?" for _ in attachment_ids)
+    rows = connection.execute(
+        f"SELECT attachment_id FROM attachments WHERE session_id = ? "
+        f"AND attachment_id IN ({placeholders})",
+        (session_id, *attachment_ids),
+    ).fetchall()
+    if {row["attachment_id"] for row in rows} != set(attachment_ids):
+        code = RunErrorCode.INTEGRITY_ERROR if integrity else RunErrorCode.UNSUPPORTED_PAYLOAD
+        raise RunError(code)
+
+
+def _attachment_is_referenced(
+    connection: sqlite3.Connection,
+    session_id: str,
+    attachment_id: str,
+) -> bool:
+    row = connection.execute(
+        "SELECT 1 FROM run_execution_records AS record "
+        "JOIN runs AS run ON run.run_id = record.run_id "
+        "JOIN json_each(record.payload_json, '$.attachment_ids') AS referenced "
+        "WHERE run.session_id = ? AND record.record_kind = 'input' "
+        "AND referenced.value = ? LIMIT 1",
+        (session_id, attachment_id),
+    ).fetchone()
+    return row is not None
 
 
 def _utf8_length(value: str) -> int:
@@ -1671,7 +1895,7 @@ def _validate_state(state: RunState) -> None:
     if first.record_kind is not RecordKind.INPUT or first.record_id != run.input_record_id:
         raise RunError(RunErrorCode.INTEGRITY_ERROR)
     input_fact = first.payload
-    if not isinstance(input_fact, RunInput) or input_fact.attachment_ids:
+    if not isinstance(input_fact, RunInput):
         raise RunError(RunErrorCode.INTEGRITY_ERROR)
     if (input_fact.requested_provider, input_fact.requested_model) != (run.provider, run.model):
         raise RunError(RunErrorCode.INTEGRITY_ERROR)

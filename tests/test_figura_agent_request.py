@@ -1,20 +1,25 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from io import BytesIO
 
 import pytest
+from PIL import Image
 
 import figura.agent.request as request_module
+from figura.attachments import FiguraAttachmentService
 from figura.agent.request import AgentRequestBuilder
 from figura.providers import (
     MODEL_IDS,
     FinishReason,
+    ImageBlock,
     MessageRole,
     ProviderContinuation,
     ProviderFactory,
     ProviderId,
     ProviderResponse,
     ProviderToolCall,
+    TextBlock,
 )
 from figura.runtime import (
     ActionKind,
@@ -80,6 +85,41 @@ def _app(tmp_path):
         )
     )
     return store, coordinator, session, run
+
+
+def _image_bytes(color: str) -> bytes:
+    content = BytesIO()
+    Image.new("RGB", (2, 2), color=color).save(content, format="PNG")
+    return content.getvalue()
+
+
+def _app_with_attachments(tmp_path, image_contents: tuple[bytes, ...]):
+    store = FiguraRunStore(tmp_path)
+    attachments = FiguraAttachmentService(store)
+    factory = ProviderFactory.from_env(
+        {
+            "FIGURA_QWEN_API_KEY": "qwen-secret",
+            "FIGURA_QWEN_BASE_URL": "https://qwen.example.test/v1",
+        },
+        transport_factory=lambda _profile: None,
+    )
+    coordinator = RunCoordinator(store, factory)
+    session = coordinator.create_session()
+    metadata = tuple(
+        attachments.upload(session.session_id, f"image-{index}.png", content)
+        for index, content in enumerate(image_contents)
+    )
+    run = coordinator.create_run(
+        RunCreateRequest(
+            session_id=session.session_id,
+            text="请分析这些图表。",
+            provider_id=ProviderId.QWEN.value,
+            model_id=MODEL_IDS[ProviderId.QWEN],
+            idempotency_key="agent-request-image-test",
+            attachment_ids=tuple(item.attachment_id for item in metadata),
+        )
+    )
+    return store, coordinator, session, run, attachments
 
 
 def _commit_tool_round(
@@ -151,6 +191,64 @@ def test_initial_request_uses_run_selection_fixed_instruction_and_tool_projectio
     assert request.options.stream is False
     assert request.options.max_completion_tokens == 4096
     assert [tool.name for tool in request.tools] == ["inspect"]
+
+
+def test_request_resolves_images_in_persisted_order_after_user_text(tmp_path) -> None:
+    first_image = _image_bytes("red")
+    second_image = _image_bytes("blue")
+    _store, coordinator, session, run, attachments = _app_with_attachments(
+        tmp_path, (first_image, second_image)
+    )
+
+    request = AgentRequestBuilder(attachments).build(
+        coordinator.read_run_state(session.session_id, run.run_id), _registry()
+    )
+
+    blocks = request.messages[0].content
+    assert isinstance(blocks, tuple)
+    assert blocks[0] == TextBlock("请分析这些图表。")
+    assert blocks[1:] == (
+        ImageBlock("image/png", first_image),
+        ImageBlock("image/png", second_image),
+    )
+
+
+def test_request_rebuilds_the_original_images_after_a_tool_round(tmp_path) -> None:
+    first_image = _image_bytes("green")
+    second_image = _image_bytes("yellow")
+    store, coordinator, session, run, attachments = _app_with_attachments(
+        tmp_path, (first_image, second_image)
+    )
+    state = _commit_tool_round(
+        store,
+        coordinator,
+        session,
+        run,
+        _registry(),
+        call_id="call-image-round",
+    )
+
+    request = AgentRequestBuilder(attachments).build(state, _registry())
+
+    assert request.messages[0].content == (
+        TextBlock("请分析这些图表。"),
+        ImageBlock("image/png", first_image),
+        ImageBlock("image/png", second_image),
+    )
+    assert request.messages[1].role is MessageRole.ASSISTANT
+
+
+def test_request_with_attachments_requires_an_injected_session_resolver(tmp_path) -> None:
+    _store, coordinator, session, run, _attachments = _app_with_attachments(
+        tmp_path, (_image_bytes("red"),)
+    )
+
+    with pytest.raises(RunError) as error:
+        AgentRequestBuilder().build(
+            coordinator.read_run_state(session.session_id, run.run_id), _registry()
+        )
+
+    assert error.value.code is RunErrorCode.UNSUPPORTED_PAYLOAD
 
 
 def test_request_rebuilds_tool_round_in_order_and_attaches_continuation(tmp_path) -> None:

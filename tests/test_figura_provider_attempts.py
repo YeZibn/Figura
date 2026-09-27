@@ -208,6 +208,8 @@ def test_v3_migration_preserves_committed_responses_without_synthetic_attempts(t
 
     database = sqlite3.connect(store.database_path)
     database.execute("DROP TABLE run_provider_attempts")
+    database.execute("DROP INDEX attachments_by_session_created")
+    database.execute("DROP TABLE attachments")
     database.execute("PRAGMA user_version = 3")
     database.commit()
     database.close()

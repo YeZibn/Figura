@@ -9,6 +9,7 @@ from typing import Any
 
 from figura.json_schema import JsonValueError, canonical_json_dumps, normalize_json_value
 from figura.providers.models import ProviderId, ProviderUsage
+from figura.providers.validation import MAX_IMAGE_COUNT
 from figura.tools.contracts import (
     ReplayEffect,
     ToolExecutionError,
@@ -71,12 +72,10 @@ def decode_payload(
     if kind is RecordKind.INPUT:
         _require_keys(value, {"schema_version", "text", "attachment_ids", "requested_provider", "requested_model"})
         text = _bounded_string(value["text"], 64 * 1024)
-        attachments = value["attachment_ids"]
-        if not isinstance(attachments, list) or any(not isinstance(item, str) for item in attachments):
-            raise RunError(RunErrorCode.INTEGRITY_ERROR)
+        attachments = _validate_attachment_ids(value["attachment_ids"], persisted=True)
         provider = _bounded_string(value["requested_provider"], 64)
         model = _bounded_string(value["requested_model"], 128)
-        return RunInput(text, tuple(attachments), provider, model, schema_version)
+        return RunInput(text, attachments, provider, model, schema_version)
 
     if kind is RecordKind.MODEL_RESPONSE:
         expected_keys = {
@@ -138,12 +137,11 @@ def payload_to_dict(kind: RecordKind, payload: object) -> dict[str, Any]:
     if kind is RecordKind.INPUT and isinstance(payload, RunInput):
         if payload.schema_version != 1:
             raise RunError(RunErrorCode.UNSUPPORTED_VERSION)
-        if payload.attachment_ids:
-            raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
+        attachments = _validate_attachment_ids(payload.attachment_ids)
         return {
             "schema_version": 1,
             "text": _bounded_string(payload.text, 64 * 1024),
-            "attachment_ids": [],
+            "attachment_ids": list(attachments),
             "requested_provider": _bounded_string(payload.requested_provider, 64),
             "requested_model": _bounded_string(payload.requested_model, 128),
         }
@@ -191,6 +189,19 @@ def payload_to_dict(kind: RecordKind, payload: object) -> dict[str, Any]:
             "guard_version": "text-only-v1",
         }
     raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
+
+
+def _validate_attachment_ids(value: object, *, persisted: bool = False) -> tuple[str, ...]:
+    error_code = RunErrorCode.INTEGRITY_ERROR if persisted else RunErrorCode.UNSUPPORTED_PAYLOAD
+    if not isinstance(value, (tuple, list)) or len(value) > MAX_IMAGE_COUNT:
+        raise RunError(error_code)
+    try:
+        attachment_ids = tuple(_nonempty_string(item, 128) for item in value)
+    except RunError:
+        raise RunError(error_code) from None
+    if len(set(attachment_ids)) != len(attachment_ids):
+        raise RunError(error_code)
+    return attachment_ids
 
 
 def validate_provider_continuation_fact(

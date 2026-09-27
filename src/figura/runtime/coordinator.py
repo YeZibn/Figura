@@ -16,6 +16,7 @@ from figura.providers import (
     ProviderToolCall,
     ProviderUsage,
 )
+from figura.providers.validation import MAX_IMAGE_COUNT
 
 from ._codec import MAX_PROVIDER_CONTINUATION_BYTES, validate_tool_call_batch
 from .errors import RunError, RunErrorCode
@@ -88,7 +89,7 @@ class RunCoordinator:
             model_id=request.model_id,
             input_payload=RunInput(
                 text=request.text,
-                attachment_ids=(),
+                attachment_ids=tuple(request.attachment_ids),
                 requested_provider=provider_id.value,
                 requested_model=request.model_id,
             ),
@@ -251,8 +252,17 @@ class RunCoordinator:
             raise RunError(RunErrorCode.INVALID_REQUEST)
         if not isinstance(request.attachment_ids, (tuple, list)):
             raise RunError(RunErrorCode.INVALID_REQUEST)
-        if request.attachment_ids:
-            raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
+        if len(request.attachment_ids) > MAX_IMAGE_COUNT:
+            raise RunError(RunErrorCode.INVALID_REQUEST)
+        if any(
+            not isinstance(attachment_id, str)
+            or not attachment_id
+            or _byte_length(attachment_id) > 128
+            for attachment_id in request.attachment_ids
+        ):
+            raise RunError(RunErrorCode.INVALID_REQUEST)
+        if len(set(request.attachment_ids)) != len(request.attachment_ids):
+            raise RunError(RunErrorCode.INVALID_REQUEST)
 
     @staticmethod
     def _model_response_fact(
@@ -362,7 +372,7 @@ def _request_fingerprint(request: RunCreateRequest) -> str:
         {
             "session_id": request.session_id,
             "text": request.text,
-            "attachment_ids": [],
+            "attachment_ids": list(request.attachment_ids),
             "provider_id": request.provider_id,
             "model_id": request.model_id,
         },

@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from figura.attachments import FiguraAttachmentService
 from figura.json_schema import JsonValueError, canonical_json_dumps
 from figura.providers import (
     FinishReason,
+    ImageBlock,
     InstructionBlock,
     InstructionRole,
     MessageRole,
@@ -16,11 +18,15 @@ from figura.providers import (
     ProviderOptions,
     ProviderRequest,
     ProviderToolCall,
+    TextBlock,
 )
 from figura.providers.errors import ProviderCallError
 from figura.providers.validation import (
     MAX_INSTRUCTION_COUNT,
+    MAX_IMAGE_BYTES,
+    MAX_IMAGE_COUNT,
     MAX_MESSAGE_COUNT,
+    MAX_TOTAL_IMAGE_BYTES,
     MAX_TOTAL_TEXT_BYTES,
     MAX_TOOL_COUNT,
     validate_request,
@@ -52,7 +58,15 @@ _MAX_COMPLETION_TOKENS = 4096
 class AgentRequestBuilder:
     """Build one validated model request from the current durable Run state."""
 
-    __slots__ = ()
+    __slots__ = ("_attachments",)
+
+    def __init__(self, attachments: FiguraAttachmentService | None = None) -> None:
+        if attachments is not None and not isinstance(attachments, FiguraAttachmentService):
+            raise TypeError("attachments must be a FiguraAttachmentService")
+        object.__setattr__(self, "_attachments", attachments)
+
+    def __setattr__(self, name: str, value: object) -> None:
+        raise AttributeError("AgentRequestBuilder is immutable")
 
     def build(self, state: RunState, registry: ToolRegistry) -> ProviderRequest:
         if not isinstance(state, RunState) or not isinstance(registry, ToolRegistry):
@@ -74,13 +88,14 @@ class AgentRequestBuilder:
         run_input = input_records[0].payload
         if not isinstance(run_input, RunInput):
             raise RunError(RunErrorCode.INTEGRITY_ERROR)
-        if run_input.attachment_ids:
-            raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
 
         instructions = (InstructionBlock(InstructionRole.SYSTEM, _SYSTEM_INSTRUCTION),)
         tools = self._project_tools(registry)
         rounds = self._project_rounds(state, registry)
-        user_message = ProviderMessage(MessageRole.USER, run_input.text)
+        user_message = ProviderMessage(
+            MessageRole.USER,
+            self._user_content(state.run.session_id, run_input.text, run_input.attachment_ids),
+        )
         retained_rounds = list(rounds)
 
         while True:
@@ -109,6 +124,34 @@ class AgentRequestBuilder:
         except ProviderCallError:
             raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD) from None
         return request
+
+    def _user_content(
+        self,
+        session_id: str,
+        text: str,
+        attachment_ids: tuple[str, ...],
+    ) -> str | tuple[TextBlock | ImageBlock, ...]:
+        if not attachment_ids:
+            return text
+        if len(attachment_ids) > MAX_IMAGE_COUNT or self._attachments is None:
+            raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
+
+        images: list[ImageBlock] = []
+        total_image_bytes = 0
+        for attachment_id in attachment_ids:
+            image = self._attachments.resolve(session_id, attachment_id)
+            if (
+                not isinstance(image, ImageBlock)
+                or not isinstance(image.image_bytes, bytes)
+                or not image.image_bytes
+                or len(image.image_bytes) > MAX_IMAGE_BYTES
+            ):
+                raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
+            total_image_bytes += len(image.image_bytes)
+            if total_image_bytes > MAX_TOTAL_IMAGE_BYTES:
+                raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
+            images.append(image)
+        return (TextBlock(text), *images)
 
     @staticmethod
     def _project_tools(registry: ToolRegistry):
@@ -259,13 +302,23 @@ def _within_provider_limits(request: ProviderRequest) -> bool:
     ):
         return False
     text_bytes = sum(len(block.content.encode("utf-8")) for block in request.instructions)
+    image_count = 0
+    image_bytes = 0
     for message in request.messages:
         content = message.content
         if isinstance(content, str):
             text_bytes += len(content.encode("utf-8"))
         else:
             for block in content:
-                text_bytes += len(block.text.encode("utf-8"))
+                if isinstance(block, TextBlock):
+                    text_bytes += len(block.text.encode("utf-8"))
+                elif isinstance(block, ImageBlock):
+                    image_count += 1
+                    image_bytes += len(block.image_bytes)
+                    if len(block.image_bytes) > MAX_IMAGE_BYTES:
+                        return False
+                else:
+                    return False
         text_bytes += sum(len(call.arguments.encode("utf-8")) for call in message.tool_calls)
         if message.continuation is not None:
             text_bytes += len(message.continuation.reasoning_content.encode("utf-8"))
@@ -275,4 +328,8 @@ def _within_provider_limits(request: ProviderRequest) -> bool:
             text_bytes += len(canonical_json_dumps(tool.parameters).encode("utf-8"))
         except (JsonValueError, TypeError, ValueError):
             return False
-    return text_bytes <= MAX_TOTAL_TEXT_BYTES
+    return (
+        text_bytes <= MAX_TOTAL_TEXT_BYTES
+        and image_count <= MAX_IMAGE_COUNT
+        and image_bytes <= MAX_TOTAL_IMAGE_BYTES
+    )

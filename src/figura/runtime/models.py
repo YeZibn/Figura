@@ -80,6 +80,16 @@ class Session:
 
 
 @dataclass(frozen=True)
+class AttachmentMetadata:
+    attachment_id: str
+    session_id: str
+    filename: str
+    media_type: str
+    byte_count: int
+    created_at: str
+
+
+@dataclass(frozen=True)
 class Run:
     run_id: str
     session_id: str

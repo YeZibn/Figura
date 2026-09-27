@@ -284,6 +284,8 @@ def _create_v2_database(data_root):
         )
         connection.execute("DROP TABLE run_provider_continuations")
         connection.execute("DROP TABLE run_provider_attempts")
+        connection.execute("DROP INDEX attachments_by_session_created")
+        connection.execute("DROP TABLE attachments")
         connection.execute("PRAGMA user_version = 2")
     return store.database_path, session, run
 
@@ -319,7 +321,7 @@ def _snapshot_run_rows(connection: sqlite3.Connection, *, session_id: str, run_i
     }
 
 
-def test_fresh_store_creates_schema_v4_continuation_and_provider_attempt_tables(tmp_path) -> None:
+def test_fresh_store_creates_schema_v5_attachment_and_execution_tables(tmp_path) -> None:
     store = FiguraRunStore(tmp_path)
 
     with sqlite3.connect(store.database_path) as connection:
@@ -341,11 +343,24 @@ def test_fresh_store_creates_schema_v4_continuation_and_provider_attempt_tables(
             row[1]
             for row in connection.execute("PRAGMA table_info(run_provider_continuations)")
         }
+        attachment_columns = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info(attachments)")
+        }
 
-    assert version == 4
+    assert version == 5
     assert quick_check == "ok"
     assert "run_provider_continuations" in tables
     assert "run_provider_attempts" in tables
+    assert "attachments" in tables
+    assert attachment_columns == {
+        "attachment_id",
+        "session_id",
+        "filename",
+        "media_type",
+        "byte_count",
+        "created_at",
+    }
     assert continuation_columns == {
         "continuation_id",
         "run_id",
@@ -710,7 +725,7 @@ def test_v1_migration_preserves_run_records_checkpoint_events_and_idempotency(tm
             )
         }
 
-    assert version == 4
+    assert version == 5
     assert quick_check == "ok"
     assert foreign_key_violations == []
     assert idempotency == ("legacy-session", "a" * 64, "b" * 64, "legacy-run")
@@ -765,7 +780,7 @@ def test_v2_migration_preserves_existing_run_facts_checkpoint_events_and_idempot
         foreign_key_violations = connection.execute("PRAGMA foreign_key_check").fetchall()
 
     state = store.read_run_state(session.session_id, run.run_id)
-    assert version == 4
+    assert version == 5
     assert quick_check == "ok"
     assert foreign_key_violations == []
     assert after == before
@@ -823,7 +838,7 @@ def test_v2_migration_failure_rolls_back_new_schema_and_can_retry(tmp_path) -> N
     store = FiguraRunStore(tmp_path)
     assert store.read_run_state(session.session_id, run.run_id).run.run_id == run.run_id
     with sqlite3.connect(database_path) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 4
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 5
 
 
 def test_v1_migration_rolls_back_schema_version_and_added_column_on_failure(tmp_path) -> None:

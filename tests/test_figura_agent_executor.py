@@ -1,15 +1,24 @@
 from __future__ import annotations
 
-import pytest
+import sqlite3
+from io import BytesIO
 
+import pytest
+from PIL import Image
+
+import figura.agent.request as request_module
+from figura.agent.request import AgentRequestBuilder
 from figura.agent.executor import AgentExecutor
+from figura.attachments import FiguraAttachmentService
 from figura.providers import (
     MODEL_IDS,
     FinishReason,
+    ImageBlock,
     ProviderFactory,
     ProviderId,
     ProviderResponse,
     ProviderToolCall,
+    TextBlock,
 )
 from figura.providers.errors import ProviderCallError, ProviderFailure, ProviderFailureCode
 from figura.runtime import (
@@ -85,6 +94,36 @@ def _app(tmp_path):
     return store, coordinator, session, run
 
 
+def _app_with_image(tmp_path):
+    store = FiguraRunStore(tmp_path)
+    attachments = FiguraAttachmentService(store)
+    factory = ProviderFactory.from_env(
+        {
+            "FIGURA_QWEN_API_KEY": "qwen-secret",
+            "FIGURA_QWEN_BASE_URL": "https://qwen.example.test/v1",
+        },
+        transport_factory=lambda _profile: None,
+    )
+    coordinator = RunCoordinator(store, factory)
+    session = coordinator.create_session()
+    content = BytesIO()
+    Image.new("RGB", (2, 2), color="purple").save(content, format="PNG")
+    image_bytes = content.getvalue()
+    metadata = attachments.upload(session.session_id, "chart.png", image_bytes)
+    run = coordinator.create_run(
+        RunCreateRequest(
+            session_id=session.session_id,
+            text="请分析图表。",
+            provider_id=ProviderId.QWEN.value,
+            model_id=MODEL_IDS[ProviderId.QWEN],
+            idempotency_key="agent-executor-image-test",
+            attachment_ids=(metadata.attachment_id,),
+        )
+    )
+    image_path = tmp_path / "attachments" / f"{metadata.attachment_id}.bin"
+    return store, coordinator, session, run, attachments, image_bytes, image_path
+
+
 def _response(
     *,
     content: str = "分析完成",
@@ -126,13 +165,14 @@ class _FakeFactory:
         return self.client
 
 
-def _agent(store, coordinator, registry, provider_factory):
+def _agent(store, coordinator, registry, provider_factory, request_builder=None):
     tool_executor = DurableToolExecutor(store, registry)
     return AgentExecutor(
         coordinator,
         provider_factory,
         tool_executor,
         PerRunExecutionLock(store.data_root),
+        request_builder=request_builder,
     )
 
 
@@ -169,6 +209,67 @@ def test_agent_completes_a_text_only_run_and_terminal_runs_are_no_ops(tmp_path) 
     assert len(factory.client.requests) == calls_before == 1
     assert unchanged == completed
     assert factory.selections == [(ProviderId.QWEN.value, MODEL_IDS[ProviderId.QWEN])]
+
+
+def test_agent_sends_image_blocks_in_memory_without_persisting_image_bytes(tmp_path) -> None:
+    store, coordinator, session, run, attachments, image_bytes, _image_path = _app_with_image(
+        tmp_path
+    )
+    factory = _FakeFactory([_response(content="图表有两个明显峰值。")])
+    agent = _agent(
+        store,
+        coordinator,
+        _registry(),
+        factory,
+        AgentRequestBuilder(attachments),
+    )
+
+    state = agent.execute(session.session_id, run.run_id)
+    content = factory.client.requests[0].messages[0].content
+
+    assert state.run.status is RunStatus.COMPLETED
+    assert content == (TextBlock("请分析图表。"), ImageBlock("image/png", image_bytes))
+    assert len(state.provider_attempts) == 1
+    with sqlite3.connect(store.database_path) as connection:
+        payloads = connection.execute(
+            "SELECT payload_json FROM run_execution_records"
+        ).fetchall()
+    assert all(image_bytes not in payload.encode("utf-8") for (payload,) in payloads)
+
+
+@pytest.mark.parametrize("failure", ["missing", "unreadable", "malformed", "over-limit"])
+def test_invalid_image_fails_before_provider_attempt_or_dispatch(
+    tmp_path, monkeypatch, failure: str
+) -> None:
+    store, coordinator, session, run, attachments, image_bytes, image_path = _app_with_image(
+        tmp_path
+    )
+    if failure == "missing":
+        image_path.unlink()
+    elif failure == "unreadable":
+        image_path.unlink()
+        image_path.symlink_to(tmp_path / "outside.bin")
+    elif failure == "malformed":
+        image_path.write_bytes(b"x" * len(image_bytes))
+    else:
+        monkeypatch.setattr(request_module, "MAX_TOTAL_IMAGE_BYTES", 1)
+
+    factory = _FakeFactory([_response()])
+    agent = _agent(
+        store,
+        coordinator,
+        _registry(),
+        factory,
+        AgentRequestBuilder(attachments),
+    )
+
+    state = agent.execute(session.session_id, run.run_id)
+
+    assert state.run.status is RunStatus.FAILED
+    assert state.run.terminal_code == TerminalCode.EXECUTION_FAILED.value
+    assert state.provider_attempts == ()
+    assert factory.selections == []
+    assert factory.client.requests == []
 
 
 def test_agent_runs_ordered_tool_round_then_uses_committed_observation(tmp_path) -> None:

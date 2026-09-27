@@ -4,6 +4,7 @@ from .coordinator import RunCoordinator
 from .errors import RunError, RunErrorCode
 from .models import (
     ActionKind,
+    AttachmentMetadata,
     EventKind,
     ExecutionCheckpoint,
     ExecutionRecord,
@@ -32,6 +33,7 @@ from .tool_execution import DurableToolExecutor
 
 __all__ = [
     "ActionKind",
+    "AttachmentMetadata",
     "EventKind",
     "ExecutionCheckpoint",
     "DurableToolExecutor",

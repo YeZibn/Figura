@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import sqlite3
 import logging
 from concurrent.futures import ThreadPoolExecutor
@@ -7,7 +8,9 @@ from threading import Barrier
 from types import SimpleNamespace
 
 import pytest
+from PIL import Image
 
+from figura.attachments import FiguraAttachmentService
 from figura.providers import (
     MODEL_IDS,
     FinishReason,
@@ -34,8 +37,8 @@ from figura.runtime import (
     RunStatus,
     TerminalCode,
 )
-from figura.runtime._codec import encode_payload
-from figura.runtime.models import ModelResponseFact, RecordKind
+from figura.runtime._codec import decode_payload, encode_payload
+from figura.runtime.models import ModelResponseFact, RecordKind, RunInput
 
 
 def _factory(environ: dict[str, str] | None = None) -> ProviderFactory:
@@ -83,14 +86,27 @@ def _commit_response(
     )
 
 
-def _request(session_id: str, *, text: str = "请分析这张图表。", key: str = "request-1") -> RunCreateRequest:
+def _request(
+    session_id: str,
+    *,
+    text: str = "请分析这张图表。",
+    key: str = "request-1",
+    attachment_ids: tuple[str, ...] = (),
+) -> RunCreateRequest:
     return RunCreateRequest(
         session_id=session_id,
         text=text,
         provider_id=ProviderId.QWEN.value,
         model_id=MODEL_IDS[ProviderId.QWEN],
         idempotency_key=key,
+        attachment_ids=attachment_ids,
     )
+
+
+def _png_bytes() -> bytes:
+    content = io.BytesIO()
+    Image.new("RGB", (2, 2), color="blue").save(content, format="PNG")
+    return content.getvalue()
 
 
 def _response(
@@ -132,6 +148,152 @@ def test_create_run_persists_atomic_initial_bundle_and_idempotency(tmp_path) -> 
     repeated = app.create_run(_request(session.session_id))
     assert repeated.run_id == run.run_id
     assert app.read_run_state(session.session_id, run.run_id) == state
+
+
+def test_run_input_codec_round_trips_ordered_attachment_ids() -> None:
+    payload = RunInput(
+        text="查看这些图片。",
+        attachment_ids=("a" * 32, "b" * 32),
+        requested_provider=ProviderId.QWEN.value,
+        requested_model=MODEL_IDS[ProviderId.QWEN],
+    )
+
+    encoded = encode_payload(RecordKind.INPUT, payload)
+    decoded = decode_payload(RecordKind.INPUT, encoded, expected_schema_version=1)
+
+    assert decoded == payload
+
+
+@pytest.mark.parametrize(
+    "attachment_ids",
+    [
+        ("duplicate", "duplicate"),
+        tuple(f"attachment-{index}" for index in range(17)),
+        ("",),
+        ("x" * 129,),
+    ],
+)
+def test_run_input_codec_rejects_invalid_attachment_id_lists(attachment_ids) -> None:
+    payload = RunInput(
+        text="查看图片。",
+        attachment_ids=attachment_ids,
+        requested_provider=ProviderId.QWEN.value,
+        requested_model=MODEL_IDS[ProviderId.QWEN],
+    )
+
+    with pytest.raises(RunError) as error:
+        encode_payload(RecordKind.INPUT, payload)
+
+    assert error.value.code is RunErrorCode.UNSUPPORTED_PAYLOAD
+
+
+def test_v4_migration_adds_attachment_table_without_changing_run_state(tmp_path) -> None:
+    store, app = _app(tmp_path)
+    session = app.create_session()
+    run = app.create_run(_request(session.session_id))
+    before = app.read_run_state(session.session_id, run.run_id)
+
+    with sqlite3.connect(store.database_path) as connection:
+        connection.execute("DROP INDEX attachments_by_session_created")
+        connection.execute("DROP TABLE attachments")
+        connection.execute("PRAGMA user_version = 4")
+
+    migrated_store = FiguraRunStore(tmp_path)
+    after = migrated_store.read_run_state(session.session_id, run.run_id)
+
+    with sqlite3.connect(store.database_path) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 5
+        assert connection.execute("PRAGMA quick_check").fetchone()[0] == "ok"
+        assert connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'attachments'"
+        ).fetchone() == ("attachments",)
+
+    assert after == before
+
+
+def test_create_run_persists_authorized_attachment_ids_and_includes_them_in_idempotency(
+    tmp_path,
+) -> None:
+    store, app = _app(tmp_path)
+    session = app.create_session()
+    attachments = FiguraAttachmentService(store)
+    first = attachments.upload(session.session_id, "first.png", _png_bytes())
+    second = attachments.upload(session.session_id, "second.png", _png_bytes())
+    request = _request(
+        session.session_id,
+        key="attachment-run",
+        attachment_ids=(second.attachment_id, first.attachment_id),
+    )
+
+    run = app.create_run(request)
+    state = app.read_run_state(session.session_id, run.run_id)
+    repeated = app.create_run(request)
+
+    assert state.records[0].payload.attachment_ids == (
+        second.attachment_id,
+        first.attachment_id,
+    )
+    assert repeated.run_id == run.run_id
+    assert state.events[0].payload == {"ordinal": 1, "session_id": session.session_id}
+    with pytest.raises(RunError) as reordered:
+        app.create_run(
+            _request(
+                session.session_id,
+                key="attachment-run",
+                attachment_ids=(first.attachment_id, second.attachment_id),
+            )
+        )
+    assert reordered.value.code is RunErrorCode.IDEMPOTENCY_CONFLICT
+
+
+def test_run_creation_rejects_missing_duplicate_and_cross_session_attachments_atomically(
+    tmp_path,
+) -> None:
+    store, app = _app(tmp_path)
+    owner = app.create_session()
+    other = app.create_session()
+    attachments = FiguraAttachmentService(store)
+    metadata = attachments.upload(owner.session_id, "chart.png", _png_bytes())
+
+    requests = (
+        _request(owner.session_id, key="missing", attachment_ids=("f" * 32,)),
+        _request(owner.session_id, key="duplicate", attachment_ids=(metadata.attachment_id,) * 2),
+        _request(other.session_id, key="cross-session", attachment_ids=(metadata.attachment_id,)),
+    )
+    for request in requests:
+        with pytest.raises(RunError):
+            app.create_run(request)
+
+    with sqlite3.connect(store.database_path) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM runs").fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM run_execution_records").fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM run_execution_checkpoints").fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM run_idempotency").fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM run_stream_events").fetchone()[0] == 0
+
+
+def test_referenced_attachment_cannot_be_deleted_and_remains_resolvable(tmp_path) -> None:
+    store, app = _app(tmp_path)
+    session = app.create_session()
+    attachments = FiguraAttachmentService(store)
+    metadata = attachments.upload(session.session_id, "chart.png", _png_bytes())
+    content = attachments.resolve(session.session_id, metadata.attachment_id).image_bytes
+    run = app.create_run(
+        _request(
+            session.session_id,
+            key="retained-attachment",
+            attachment_ids=(metadata.attachment_id,),
+        )
+    )
+
+    with pytest.raises(RunError) as deletion:
+        attachments.delete(session.session_id, metadata.attachment_id)
+
+    assert deletion.value.code is RunErrorCode.INVALID_TRANSITION
+    assert app.read_run_state(session.session_id, run.run_id).records[0].payload.attachment_ids == (
+        metadata.attachment_id,
+    )
+    assert attachments.resolve(session.session_id, metadata.attachment_id).image_bytes == content
 
 
 @pytest.mark.parametrize(
