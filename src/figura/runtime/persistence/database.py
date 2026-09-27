@@ -70,6 +70,23 @@ class SqliteDatabase:
             raise RunError(RunErrorCode.STORAGE_ERROR) from None
 
     @contextmanager
+    def read_snapshot(self) -> Iterator[sqlite3.Connection]:
+        """Read related rows from one consistent SQLite snapshot."""
+        try:
+            with self._connection() as connection:
+                connection.execute("BEGIN")
+                try:
+                    yield connection
+                    connection.commit()
+                except Exception:
+                    connection.rollback()
+                    raise
+        except RunError:
+            raise
+        except sqlite3.Error:
+            raise RunError(RunErrorCode.STORAGE_ERROR) from None
+
+    @contextmanager
     def write(self) -> Iterator[sqlite3.Connection]:
         try:
             with self._connection() as connection:

@@ -93,7 +93,10 @@ class AgentExecutor:
         if len(state.provider_attempts) >= _MAX_PROVIDER_ATTEMPTS:
             return self._fail_run(state)
         try:
-            request = self._requests.build(state, self._tools.registry)
+            prior_run_states = self._coordinator.read_prior_run_states(session_id, run_id)
+            request = self._requests.build(
+                state, self._tools.registry, prior_run_states
+            )
         except RunError:
             return self._fail_run(state)
 

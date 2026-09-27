@@ -1,13 +1,19 @@
-"""Pure projection from committed Run facts to a bounded Provider request."""
+"""Projection from durable Figura conversation facts to a bounded Provider request."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
 from figura.attachments import FiguraAttachmentService
-from figura.json_schema import JsonValueError, canonical_json_dumps
+from figura.memory import (
+    AssistantMessage,
+    MemoryMessage,
+    ToolMessage,
+    UserMessage,
+    project_run_messages,
+    project_session_history,
+)
 from figura.providers import (
-    FinishReason,
     ImageBlock,
     InstructionBlock,
     InstructionRole,
@@ -22,29 +28,18 @@ from figura.providers import (
 )
 from figura.providers.errors import ProviderCallError
 from figura.providers.validation import (
-    MAX_INSTRUCTION_COUNT,
     MAX_IMAGE_BYTES,
     MAX_IMAGE_COUNT,
-    MAX_MESSAGE_COUNT,
     MAX_TOTAL_IMAGE_BYTES,
-    MAX_TOTAL_TEXT_BYTES,
-    MAX_TOOL_COUNT,
     validate_request,
 )
 from figura.runtime import RunError, RunErrorCode
 from figura.runtime.domain.models import (
     ActionKind,
-    ExecutionRecord,
-    ModelResponseFact,
     ProviderContinuationFact,
-    RecordKind,
+    Run,
     RunState,
     RunStatus,
-    RunInput,
-    ToolCallFact,
-    ToolExecutionFact,
-    ToolFactKind,
-    ToolResultFact,
 )
 from figura.tools import ToolRegistry, project_provider_tools
 
@@ -56,7 +51,7 @@ _MAX_COMPLETION_TOKENS = 4096
 
 
 class AgentRequestBuilder:
-    """Build one validated model request from the current durable Run state."""
+    """Build one validated model request from Session history and the current Run."""
 
     __slots__ = ("_attachments",)
 
@@ -68,7 +63,12 @@ class AgentRequestBuilder:
     def __setattr__(self, name: str, value: object) -> None:
         raise AttributeError("AgentRequestBuilder is immutable")
 
-    def build(self, state: RunState, registry: ToolRegistry) -> ProviderRequest:
+    def build(
+        self,
+        state: RunState,
+        registry: ToolRegistry,
+        prior_run_states: tuple[RunState, ...] = (),
+    ) -> ProviderRequest:
         if not isinstance(state, RunState) or not isinstance(registry, ToolRegistry):
             raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
         if (
@@ -82,48 +82,97 @@ class AgentRequestBuilder:
         except (TypeError, ValueError):
             raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD) from None
 
-        input_records = [record for record in state.records if record.record_kind is RecordKind.INPUT]
-        if len(input_records) != 1 or input_records[0].record_id != state.run.input_record_id:
-            raise RunError(RunErrorCode.INTEGRITY_ERROR)
-        run_input = input_records[0].payload
-        if not isinstance(run_input, RunInput):
-            raise RunError(RunErrorCode.INTEGRITY_ERROR)
-
-        instructions = (InstructionBlock(InstructionRole.SYSTEM, _SYSTEM_INSTRUCTION),)
-        tools = self._project_tools(registry)
-        rounds = self._project_rounds(state, registry)
-        user_message = ProviderMessage(
-            MessageRole.USER,
-            self._user_content(state.run.session_id, run_input.text, run_input.attachment_ids),
+        history = project_session_history(state.run, prior_run_states)
+        messages = self._provider_messages(
+            (*history.messages, *project_run_messages(state)),
+            session_id=state.run.session_id,
+            current_run=state.run,
+            continuations=_continuations_by_response(
+                state.provider_continuations, state.run.run_id
+            ),
+            registry=registry,
         )
-        retained_rounds = list(rounds)
+        try:
+            tools = project_provider_tools(registry)
+        except (TypeError, ValueError):
+            raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD) from None
 
-        while True:
-            messages = (user_message,) + tuple(
-                message for round_messages in retained_rounds for message in round_messages
-            )
-            request = ProviderRequest(
-                provider_id=provider_id,
-                model_id=state.run.model,
-                instructions=instructions,
-                messages=messages,
-                options=ProviderOptions(
-                    max_completion_tokens=_MAX_COMPLETION_TOKENS,
-                    stream=False,
-                ),
-                tools=tools,
-            )
-            if _within_provider_limits(request):
-                break
-            if len(retained_rounds) <= 1:
-                raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
-            retained_rounds.pop(0)
-
+        request = ProviderRequest(
+            provider_id=provider_id,
+            model_id=state.run.model,
+            instructions=(InstructionBlock(InstructionRole.SYSTEM, _SYSTEM_INSTRUCTION),),
+            messages=messages,
+            options=ProviderOptions(
+                max_completion_tokens=_MAX_COMPLETION_TOKENS,
+                stream=False,
+            ),
+            tools=tools,
+        )
         try:
             validate_request(request, provider_id)
         except ProviderCallError:
             raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD) from None
         return request
+
+    def _provider_messages(
+        self,
+        messages: tuple[MemoryMessage, ...],
+        *,
+        session_id: str,
+        current_run: Run,
+        continuations: dict[str, ProviderContinuationFact],
+        registry: ToolRegistry,
+    ) -> tuple[ProviderMessage, ...]:
+        projected: list[ProviderMessage] = []
+        for message in messages:
+            if isinstance(message, UserMessage):
+                projected.append(
+                    ProviderMessage(
+                        MessageRole.USER,
+                        self._user_content(session_id, message.text, message.attachment_ids),
+                    )
+                )
+            elif isinstance(message, AssistantMessage):
+                if any(call.registry_version != registry.version for call in message.tool_calls):
+                    raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
+                continuation = None
+                if message.run_id == current_run.run_id:
+                    continuation_fact = continuations.get(message.source_record_id)
+                    if continuation_fact is not None:
+                        try:
+                            continuation = ProviderContinuation(
+                                provider_id=ProviderId(continuation_fact.provider_id),
+                                format_version=continuation_fact.format_version,
+                                reasoning_content=continuation_fact.reasoning_content,
+                            )
+                        except (TypeError, ValueError):
+                            raise RunError(RunErrorCode.INTEGRITY_ERROR) from None
+                projected.append(
+                    ProviderMessage(
+                        role=MessageRole.ASSISTANT,
+                        content=message.content,
+                        tool_calls=tuple(
+                            ProviderToolCall(
+                                call_id=call.call_id,
+                                name=call.tool_name,
+                                arguments=call.arguments_json,
+                            )
+                            for call in message.tool_calls
+                        ),
+                        continuation=continuation,
+                    )
+                )
+            elif isinstance(message, ToolMessage):
+                projected.append(
+                    ProviderMessage(
+                        role=MessageRole.TOOL,
+                        content=message.content,
+                        tool_call_id=message.tool_call_id,
+                    )
+                )
+            else:
+                raise RunError(RunErrorCode.INTEGRITY_ERROR)
+        return tuple(projected)
 
     def _user_content(
         self,
@@ -153,109 +202,6 @@ class AgentRequestBuilder:
             images.append(image)
         return (TextBlock(text), *images)
 
-    @staticmethod
-    def _project_tools(registry: ToolRegistry):
-        try:
-            return project_provider_tools(registry)
-        except (TypeError, ValueError):
-            raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD) from None
-
-    @staticmethod
-    def _project_rounds(
-        state: RunState,
-        registry: ToolRegistry,
-    ) -> tuple[tuple[ProviderMessage, ...], ...]:
-        calls_by_response: dict[str, list[tuple[ToolExecutionFact, ToolCallFact]]] = {}
-        calls_by_sequence: dict[int, tuple[ToolExecutionFact, ToolCallFact]] = {}
-        results_by_call: dict[int, list[ToolResultFact]] = {}
-        for fact in state.tool_facts:
-            if fact.fact_kind is ToolFactKind.TOOL_CALL:
-                if not isinstance(fact.payload, ToolCallFact):
-                    raise RunError(RunErrorCode.INTEGRITY_ERROR)
-                pair = (fact, fact.payload)
-                calls_by_response.setdefault(fact.payload.response_record_id, []).append(pair)
-                calls_by_sequence[fact.tool_sequence] = pair
-            elif fact.fact_kind is ToolFactKind.TOOL_RESULT:
-                if not isinstance(fact.payload, ToolResultFact):
-                    raise RunError(RunErrorCode.INTEGRITY_ERROR)
-                results_by_call.setdefault(fact.payload.tool_call_sequence, []).append(fact.payload)
-
-        continuations = _continuations_by_response(state.provider_continuations, state.run.run_id)
-        rounds: list[tuple[ProviderMessage, ...]] = []
-        response_ids: set[str] = set()
-        for record in state.records:
-            if record.record_kind is RecordKind.INPUT:
-                continue
-            if record.record_kind is not RecordKind.MODEL_RESPONSE or not isinstance(
-                record.payload, ModelResponseFact
-            ):
-                raise RunError(RunErrorCode.INTEGRITY_ERROR)
-            response = record.payload
-            if response.finish_reason != FinishReason.TOOL_CALLS.value:
-                raise RunError(RunErrorCode.INVALID_TRANSITION)
-            response_ids.add(record.record_id)
-            call_pairs = sorted(
-                calls_by_response.get(record.record_id, ()),
-                key=lambda pair: pair[1].position,
-            )
-            if not call_pairs or [call.position for _, call in call_pairs] != list(
-                range(len(call_pairs))
-            ):
-                raise RunError(RunErrorCode.INTEGRITY_ERROR)
-
-            provider_calls: list[ProviderToolCall] = []
-            observations: list[ProviderMessage] = []
-            for call_fact, call in call_pairs:
-                if call.registry_version != registry.version:
-                    raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
-                results = results_by_call.get(call_fact.tool_sequence, ())
-                if len(results) != 1:
-                    raise RunError(RunErrorCode.INVALID_TRANSITION)
-                result = results[0]
-                if result.call_id != call.call_id or result.tool_name != call.tool_name:
-                    raise RunError(RunErrorCode.INTEGRITY_ERROR)
-                provider_calls.append(
-                    ProviderToolCall(
-                        call_id=call.call_id,
-                        name=call.tool_name,
-                        arguments=call.arguments_json,
-                    )
-                )
-                observations.append(
-                    ProviderMessage(
-                        role=MessageRole.TOOL,
-                        content=_tool_observation(result),
-                        tool_call_id=call.call_id,
-                    )
-                )
-
-            continuation_fact = continuations.get(record.record_id)
-            continuation = None
-            if continuation_fact is not None:
-                try:
-                    continuation = ProviderContinuation(
-                        provider_id=ProviderId(continuation_fact.provider_id),
-                        format_version=continuation_fact.format_version,
-                        reasoning_content=continuation_fact.reasoning_content,
-                    )
-                except (TypeError, ValueError):
-                    raise RunError(RunErrorCode.INTEGRITY_ERROR) from None
-            assistant = ProviderMessage(
-                role=MessageRole.ASSISTANT,
-                content=response.assistant_content,
-                tool_calls=tuple(provider_calls),
-                continuation=continuation,
-            )
-            rounds.append((assistant, *observations))
-
-        if set(calls_by_response) != response_ids:
-            raise RunError(RunErrorCode.INTEGRITY_ERROR)
-        if set(results_by_call) - set(calls_by_sequence):
-            raise RunError(RunErrorCode.INTEGRITY_ERROR)
-        if any(sequence not in calls_by_sequence for sequence in results_by_call):
-            raise RunError(RunErrorCode.INTEGRITY_ERROR)
-        return tuple(rounds)
-
 
 def _continuations_by_response(
     facts: tuple[ProviderContinuationFact, ...],
@@ -267,69 +213,3 @@ def _continuations_by_response(
             raise RunError(RunErrorCode.INTEGRITY_ERROR)
         result[fact.response_record_id] = fact
     return result
-
-
-def _tool_observation(result: ToolResultFact) -> str:
-    if result.outcome.value == "succeeded":
-        if result.error is not None or result.result is None:
-            raise RunError(RunErrorCode.INTEGRITY_ERROR)
-        payload: dict[str, object] = {
-            "outcome": result.outcome.value,
-            "result": result.result,
-        }
-    else:
-        if result.error is None or result.result is not None:
-            raise RunError(RunErrorCode.INTEGRITY_ERROR)
-        error: dict[str, object] = {
-            "code": result.error.code,
-            "message": result.error.message,
-            "retryable": result.error.retryable,
-        }
-        if result.error.field_path is not None:
-            error["field_path"] = result.error.field_path
-        payload = {"outcome": result.outcome.value, "error": error}
-    try:
-        return canonical_json_dumps(payload)
-    except (JsonValueError, TypeError, ValueError):
-        raise RunError(RunErrorCode.INTEGRITY_ERROR) from None
-
-
-def _within_provider_limits(request: ProviderRequest) -> bool:
-    if (
-        len(request.instructions) > MAX_INSTRUCTION_COUNT
-        or len(request.messages) > MAX_MESSAGE_COUNT
-        or len(request.tools) > MAX_TOOL_COUNT
-    ):
-        return False
-    text_bytes = sum(len(block.content.encode("utf-8")) for block in request.instructions)
-    image_count = 0
-    image_bytes = 0
-    for message in request.messages:
-        content = message.content
-        if isinstance(content, str):
-            text_bytes += len(content.encode("utf-8"))
-        else:
-            for block in content:
-                if isinstance(block, TextBlock):
-                    text_bytes += len(block.text.encode("utf-8"))
-                elif isinstance(block, ImageBlock):
-                    image_count += 1
-                    image_bytes += len(block.image_bytes)
-                    if len(block.image_bytes) > MAX_IMAGE_BYTES:
-                        return False
-                else:
-                    return False
-        text_bytes += sum(len(call.arguments.encode("utf-8")) for call in message.tool_calls)
-        if message.continuation is not None:
-            text_bytes += len(message.continuation.reasoning_content.encode("utf-8"))
-    for tool in request.tools:
-        text_bytes += len(tool.description.encode("utf-8"))
-        try:
-            text_bytes += len(canonical_json_dumps(tool.parameters).encode("utf-8"))
-        except (JsonValueError, TypeError, ValueError):
-            return False
-    return (
-        text_bytes <= MAX_TOTAL_TEXT_BYTES
-        and image_count <= MAX_IMAGE_COUNT
-        and image_bytes <= MAX_TOTAL_IMAGE_BYTES
-    )

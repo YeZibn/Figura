@@ -45,6 +45,21 @@ Figura SHALL scope creation idempotency to the Session and a digest of the calle
 - **WHEN** a caller reuses a Session-scoped key with changed text, attachment IDs or their order, or provider/model selection
 - **THEN** Figura reports an idempotency conflict and leaves the existing Run unchanged
 
+### Requirement: Runs within a Session are created sequentially
+Figura SHALL allow at most one `running` Run per Session. Creating a new Run SHALL atomically reject a distinct request while that Session already has a running Run, without writing a Run or any of its facts. An idempotent replay that matches an existing Run SHALL return that Run, including while it is running. A new Run MAY be created after all prior Runs in the Session are terminal.
+
+#### Scenario: Reject a second active Run in the same Session
+- **WHEN** a caller submits a new, non-idempotent Run request while another Run in that Session has status `running`
+- **THEN** Figura rejects the request without creating a Run, input record, checkpoint, idempotency mapping, or event
+
+#### Scenario: Preserve idempotent replay of the active Run
+- **WHEN** a caller repeats the original creation request with the same Session, idempotency key, and request content while its Run is still running
+- **THEN** Figura returns the original Run and creates no additional Run or facts
+
+#### Scenario: Create the next Run after the prior Run is terminal
+- **WHEN** all existing Runs in a Session are completed, failed, or interrupted
+- **THEN** Figura may create a new Run with the next Session ordinal
+
 ### Requirement: Execution facts and checkpoints advance together
 Figura SHALL expose an internal commit boundary that appends only supported, bounded, versioned execution facts and advances the same Run's checkpoint atomically. Core record sequences and tool-execution fact sequences SHALL each be unique and increasing within a Run. A commit SHALL reject a stale expected checkpoint, an invalid record reference, an unsupported payload kind or version, or a terminal Run without partially advancing records, tool facts, checkpoint, or events. Core records SHALL support input, model responses, and final answers; a separate ordered tool-execution fact stream SHALL support tool-call intents, tool-attempt starts, and tool results. A model response SHALL be accepted only if any provider-private continuation it contains is valid, provider-scoped, within the continuation resource bound, and durably linked to that exact response. The response, private continuation, associated tool-call facts, and checkpoint SHALL be committed atomically. The state validator SHALL allow repeated model-response/tool-execution rounds only when every prior tool batch is fully resolved before the next model response, and SHALL verify that every non-null continuation reference resolves to the matching Run, response, provider, and supported format. Completion SHALL require a final text response with no pending or unresolved tool attempt.
 

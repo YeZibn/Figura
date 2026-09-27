@@ -100,6 +100,9 @@ class RunCoordinator:
     def read_run_state(self, session_id: str, run_id: str) -> RunState:
         return self._store.read_run_state(session_id, run_id)
 
+    def read_prior_run_states(self, session_id: str, run_id: str) -> tuple[RunState, ...]:
+        return self._store.read_prior_run_states(session_id, run_id)
+
     def begin_provider_attempt(
         self, session_id: str, run_id: str, expected_revision: int
     ) -> ProviderAttempt:

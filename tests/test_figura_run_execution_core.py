@@ -365,6 +365,100 @@ def test_same_key_with_changed_content_conflicts_without_mutating_original(tmp_p
     assert app.read_run_state(session.session_id, original.run_id).run.ordinal == 1
 
 
+def test_read_prior_run_states_returns_terminal_same_session_runs_in_ordinal_order(tmp_path) -> None:
+    _store, app = _app(tmp_path)
+    session = app.create_session()
+    other_session = app.create_session()
+
+    first = app.create_run(_request(session.session_id, key="history-first"))
+    _commit_response(app, session.session_id, first.run_id, 1, _response(content="第一轮回答。"))
+    app.complete_run(session.session_id, first.run_id, 3)
+
+    other = app.create_run(_request(other_session.session_id, key="history-other"))
+    second = app.create_run(_request(session.session_id, key="history-second"))
+    _commit_response(app, session.session_id, second.run_id, 1, _response(content="第二轮回答。"))
+    app.complete_run(session.session_id, second.run_id, 3)
+
+    target = app.create_run(_request(session.session_id, key="history-target"))
+    prior = app.read_prior_run_states(session.session_id, target.run_id)
+
+    assert [state.run.run_id for state in prior] == [first.run_id, second.run_id]
+    assert [state.run.ordinal for state in prior] == [1, 2]
+    assert all(state.run.status is RunStatus.COMPLETED for state in prior)
+    assert app.read_prior_run_states(other_session.session_id, other.run_id) == ()
+
+
+def test_read_prior_run_states_rejects_wrong_session_and_nonterminal_history(tmp_path) -> None:
+    store, app = _app(tmp_path)
+    session = app.create_session()
+    other_session = app.create_session()
+    first = app.create_run(_request(session.session_id, key="history-prior"))
+    _commit_response(app, session.session_id, first.run_id, 1, _response())
+    app.complete_run(session.session_id, first.run_id, 3)
+    target = app.create_run(_request(session.session_id, key="history-current"))
+
+    with pytest.raises(RunError) as wrong_session:
+        app.read_prior_run_states(other_session.session_id, target.run_id)
+    assert wrong_session.value.code is RunErrorCode.RUN_NOT_FOUND
+
+    with sqlite3.connect(store.database_path) as connection:
+        connection.execute(
+            "UPDATE runs SET status = 'running' WHERE run_id = ?", (first.run_id,)
+        )
+    with pytest.raises(RunError) as nonterminal:
+        app.read_prior_run_states(session.session_id, target.run_id)
+    assert nonterminal.value.code is RunErrorCode.INVALID_TRANSITION
+
+
+def test_session_rejects_distinct_active_run_but_allows_idempotent_replay(tmp_path) -> None:
+    store, app = _app(tmp_path)
+    session = app.create_session()
+    request = _request(session.session_id, key="active-run")
+    run = app.create_run(request)
+
+    assert app.create_run(request).run_id == run.run_id
+    with pytest.raises(RunError) as overlapping:
+        app.create_run(_request(session.session_id, key="overlapping-run"))
+
+    assert overlapping.value.code is RunErrorCode.INVALID_TRANSITION
+    with sqlite3.connect(store.database_path) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM runs WHERE session_id = ?", (session.session_id,)
+        ).fetchone()[0] == 1
+        assert connection.execute(
+            "SELECT COUNT(*) FROM run_execution_records WHERE run_id != ?", (run.run_id,)
+        ).fetchone()[0] == 0
+
+
+def test_concurrent_distinct_run_creates_in_one_session_only_commit_one(tmp_path) -> None:
+    store, app = _app(tmp_path)
+    session = app.create_session()
+    competing_app = RunCoordinator(FiguraRunStore(tmp_path), _factory())
+    barrier = Barrier(2)
+
+    def create(coordinator: RunCoordinator, key: str):
+        barrier.wait()
+        try:
+            return coordinator.create_run(_request(session.session_id, key=key))
+        except RunError as error:
+            return error.code
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        outcomes = list(
+            executor.map(
+                lambda args: create(*args),
+                ((app, "concurrent-first"), (competing_app, "concurrent-second")),
+            )
+        )
+
+    assert sum(not isinstance(outcome, RunErrorCode) for outcome in outcomes) == 1
+    assert outcomes.count(RunErrorCode.INVALID_TRANSITION) == 1
+    with sqlite3.connect(store.database_path) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM runs WHERE session_id = ?", (session.session_id,)
+        ).fetchone()[0] == 1
+
+
 def test_text_response_commit_advances_checkpoint_and_rejects_tool_payloads(tmp_path) -> None:
     _store, app = _app(tmp_path)
     session = app.create_session()
@@ -388,9 +482,10 @@ def test_text_response_commit_advances_checkpoint_and_rejects_tool_payloads(tmp_
     assert state.provider_attempts[0].status.value == "started"
     assert len(state.events) == 1
 
-    valid_run = app.create_run(_request(session.session_id, key="valid-response"))
-    record = _commit_response(app, session.session_id, valid_run.run_id, 1, _response())
-    state = app.read_run_state(session.session_id, valid_run.run_id)
+    valid_session = app.create_session()
+    valid_run = app.create_run(_request(valid_session.session_id, key="valid-response"))
+    record = _commit_response(app, valid_session.session_id, valid_run.run_id, 1, _response())
+    state = app.read_run_state(valid_session.session_id, valid_run.run_id)
     assert record.record_sequence == 2
     assert state.checkpoint.revision == 3
     assert state.checkpoint.last_committed_record_sequence == 2
@@ -622,7 +717,8 @@ def test_continuation_is_absent_from_public_repr_logs_and_user_facing_errors(tmp
     assert secret not in caplog.text
     assert reference not in caplog.text
 
-    failed_run = app.create_run(_request(session.session_id, key="error-run"))
+    failed_session = app.create_session()
+    failed_run = app.create_run(_request(failed_session.session_id, key="error-run"))
     with sqlite3.connect(store.database_path) as connection:
         connection.execute(
             "CREATE TRIGGER reject_private_continuation BEFORE INSERT ON run_provider_continuations "
@@ -630,7 +726,7 @@ def test_continuation_is_absent_from_public_repr_logs_and_user_facing_errors(tmp
         )
     with pytest.raises(RunError) as rejected:
         _commit_response(app,
-            session.session_id,
+            failed_session.session_id,
             failed_run.run_id,
             1,
             _response(continuation=ProviderContinuation(ProviderId.QWEN, 1, secret)),
@@ -825,10 +921,13 @@ def test_two_sqlite_writers_racing_on_the_same_revision_commit_only_one_record(t
 def test_cross_run_response_reference_is_rejected_without_partial_completion(tmp_path) -> None:
     store, app = _app(tmp_path)
     session = app.create_session()
+    second_session = app.create_session()
     first = app.create_run(_request(session.session_id, key="first"))
-    second = app.create_run(_request(session.session_id, key="second"))
+    second = app.create_run(_request(second_session.session_id, key="second"))
     _commit_response(app, session.session_id, first.run_id, 1, _response())
-    second_response = _commit_response(app, session.session_id, second.run_id, 1, _response())
+    second_response = _commit_response(
+        app, second_session.session_id, second.run_id, 1, _response()
+    )
     with sqlite3.connect(store.database_path) as connection:
         connection.execute("DROP TRIGGER immutable_run_record_update")
         connection.execute(

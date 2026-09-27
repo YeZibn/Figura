@@ -1381,18 +1381,19 @@ def test_run_lock_contention_fails_closed_without_starting_a_tool(tmp_path) -> N
 
 def test_different_run_can_execute_while_another_run_lock_is_held(tmp_path) -> None:
     store, coordinator, session, first_run = _app(tmp_path)
+    other_session = coordinator.create_session()
     second_run = coordinator.create_run(
         RunCreateRequest(
-            session_id=session.session_id,
+            session_id=other_session.session_id,
             text="分析第二个运行",
             provider_id=ProviderId.QWEN.value,
             model_id=MODEL_IDS[ProviderId.QWEN],
             idempotency_key="second-run",
         )
     )
-    for target_run in (first_run, second_run):
+    for target_session, target_run in ((session, first_run), (other_session, second_run)):
         _commit_response(coordinator,
-            session.session_id,
+            target_session.session_id,
             target_run.run_id,
             1,
             _tool_response(ProviderToolCall(f"call-{target_run.ordinal}", "inspect", '{"value":1}')),
@@ -1406,7 +1407,7 @@ def test_different_run_can_execute_while_another_run_lock_is_held(tmp_path) -> N
 
     executor = DurableToolExecutor(store, _registry(handler))
     with PerRunExecutionLock(tmp_path).acquire(first_run.run_id):
-        second_state = executor.execute_pending(session.session_id, second_run.run_id)
+        second_state = executor.execute_pending(other_session.session_id, second_run.run_id)
 
     first_state = coordinator.read_run_state(session.session_id, first_run.run_id)
     assert invoked == [second_run.run_id]

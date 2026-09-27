@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-from dataclasses import replace
 from io import BytesIO
 
 import pytest
 from PIL import Image
 
-import figura.agent.request as request_module
 from figura.attachments import FiguraAttachmentService
 from figura.agent.request import AgentRequestBuilder
+from figura.json_schema import canonical_json_dumps
+import figura.providers.validation as provider_validation
 from figura.providers import (
     MODEL_IDS,
     FinishReason,
@@ -169,7 +169,7 @@ def _request_text_bytes(request) -> int:
             total += len(message.continuation.reasoning_content.encode("utf-8"))
     for tool in request.tools:
         total += len(tool.description.encode("utf-8"))
-        total += len(request_module.canonical_json_dumps(tool.parameters).encode("utf-8"))
+        total += len(canonical_json_dumps(tool.parameters).encode("utf-8"))
     return total
 
 
@@ -317,6 +317,59 @@ def test_request_rebuilds_tool_round_in_order_and_attaches_continuation(tmp_path
     )
 
 
+def test_request_includes_complete_prior_run_history_without_prior_continuation(tmp_path) -> None:
+    _store, coordinator, session, first_run = _app(tmp_path)
+    continuation = ProviderContinuation(ProviderId.QWEN, 1, "private old continuation")
+    state = coordinator.read_run_state(session.session_id, first_run.run_id)
+    attempt = coordinator.begin_provider_attempt(
+        session.session_id, first_run.run_id, state.checkpoint.revision
+    )
+    claimed = coordinator.read_run_state(session.session_id, first_run.run_id)
+    coordinator.commit_model_response(
+        session.session_id,
+        first_run.run_id,
+        claimed.checkpoint.revision,
+        ProviderResponse(
+            ProviderId.QWEN,
+            MODEL_IDS[ProviderId.QWEN],
+            "第一轮的完整回答。",
+            (),
+            FinishReason.STOP,
+            continuation=continuation,
+        ),
+        provider_attempt_id=attempt.attempt_id,
+    )
+    first_state = coordinator.read_run_state(session.session_id, first_run.run_id)
+    coordinator.complete_run(
+        session.session_id, first_run.run_id, first_state.checkpoint.revision
+    )
+    second_run = coordinator.create_run(
+        RunCreateRequest(
+            session_id=session.session_id,
+            text="第二轮输入。",
+            provider_id=ProviderId.QWEN.value,
+            model_id=MODEL_IDS[ProviderId.QWEN],
+            idempotency_key="agent-request-second-run",
+        )
+    )
+
+    request = AgentRequestBuilder().build(
+        coordinator.read_run_state(session.session_id, second_run.run_id),
+        _registry(),
+        coordinator.read_prior_run_states(session.session_id, second_run.run_id),
+    )
+
+    assert [message.role for message in request.messages] == [
+        MessageRole.USER,
+        MessageRole.ASSISTANT,
+        MessageRole.USER,
+    ]
+    assert request.messages[0].content == "请分析以下图表数据。"
+    assert request.messages[1].content == "第一轮的完整回答。"
+    assert request.messages[1].continuation is None
+    assert request.messages[2].content == "第二轮输入。"
+
+
 def test_request_fails_closed_when_recorded_registry_is_unavailable(tmp_path) -> None:
     store, coordinator, session, run = _app(tmp_path)
     original = _registry()
@@ -336,7 +389,7 @@ def test_request_fails_closed_when_recorded_registry_is_unavailable(tmp_path) ->
     assert error.value.code is RunErrorCode.UNSUPPORTED_PAYLOAD
 
 
-def test_request_trims_only_old_complete_rounds_and_fails_when_newest_cannot_fit(
+def test_request_preserves_all_complete_rounds_and_fails_when_history_cannot_fit(
     tmp_path, monkeypatch
 ) -> None:
     store, coordinator, session, run = _app(tmp_path)
@@ -350,7 +403,8 @@ def test_request_trims_only_old_complete_rounds_and_fails_when_newest_cannot_fit
         call_id="call-old",
         content="o" * 700,
     )
-    first_request = AgentRequestBuilder().build(first_state, registry)
+    builder = AgentRequestBuilder()
+    first_request = builder.build(first_state, registry)
     second_state = _commit_tool_round(
         store,
         coordinator,
@@ -360,27 +414,13 @@ def test_request_trims_only_old_complete_rounds_and_fails_when_newest_cannot_fit
         call_id="call-new",
         content="n" * 700,
     )
-    full_request = AgentRequestBuilder().build(second_state, registry)
-    base_bytes = _request_text_bytes(
-        replace(first_request, messages=first_request.messages[:1])
-    )
-    newest_round = full_request.messages[-2:]
-    newest_bytes = _request_text_bytes(
-        replace(full_request, messages=(full_request.messages[0], *newest_round))
-    )
+    full_request = builder.build(second_state, registry)
+    first_call_ids = [call.call_id for message in first_request.messages for call in message.tool_calls]
+    assert first_call_ids == ["call-old"]
+    full_call_ids = [call.call_id for message in full_request.messages for call in message.tool_calls]
+    assert full_call_ids == ["call-old", "call-new"]
     full_bytes = _request_text_bytes(full_request)
-    assert full_bytes > newest_bytes
-    threshold = (newest_bytes + full_bytes) // 2
-    assert base_bytes < threshold
-    monkeypatch.setattr(request_module, "MAX_TOTAL_TEXT_BYTES", threshold)
-
-    trimmed = AgentRequestBuilder().build(second_state, registry)
-
-    assert [call.call_id for message in trimmed.messages for call in message.tool_calls] == [
-        "call-new"
-    ]
-    assert trimmed.messages[0].role is MessageRole.USER
-    monkeypatch.setattr(request_module, "MAX_TOTAL_TEXT_BYTES", newest_bytes - 1)
+    monkeypatch.setattr(provider_validation, "MAX_TOTAL_TEXT_BYTES", full_bytes - 1)
     with pytest.raises(RunError) as error:
-        AgentRequestBuilder().build(second_state, registry)
+        builder.build(second_state, registry)
     assert error.value.code is RunErrorCode.UNSUPPORTED_PAYLOAD

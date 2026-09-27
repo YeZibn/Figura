@@ -171,6 +171,13 @@ class RunRepository:
                     raise RunError(RunErrorCode.INTEGRITY_ERROR)
                 return _run_from_row(run_row)
 
+            active_run = connection.execute(
+                "SELECT 1 FROM runs WHERE session_id = ? AND status = 'running' LIMIT 1",
+                (session_id,),
+            ).fetchone()
+            if active_run is not None:
+                raise RunError(RunErrorCode.INVALID_TRANSITION)
+
             self._sessions._require_attachment_ownership(
                 connection,
                 session_id,
@@ -245,6 +252,50 @@ class RunRepository:
                     raise
                 raise RunError(RunErrorCode.INTEGRITY_ERROR) from None
             return state
+
+    def read_prior_run_states(self, session_id: str, run_id: str) -> tuple[RunState, ...]:
+        """Load every earlier Run in one Session snapshot, in ordinal order."""
+        _validate_id(session_id)
+        _validate_id(run_id)
+        with self._database.read_snapshot() as connection:
+            target_row = connection.execute(
+                "SELECT ordinal FROM runs WHERE run_id = ? AND session_id = ?",
+                (run_id, session_id),
+            ).fetchone()
+            if target_row is None:
+                raise RunError(RunErrorCode.RUN_NOT_FOUND)
+            target_ordinal = int(target_row["ordinal"])
+            prior_rows = connection.execute(
+                "SELECT run_id, ordinal, status FROM runs "
+                "WHERE session_id = ? AND ordinal < ? ORDER BY ordinal",
+                (session_id, target_ordinal),
+            ).fetchall()
+            if [int(row["ordinal"]) for row in prior_rows] != list(range(1, target_ordinal)):
+                raise RunError(RunErrorCode.INTEGRITY_ERROR)
+            if any(row["status"] == RunStatus.RUNNING.value for row in prior_rows):
+                raise RunError(RunErrorCode.INVALID_TRANSITION)
+
+            states: list[RunState] = []
+            for row in prior_rows:
+                state = self._read_run_state_from_connection(
+                    connection, session_id, row["run_id"]
+                )
+                input_payload = state.records[0].payload
+                if not isinstance(input_payload, RunInput):
+                    raise RunError(RunErrorCode.INTEGRITY_ERROR)
+                try:
+                    self._sessions._require_attachment_ownership(
+                        connection,
+                        session_id,
+                        input_payload.attachment_ids,
+                        integrity=True,
+                    )
+                except RunError as error:
+                    if error.code is RunErrorCode.INTEGRITY_ERROR:
+                        raise
+                    raise RunError(RunErrorCode.INTEGRITY_ERROR) from None
+                states.append(state)
+            return tuple(states)
 
     def _scoped_run(self, connection: sqlite3.Connection, session_id: str, run_id: str) -> Run:
         _validate_id(session_id)

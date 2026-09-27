@@ -192,6 +192,43 @@ def _commit_tool_response(coordinator, session_id, run_id, registry, response):
     )
 
 
+def _create_followup_run(coordinator, session_id, *, key="agent-followup", text="继续分析"):
+    return coordinator.create_run(
+        RunCreateRequest(
+            session_id=session_id,
+            text=text,
+            provider_id=ProviderId.QWEN.value,
+            model_id=MODEL_IDS[ProviderId.QWEN],
+            idempotency_key=key,
+        )
+    )
+
+
+def _complete_text_run(coordinator, session_id, run_id, *, registry=None):
+    state = coordinator.read_run_state(session_id, run_id)
+    attempt = coordinator.begin_provider_attempt(
+        session_id, run_id, state.checkpoint.revision
+    )
+    claimed = coordinator.read_run_state(session_id, run_id)
+    coordinator.commit_model_response(
+        session_id,
+        run_id,
+        claimed.checkpoint.revision,
+        _response(),
+        provider_attempt_id=attempt.attempt_id,
+        registry_version=registry.version if registry is not None else None,
+    )
+    committed = coordinator.read_run_state(session_id, run_id)
+    coordinator.complete_run(session_id, run_id, committed.checkpoint.revision)
+
+
+def _assert_request_rejected_before_claim(state, factory):
+    assert state.run.status is RunStatus.FAILED
+    assert state.provider_attempts == ()
+    assert factory.selections == []
+    assert factory.client.requests == []
+
+
 def test_agent_completes_a_text_only_run_and_terminal_runs_are_no_ops(tmp_path) -> None:
     store, coordinator, session, run = _app(tmp_path)
     registry = _registry()
@@ -560,11 +597,11 @@ def test_agent_stops_at_tool_budget_without_running_thirty_third_call(tmp_path) 
 def test_request_that_cannot_fit_fails_before_client_creation_or_attempt_claim(
     tmp_path, monkeypatch
 ) -> None:
-    import figura.agent.request as request_module
+    import figura.providers.validation as provider_validation
 
     store, coordinator, session, run = _app(tmp_path)
     factory = _FakeFactory([_response()])
-    monkeypatch.setattr(request_module, "MAX_TOTAL_TEXT_BYTES", 1)
+    monkeypatch.setattr(provider_validation, "MAX_TOTAL_TEXT_BYTES", 1)
 
     state = _agent(store, coordinator, _registry(), factory).execute(
         session.session_id, run.run_id
@@ -575,6 +612,146 @@ def test_request_that_cannot_fit_fails_before_client_creation_or_attempt_claim(
     assert state.provider_attempts == ()
     assert factory.selections == []
     assert factory.client.requests == []
+
+
+def test_complete_session_history_message_limit_fails_before_claim(tmp_path, monkeypatch) -> None:
+    import figura.providers.validation as provider_validation
+
+    _store, coordinator, session, prior = _app(tmp_path)
+    _complete_text_run(coordinator, session.session_id, prior.run_id)
+    current = _create_followup_run(coordinator, session.session_id)
+    factory = _FakeFactory([_response()])
+    monkeypatch.setattr(provider_validation, "MAX_MESSAGE_COUNT", 2)
+
+    state = _agent(_store, coordinator, _registry(), factory).execute(
+        session.session_id, current.run_id
+    )
+
+    _assert_request_rejected_before_claim(state, factory)
+
+
+def test_complete_session_history_image_limit_fails_before_claim(tmp_path, monkeypatch) -> None:
+    import figura.providers.validation as provider_validation
+
+    store, coordinator, session, prior, attachments, _image_bytes, _image_path = _app_with_image(
+        tmp_path
+    )
+    _complete_text_run(coordinator, session.session_id, prior.run_id)
+    current = _create_followup_run(coordinator, session.session_id)
+    factory = _FakeFactory([_response()])
+    monkeypatch.setattr(provider_validation, "MAX_IMAGE_COUNT", 0)
+
+    state = _agent(
+        store,
+        coordinator,
+        _registry(),
+        factory,
+        AgentRequestBuilder(attachments),
+    ).execute(session.session_id, current.run_id)
+
+    _assert_request_rejected_before_claim(state, factory)
+
+
+def test_tool_schema_limit_fails_before_claim(tmp_path, monkeypatch) -> None:
+    import figura.providers.validation as provider_validation
+
+    store, coordinator, session, current = _app(tmp_path)
+    factory = _FakeFactory([_response()])
+    monkeypatch.setattr(request_module, "_SYSTEM_INSTRUCTION", "")
+    monkeypatch.setattr(provider_validation, "MAX_TOTAL_TEXT_BYTES", 64)
+
+    state = _agent(store, coordinator, _registry(), factory).execute(
+        session.session_id, current.run_id
+    )
+
+    _assert_request_rejected_before_claim(state, factory)
+
+
+def test_missing_historical_attachment_fails_before_claim(tmp_path) -> None:
+    store, coordinator, session, prior, attachments, _image_bytes, image_path = _app_with_image(
+        tmp_path
+    )
+    _complete_text_run(coordinator, session.session_id, prior.run_id)
+    image_path.unlink()
+    current = _create_followup_run(coordinator, session.session_id)
+    factory = _FakeFactory([_response()])
+
+    state = _agent(
+        store,
+        coordinator,
+        _registry(),
+        factory,
+        AgentRequestBuilder(attachments),
+    ).execute(session.session_id, current.run_id)
+
+    _assert_request_rejected_before_claim(state, factory)
+
+
+def test_historical_tool_registry_mismatch_fails_before_claim(tmp_path) -> None:
+    store, coordinator, session, prior = _app(tmp_path)
+    historical_registry = _registry()
+    call_response = _response(
+        content="执行历史检查。",
+        reason=FinishReason.TOOL_CALLS,
+        calls=(ProviderToolCall("prior-call", "inspect", '{"value":1}'),),
+    )
+    _commit_tool_response(
+        coordinator, session.session_id, prior.run_id, historical_registry, call_response
+    )
+    DurableToolExecutor(store, historical_registry).execute_pending(
+        session.session_id, prior.run_id
+    )
+    _commit_tool_response(
+        coordinator,
+        session.session_id,
+        prior.run_id,
+        historical_registry,
+        _response(content="历史检查已完成。"),
+    )
+    completed_prior = coordinator.read_run_state(session.session_id, prior.run_id)
+    coordinator.complete_run(
+        session.session_id, prior.run_id, completed_prior.checkpoint.revision
+    )
+    current = _create_followup_run(coordinator, session.session_id)
+    current_registry = ToolRegistry("registry-v2", historical_registry.definitions)
+    factory = _FakeFactory([_response()])
+
+    state = _agent(store, coordinator, current_registry, factory).execute(
+        session.session_id, current.run_id
+    )
+
+    _assert_request_rejected_before_claim(state, factory)
+
+
+def test_incomplete_prior_tool_work_fails_before_claim(tmp_path) -> None:
+    _store, coordinator, session, prior = _app(tmp_path)
+    registry = _registry()
+    _commit_tool_response(
+        coordinator,
+        session.session_id,
+        prior.run_id,
+        registry,
+        _response(
+            content="待执行工具。",
+            reason=FinishReason.TOOL_CALLS,
+            calls=(ProviderToolCall("pending-call", "inspect", '{"value":1}'),),
+        ),
+    )
+    pending = coordinator.read_run_state(session.session_id, prior.run_id)
+    coordinator.fail_run(
+        session.session_id,
+        prior.run_id,
+        pending.checkpoint.revision,
+        TerminalCode.EXECUTION_FAILED,
+    )
+    current = _create_followup_run(coordinator, session.session_id)
+    factory = _FakeFactory([_response()])
+
+    state = _agent(_store, coordinator, registry, factory).execute(
+        session.session_id, current.run_id
+    )
+
+    _assert_request_rejected_before_claim(state, factory)
 
 
 def test_agent_accepts_exactly_eight_provider_attempts_without_sending_ninth(tmp_path) -> None:

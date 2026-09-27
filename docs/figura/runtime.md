@@ -4,7 +4,7 @@
 
 ## 1. 职责与边界
 
-RunCoordinator 校验并推进 Session/Run；`FiguraRunStore` 是保持原调用方式的兼容门面，实际持久化由领域 Repository 完成；DurableToolExecutor 记录工具尝试与结果。Agent 只能通过这些协调入口推进 Run，不能绕过 Checkpoint 直接更新执行历史。Provider 凭据、图片字节和调用期请求不进入 Run 事实。当前无 Figura Gateway，因此 `RunStreamEvent` 已持久化但尚无新 Figura SSE 入口。
+RunCoordinator 校验并推进 Session/Run；`FiguraRunStore` 是保持原调用方式的兼容门面，实际持久化由领域 Repository 完成；DurableToolExecutor 记录工具尝试与结果。同一 Session 同时最多有一个 running Run。Runtime 还向 Agent 提供同一 Session 中目标 Run 之前的终态 RunState 一致快照，供[Session Memory](session-memory.md)只读投影。Agent 只能通过这些协调入口推进 Run，不能绕过 Checkpoint 直接更新执行历史。Provider 凭据、图片字节、调用期请求和 Memory 消息投影不进入 Run 事实。当前无 Figura Gateway，因此 `RunStreamEvent` 已持久化但尚无新 Figura SSE 入口。
 
 ```mermaid
 flowchart LR
@@ -19,6 +19,10 @@ flowchart LR
     Database --> SQLite[(SQLite schema v5)]
     RunRepo --> Run[(Run and initial input)]
     RunRepo --> State[RunState hydration]
+    Agent -->|read_prior_run_states| Coordinator
+    RunRepo -->|ordered prior RunState snapshot| Store
+    Store -->|read result| Coordinator
+    Coordinator -->|earlier terminal RunStates| Agent
     ExecutionRepo --> Records[(Execution records)]
     ExecutionRepo --> ToolFacts[(Tool execution facts)]
     ExecutionRepo --> Attempts[(Provider attempts / continuation)]
@@ -36,14 +40,17 @@ flowchart LR
 
 ## 2. 内部流转
 
-1. **创建**：`RunCreateRequest` 带 Session、文本、显式 provider/model、幂等键及有序附件 ID。Coordinator 校验请求；`RunRepository` 在一个写事务内校验 Session 与附件归属，并写 `Run`、唯一 input `ExecutionRecord`（payload 为 `RunInput`）、初始 `ExecutionCheckpoint`、幂等映射及 created event。图片只以 ID 引用，字段见[附件文档](attachments.md#3-完整模型字段)。
-2. **模型尝试**：Agent 已构建并校验 `ProviderRequest` 后，经 `FiguraRunStore` 委托 `ExecutionRepository` claim `ProviderAttempt`，再发送请求。成功时，响应事实、私有 `ProviderContinuationFact`（如有）、工具调用意图、attempt 状态及下一 checkpoint 在同一事务中提交。确定失败与未知结果走不同状态；读取不重发已启动请求。
-3. **工具尝试**：`ToolCallFact` 是模型提出的逻辑调用；`ToolAttemptStartedFact` 表示 handler 已启动；`ToolResultFact` 记录成功或有界失败。DurableToolExecutor 执行 handler 并通过 `ExecutionRepository` 追加事实和推进 checkpoint；批次完成后才继续模型轮次。未知副作用需显式处理，不由 Agent 自动 replay。
-4. **终结与恢复**：Checkpoint 的 `revision` 用于拒绝过期推进；`next_action` 指明 model、provider_attempt、tool_execution、tool_attempt 或 final。终态提交 `FinalAnswerFact` 或失败/中断状态，并写安全生命周期事件。`RunRepository` 从 SQLite 重建 `RunState`；事件、历史展示和未来评测从已提交事实投影，不反向成为权威状态。
+1. **创建**：`RunCreateRequest` 带 Session、文本、显式 provider/model、幂等键及有序附件 ID。Coordinator 校验请求；`RunRepository` 在一个写事务内先查幂等映射，匹配则返回原 Run；否则若 Session 已有 running Run 则拒绝新建。事务随后校验附件归属，并写 `Run`、唯一 input `ExecutionRecord`（payload 为 `RunInput`）、初始 `ExecutionCheckpoint`、幂等映射及 created event。图片只以 ID 引用，字段见[附件文档](attachments.md#3-完整模型字段)。
+2. **读取历史 Run**：Agent 在每个 model action 前请求目标 Run 的 `read_prior_run_states`。`RunRepository` 在一个 SQLite 读事务/快照中按 Session ordinal 查询全部较早 Run，校验 ordinal 从 1 连续、先前 Run 已终态、RunState 完整且附件元数据仍属该 Session，再返回完整 tuple。图像文件可读性随后由 Agent 请求构建阶段验证。此读取不写历史副本；消息投影由[Session Memory](session-memory.md)负责。
+3. **模型尝试**：Agent 将完整历史、当前 Run 已提交前缀和已解析附件组装成 `ProviderRequest`，先运行 Provider 全量限制校验。只有校验通过后，才经 `FiguraRunStore` 委托 `ExecutionRepository` claim `ProviderAttempt` 并发送请求。成功时，响应事实、私有 `ProviderContinuationFact`（如有）、工具调用意图、attempt 状态及下一 checkpoint 在同一事务中提交。确定失败与未知结果走不同状态；读取不重发已启动请求。完整消息不得为满足 Provider 限制而裁剪，超限时不 claim。
+4. **工具尝试**：`ToolCallFact` 是模型提出的逻辑调用；`ToolAttemptStartedFact` 表示 handler 已启动；`ToolResultFact` 记录成功或有界失败。DurableToolExecutor 执行 handler 并通过 `ExecutionRepository` 追加事实和推进 checkpoint；批次完成后才继续模型轮次。未知副作用需显式处理，不由 Agent 自动 replay。
+5. **终结与恢复**：Checkpoint 的 `revision` 用于拒绝过期推进；`next_action` 指明 model、provider_attempt、tool_execution、tool_attempt 或 final。终态提交 `FinalAnswerFact` 或失败/中断状态，并写安全生命周期事件。`RunRepository` 从 SQLite 重建 `RunState`；事件、历史展示和未来评测从已提交事实投影，不反向成为权威状态。
 
 ## 3. 模型关系与共同规则
 
-Session 拥有 Run 和附件元数据；Run 只引用附件 ID，`AttachmentMetadata` 的权威模型和完整字段见[附件专题](attachments.md#3-完整模型字段)。Run 还拥有自己的执行记录、工具事实、Provider attempts、continuation、Checkpoint 与事件。`ExecutionRecord.payload` 是 `RunInput | ModelResponseFact | FinalAnswerFact`；`ToolExecutionFact.payload` 是 `ToolCallFact | ToolAttemptStartedFact | ToolResultFact`。这些联合类型按 kind 判别，不能只凭同名 ID 猜测类型。事件的 `event_sequence` 与记录的 `record_sequence`、工具事实的 `tool_sequence` 分属不同序列。事件 `payload` 的 `EventValue` 仅允许 `str | int | tuple[str, ...]`。
+Session 拥有 Run 和附件元数据；Run 只引用附件 ID，`AttachmentMetadata` 的权威模型和完整字段见[附件专题](attachments.md#3-完整模型字段)。一个 Session 同时至多有一个 `running` Run；幂等重放在 active-Run 拒绝检查之前。Run 还拥有自己的执行记录、工具事实、Provider attempts、continuation、Checkpoint 与事件。`ExecutionRecord.payload` 是 `RunInput | ModelResponseFact | FinalAnswerFact`；`ToolExecutionFact.payload` 是 `ToolCallFact | ToolAttemptStartedFact | ToolResultFact`。这些联合类型按 kind 判别，不能只凭同名 ID 猜测类型。事件的 `event_sequence` 与记录的 `record_sequence`、工具事实的 `tool_sequence` 分属不同序列。事件 `payload` 的 `EventValue` 仅允许 `str | int | tuple[str, ...]`。
+
+Runtime 提供较早 Run 的一致读取，不负责将其转成消息。`SessionHistory` 与 role-specific Memory 消息是每次 Agent 请求时的不可变投影；它们没有 SQLite 表，不改变 Run 的字段合同。完整字段和投影来源见[Session Memory 专题](session-memory.md#4-完整模型字段)。
 
 以下字段表按当前 Python dataclass 的全部声明字段列出。表内“默认”是构造默认值；`—` 表示构造时必传，不代表值在业务上可任意为空。时间是存储的 UTC 文本。每个模型小节的写入/权威/读取边界适用于其全部字段，字段行再注明例外。
 
@@ -290,4 +297,4 @@ Run 唯一推进点和 CAS 修订。 **写入者：**Store / Runtime 提交。**
 - `RunStatus`：`running`、`completed`、`failed`、`interrupted`。`RecordKind`：`input`、`model_response`、`final_answer`。`ActionKind`：`model`、`provider_attempt`、`tool_execution`、`tool_attempt`、`final`。
 - `ProviderAttemptStatus`：`started`、`response_committed`、`known_failure`、`outcome_unknown`。`ToolFactKind`：`tool_call`、`tool_attempt_started`、`tool_result`。`EventKind`：`run_created`、`run_completed`、`run_failed`、`run_interrupted`。
 - `TerminalCode`：`execution_failed`、`invalid_response`、`storage_error`、`interrupted`、`provider_outcome_unknown`。创建幂等映射是 RunRepository 的内部存储合同，不存在同名 dataclass；不能把它当成 RunInput 的另一个字段。
-- 代码：[领域模型](../../src/figura/runtime/domain/models.py)、[领域不变量](../../src/figura/runtime/domain/invariants.py)、[兼容门面](../../src/figura/runtime/store.py)、[数据库与事务](../../src/figura/runtime/persistence/database.py)、[Session Repository](../../src/figura/runtime/persistence/session_repository.py)、[Run Repository](../../src/figura/runtime/persistence/run_repository.py)、[Execution Repository](../../src/figura/runtime/persistence/execution_repository.py)、[工具执行](../../src/figura/runtime/tool_execution.py)。主规格：[Run 核心](../../openspec/figura/openspec/specs/run-execution-core/spec.md)、[耐久工具执行](../../openspec/figura/openspec/specs/durable-tool-execution/spec.md)、[Provider continuation](../../openspec/figura/openspec/specs/provider-continuation-persistence/spec.md)。
+- 代码：[领域模型](../../src/figura/runtime/domain/models.py)、[领域不变量](../../src/figura/runtime/domain/invariants.py)、[兼容门面](../../src/figura/runtime/store.py)、[数据库与事务](../../src/figura/runtime/persistence/database.py)、[Session Repository](../../src/figura/runtime/persistence/session_repository.py)、[Run Repository](../../src/figura/runtime/persistence/run_repository.py)、[Execution Repository](../../src/figura/runtime/persistence/execution_repository.py)、[工具执行](../../src/figura/runtime/tool_execution.py)。主规格：[Run 核心](../../openspec/figura/openspec/specs/run-execution-core/spec.md)、[Session Memory](../../openspec/figura/openspec/specs/session-memory/spec.md)、[Agent ReAct](../../openspec/figura/openspec/specs/agent-react-execution/spec.md)、[耐久工具执行](../../openspec/figura/openspec/specs/durable-tool-execution/spec.md)、[Provider continuation](../../openspec/figura/openspec/specs/provider-continuation-persistence/spec.md)。
