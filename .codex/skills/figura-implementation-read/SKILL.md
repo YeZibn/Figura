@@ -1,42 +1,17 @@
 ---
 name: figura-implementation-read
-description: Read Figura's current implementation overview and verify relevant code and OpenSpec facts before discussing the architecture or next change; read-only.
+description: Read Figura's layered system overview and relevant component document, then verify current code and OpenSpec facts before answering architecture, model, field, flow, or next-change questions; read-only.
 ---
 
-# 读取 Figura 当前实现
+# 读取 Figura 分层系统文档
 
-用于回答“现在实现了什么、下一步做什么、某字段归谁、某流程如何运转”。从仓库根目录执行命令。此 skill 只读取；用户要更新总览时使用 `$figura-implementation-overview`，要写新 change 方案时使用 OpenSpec。
+先读 `docs/figura-implementation-overview.md`，确定问题涉及的大组件和当前状态；再按**语义与权威 owner**寻找相关 `docs/figura/*.md` 专题。专题集合会随领域变化扩展，不能假定固定目录或按调用链把 Agent、Provider、Tool 当成一个领域。专题中的内部流转与完整字段表是导航，不代替代码和规格核对。用户要求维护这些文档时使用 `$figura-implementation-overview`；本 skill 只读。
 
-## 读取顺序
+## 核对顺序
 
-1. 读 `docs/figura-implementation-overview.md` 的状态、总图、组件、核心数据和流程；先确定用户问题涉及的模块。
-2. 查看相关 `src/figura/` 代码和 `openspec/figura/openspec/specs/` 主规格。具体字段以实际类型、编解码及持久化读写代码核对；接口行为同时核对调用方和实现方。
-3. 问题涉及进行中的 change 时，查看该 change 的 proposal、design、specs、tasks 和 `openspec status`；涉及历史决定时，按 change 名称查 archive。只打开相关文件。
-4. 检查 `git status --short`。未提交代码可以描述为“当前工作树已实现”，但不能因此声称 change 已归档或验证已通过。
-5. 设计草案 `docs/figura-architecture-design.md` 和旧版 `src/chartagent/` 仅在比较、迁移或兼容性问题中查阅。草案中的对象或字段不自动属于当前实现。
+1. 看 `git status --short`，识别工作树已有改动。新 Figura 的实现事实核对 `src/figura/`；字段至少看模型定义、编解码、写入/调用与读取/投影。只打开相关文件。
+2. 行为合同看 `openspec/figura/openspec/specs/`；活动 change 另看对应 proposal/design/specs/tasks 和当前状态。先以 `openspec store list --json` 解析 store id，后续带 `--store <id>`。
+3. `docs/figura-architecture-design.md` 是长期设计草案；`src/chartagent/` 与 chartagent store 是旧系统。只有比较、迁移或兼容性问题才作为参考，不能用来证明新 Figura 已实现。
+4. 回答时分开写：当前工作树代码、主规格合同、活动设计、旧系统参考、实际运行过的验证。Overview 与代码冲突时指出文档待更新，不在只读任务中改写。
 
-## 命令
-
-```sh
-git status --short
-sed -n '1,240p' docs/figura-implementation-overview.md
-rg --files src/figura
-rg -n '^(class |def |    def )' src/figura
-rg --files openspec/figura/openspec/specs
-openspec store list --json
-openspec list --json --store figura
-openspec status --change <change-id> --json --store figura
-rg --files openspec/figura/openspec/changes/archive | rg '<change-id>'
-```
-
-先通过 `openspec store list --json` 确定真实 store id，再替换示例中的 `figura`。`<change-id>` 是占位符，不要原样执行。代码搜索先限定相关模块，再打开具体文件。不要读取 `.env`、密钥或生成的会话数据。
-
-## 回答规则
-
-- **实现事实**：说明代码位置、字段 owner 和流转；必要时指出仅存在于工作树。
-- **规格合同**：说明主规格或活动 change 的要求，以及与代码是否一致。
-- **计划内容**：明确标记为计划，不画成已运行组件。
-- **验证结果**：只引用本次实际执行或有明确来源的历史结果，注明时间范围。
-- Overview 与代码冲突时，先按代码说明现状并指出总览待更新；不要在只读任务中改写文档。
-
-输出围绕用户的问题给出结论和可核查路径，不复述完整 Overview。
+字段问题先找定义该合同的领域文档，给出完整 `Model.field` 路径、owner、写入、持久化或调用期位置、读取与公开边界；消费方文档只解释映射。流程问题说明内容穿过哪些组件及失败/恢复分支。不要把 ExecutionRecord、Checkpoint、RunStreamEvent 当成同一种事实。
