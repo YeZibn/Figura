@@ -35,7 +35,7 @@ from figura.runtime._codec import (
     validate_tool_call_batch,
 )
 from figura.runtime.models import EventKind, ModelResponseFact, RecordKind, RunInput
-from figura.runtime.store import _CORE_SCHEMA
+from figura.runtime.persistence.schema import _CORE_SCHEMA
 from figura.providers import (
     MODEL_IDS,
     FinishReason,

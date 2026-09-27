@@ -4,44 +4,56 @@
 
 ## 1. 职责与边界
 
-RunCoordinator 校验并推进 Session/Run；FiguraRunStore 是持久化 owner；DurableToolExecutor 记录工具尝试与结果。Agent 只能通过这些协调入口推进 Run，不能绕过 Checkpoint 直接更新执行历史。Provider 凭据、图片字节和调用期请求不进入 Run 事实。当前无 Figura Gateway，因此 `RunStreamEvent` 已持久化但尚无新 Figura SSE 入口。
+RunCoordinator 校验并推进 Session/Run；`FiguraRunStore` 是保持原调用方式的兼容门面，实际持久化由领域 Repository 完成；DurableToolExecutor 记录工具尝试与结果。Agent 只能通过这些协调入口推进 Run，不能绕过 Checkpoint 直接更新执行历史。Provider 凭据、图片字节和调用期请求不进入 Run 事实。当前无 Figura Gateway，因此 `RunStreamEvent` 已持久化但尚无新 Figura SSE 入口。
 
 ```mermaid
 flowchart LR
     Create[RunCreateRequest] --> Coordinator[RunCoordinator]
-    Coordinator --> Store[FiguraRunStore]
-    Store --> Run[(Run)]
-    Store --> Records[(ExecutionRecord)]
-    Store --> ToolFacts[(ToolExecutionFact)]
-    Store --> Attempts[(ProviderAttempt / Continuation)]
-    Store --> Checkpoint[(ExecutionCheckpoint)]
-    Store --> Events[(RunStreamEvent)]
-    Run --> State[RunState]
-    Records --> State
-    ToolFacts --> State
-    Attempts --> State
-    Checkpoint --> State
+    Coordinator --> Store[FiguraRunStore compatibility facade]
+    Store --> SessionRepo[SessionRepository]
+    Store --> RunRepo[RunRepository]
+    Store --> ExecutionRepo[ExecutionRepository]
+    SessionRepo --> Database[SqliteDatabase transactions]
+    RunRepo --> Database
+    ExecutionRepo --> Database
+    Database --> SQLite[(SQLite schema v5)]
+    RunRepo --> Run[(Run and initial input)]
+    RunRepo --> State[RunState hydration]
+    ExecutionRepo --> Records[(Execution records)]
+    ExecutionRepo --> ToolFacts[(Tool execution facts)]
+    ExecutionRepo --> Attempts[(Provider attempts / continuation)]
+    ExecutionRepo --> Checkpoint[(Execution checkpoint)]
+    RunRepo --> Events[(Run lifecycle events)]
+    ExecutionRepo --> Events
+    Domain[Domain models and invariants] -.-> RunRepo
+    Domain -.-> ExecutionRepo
+    Mappers[Persistence mappers] -.-> RunRepo
+    Mappers -.-> ExecutionRepo
     State --> Agent[AgentExecutor]
 ```
 
+实现按领域与持久化职责拆分：[`runtime/domain/models.py`](../../src/figura/runtime/domain/models.py) 是模型和枚举的权威定义，[`runtime/domain/invariants.py`](../../src/figura/runtime/domain/invariants.py) 保存纯 Run 状态校验；[`runtime/models.py`](../../src/figura/runtime/models.py) 仅重导出旧导入路径。[`runtime/persistence/database.py`](../../src/figura/runtime/persistence/database.py) 管理 SQLite 连接与读写事务，[`schema.py`](../../src/figura/runtime/persistence/schema.py) 管理 schema v5 和迁移，[`mappers.py`](../../src/figura/runtime/persistence/mappers.py) 负责数据库行与领域值的转换。Session/附件元数据由 `SessionRepository` 写入，Run 创建与聚合读取由 `RunRepository` 负责，Provider、工具事实及后续 checkpoint/终态转移由 `ExecutionRepository` 负责。`FiguraRunStore` 只组合并委托这些对象，调用方接口保持不变。
+
 ## 2. 内部流转
 
-1. **创建**：`RunCreateRequest` 带 Session、文本、显式 provider/model、幂等键及有序附件 ID。Coordinator 校验请求；Store 在同一事务核对附件同属 Session，并写 `Run`、唯一 input `ExecutionRecord`（payload 为 `RunInput`）、初始 `ExecutionCheckpoint`、幂等映射及 created event。图片只以 ID 引用，字段见[附件文档](attachments.md#3-完整模型字段)。
-2. **模型尝试**：Agent 已构建并校验 `ProviderRequest` 后，先 claim `ProviderAttempt`，再发送请求。成功时，响应事实、私有 `ProviderContinuationFact`（如有）、工具调用意图、attempt 状态及下一 checkpoint 在事务中提交。确定失败与未知结果走不同状态；读取不重发已启动请求。
-3. **工具尝试**：`ToolCallFact` 是模型提出的逻辑调用；`ToolAttemptStartedFact` 表示 handler 已启动；`ToolResultFact` 记录成功或有界失败。事实按 `tool_sequence` 追加，批次完成后才继续模型轮次。未知副作用需显式处理，不由 Agent 自动 replay。
-4. **终结与恢复**：Checkpoint 的 `revision` 用于拒绝过期推进；`next_action` 指明 model、provider_attempt、tool_execution、tool_attempt 或 final。终态提交 `FinalAnswerFact` 或失败/中断状态，并写安全生命周期事件。Store 重建 `RunState`；事件、历史展示和未来评测从已提交事实投影，不反向成为权威状态。
+1. **创建**：`RunCreateRequest` 带 Session、文本、显式 provider/model、幂等键及有序附件 ID。Coordinator 校验请求；`RunRepository` 在一个写事务内校验 Session 与附件归属，并写 `Run`、唯一 input `ExecutionRecord`（payload 为 `RunInput`）、初始 `ExecutionCheckpoint`、幂等映射及 created event。图片只以 ID 引用，字段见[附件文档](attachments.md#3-完整模型字段)。
+2. **模型尝试**：Agent 已构建并校验 `ProviderRequest` 后，经 `FiguraRunStore` 委托 `ExecutionRepository` claim `ProviderAttempt`，再发送请求。成功时，响应事实、私有 `ProviderContinuationFact`（如有）、工具调用意图、attempt 状态及下一 checkpoint 在同一事务中提交。确定失败与未知结果走不同状态；读取不重发已启动请求。
+3. **工具尝试**：`ToolCallFact` 是模型提出的逻辑调用；`ToolAttemptStartedFact` 表示 handler 已启动；`ToolResultFact` 记录成功或有界失败。DurableToolExecutor 执行 handler 并通过 `ExecutionRepository` 追加事实和推进 checkpoint；批次完成后才继续模型轮次。未知副作用需显式处理，不由 Agent 自动 replay。
+4. **终结与恢复**：Checkpoint 的 `revision` 用于拒绝过期推进；`next_action` 指明 model、provider_attempt、tool_execution、tool_attempt 或 final。终态提交 `FinalAnswerFact` 或失败/中断状态，并写安全生命周期事件。`RunRepository` 从 SQLite 重建 `RunState`；事件、历史展示和未来评测从已提交事实投影，不反向成为权威状态。
 
 ## 3. 模型关系与共同规则
 
-Session 拥有 Run 和附件元数据；Run 引用附件，拥有自己的执行记录、工具事实、Provider attempts、continuation、Checkpoint 与事件。`ExecutionRecord.payload` 是 `RunInput | ModelResponseFact | FinalAnswerFact`；`ToolExecutionFact.payload` 是 `ToolCallFact | ToolAttemptStartedFact | ToolResultFact`。这些联合类型按 kind 判别，不能只凭同名 ID 猜测类型。事件的 `event_sequence` 与记录的 `record_sequence`、工具事实的 `tool_sequence` 分属不同序列。事件 `payload` 的 `EventValue` 仅允许 `str | int | tuple[str, ...]`。
+Session 拥有 Run 和附件元数据；Run 只引用附件 ID，`AttachmentMetadata` 的权威模型和完整字段见[附件专题](attachments.md#3-完整模型字段)。Run 还拥有自己的执行记录、工具事实、Provider attempts、continuation、Checkpoint 与事件。`ExecutionRecord.payload` 是 `RunInput | ModelResponseFact | FinalAnswerFact`；`ToolExecutionFact.payload` 是 `ToolCallFact | ToolAttemptStartedFact | ToolResultFact`。这些联合类型按 kind 判别，不能只凭同名 ID 猜测类型。事件的 `event_sequence` 与记录的 `record_sequence`、工具事实的 `tool_sequence` 分属不同序列。事件 `payload` 的 `EventValue` 仅允许 `str | int | tuple[str, ...]`。
 
 以下字段表按当前 Python dataclass 的全部声明字段列出。表内“默认”是构造默认值；`—` 表示构造时必传，不代表值在业务上可任意为空。时间是存储的 UTC 文本。每个模型小节的写入/权威/读取边界适用于其全部字段，字段行再注明例外。
+
+字段表中的 `Store` 指 `FiguraRunStore` 兼容门面，不表示 SQL 或事务仍由门面实现。实际 owner 如下：Session/AttachmentMetadata 对应 `SessionRepository`；Run、初始 RunInput、幂等查找与 RunState 聚合读取对应 `RunRepository`；Provider attempt、模型响应、工具事实、后续 checkpoint 和终态转移对应 `ExecutionRepository`。`ExecutionRecord` 的初始 input 由 RunRepository 写入，模型响应与最终答案由 ExecutionRepository 写入；`RunStreamEvent` 的创建事件由 RunRepository 写入，终态事件由 ExecutionRepository 写入。以下字段合同与数据库表、字段和事务语义保持不变。
 
 ## 4. 完整模型字段
 
 ### Session
 
-会话身份与元数据；拥有 Run 和 Attachment。 **写入者：**RunCoordinator / Store。**权威位置：**sessions 表。**读取与公开：**Session 查询、Run 创建；安全元数据可公开。[定义](../../src/figura/runtime/models.py)。
+会话身份与元数据；拥有 Run 和 Attachment。 **写入者：**RunCoordinator / Store。**权威位置：**sessions 表。**读取与公开：**Session 查询、Run 创建；安全元数据可公开。[定义](../../src/figura/runtime/domain/models.py)。
 
 | 完整字段路径 | 类型 | 构造默认 | 含义与约束 | 写入 → 权威 → 读取/公开 |
 |---|---|---|---|---|
@@ -52,7 +64,7 @@ Session 拥有 Run 和附件元数据；Run 引用附件，拥有自己的执行
 
 ### Run
 
-一次独立执行的身份、模型选择和生命周期。 **写入者：**RunCoordinator / Store。**权威位置：**runs 表。**读取与公开：**Agent、恢复与安全 Run 摘要。[定义](../../src/figura/runtime/models.py)。
+一次独立执行的身份、模型选择和生命周期。 **写入者：**RunCoordinator / Store。**权威位置：**runs 表。**读取与公开：**Agent、恢复与安全 Run 摘要。[定义](../../src/figura/runtime/domain/models.py)。
 
 | 完整字段路径 | 类型 | 构造默认 | 含义与约束 | 写入 → 权威 → 读取/公开 |
 |---|---|---|---|---|
@@ -72,7 +84,7 @@ Session 拥有 Run 和附件元数据；Run 引用附件，拥有自己的执行
 
 ### RunInput
 
-创建时固定的唯一输入事实。 **写入者：**RunCoordinator / Store。**权威位置：**input ExecutionRecord.payload。**读取与公开：**Agent 请求构建；文本与附件 ID 不进入普通事件。[定义](../../src/figura/runtime/models.py)。
+创建时固定的唯一输入事实。 **写入者：**RunCoordinator / Store。**权威位置：**input ExecutionRecord.payload。**读取与公开：**Agent 请求构建；文本与附件 ID 不进入普通事件。[定义](../../src/figura/runtime/domain/models.py)。
 
 | 完整字段路径 | 类型 | 构造默认 | 含义与约束 | 写入 → 权威 → 读取/公开 |
 |---|---|---|---|---|
@@ -84,7 +96,7 @@ Session 拥有 Run 和附件元数据；Run 引用附件，拥有自己的执行
 
 ### ModelResponseFact
 
-已提交的模型响应事实。 **写入者：**RunCoordinator / Store。**权威位置：**model_response ExecutionRecord.payload。**读取与公开：**历史重建和 Agent；原始内容不直接作 SSE payload。[定义](../../src/figura/runtime/models.py)。
+已提交的模型响应事实。 **写入者：**RunCoordinator / Store。**权威位置：**model_response ExecutionRecord.payload。**读取与公开：**历史重建和 Agent；原始内容不直接作 SSE payload。[定义](../../src/figura/runtime/domain/models.py)。
 
 | 完整字段路径 | 类型 | 构造默认 | 含义与约束 | 写入 → 权威 → 读取/公开 |
 |---|---|---|---|---|
@@ -99,7 +111,7 @@ Session 拥有 Run 和附件元数据；Run 引用附件，拥有自己的执行
 
 ### ProviderContinuationFact
 
-与来源响应绑定的私有续接内容。 **写入者：**RunCoordinator / Store。**权威位置：**run_provider_continuations 表。**读取与公开：**后续请求重建；不公开 reasoning_content。[定义](../../src/figura/runtime/models.py)。
+与来源响应绑定的私有续接内容。 **写入者：**RunCoordinator / Store。**权威位置：**run_provider_continuations 表。**读取与公开：**后续请求重建；不公开 reasoning_content。[定义](../../src/figura/runtime/domain/models.py)。
 
 | 完整字段路径 | 类型 | 构造默认 | 含义与约束 | 写入 → 权威 → 读取/公开 |
 |---|---|---|---|---|
@@ -114,7 +126,7 @@ Session 拥有 Run 和附件元数据；Run 引用附件，拥有自己的执行
 
 ### ProviderAttempt
 
-一次已 claim 的模型请求尝试及确定性状态。 **写入者：**RunCoordinator / Store。**权威位置：**run_provider_attempts 表。**读取与公开：**Agent 恢复与预算；只公开安全状态。[定义](../../src/figura/runtime/models.py)。
+一次已 claim 的模型请求尝试及确定性状态。 **写入者：**RunCoordinator / Store。**权威位置：**run_provider_attempts 表。**读取与公开：**Agent 恢复与预算；只公开安全状态。[定义](../../src/figura/runtime/domain/models.py)。
 
 | 完整字段路径 | 类型 | 构造默认 | 含义与约束 | 写入 → 权威 → 读取/公开 |
 |---|---|---|---|---|
@@ -131,7 +143,7 @@ Session 拥有 Run 和附件元数据；Run 引用附件，拥有自己的执行
 
 ### FinalAnswerFact
 
-最终回答与来源响应的绑定事实。 **写入者：**RunCoordinator / Store。**权威位置：**final_answer ExecutionRecord.payload。**读取与公开：**Run 终结与回答读取；artifact_refs 当前为空。[定义](../../src/figura/runtime/models.py)。
+最终回答与来源响应的绑定事实。 **写入者：**RunCoordinator / Store。**权威位置：**final_answer ExecutionRecord.payload。**读取与公开：**Run 终结与回答读取；artifact_refs 当前为空。[定义](../../src/figura/runtime/domain/models.py)。
 
 | 完整字段路径 | 类型 | 构造默认 | 含义与约束 | 写入 → 权威 → 读取/公开 |
 |---|---|---|---|---|
@@ -142,7 +154,7 @@ Session 拥有 Run 和附件元数据；Run 引用附件，拥有自己的执行
 
 ### ToolCallFact
 
-模型提出的逻辑工具调用。 **写入者：**RunCoordinator / Store。**权威位置：**run_tool_execution_facts 的 tool_call payload。**读取与公开：**DurableToolExecutor 与历史重建；参数不直接公开。[定义](../../src/figura/runtime/models.py)。
+模型提出的逻辑工具调用。 **写入者：**RunCoordinator / Store。**权威位置：**run_tool_execution_facts 的 tool_call payload。**读取与公开：**DurableToolExecutor 与历史重建；参数不直接公开。[定义](../../src/figura/runtime/domain/models.py)。
 
 | 完整字段路径 | 类型 | 构造默认 | 含义与约束 | 写入 → 权威 → 读取/公开 |
 |---|---|---|---|---|
@@ -156,7 +168,7 @@ Session 拥有 Run 和附件元数据；Run 引用附件，拥有自己的执行
 
 ### ToolAttemptStartedFact
 
-handler 启动前的耐久标记。 **写入者：**DurableToolExecutor / Store。**权威位置：**run_tool_execution_facts 的 tool_attempt_started payload。**读取与公开：**恢复逻辑；未知结果不能自动重放。[定义](../../src/figura/runtime/models.py)。
+handler 启动前的耐久标记。 **写入者：**DurableToolExecutor / Store。**权威位置：**run_tool_execution_facts 的 tool_attempt_started payload。**读取与公开：**恢复逻辑；未知结果不能自动重放。[定义](../../src/figura/runtime/domain/models.py)。
 
 | 完整字段路径 | 类型 | 构造默认 | 含义与约束 | 写入 → 权威 → 读取/公开 |
 |---|---|---|---|---|
@@ -170,7 +182,7 @@ handler 启动前的耐久标记。 **写入者：**DurableToolExecutor / Store�
 
 ### ToolResultFact
 
-工具一次尝试的提交结果。 **写入者：**DurableToolExecutor / Store。**权威位置：**run_tool_execution_facts 的 tool_result payload。**读取与公开：**历史重建与 Agent；仅安全摘要可投影。[定义](../../src/figura/runtime/models.py)。
+工具一次尝试的提交结果。 **写入者：**DurableToolExecutor / Store。**权威位置：**run_tool_execution_facts 的 tool_result payload。**读取与公开：**历史重建与 Agent；仅安全摘要可投影。[定义](../../src/figura/runtime/domain/models.py)。
 
 | 完整字段路径 | 类型 | 构造默认 | 含义与约束 | 写入 → 权威 → 读取/公开 |
 |---|---|---|---|---|
@@ -185,7 +197,7 @@ handler 启动前的耐久标记。 **写入者：**DurableToolExecutor / Store�
 
 ### ToolExecutionFact
 
-工具事实的排序封套。 **写入者：**Store。**权威位置：**run_tool_execution_facts 表。**读取与公开：**Agent 和恢复；payload 按 fact_kind 判别。[定义](../../src/figura/runtime/models.py)。
+工具事实的排序封套。 **写入者：**Store。**权威位置：**run_tool_execution_facts 表。**读取与公开：**Agent 和恢复；payload 按 fact_kind 判别。[定义](../../src/figura/runtime/domain/models.py)。
 
 | 完整字段路径 | 类型 | 构造默认 | 含义与约束 | 写入 → 权威 → 读取/公开 |
 |---|---|---|---|---|
@@ -198,7 +210,7 @@ handler 启动前的耐久标记。 **写入者：**DurableToolExecutor / Store�
 
 ### ExecutionRecord
 
-Run 执行内容的有序事实封套。 **写入者：**Store。**权威位置：**run_execution_records 表。**读取与公开：**历史、恢复与后续评测；payload 不直接公开。[定义](../../src/figura/runtime/models.py)。
+Run 执行内容的有序事实封套。 **写入者：**Store。**权威位置：**run_execution_records 表。**读取与公开：**历史、恢复与后续评测；payload 不直接公开。[定义](../../src/figura/runtime/domain/models.py)。
 
 | 完整字段路径 | 类型 | 构造默认 | 含义与约束 | 写入 → 权威 → 读取/公开 |
 |---|---|---|---|---|
@@ -211,7 +223,7 @@ Run 执行内容的有序事实封套。 **写入者：**Store。**权威位置�
 
 ### NextAction
 
-checkpoint 中下一执行动作的判别值。 **写入者：**Store / Runtime 提交。**权威位置：**ExecutionCheckpoint.next_action_json。**读取与公开：**Agent；动作细节不直接公开。[定义](../../src/figura/runtime/models.py)。
+checkpoint 中下一执行动作的判别值。 **写入者：**Store / Runtime 提交。**权威位置：**ExecutionCheckpoint.next_action_json。**读取与公开：**Agent；动作细节不直接公开。[定义](../../src/figura/runtime/domain/models.py)。
 
 | 完整字段路径 | 类型 | 构造默认 | 含义与约束 | 写入 → 权威 → 读取/公开 |
 |---|---|---|---|---|
@@ -222,7 +234,7 @@ checkpoint 中下一执行动作的判别值。 **写入者：**Store / Runtime 
 
 ### ExecutionCheckpoint
 
-Run 唯一推进点和 CAS 修订。 **写入者：**Store / Runtime 提交。**权威位置：**run_execution_checkpoints 表。**读取与公开：**Agent 与恢复；只投影必要状态。[定义](../../src/figura/runtime/models.py)。
+Run 唯一推进点和 CAS 修订。 **写入者：**Store / Runtime 提交。**权威位置：**run_execution_checkpoints 表。**读取与公开：**Agent 与恢复；只投影必要状态。[定义](../../src/figura/runtime/domain/models.py)。
 
 | 完整字段路径 | 类型 | 构造默认 | 含义与约束 | 写入 → 权威 → 读取/公开 |
 |---|---|---|---|---|
@@ -236,7 +248,7 @@ Run 唯一推进点和 CAS 修订。 **写入者：**Store / Runtime 提交。**
 
 ### RunStreamEvent
 
-可重放的安全生命周期事件。 **写入者：**Store。**权威位置：**run_stream_events 表。**读取与公开：**未来 Gateway/客户端；to_public_dict 有界投影。[定义](../../src/figura/runtime/models.py)。
+可重放的安全生命周期事件。 **写入者：**Store。**权威位置：**run_stream_events 表。**读取与公开：**未来 Gateway/客户端；to_public_dict 有界投影。[定义](../../src/figura/runtime/domain/models.py)。
 
 | 完整字段路径 | 类型 | 构造默认 | 含义与约束 | 写入 → 权威 → 读取/公开 |
 |---|---|---|---|---|
@@ -248,21 +260,21 @@ Run 唯一推进点和 CAS 修订。 **写入者：**Store / Runtime 提交。**
 
 ### RunState
 
-从持久 Run 数据重建的内部读取视图。 **写入者：**Store.read_run_state。**权威位置：**调用期内存；各成员各有权威存储。**读取与公开：**Agent；整体不公开。[定义](../../src/figura/runtime/models.py)。
+从持久 Run 数据重建的内部读取视图。 **写入者：**RunRepository.read_run_state（经 FiguraRunStore）。**权威位置：**调用期内存；各成员各有权威存储。**读取与公开：**Agent；整体不公开。[定义](../../src/figura/runtime/domain/models.py)。
 
 | 完整字段路径 | 类型 | 构造默认 | 含义与约束 | 写入 → 权威 → 读取/公开 |
 |---|---|---|---|---|
-| RunState.run | Run | 必传 | 由 Store 读取的当前 Run；字段见 Run | Store.read_run_state → 调用期内存；各成员各有权威存储 → Agent；整体不公开 |
-| RunState.records | tuple[ExecutionRecord, ...] | 必传 | 已提交的有序执行记录 | Store.read_run_state → 调用期内存；各成员各有权威存储 → Agent；整体不公开 |
-| RunState.checkpoint | ExecutionCheckpoint | 必传 | 当前唯一执行检查点 | Store.read_run_state → 调用期内存；各成员各有权威存储 → Agent；整体不公开 |
-| RunState.events | tuple[RunStreamEvent, ...] | 必传 | 已提交的安全事件 | Store.read_run_state → 调用期内存；各成员各有权威存储 → Agent；整体不公开 |
-| RunState.tool_facts | tuple[ToolExecutionFact, ...] | () | 已提交的有序工具事实 | Store.read_run_state → 调用期内存；各成员各有权威存储 → Agent；整体不公开 |
-| RunState.provider_continuations | tuple[ProviderContinuationFact, ...] | () | 与已提交响应关联的私有续接事实 | Store.read_run_state → 调用期内存；各成员各有权威存储 → Agent；整体不公开 |
-| RunState.provider_attempts | tuple[ProviderAttempt, ...] | () | 已 claim 的模型尝试记录 | Store.read_run_state → 调用期内存；各成员各有权威存储 → Agent；整体不公开 |
+| RunState.run | Run | 必传 | 由 Store 读取的当前 Run；字段见 Run | RunRepository.read_run_state（经 FiguraRunStore） → 调用期内存；各成员各有权威存储 → Agent；整体不公开 |
+| RunState.records | tuple[ExecutionRecord, ...] | 必传 | 已提交的有序执行记录 | RunRepository.read_run_state（经 FiguraRunStore） → 调用期内存；各成员各有权威存储 → Agent；整体不公开 |
+| RunState.checkpoint | ExecutionCheckpoint | 必传 | 当前唯一执行检查点 | RunRepository.read_run_state（经 FiguraRunStore） → 调用期内存；各成员各有权威存储 → Agent；整体不公开 |
+| RunState.events | tuple[RunStreamEvent, ...] | 必传 | 已提交的安全事件 | RunRepository.read_run_state（经 FiguraRunStore） → 调用期内存；各成员各有权威存储 → Agent；整体不公开 |
+| RunState.tool_facts | tuple[ToolExecutionFact, ...] | () | 已提交的有序工具事实 | RunRepository.read_run_state（经 FiguraRunStore） → 调用期内存；各成员各有权威存储 → Agent；整体不公开 |
+| RunState.provider_continuations | tuple[ProviderContinuationFact, ...] | () | 与已提交响应关联的私有续接事实 | RunRepository.read_run_state（经 FiguraRunStore） → 调用期内存；各成员各有权威存储 → Agent；整体不公开 |
+| RunState.provider_attempts | tuple[ProviderAttempt, ...] | () | 已 claim 的模型尝试记录 | RunRepository.read_run_state（经 FiguraRunStore） → 调用期内存；各成员各有权威存储 → Agent；整体不公开 |
 
 ### RunCreateRequest
 
-内部创建 Run 的调用期输入。 **写入者：**内部调用方。**权威位置：**调用期；幂等键摘要单独入库。**读取与公开：**RunCoordinator；原始幂等键不公开。[定义](../../src/figura/runtime/models.py)。
+内部创建 Run 的调用期输入。 **写入者：**内部调用方。**权威位置：**调用期；幂等键摘要单独入库。**读取与公开：**RunCoordinator；原始幂等键不公开。[定义](../../src/figura/runtime/domain/models.py)。
 
 | 完整字段路径 | 类型 | 构造默认 | 含义与约束 | 写入 → 权威 → 读取/公开 |
 |---|---|---|---|---|
@@ -277,5 +289,5 @@ Run 唯一推进点和 CAS 修订。 **写入者：**Store / Runtime 提交。**
 
 - `RunStatus`：`running`、`completed`、`failed`、`interrupted`。`RecordKind`：`input`、`model_response`、`final_answer`。`ActionKind`：`model`、`provider_attempt`、`tool_execution`、`tool_attempt`、`final`。
 - `ProviderAttemptStatus`：`started`、`response_committed`、`known_failure`、`outcome_unknown`。`ToolFactKind`：`tool_call`、`tool_attempt_started`、`tool_result`。`EventKind`：`run_created`、`run_completed`、`run_failed`、`run_interrupted`。
-- `TerminalCode`：`execution_failed`、`invalid_response`、`storage_error`、`interrupted`、`provider_outcome_unknown`。创建幂等映射是 Store 内部存储合同，不存在同名 dataclass；不能把它当成 RunInput 的另一个字段。
-- 代码：[模型](../../src/figura/runtime/models.py)、[Coordinator](../../src/figura/runtime/coordinator.py)、[Store](../../src/figura/runtime/store.py)、[工具执行](../../src/figura/runtime/tool_execution.py)。主规格：[Run 核心](../../openspec/figura/openspec/specs/run-execution-core/spec.md)、[耐久工具执行](../../openspec/figura/openspec/specs/durable-tool-execution/spec.md)、[Provider continuation](../../openspec/figura/openspec/specs/provider-continuation-persistence/spec.md)。
+- `TerminalCode`：`execution_failed`、`invalid_response`、`storage_error`、`interrupted`、`provider_outcome_unknown`。创建幂等映射是 RunRepository 的内部存储合同，不存在同名 dataclass；不能把它当成 RunInput 的另一个字段。
+- 代码：[领域模型](../../src/figura/runtime/domain/models.py)、[领域不变量](../../src/figura/runtime/domain/invariants.py)、[兼容门面](../../src/figura/runtime/store.py)、[数据库与事务](../../src/figura/runtime/persistence/database.py)、[Session Repository](../../src/figura/runtime/persistence/session_repository.py)、[Run Repository](../../src/figura/runtime/persistence/run_repository.py)、[Execution Repository](../../src/figura/runtime/persistence/execution_repository.py)、[工具执行](../../src/figura/runtime/tool_execution.py)。主规格：[Run 核心](../../openspec/figura/openspec/specs/run-execution-core/spec.md)、[耐久工具执行](../../openspec/figura/openspec/specs/durable-tool-execution/spec.md)、[Provider continuation](../../openspec/figura/openspec/specs/provider-continuation-persistence/spec.md)。

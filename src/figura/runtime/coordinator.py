@@ -21,7 +21,7 @@ from figura.providers.validation import MAX_IMAGE_COUNT
 from ._codec import MAX_PROVIDER_CONTINUATION_BYTES, validate_tool_call_batch
 from .errors import RunError, RunErrorCode
 from ._run_lock import PerRunExecutionLock, RunExecutionLockUnavailable
-from .models import (
+from .domain.models import (
     ActionKind,
     ExecutionRecord,
     ModelResponseFact,

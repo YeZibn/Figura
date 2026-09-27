@@ -18,7 +18,7 @@ from figura.tools.contracts import (
 )
 
 from .errors import RunError, RunErrorCode
-from .models import (
+from .domain.models import (
     EventKind,
     ExecutionRecord,
     FinalAnswerFact,

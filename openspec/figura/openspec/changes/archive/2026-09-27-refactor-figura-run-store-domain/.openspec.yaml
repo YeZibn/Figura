@@ -1,0 +1,4 @@
+schema: spec-driven
+created: 2026-09-27
+goal: 形成清晰的领域模型与持久化模块边界，维持 FiguraRunStore 兼容接口及现有原子事务语义
+skip_specs: true

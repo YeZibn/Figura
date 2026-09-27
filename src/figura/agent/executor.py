@@ -15,7 +15,7 @@ from figura.runtime import (
     TerminalCode,
 )
 from figura.runtime._run_lock import PerRunExecutionLock, RunExecutionLockUnavailable
-from figura.runtime.models import (
+from figura.runtime.domain.models import (
     ModelResponseFact,
     ToolAttemptStartedFact,
     ToolCallFact,

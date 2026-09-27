@@ -15,7 +15,7 @@ from figura.tools import (
 )
 
 from .errors import RunError, RunErrorCode
-from .models import (
+from .domain.models import (
     ActionKind,
     RunState,
     RunStatus,

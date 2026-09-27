@@ -32,7 +32,7 @@ from figura.providers.validation import (
     validate_request,
 )
 from figura.runtime import RunError, RunErrorCode
-from figura.runtime.models import (
+from figura.runtime.domain.models import (
     ActionKind,
     ExecutionRecord,
     ModelResponseFact,
