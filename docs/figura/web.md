@@ -1,10 +1,10 @@
 # Web：Local Gateway 与 React Figura
 
-> [返回系统总览](../figura-implementation-overview.md)。范围：当前 `src/figura/gateway/`、`frontend/src/api/figura/` 与 `frontend/src/FiguraApp.tsx` 实现；Panel 的内部字段归[Panels 专题](panels.md)，本篇拥有 Web DTO 与公开路由合同。主规格见 [Gateway](../../openspec/figura/openspec/specs/figura-web-gateway/spec.md) 和 [React Client](../../openspec/figura/openspec/specs/figura-web-client/spec.md)。`connect-figura-web-frontend` 已归档；Panel change 仍活动。
+> [返回系统总览](../figura-implementation-overview.md)。范围：当前 `src/figura/gateway/`、`src/figura/bootstrap.py`、`frontend/src/api/figura/` 与 `frontend/src/FiguraApp.tsx` 实现；附件和 Panel 源模型归[Sources](sources.md)，Agent 派生清单归[Agent](agent.md)，本篇拥有 Web DTO 与公开路由合同。主规格见 [Gateway](../../openspec/figura/openspec/specs/figura-web-gateway/spec.md) 和 [React Client](../../openspec/figura/openspec/specs/figura-web-client/spec.md)。`connect-figura-web-frontend`、`add-figura-panel-image-tools` 与模块结构调整 change 均已归档。
 
 ## 1. 职责与边界
 
-Local Gateway 是 Python 进程内的 HTTP/SSE 边界，不是第二套 Session 或 Run 存储。它把 JSON/图片请求交给 Runtime、Attachment/Panel Service 与 ProviderFactory，再把有限的 Session、Run、事件、附件和已提交 Panel DTO 返回给浏览器。Run 创建持久化后由有界 Dispatcher 异步提交给既有 Agent；Gateway handler 不直接请求模型。当前 Registry 提供 `load_image` 和 `decompose_chart_image`；尚无测量和图表生成工具。
+Local Gateway 是 Python 进程内的 HTTP/SSE 边界，不是第二套 Session 或 Run 存储。`bootstrap.py` 负责组装并注入 Runtime、Sources、Agent、Provider 与 Tools；`gateway/application.py` 负责 HTTP 请求处理和安全投影。它把 JSON/图片请求交给 Runtime、Sources 与 ProviderFactory，再把有限的 Session、Run、事件、附件和已提交 Panel DTO 返回给浏览器。Run 创建持久化后由有界 Dispatcher 异步提交给既有 Agent；Gateway handler 不直接请求模型。当前 Registry 提供 `load_image` 和 `decompose_chart_image`；尚无测量和图表生成工具。
 
 React Figura mode 通过 `FiguraClient` 负责 HTTP/SSE，再由 `FiguraWorkspaceApi` 映射到现有工作区协议和共享组件。React 组件不直接访问 Gateway；ChartAgent 与 Mock client 模式仍由其原有客户端提供。此边界目前是本地网页接入，没有 Tauri shell 接入。
 
@@ -13,17 +13,17 @@ flowchart LR
     UI[React Figura mode] -->|FiguraClient| Adapter[FiguraWorkspaceApi]
     Adapter -->|HTTP JSON / SSE| Gateway[Loopback Gateway]
     Gateway -->|Session / Run 读取与创建| Runtime[RunCoordinator / Store]
-    Gateway -->|图片上传、列表、内容、删除| Attach[Attachment Service]
-    Gateway -->|Session Panel 列表与 PNG 内容| Panels[Panel Service / RunExecutionState]
+    Gateway -->|附件操作与图像内容| Sources[Sources services]
+    Gateway -->|已提交 Panel 列表| ImageState[Agent RunExecutionState]
+    Gateway -->|Panel PNG 内容| Sources
+    ImageState -->|Panel metadata 与校验| Sources
     Gateway -->|配置可用性检查| Provider[ProviderFactory]
     Gateway -->|持久 Run 的异步提交| Dispatcher[有界 RunDispatcher]
     Dispatcher -->|execute(session_id, run_id)| Agent[AgentExecutor]
     Agent --> Runtime
-    Attach -->|元数据| Runtime
-    Attach -->|私有图片字节| Files[(私有文件)]
-    Panels -->|独立 Panel PNG| Files
-    Panels -->|Panel metadata| RuntimeDB[(SQLite panels 表)]
-    Runtime -->|Run inputs 和已提交工具事实| Panels
+    Sources -->|Attachment / Panel metadata| RuntimeDB[(共享 Figura SQLite)]
+    Sources -->|私有附件与独立 Panel 图像| Files[(私有文件)]
+    Runtime -->|Session / Run / 执行事实| RuntimeDB
     Runtime -->|Session snapshot / RunState / events| Gateway
     Provider -->|ProviderAvailability| Gateway
 ```
@@ -34,7 +34,7 @@ Gateway 只绑定 loopback，并验证浏览器 Origin 白名单。启动时进�
 
 1. **启动本地网页栈**：`npm run dev:figura` 启动 Python Gateway 与 Vite；默认 Gateway 端口为 `8766`，Vite 为 `1421`。Launcher 等待 Figura health 成功后再启动网页，并在退出或启动失败时清理它启动的进程组。只有 Gateway 子进程读取项目 `.env`；Vite 只收到 Figura mode 和 Gateway URL 等前端配置，不继承 `FIGURA_*` 或凭据 endpoint/key 环境值。
 2. **读取 Provider 与 Session**：`GET /health` 返回三个 allowlist Provider 的配置可用性及固定 model ID，不探测远端网络。Session 列表使用 Runtime 的 SQL 聚合；创建 Session 后，网页读取 Session 详情以取得消息、附件及 Run 投影。Web DTO 字段见[第 4 节](#4-web-dto-字段)，Runtime 的聚合读取值见[Run Runtime](runtime.md#4-完整模型字段)。
-3. **上传、管理及读取分区图像**：浏览器向 Session attachment endpoint 上传原始字节并通过 query 传文件名；Gateway 委托 Attachment Service 做媒体内容验证、大小限制、文件名净化和私有存储。浏览器只能在所属 Session 中列出、预览或删除；已被 Run 引用的附件不能删除。Run 输入保留有序附件 ID，图片字节不进入 Runtime 输入或 Web DTO。Panel 使用独立 Session-scoped list/content 路由；列表仅呈现已提交成功分割结果的 Panel，图像读取返回 `image/png` 且不缓存。
+3. **上传、管理及读取分区图像**：浏览器向 Session attachment endpoint 上传原始字节并通过 query 传文件名；Gateway 委托 Sources 做媒体内容验证、大小限制、文件名净化和私有存储。浏览器只能在所属 Session 中列出、预览或删除；已被 Run 引用的附件不能删除。Run 输入保留有序附件 ID，图片字节不进入 Runtime 输入或 Web DTO。Panel 使用独立 Session-scoped list/content 路由；Agent 的 RunExecutionState 根据已提交成功分割结果筛选列表，Sources 提供 metadata 和 PNG 内容；图像读取返回 `image/png` 且不缓存。
 4. **创建 Run**：浏览器提交 `text`、有序 `attachmentIds`、allowlist `providerId` 和 `Idempotency-Key`。浏览器不提交 model ID。Gateway 从 Provider allowlist 解析固定 model，Runtime 原子写入 Run、RunInput、初始 Checkpoint、幂等映射和创建事件后，Gateway 将其交给有界 Dispatcher 并返回 `202` Run handle。一个 Session 同时最多一个 running Run；同 key 同 payload 重放返回原 Run，key 冲突或 Session 已有不同 running Run 时返回安全错误。若本地 Dispatcher 暂时满，Run 可能已持久化而请求返回有界 `503`；使用原幂等键重试会复用该 Run 并尝试调度。
 5. **执行与恢复**：Dispatcher 当前默认最多 3 个并发 worker、另有 8 个排队槽。Agent 从 Runtime checkpoint 执行，不确定的 Provider attempt 不自动重发，未解决的工具 attempt 不自动 replay。Gateway 启动时按 Session ID 和 Run ordinal 列出所有持久 running Run，再走相同 Dispatcher/Agent 路径；投影只有在 Run 仍 running 且下一动作要求 tool-attempt reconciliation 时才显示 `needs_reconciliation`。
 6. **读取历史、Panel 和事件**：Session detail 从一个 Runtime SQLite 读快照生成消息、附件和 Run 投影；前端另调 Panel list route，按 `runId` 将 Panels 放到对应 Run 下，浏览器通过 Session-scoped content URL 懒加载 PNG。Run history 按 `afterSequence` 返回更大的事件序号；SSE 先重放游标后的持久事件，再跟随后续事件，并以 `runId:sequence` 作为事件 ID。终态事件送达后关闭流。前端 RunController 负责历史补读、游标合并和终态收敛；终态后重新加载 Session detail 与 Panel list。
@@ -101,7 +101,7 @@ Gateway 内部的一次 HTTP 响应封套，由 `FiguraGatewayApplication` 创�
 
 ## 4. Web DTO 字段
 
-本节是 `frontend/src/api/figura/types.ts` 与 Gateway JSON 的公开 DTO owner。每字段列出 JSON 名、必填状态、投影来源和读取/修订规则。Python 源模型的字段仍由[Runtime](runtime.md#4-完整模型字段)、[Attachment](sources.md#3-完整模型字段)、[Panel](panels.md#3-完整字段合同)和[Provider](provider.md#4-完整模型字段)分别拥有；此处不复制它们的源字段表。
+本节是 `frontend/src/api/figura/types.ts` 与 Gateway JSON 的公开 DTO owner。每字段列出 JSON 名、必填状态、投影来源和读取/修订规则。Python 源模型的字段仍由[Runtime](runtime.md#4-完整模型字段)、[Sources 附件与 Panel](sources.md#3-完整模型字段)和[Provider](provider.md#4-完整模型字段)分别拥有；此处不复制它们的源字段表。
 
 ### `FiguraProviderId`
 
@@ -155,7 +155,7 @@ Gateway Attachment projection。写入者为 `web_projection.attachment`；源�
 
 ### `FiguraPanelDto`
 
-Session-scoped Panel metadata projection，由 `web_projection.panel` 从已提交的 `PanelRecord` 创建。客户端独立请求列表；Session detail 不嵌入重复 Panel 数据。字段不含 `sessionId`、路径、图像字节或创建状态；图片由对应 Panel content URL 单独读取。源多边形和持久字段见[PanelRecord](panels.md#3-完整字段合同)。
+Session-scoped Panel metadata projection，由 `web_projection.panel` 从已提交的 `PanelRecord` 创建。客户端独立请求列表；Session detail 不嵌入重复 Panel 数据。字段不含 `sessionId`、路径、图像字节或创建状态；图片由对应 Panel content URL 单独读取。源多边形和持久字段见[PanelRecord](sources.md#3-完整模型字段)。
 
 | 完整字段路径 | JSON 类型 | 必填/默认 | 含义与约束 | 写入者 → 权威来源 → 读取/公开规则 |
 |---|---|---|---|---|
@@ -163,7 +163,7 @@ Session-scoped Panel metadata projection，由 `web_projection.panel` 从已提�
 | `FiguraPanelDto.runId` | `string` | 必填 | 产生该 Panel 的 Run ID | projection → `PanelRecord.run_id` → workspace 在所属 Run 下分组；不授权单独内容访问 |
 | `FiguraPanelDto.sourceAttachmentId` | `string` | 必填 | 被切分的来源 Attachment ID | projection → `PanelRecord.source_attachment_id` → UI 显示来源引用 |
 | `FiguraPanelDto.name` | `string` | 必填 | Panel 显示名 | projection → `PanelRecord.name` → 标题和图像 alt；只读 |
-| `FiguraPanelDto.points` | `{ x: number, y: number }[]` | 必填 | 原图归一化 0–1000 多边形点；保持分割输入顺序 | projection → `PanelRecord.points` → Web client；坐标定义见 Panels，不在网页端修改 |
+| `FiguraPanelDto.points` | `{ x: number, y: number }[]` | 必填 | 原图归一化 0–1000 多边形点；保持分割输入顺序 | projection → `PanelRecord.points` → Web client；坐标定义见 Sources，不在网页端修改 |
 
 ### `FiguraSessionDataDto`
 

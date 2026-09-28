@@ -7,7 +7,7 @@ import json
 from collections.abc import Mapping
 from typing import Any
 
-from ..json_schema import JsonValueError, canonical_json_dumps, normalize_json_value, validate_instance
+from figura.shared.json_schema import JsonValueError, canonical_json_dumps, normalize_json_value, validate_instance
 from .contracts import (
     ReplayEffect,
     ToolContext,

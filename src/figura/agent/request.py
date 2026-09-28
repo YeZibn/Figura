@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from figura.attachments import FiguraAttachmentService
+from figura.sources.attachments import FiguraAttachmentService
 from figura.memory import (
     AssistantMessage,
     MemoryMessage,
@@ -13,7 +13,7 @@ from figura.memory import (
     project_run_messages,
     project_session_history,
 )
-from figura.panels import RunExecutionState, RunExecutionStateService
+from figura.agent.execution_state import RunExecutionState, RunExecutionStateService
 from figura.providers import (
     ImageBlock,
     InstructionBlock,
@@ -28,20 +28,13 @@ from figura.providers import (
     TextBlock,
 )
 from figura.providers.errors import ProviderCallError
-from figura.providers.validation import (
-    MAX_IMAGE_BYTES,
-    validate_request,
-)
-from figura.runtime import RunError, RunErrorCode
-from figura.runtime.domain.models import (
-    ActionKind,
-    ProviderContinuationFact,
-    Run,
-    RunState,
-    RunStatus,
-)
+from figura.providers.validation import validate_request
+from figura.shared.image_limits import MAX_IMAGE_BYTES
+from figura.runtime.errors import RunError, RunErrorCode
+from figura.runtime.models import ActionKind, Run, RunStatus
+from figura.runtime.records import ProviderContinuationFact, RunState
 from figura.tools import ToolRegistry, project_provider_tools
-from figura.panels.execution_state import latest_loaded_images
+from figura.agent.execution_state import latest_loaded_images
 
 
 _SYSTEM_INSTRUCTION = Path(__file__).with_name("assets").joinpath("system-v1.md").read_text(

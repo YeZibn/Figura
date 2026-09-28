@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from tests.figura_sources_support import make_attachment_service, make_panel_service
+
 import json
 import threading
 from time import monotonic, sleep
@@ -9,22 +11,19 @@ from threading import Event
 
 from PIL import Image
 
-from figura.attachments import FiguraAttachmentService
-from figura.panels import FiguraPanelService, PanelPoint, RunExecutionStateService
-from figura.gateway.application import FiguraGatewayApplication, recover_running_runs
+from figura.sources.models import PanelPoint
+from figura.agent.execution_state import RunExecutionStateService
+from figura.bootstrap import recover_running_runs
+from figura.gateway.application import FiguraGatewayApplication
 from figura.gateway.dispatcher import RunDispatcher
 from figura.gateway.server import FiguraHTTPServer
 from figura.providers import FinishReason, MODEL_IDS, ProviderFactory, ProviderId, ProviderResponse, ProviderToolCall
-from figura.runtime import (
-    FiguraRunStore,
-    RunCoordinator,
-    RunCreateRequest,
-    DurableToolExecutor,
-    RunStatus,
-    TerminalCode,
-)
+from figura.runtime.coordinator import RunCoordinator
+from figura.runtime.models import RunCreateRequest, RunStatus, TerminalCode
+from figura.runtime.store import FiguraRunStore
+from figura.runtime.tool_execution import DurableToolExecutor
 from figura.tools import ToolRegistry
-from figura.tools.image_tools import image_tool_definitions
+from figura.tools.implementations.image import image_tool_definitions
 
 
 ORIGIN = "http://127.0.0.1:1421"
@@ -62,10 +61,10 @@ def _provider_factory(transport_calls: list[object] | None = None) -> ProviderFa
 
 def _application(tmp_path, executor: PassiveExecutor | None = None):
     store = FiguraRunStore(tmp_path)
-    attachments = FiguraAttachmentService(store)
+    attachments = make_attachment_service(store)
     providers = _provider_factory()
     coordinator = RunCoordinator(store, providers)
-    panels = FiguraPanelService(store.data_root, attachments)
+    panels = make_panel_service(store, attachments)
     execution_state = RunExecutionStateService(coordinator, panels)
     selected_executor = executor or PassiveExecutor()
     dispatcher = RunDispatcher(selected_executor)  # type: ignore[arg-type]
@@ -237,7 +236,7 @@ def test_panel_routes_expose_only_committed_session_owned_pngs(tmp_path):
 
         registry = ToolRegistry(
             "gateway-panel-v1",
-            image_tool_definitions(app.execution_state, attachments, app.panels),
+            image_tool_definitions(app.execution_state.for_run, attachments, app.panels),
         )
         state = coordinator.read_run_state(first.session_id, run.run_id)
         attempt = coordinator.begin_provider_attempt(first.session_id, run.run_id, state.checkpoint.revision)

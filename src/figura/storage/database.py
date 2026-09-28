@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
 
-from ..errors import RunError, RunErrorCode
+from figura.runtime.errors import RunError, RunErrorCode
 from .schema import initialize_schema
 
 _BUSY_TIMEOUT_MS = 5000

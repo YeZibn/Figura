@@ -10,30 +10,26 @@ Figura 接收用户文本和图像，创建可恢复的 Run，让 Agent 调用�
 flowchart LR
     UI[Web: React 界面] -->|FiguraClient / Workspace API| Gateway[Web: 本地 Gateway]
     Gateway -->|Session、Run 查询与创建| Runtime[Runtime]
-    Gateway -->|图片上传、列表、内容读取| Attach[Sources]
-    Attach -->|Session 附件元数据| Runtime
-    Attach -->|私有附件图像| Files[(私有图片文件)]
-    Gateway -->|Panel 列表与 PNG 读取| Panels[Panels]
-    Panels -->|Panel 元数据| DB[(Figura SQLite)]
-    Panels -->|独立 Panel PNG| Files
+    Gateway -->|附件与 Panel 上传、列表、内容读取| Sources[Sources]
+    Sources -->|附件与 Panel 元数据| DB[(Figura SQLite / storage)]
+    Sources -->|私有附件文件与独立 Panel PNG| Files[(私有图片文件)]
     Gateway -->|异步提交已持久化 Run| Dispatcher[Run Dispatcher]
     Dispatcher -->|execute(session_id, run_id)| Agent[Agent]
     Gateway -->|本地配置可用性| Provider[Provider Boundary]
-    Runtime -->|RunState、Checkpoint| Agent[Agent]
+    Runtime -->|RunState、Checkpoint| Agent
     Agent -->|读取较早的终态 RunState| Runtime
     Agent -->|当前 Run 与较早 Run 的事实| Memory[Memory]
     Memory -->|完整有序角色消息| Agent
-    Runtime -->|Run 输入与已提交工具事实| ImageState[RunExecutionState]
-    Panels -->|Panel 记录| ImageState
-    ImageState -->|附件清单与已提交 Panels| Agent
+    Runtime -->|Run 输入与已提交工具事实| ImageState[Agent RunExecutionState]
+    Sources -->|附件元数据、Panel 记录与授权读取| ImageState
+    ImageState -->|可用图像清单| Agent
     Agent -->|ProviderRequest| Provider[Provider]
     Provider -->|ProviderResponse| Agent
     Agent -->|image load / decomposition calls| Tools[Tools]
-    Tools -->|按 Session 读取附件| Attach
-    Tools -->|按 Session 读取 Panel / 写入 Panel| Panels
+    Tools -->|按 Session 读取、写入图像资源| Sources
     Tools -->|ToolExecutionResult| Agent
     Agent -->|执行事实、Attempt、终态| Runtime
-    Runtime -->|SQLite Run 事实与事件| DB
+    Runtime -->|Session、Run 事实与事件| DB
     Runtime -->|安全 Session / Run / Event 投影| Gateway
     Gateway -->|JSON / SSE| UI
     Chart[Charts: ChartSpecData] -.->|尚未接入组装工具与 Run| Agent
@@ -45,23 +41,23 @@ flowchart LR
 
 | 组件 | 职责与跨组件交付 | 当前状态 | 内部文档 |
 |---|---|---|---|
-| Runtime | Session、Run、执行事实、Attempt、Checkpoint、生命周期事件；交付可恢复 `RunState` 和同 Session 较早 Run 的一致快照；每 Session 至多一个 running Run | 当前已实现 | [Runtime](figura/runtime.md) |
-| Sources | 负责 Session 附件的验证、私有保存与授权读取 | 当前工作树已实现附件能力 | [Sources](figura/sources.md) |
-| Panels | 保存每个分区的不可变元数据和独立 PNG；从 Run 输入及已提交工具结果重建图像清单 | 当前工作树已有实现；change 尚未归档 | [Panels](figura/panels.md) |
-| Agent | 按 checkpoint 组装请求、协调模型和工具、提交结果与终态；由 Gateway Dispatcher 异步调用 | 当前工作树已实现同步 ReAct、图像清单和显式图像加载 | [Agent 编排](figura/agent.md) |
+| Runtime | Session、Run、执行事实、Attempt、Checkpoint、生命周期事件；交付可恢复 `RunState` 和同 Session 较早 Run 的一致快照；每 Session 至多一个 running Run | 当前工作树已实现；结构调整 change 已归档 | [Runtime](figura/runtime.md) |
+| Sources | 管理 Session 附件与 Panel 元数据、私有图像文件、图像验证/处理和授权读取；与 Runtime 共用一份 SQLite | 当前工作树已实现；Panel 功能 change 已归档 | [Sources](figura/sources.md) |
+| Agent | 按 checkpoint 组装请求、协调模型和工具、提交结果与终态；从 Runtime 与 Sources 重建调用期图像状态 | 当前工作树已实现同步 ReAct、图像清单和显式图像加载 | [Agent 编排](figura/agent.md) |
 | Memory | 从同 Session 的 Run 事实构建完整角色消息；无独立持久化、裁剪或摘要 | 当前已实现 Session 对话投影 | [Memory](figura/memory.md) |
 | Provider | 选择固定 provider/model，归一化请求、响应和安全失败 | 已实现 Qwen、DeepSeek、MiMo | [Provider](figura/provider.md) |
 | Tools | 版本化定义、参数/结果校验及 handler；执行事实归 Runtime | 当前 Registry 提供 `load_image` 与 `decompose_chart_image` | [Tools](figura/tools.md) |
-| Validation | 有界 JSON 与受支持 Schema 子集的校验，供多个领域消费 | 已实现基础校验 | [Validation](figura/validation.md) |
+| Shared / Validation | 被多个能力复用的 JSON Schema 校验与图像大小限制 | 当前已实现 | [Validation](figura/validation.md) |
+| Storage | 一份 SQLite 的连接、事务和 schema 初始化；由 Runtime 与 Sources 共用 | 当前已实现 | [Runtime](figura/runtime.md)、[Sources](figura/sources.md) |
 | Web | 本地 Gateway、Session/Run/Panel HTTP API、安全历史投影和 SSE；前端经 Figura client 复用工作区 UI | 当前已实现 Panel 读取与预览；尚无测量或图表生成接口 | [Web](figura/web.md) |
 | Charts | 当前提供单图内容值 `ChartSpecData`、解析、校验和规范序列化 | Core 已实现，主规格已同步，change 已归档；后续图表链未实现 | [Charts](figura/charts.md) |
 
 ## 3. 跨组件内容流
 
-1. **网页输入与身份**：React Figura UI 通过 `FiguraClient` 调用 loopback Gateway。Gateway 创建/列出 Session，并委托 Attachment Service 上传、读取和删除图片；Run 创建只提交文本、有序附件 ID、provider ID 与幂等键。Runtime 先处理幂等重放，再拒绝同 Session 的第二个 running Run；成功时校验附件归属并保存输入、初始 checkpoint、Run 和创建事件。图片字节留在私有文件中。见[网页边界](figura/web.md)、[运行时](figura/runtime.md#2-内部流转)和[附件](figura/sources.md#2-内部流转)。
+1. **网页输入与身份**：React Figura UI 通过 `FiguraClient` 调用 loopback Gateway。Gateway 创建/列出 Session，并委托 Sources 上传、读取和删除附件，或读取 Panel；Run 创建只提交文本、有序附件 ID、provider ID 与幂等键。Runtime 先处理幂等重放，再拒绝同 Session 的第二个 running Run；成功时校验附件归属并保存输入、初始 checkpoint、Run 和创建事件。图片字节留在私有文件中。见[网页边界](figura/web.md)、[运行时](figura/runtime.md#2-内部流转)和[Sources](figura/sources.md#2-内部流转与不变量)。
 2. **重建 Session 对话**：每次模型动作前，Agent 向 Runtime 读取目标 Run 之前的终态 RunState；Runtime 在一个 SQLite 读快照中按 ordinal 排序并检查范围与完整性。Session Memory 将历史 Run 以及当前 Run 的已提交前缀投影为完整 user/assistant/tool 消息。见[Session Memory](figura/memory.md#3-内部流转与失败边界)。
-3. **组装模型请求**：Agent 从 Run 输入和同 Session 较早 Run 输入构建有序、去重的附件清单，并从成功的 `decompose_chart_image` 结果重建已提交 Panels。每次模型请求先附加文本清单；只有紧接前一次请求且已提交的工具批次中成功 `load_image` 的图像，才以 ImageBlock 加入请求。Agent 校验完整 ProviderRequest；不裁剪历史，超出 Provider 硬限制时在 attempt claim 前失败。见[Agent 编排](figura/agent.md#2-内部流转)和[Panels](figura/panels.md#2-内部流转)。
-4. **工具与恢复**：Tool Runtime 校验并执行 `load_image` 或 `decompose_chart_image`；Panels 保存分割后的 PNG 与元数据，Runtime 记录工具调用和结果事实。Panel 仅在对应成功 ToolResultFact 提交后进入清单和网页投影。分割是带 call-scoped 幂等键的本地写入；其余不确定工具效果不会由 Agent 自动重放。Gateway 启动时按稳定顺序发现 running Runs，并交给同一 Dispatcher/Agent 恢复路径。分别见[Tool 调用](figura/tools.md#2-内部流转)和[运行时恢复](figura/runtime.md#2-内部流转)。
+3. **组装模型请求**：Agent 从 Runtime Run 输入和 Sources 附件元数据构建有序、去重的附件清单，并结合成功的 `decompose_chart_image` 结果和 Sources Panel 记录重建可用图像状态。每次模型请求先附加文本清单；只有紧接前一次请求且已提交的工具批次中成功 `load_image` 的图像，才以 ImageBlock 加入请求。Agent 校验完整 ProviderRequest；不裁剪历史，超出 Provider 硬限制时在 attempt claim 前失败。见[Agent 编排](figura/agent.md#2-内部流转)和[Sources](figura/sources.md#2-内部流转与不变量)。
+4. **工具与恢复**：Tool Runtime 校验并执行 `load_image` 或 `decompose_chart_image`；Sources 保存分割后的 PNG 与元数据，Runtime 记录工具调用和结果事实。Panel 仅在对应成功 ToolResultFact 提交后进入 Agent 清单和网页投影。分割是带 call-scoped 幂等键的本地写入；其余不确定工具效果不会由 Agent 自动重放。Gateway 启动时按稳定顺序发现 running Runs，并交给同一 Dispatcher/Agent 恢复路径。分别见[Tool 调用](figura/tools.md#2-内部流转)和[运行时恢复](figura/runtime.md#2-内部流转)。
 5. **返回网页**：Gateway 从 Runtime 读取 Session snapshot、Run history 和安全事件，再投影 JSON/SSE；Session-scoped Panel 路由只返回成功工具结果对应的元数据和 `image/png`。Conversation 按 Run 展示 Panel 懒加载预览，同时不把 Agent 的完整 Session Memory、工具消息或 Provider continuation 暴露为普通对话。详见[网页端边界](figura/web.md)。
 6. **图表链**：当前 `ChartSpecData` 能表达并验证单图内容，但尚不保存为 Run 图表对象，也没有来源证据、渲染、验证或发布连接。[规划能力](#4-规划能力与边界)只画为目标关系，不属于上述实线路径。
 
@@ -88,7 +84,7 @@ flowchart LR
     Runtime[Run 执行事实] -.-> Eval[Evaluation 诊断]
 ```
 
-Panel 已在当前工作树实现；字段和生命周期见[Panels](figura/panels.md)，该 change 尚未归档。架构草案中的 Observation、Measurement、Evidence、图表 provenance、渲染、验证与发布仍是规划能力。测量输出是候选证据，不自动成为图表事实。旧 `src/chartagent/` 有部分对应实现，其对象身份、字段和存储不能直接视作新 Figura 合同。
+附件与 Panel 目前属于同一个 Sources 能力；模型字段见[Sources](figura/sources.md)，Panel 可用性投影见[Agent](figura/agent.md#4-运行时状态字段)。Panel 功能 change 与结构调整 change 均已归档。架构草案中的 Observation、Measurement、Evidence、图表 provenance、渲染、验证与发布仍是规划能力。测量输出是候选证据，不自动成为图表事实。旧 `src/chartagent/` 有部分对应实现，其对象身份、字段和存储不能直接视作新 Figura 合同。
 
 ## 5. 阅读与状态规则
 

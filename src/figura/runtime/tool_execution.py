@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 
-from figura.json_schema import canonical_json_dumps
+from figura.shared.json_schema import canonical_json_dumps
 from figura.tools import (
     ReplayEffect,
     ToolContext,
@@ -15,16 +15,18 @@ from figura.tools import (
 )
 
 from .errors import RunError, RunErrorCode
-from .domain.models import (
+from .models import (
     ActionKind,
-    RunState,
     RunStatus,
+    ToolFactKind,
+)
+from .records import (
+    RunState,
     ToolAttemptStartedFact,
     ToolCallFact,
     ToolExecutionFact,
-    ToolFactKind,
 )
-from ._run_lock import PerRunExecutionLock, RunExecutionLockUnavailable
+from .run_lock import PerRunExecutionLock, RunExecutionLockUnavailable
 from .store import FiguraRunStore
 
 

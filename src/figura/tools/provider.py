@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from figura.json_schema import JsonValueError, normalize_json_value
+from figura.shared.json_schema import JsonValueError, normalize_json_value
 from figura.providers.models import FunctionTool, ProviderToolCall
 
 from .contracts import ToolInvocation, ToolInvocationError

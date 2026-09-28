@@ -5,44 +5,36 @@ from __future__ import annotations
 import json
 import sqlite3
 
-from .._codec import (
-    decode_event_payload,
+from ..codecs.records import (
     decode_payload,
-    decode_tool_fact,
     validate_provider_continuation_fact,
 )
-from ..domain.models import (
+from ..codecs.tools import (
+    decode_tool_fact,
+)
+from ..codecs.events import (
+    decode_event_payload,
+)
+from ..models import (
     ActionKind,
-    AttachmentMetadata,
     EventKind,
     ExecutionCheckpoint,
-    ExecutionRecord,
     NextAction,
-    ProviderAttempt,
     ProviderAttemptStatus,
-    ProviderContinuationFact,
     RecordKind,
     Run,
     RunStatus,
-    RunStreamEvent,
     Session,
-    ToolExecutionFact,
     ToolFactKind,
 )
+from ..records import (
+    ExecutionRecord,
+    ProviderAttempt,
+    ProviderContinuationFact,
+    RunStreamEvent,
+    ToolExecutionFact,
+)
 from ..errors import RunError, RunErrorCode
-
-def _attachment_from_row(row: sqlite3.Row) -> AttachmentMetadata:
-    try:
-        return AttachmentMetadata(
-            attachment_id=row["attachment_id"],
-            session_id=row["session_id"],
-            filename=row["filename"],
-            media_type=row["media_type"],
-            byte_count=row["byte_count"],
-            created_at=row["created_at"],
-        )
-    except (KeyError, TypeError, ValueError):
-        raise RunError(RunErrorCode.INTEGRITY_ERROR) from None
 
 
 def _session_from_row(row: sqlite3.Row) -> Session:

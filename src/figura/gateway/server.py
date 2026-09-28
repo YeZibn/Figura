@@ -8,8 +8,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from time import monotonic, sleep
 from urllib.parse import parse_qs, urlsplit
 
-from figura.providers.validation import MAX_IMAGE_BYTES
-from figura.runtime import RunError, RunStatus
+from figura.shared.image_limits import MAX_IMAGE_BYTES
+from figura.runtime.errors import RunError
+from figura.runtime.models import RunStatus
 
 from .application import FiguraGatewayApplication
 from .web_projection import event_id, event_projection

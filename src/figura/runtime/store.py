@@ -1,46 +1,55 @@
-"""Stable FiguraRunStore façade over domain-focused persistence repositories."""
+"""Compose Runtime persistence repositories over one SQLite database."""
 
 from __future__ import annotations
 
 import os
-from contextlib import contextmanager
-from typing import Callable, Iterator
 
 from figura.providers.models import ProviderContinuation
+from figura.storage.database import SqliteDatabase
 from figura.tools.contracts import ReplayEffect, ToolExecutionResult
 
-from .domain.models import (
-    AttachmentMetadata,
-    ExecutionRecord,
-    ModelResponseFact,
-    ProviderAttempt,
+from .models import (
     Run,
-    RunInput,
-    RunState,
     RunStatus,
     Session,
     SessionListEntry,
-    SessionSnapshot,
     TerminalCode,
+)
+from .records import (
+    ExecutionRecord,
+    ModelResponseFact,
+    ProviderAttempt,
+    RunInput,
+    RunState,
+    SessionSnapshot,
     ToolCallFact,
     ToolExecutionFact,
 )
-from .persistence.database import SqliteDatabase
-from .persistence.execution_repository import ExecutionRepository
-from .persistence.run_repository import RunRepository
-from .persistence.session_repository import SessionRepository
+from .persistence.providers import ProviderRepository
+from .persistence.runs import RunRepository
+from .persistence.sessions import SessionRepository
+from .persistence.snapshots import SnapshotRepository
+from .persistence.run_transitions import RunTransitionRepository
+from .persistence.tools import ToolRepository
 
 
 class FiguraRunStore:
-    """Own one Figura SQLite database and preserve its stable call surface."""
+    """Own the SQLite database and coordinate Runtime persistence operations."""
 
     def __init__(self, data_root: str | os.PathLike[str]) -> None:
         self._database = SqliteDatabase(data_root)
         self.data_root = self._database.data_root
         self.database_path = self._database.database_path
         self._sessions = SessionRepository(self._database)
-        self._runs = RunRepository(self._database, self._sessions)
-        self._execution = ExecutionRepository(self._database, self._runs)
+        self._runs = RunRepository(self._database)
+        self._snapshots = SnapshotRepository(self._database, self._runs)
+        self._providers = ProviderRepository(self._database, self._runs)
+        self._tools = ToolRepository(self._database, self._runs)
+        self._transitions = RunTransitionRepository(self._database, self._runs)
+
+    @property
+    def database(self) -> SqliteDatabase:
+        return self._database
 
     def create_session(self, name: str | None = None) -> Session:
         return self._sessions.create_session(name)
@@ -58,42 +67,10 @@ class FiguraRunStore:
         return self._sessions.get_session(session_id)
 
     def read_session_snapshot(self, session_id: str) -> SessionSnapshot:
-        return self._runs.read_session_snapshot(session_id)
+        return self._snapshots.read_session_snapshot(session_id)
 
     def list_running_runs(self) -> tuple[Run, ...]:
         return self._runs.list_running_runs()
-
-    def register_attachment(
-        self,
-        metadata: AttachmentMetadata,
-        install_file: Callable[[], None],
-    ) -> None:
-        self._sessions.register_attachment(metadata, install_file)
-
-    def list_attachments(self, session_id: str) -> tuple[AttachmentMetadata, ...]:
-        return self._sessions.list_attachments(session_id)
-
-    def get_attachment_metadata(
-        self,
-        session_id: str,
-        attachment_id: str,
-    ) -> AttachmentMetadata:
-        return self._sessions.get_attachment_metadata(session_id, attachment_id)
-
-    @contextmanager
-    def delete_attachment_transaction(
-        self,
-        session_id: str,
-        attachment_id: str,
-    ) -> Iterator[AttachmentMetadata]:
-        with self._sessions.delete_attachment_transaction(session_id, attachment_id) as metadata:
-            yield metadata
-
-    def reconcile_attachment_files(
-        self,
-        reconcile: Callable[[frozenset[str]], None],
-    ) -> None:
-        self._sessions.reconcile_attachment_files(reconcile)
 
     def find_idempotent_run(
         self,
@@ -126,7 +103,7 @@ class FiguraRunStore:
         return self._runs.read_run_state(session_id, run_id)
 
     def read_prior_run_states(self, session_id: str, run_id: str) -> tuple[RunState, ...]:
-        return self._runs.read_prior_run_states(session_id, run_id)
+        return self._snapshots.read_prior_run_states(session_id, run_id)
 
     def begin_provider_attempt(
         self,
@@ -136,7 +113,7 @@ class FiguraRunStore:
         expected_revision: int,
         attempt_id: str,
     ) -> ProviderAttempt:
-        return self._execution.begin_provider_attempt(
+        return self._providers.begin_provider_attempt(
             session_id=session_id,
             run_id=run_id,
             expected_revision=expected_revision,
@@ -156,7 +133,7 @@ class FiguraRunStore:
         continuation: ProviderContinuation | None = None,
         continuation_id: str | None = None,
     ) -> ExecutionRecord:
-        return self._execution.commit_model_response(
+        return self._providers.commit_model_response(
             session_id=session_id,
             run_id=run_id,
             expected_revision=expected_revision,
@@ -178,7 +155,7 @@ class FiguraRunStore:
         outcome_unknown: bool,
         failure_code: str | None,
     ) -> Run:
-        return self._execution.fail_provider_attempt(
+        return self._providers.fail_provider_attempt(
             session_id=session_id,
             run_id=run_id,
             expected_revision=expected_revision,
@@ -198,7 +175,7 @@ class FiguraRunStore:
         replay_effect: ReplayEffect,
         attempt_id: str | None = None,
     ) -> ToolExecutionFact:
-        return self._execution.begin_tool_attempt(
+        return self._tools.begin_tool_attempt(
             session_id=session_id,
             run_id=run_id,
             expected_revision=expected_revision,
@@ -219,7 +196,7 @@ class FiguraRunStore:
         registry_version: str,
         attempt_id: str | None = None,
     ) -> ToolExecutionFact:
-        return self._execution.begin_tool_replay_attempt(
+        return self._tools.begin_tool_replay_attempt(
             session_id=session_id,
             run_id=run_id,
             expected_revision=expected_revision,
@@ -238,7 +215,7 @@ class FiguraRunStore:
         attempt_id: str,
         result: ToolExecutionResult,
     ) -> ToolExecutionFact:
-        return self._execution.commit_tool_result(
+        return self._tools.commit_tool_result(
             session_id=session_id,
             run_id=run_id,
             expected_revision=expected_revision,
@@ -253,7 +230,7 @@ class FiguraRunStore:
         run_id: str,
         expected_revision: int,
     ) -> ExecutionRecord:
-        return self._execution.complete_run(
+        return self._transitions.complete_run(
             session_id=session_id,
             run_id=run_id,
             expected_revision=expected_revision,
@@ -268,7 +245,7 @@ class FiguraRunStore:
         status: RunStatus,
         terminal_code: TerminalCode,
     ) -> Run:
-        return self._execution.terminal_run(
+        return self._transitions.terminal_run(
             session_id=session_id,
             run_id=run_id,
             expected_revision=expected_revision,

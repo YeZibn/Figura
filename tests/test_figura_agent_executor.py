@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from tests.figura_sources_support import make_attachment_service, make_panel_service
+
 import sqlite3
 from io import BytesIO
 
@@ -9,8 +11,8 @@ from PIL import Image
 import figura.agent.request as request_module
 from figura.agent.request import AgentRequestBuilder
 from figura.agent.executor import AgentExecutor
-from figura.attachments import FiguraAttachmentService
-from figura.panels import FiguraPanelService, RunExecutionStateService
+from figura.sources.attachments import FiguraAttachmentService
+from figura.agent.execution_state import RunExecutionStateService
 from figura.providers import (
     MODEL_IDS,
     FinishReason,
@@ -20,18 +22,13 @@ from figura.providers import (
     ProviderToolCall,
 )
 from figura.providers.errors import ProviderCallError, ProviderFailure, ProviderFailureCode
-from figura.runtime import (
-    ActionKind,
-    DurableToolExecutor,
-    FiguraRunStore,
-    RunCoordinator,
-    RunCreateRequest,
-    RunStatus,
-    TerminalCode,
-)
-from figura.runtime._run_lock import PerRunExecutionLock
+from figura.runtime.coordinator import RunCoordinator
+from figura.runtime.models import ActionKind, RunCreateRequest, RunStatus, TerminalCode
+from figura.runtime.store import FiguraRunStore
+from figura.runtime.tool_execution import DurableToolExecutor
+from figura.runtime.run_lock import PerRunExecutionLock
 from figura.tools import ReplayEffect, ToolDefinition, ToolFailure, ToolRegistry
-from figura.tools.image_tools import image_tool_definitions
+from figura.tools.implementations.image import image_tool_definitions
 
 
 def _registry(
@@ -96,7 +93,7 @@ def _app(tmp_path):
 
 def _app_with_image(tmp_path):
     store = FiguraRunStore(tmp_path)
-    attachments = FiguraAttachmentService(store)
+    attachments = make_attachment_service(store)
     factory = ProviderFactory.from_env(
         {
             "FIGURA_QWEN_API_KEY": "qwen-secret",
@@ -167,8 +164,8 @@ class _FakeFactory:
 
 def _agent(store, coordinator, registry, provider_factory, request_builder=None):
     if request_builder is None:
-        attachments = FiguraAttachmentService(store)
-        panels = FiguraPanelService(store.data_root, attachments)
+        attachments = make_attachment_service(store)
+        panels = make_panel_service(store, attachments)
         execution_state = RunExecutionStateService(coordinator, panels)
         request_builder = AgentRequestBuilder(attachments, execution_state)
     tool_executor = DurableToolExecutor(store, registry)
@@ -182,11 +179,11 @@ def _agent(store, coordinator, registry, provider_factory, request_builder=None)
 
 
 def _image_runtime(store, coordinator, attachments):
-    panels = FiguraPanelService(store.data_root, attachments)
+    panels = make_panel_service(store, attachments)
     execution_state = RunExecutionStateService(coordinator, panels)
     registry = ToolRegistry(
         "registry-v1",
-        (*image_tool_definitions(execution_state, attachments, panels), *_registry().definitions),
+        (*image_tool_definitions(execution_state.for_run, attachments, panels), *_registry().definitions),
     )
     return registry, AgentRequestBuilder(attachments, execution_state)
 

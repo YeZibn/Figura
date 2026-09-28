@@ -19,7 +19,7 @@ from figura.chartspec import (
     validate_chart_spec_data,
 )
 from figura.chartspec.limits import MAX_CHART_SPEC_DATA_BYTES, MAX_ISSUES
-from figura.json_schema import validate_instance, validate_schema_definition
+from figura.shared.json_schema import validate_instance, validate_schema_definition
 
 
 def _bar(

@@ -4,46 +4,40 @@ from __future__ import annotations
 
 import io
 import os
-import stat
 import tempfile
 import unicodedata
 import uuid
-import warnings
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import BinaryIO
 
-from PIL import Image, UnidentifiedImageError
-
 from figura.providers.models import ImageBlock
-from figura.providers.validation import MAX_IMAGE_BYTES
-from figura.runtime import AttachmentMetadata, FiguraRunStore, RunError, RunErrorCode
+from figura.shared.image_limits import MAX_IMAGE_BYTES
+from figura.runtime.errors import RunError, RunErrorCode
+from figura.sources.imaging import verify_attachment_image
+from figura.sources.models import AttachmentMetadata
+from figura.sources.repository import SourcesRepository
+from figura.sources.storage import ensure_private_directory
+from figura.storage.database import _utc_now
 
 
-_PIL_FORMATS = {
-    "JPEG": "image/jpeg",
-    "PNG": "image/png",
-    "GIF": "image/gif",
-    "WEBP": "image/webp",
-}
 _CHUNK_BYTES = 64 * 1024
 
 
 class FiguraAttachmentService:
     """Persist Session-owned image metadata and resolve bytes for Agent calls."""
 
-    __slots__ = ("_store", "_root", "_trash")
+    __slots__ = ("_repository", "_root", "_trash")
 
-    def __init__(self, store: FiguraRunStore) -> None:
-        if not isinstance(store, FiguraRunStore):
-            raise TypeError("store must be a FiguraRunStore")
-        self._store = store
-        self._root = store.data_root / "attachments"
+    def __init__(self, repository: SourcesRepository, data_root: str | os.PathLike[str]) -> None:
+        if not isinstance(repository, SourcesRepository):
+            raise TypeError("repository must be a SourcesRepository")
+        self._repository = repository
+        self._root = Path(data_root).expanduser() / "attachments"
         self._trash = self._root / ".trash"
         try:
-            self._ensure_private_directory(self._root)
-            self._ensure_private_directory(self._trash)
-            self._store.reconcile_attachment_files(self._reconcile_files)
+            ensure_private_directory(self._root, "attachment storage")
+            ensure_private_directory(self._trash, "attachment trash")
+            self._repository.reconcile_attachment_files(self._reconcile_files)
         except RunError:
             raise
         except OSError:
@@ -56,7 +50,7 @@ class FiguraAttachmentService:
         content: bytes | bytearray | memoryview | BinaryIO,
     ) -> AttachmentMetadata:
         safe_filename = _sanitize_filename(filename)
-        self._store.assert_session(session_id)
+        self._repository.assert_session(session_id)
         attachment_id = uuid.uuid4().hex
         final_path = self._final_path(attachment_id)
 
@@ -65,7 +59,7 @@ class FiguraAttachmentService:
                 byte_count = _copy_bounded(content, staged)
                 if byte_count == 0:
                     raise RunError(RunErrorCode.INVALID_REQUEST)
-                media_type = _verify_image(staged)
+                media_type = verify_attachment_image(staged)
                 metadata = AttachmentMetadata(
                     attachment_id=attachment_id,
                     session_id=session_id,
@@ -91,7 +85,7 @@ class FiguraAttachmentService:
                         destination.flush()
                         os.fsync(destination.fileno())
 
-                self._store.register_attachment(metadata, install_file)
+                self._repository.register_attachment(metadata, install_file)
                 return metadata
         except RunError:
             self._remove_failed_upload(final_path)
@@ -101,10 +95,10 @@ class FiguraAttachmentService:
             raise RunError(RunErrorCode.STORAGE_ERROR) from None
 
     def list(self, session_id: str) -> tuple[AttachmentMetadata, ...]:
-        return self._store.list_attachments(session_id)
+        return self._repository.list_attachments(session_id)
 
     def resolve(self, session_id: str, attachment_id: str) -> ImageBlock:
-        metadata = self._store.get_attachment_metadata(session_id, attachment_id)
+        metadata = self._repository.get_attachment_metadata(session_id, attachment_id)
         path = self._final_path(metadata.attachment_id)
         try:
             if (
@@ -120,16 +114,16 @@ class FiguraAttachmentService:
             raise RunError(RunErrorCode.STORAGE_ERROR) from None
         if len(content) != metadata.byte_count:
             raise RunError(RunErrorCode.STORAGE_ERROR)
-        if _verify_image(io.BytesIO(content)) != metadata.media_type:
+        if verify_attachment_image(io.BytesIO(content)) != metadata.media_type:
             raise RunError(RunErrorCode.INTEGRITY_ERROR)
         return ImageBlock(metadata.media_type, content)
 
     def delete(self, session_id: str, attachment_id: str) -> None:
-        self._store.get_attachment_metadata(session_id, attachment_id)
+        self._repository.get_attachment_metadata(session_id, attachment_id)
         final_path = self._final_path(attachment_id)
         trash_path = self._trash / f"{attachment_id}.{uuid.uuid4().hex}.bin"
         try:
-            with self._store.delete_attachment_transaction(session_id, attachment_id):
+            with self._repository.delete_attachment_transaction(session_id, attachment_id):
                 if final_path.exists() or final_path.is_symlink():
                     os.replace(final_path, trash_path)
         except Exception as error:
@@ -170,15 +164,6 @@ class FiguraAttachmentService:
         if not _is_attachment_id(attachment_id):
             raise RunError(RunErrorCode.INVALID_REQUEST)
         return self._root / f"{attachment_id}.bin"
-
-    @staticmethod
-    def _ensure_private_directory(path: Path) -> None:
-        if path.is_symlink():
-            raise OSError("attachment directory cannot be a symlink")
-        path.mkdir(mode=0o700, parents=True, exist_ok=True)
-        if not path.is_dir():
-            raise OSError("attachment path is not a directory")
-        path.chmod(0o700)
 
     @staticmethod
     def _remove_failed_upload(path: Path) -> None:
@@ -229,33 +214,6 @@ def _sanitize_filename(filename: str) -> str:
     return safe
 
 
-def _verify_image(source: BinaryIO) -> str:
-    try:
-        with warnings.catch_warnings():
-            warnings.simplefilter("error", Image.DecompressionBombWarning)
-            source.seek(0)
-            with Image.open(source) as image:
-                image_format = image.format
-                image.verify()
-            source.seek(0)
-            with Image.open(source) as image:
-                image.load()
-                image_format = image.format
-    except (
-        UnidentifiedImageError,
-        OSError,
-        ValueError,
-        SyntaxError,
-        Image.DecompressionBombWarning,
-        Image.DecompressionBombError,
-    ):
-        raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD) from None
-    media_type = _PIL_FORMATS.get(image_format or "")
-    if media_type is None:
-        raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
-    return media_type
-
-
 def _is_attachment_id(value: str) -> bool:
     if not isinstance(value, str) or len(value) != 32:
         return False
@@ -263,7 +221,3 @@ def _is_attachment_id(value: str) -> bool:
         return uuid.UUID(value).hex == value
     except ValueError:
         return False
-
-
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")

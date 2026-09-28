@@ -1,0 +1,4 @@
+schema: spec-driven
+created: 2026-09-28
+goal: 按功能模块整理 Figura 代码，降低职责混杂与过度拆分，同时保留现有行为和完整 Memory
+skip_specs: true

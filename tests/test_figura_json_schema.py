@@ -4,7 +4,7 @@ import math
 
 import pytest
 
-from figura.json_schema import (
+from figura.shared.json_schema import (
     JsonValueError,
     SchemaDefinitionError,
     canonical_json_dumps,

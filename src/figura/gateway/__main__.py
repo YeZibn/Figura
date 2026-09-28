@@ -9,7 +9,7 @@ from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
 
-from .application import create_application, recover_running_runs
+from figura.bootstrap import create_application, recover_running_runs
 from .server import FiguraHTTPServer
 
 

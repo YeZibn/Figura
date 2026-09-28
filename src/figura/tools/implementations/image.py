@@ -2,16 +2,26 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from typing import Any
+from collections.abc import Callable, Mapping
+from typing import Any, Protocol
 
-from figura.attachments import FiguraAttachmentService
-from figura.panels import FiguraPanelService, PanelPoint, RunExecutionStateService
 from io import BytesIO
 from PIL import Image
-from figura.runtime import RunError, RunErrorCode
+from figura.runtime.errors import RunError, RunErrorCode
+from figura.sources.attachments import FiguraAttachmentService
+from figura.sources.models import PanelPoint, PanelRecord
+from figura.sources.panels import FiguraPanelService
 
-from .contracts import ReplayEffect, ToolContext, ToolDefinition, ToolFailure
+from ..contracts import ReplayEffect, ToolContext, ToolDefinition, ToolFailure
+
+
+class _AvailableAttachment(Protocol):
+    attachment_id: str
+
+
+class _RunImageInventory(Protocol):
+    available_attachments: tuple[_AvailableAttachment, ...]
+    panels: tuple[PanelRecord, ...]
 
 
 _LOAD_IMAGE_PARAMETERS = {
@@ -87,12 +97,12 @@ _DECOMPOSE_RESULT = {
 
 
 def image_tool_definitions(
-    execution_state: RunExecutionStateService,
+    image_inventory: Callable[[str, str], _RunImageInventory],
     attachments: FiguraAttachmentService,
     panels: FiguraPanelService,
 ) -> tuple[ToolDefinition, ToolDefinition]:
     def load_image(_context: ToolContext, arguments: Mapping[str, Any]) -> dict[str, object]:
-        state = execution_state.for_run(_context.session_id, _context.run_id)
+        state = image_inventory(_context.session_id, _context.run_id)
         kind, source_id = arguments["source_kind"], arguments["source_id"]
         if kind == "attachment":
             item = next((item for item in state.available_attachments if item.attachment_id == source_id), None)
@@ -122,7 +132,7 @@ def image_tool_definitions(
         }
 
     def decompose_chart_image(context: ToolContext, arguments: Mapping[str, Any]) -> dict[str, object]:
-        state = execution_state.for_run(context.session_id, context.run_id)
+        state = image_inventory(context.session_id, context.run_id)
         attachment_id = arguments["attachment_id"]
         if not any(item.attachment_id == attachment_id for item in state.available_attachments):
             raise ToolFailure("image_not_available", "待分割图像不在当前 Session 的可用清单中。")

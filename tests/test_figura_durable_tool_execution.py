@@ -11,31 +11,39 @@ from typing import Any
 
 import pytest
 
-from figura.runtime import (
+from figura.runtime.coordinator import RunCoordinator
+from figura.runtime.errors import RunError, RunErrorCode
+from figura.runtime.models import (
     ActionKind,
-    DurableToolExecutor,
-    FiguraRunStore,
+    EventKind,
     NextAction,
-    RunCoordinator,
+    RecordKind,
     RunCreateRequest,
-    RunError,
-    RunErrorCode,
     RunStatus,
+    ToolFactKind,
+)
+from figura.runtime.records import (
+    ModelResponseFact,
+    RunInput,
     ToolAttemptStartedFact,
     ToolCallFact,
-    ToolFactKind,
     ToolResultFact,
 )
-from figura.runtime._codec import (
+from figura.runtime.store import FiguraRunStore
+from figura.runtime.tool_execution import DurableToolExecutor
+from figura.runtime.codecs.records import (
     decode_payload,
-    decode_tool_fact,
-    encode_event_payload,
     encode_payload,
+)
+from figura.runtime.codecs.tools import (
+    decode_tool_fact,
     encode_tool_fact,
     validate_tool_call_batch,
 )
-from figura.runtime.models import EventKind, ModelResponseFact, RecordKind, RunInput
-from figura.runtime.persistence.schema import _CORE_SCHEMA
+from figura.runtime.codecs.events import (
+    encode_event_payload,
+)
+from figura.storage.schema import _CORE_SCHEMA
 from figura.providers import (
     MODEL_IDS,
     FinishReason,
@@ -45,7 +53,7 @@ from figura.providers import (
     ProviderResponse,
     ProviderToolCall,
 )
-from figura.json_schema import canonical_json_dumps
+from figura.shared.json_schema import canonical_json_dumps
 from figura.tools.contracts import (
     ReplayEffect,
     ToolExecutionError,
@@ -53,7 +61,7 @@ from figura.tools.contracts import (
     ToolOutcome,
 )
 from figura.tools import ToolContext, ToolDefinition, ToolRegistry
-from figura.runtime._run_lock import PerRunExecutionLock
+from figura.runtime.run_lock import PerRunExecutionLock
 
 
 def _call(

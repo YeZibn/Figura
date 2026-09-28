@@ -4,9 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from types import MappingProxyType
-from typing import Any
 
-from ..json_schema import (
+from figura.shared.json_schema import (
     JsonValueError,
     SchemaDefinitionError,
     canonical_json_dumps,

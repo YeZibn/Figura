@@ -1,29 +1,19 @@
-"""Composition root and bounded JSON application for the local Figura Gateway."""
+"""Bounded JSON and HTTP application for the local Figura Gateway."""
 
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Mapping
 from urllib.parse import parse_qs, urlsplit
 
-from figura.agent import AgentExecutor, AgentRequestBuilder
-from figura.attachments import FiguraAttachmentService
-from figura.panels import FiguraPanelService, RunExecutionStateService
+from figura.sources.attachments import FiguraAttachmentService
+from figura.sources.panels import FiguraPanelService
+from figura.agent.execution_state import RunExecutionStateService
 from figura.providers import MODEL_IDS, ProviderFactory, ProviderId
-from figura.runtime import (
-    FiguraRunStore,
-    RunCoordinator,
-    RunCreateRequest,
-    RunError,
-    RunErrorCode,
-    RunStatus,
-)
-from figura.runtime._run_lock import PerRunExecutionLock
-from figura.runtime.tool_execution import DurableToolExecutor
-from figura.tools import ToolRegistry, ToolRuntime
-from figura.tools.image_tools import image_tool_definitions
+from figura.runtime.coordinator import RunCoordinator
+from figura.runtime.errors import RunError, RunErrorCode
+from figura.runtime.models import RunCreateRequest, RunStatus
 
 from .dispatcher import DispatcherFull, RunDispatcher
 from .web_projection import attachment, panel, run_handle, run_history, session_snapshot
@@ -300,60 +290,6 @@ class FiguraGatewayApplication:
         if origin in self.allowed_origins:
             result["Access-Control-Allow-Origin"] = origin
         return result
-
-
-def create_application(
-    project_root: str | Path,
-    *,
-    data_dir: str | Path | None = None,
-    provider_factory: ProviderFactory | None = None,
-    allowed_origins: tuple[str, ...] = ("http://127.0.0.1:1421",),
-    max_workers: int = 3,
-    max_queued: int = 8,
-) -> FiguraGatewayApplication:
-    root = Path(project_root).expanduser().resolve()
-    selected_data_dir = Path(data_dir).expanduser() if data_dir is not None else root / ".figura"
-    if not selected_data_dir.is_absolute():
-        selected_data_dir = root / selected_data_dir
-    store = FiguraRunStore(selected_data_dir)
-    attachment_service = FiguraAttachmentService(store)
-    factory = provider_factory or ProviderFactory.from_env()
-    coordinator = RunCoordinator(store, factory)
-    panel_service = FiguraPanelService(store.data_root, attachment_service)
-    execution_state = RunExecutionStateService(coordinator, panel_service)
-    registry = ToolRegistry(
-        "figura-web-v2",
-        image_tool_definitions(execution_state, attachment_service, panel_service),
-    )
-    runtime = ToolRuntime(registry)
-    lock = PerRunExecutionLock(store.data_root)
-    tools = DurableToolExecutor(store, registry, runtime, execution_lock=lock)
-    agent = AgentExecutor(
-        coordinator,
-        factory,
-        tools,
-        lock,
-        AgentRequestBuilder(attachment_service, execution_state),
-    )
-    dispatcher = RunDispatcher(agent, max_workers=max_workers, max_queued=max_queued)
-    return FiguraGatewayApplication(
-        coordinator,
-        attachment_service,
-        panel_service,
-        execution_state,
-        factory,
-        dispatcher,
-        allowed_origins=allowed_origins,
-    )
-
-
-def recover_running_runs(application: FiguraGatewayApplication) -> int:
-    """Schedule persisted running Runs through the ordinary safe executor path."""
-    scheduled = 0
-    for run in application.coordinator.list_running_runs():
-        if application.dispatcher.ensure_scheduled(run, wait_for_capacity=True):
-            scheduled += 1
-    return scheduled
 
 
 def _read_json(body: bytes) -> dict[str, object]:

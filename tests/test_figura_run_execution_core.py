@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from tests.figura_sources_support import make_attachment_service
+
 import io
 import sqlite3
 import logging
@@ -10,7 +12,6 @@ from types import SimpleNamespace
 import pytest
 from PIL import Image
 
-from figura.attachments import FiguraAttachmentService
 from figura.providers import (
     MODEL_IDS,
     FinishReason,
@@ -25,20 +26,22 @@ from figura.providers import (
     ProviderToolCall,
     ProviderUsage,
 )
-from figura.runtime import (
+from figura.runtime.coordinator import RunCoordinator
+from figura.runtime.errors import RunError, RunErrorCode
+from figura.runtime.models import (
     ActionKind,
     EventKind,
-    FiguraRunStore,
-    NextAction,
-    RunCoordinator,
+    RecordKind,
     RunCreateRequest,
-    RunError,
-    RunErrorCode,
     RunStatus,
     TerminalCode,
 )
-from figura.runtime._codec import decode_payload, encode_payload
-from figura.runtime.models import ModelResponseFact, RecordKind, RunInput
+from figura.runtime.records import ModelResponseFact, RunInput
+from figura.runtime.store import FiguraRunStore
+from figura.runtime.codecs.records import (
+    decode_payload,
+    encode_payload,
+)
 
 
 def _factory(environ: dict[str, str] | None = None) -> ProviderFactory:
@@ -223,7 +226,7 @@ def test_create_run_persists_authorized_attachment_ids_and_includes_them_in_idem
 ) -> None:
     store, app = _app(tmp_path)
     session = app.create_session()
-    attachments = FiguraAttachmentService(store)
+    attachments = make_attachment_service(store)
     first = attachments.upload(session.session_id, "first.png", _png_bytes())
     second = attachments.upload(session.session_id, "second.png", _png_bytes())
     request = _request(
@@ -259,7 +262,7 @@ def test_run_creation_rejects_missing_duplicate_and_cross_session_attachments_at
     store, app = _app(tmp_path)
     owner = app.create_session()
     other = app.create_session()
-    attachments = FiguraAttachmentService(store)
+    attachments = make_attachment_service(store)
     metadata = attachments.upload(owner.session_id, "chart.png", _png_bytes())
 
     requests = (
@@ -282,7 +285,7 @@ def test_run_creation_rejects_missing_duplicate_and_cross_session_attachments_at
 def test_referenced_attachment_cannot_be_deleted_and_remains_resolvable(tmp_path) -> None:
     store, app = _app(tmp_path)
     session = app.create_session()
-    attachments = FiguraAttachmentService(store)
+    attachments = make_attachment_service(store)
     metadata = attachments.upload(session.session_id, "chart.png", _png_bytes())
     content = attachments.resolve(session.session_id, metadata.attachment_id).image_bytes
     run = app.create_run(

@@ -7,7 +7,7 @@ import math
 from collections.abc import Mapping
 from typing import Any
 
-from figura.json_schema import (
+from figura.shared.json_schema import (
     MAX_OBJECT_PROPERTIES,
     MAX_VALUE_DEPTH,
     JsonValueError,

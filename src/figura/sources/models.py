@@ -1,10 +1,20 @@
-"""Immutable Panel metadata and normalized polygon values."""
+"""Attachment and derived Panel values persisted by Figura Sources."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from figura.runtime import RunError, RunErrorCode
+from figura.runtime.errors import RunError, RunErrorCode
+
+
+@dataclass(frozen=True)
+class AttachmentMetadata:
+    attachment_id: str
+    session_id: str
+    filename: str
+    media_type: str
+    byte_count: int
+    created_at: str
 
 
 @dataclass(frozen=True)
@@ -29,12 +39,15 @@ class PanelRecord:
     points: tuple[PanelPoint, ...]
 
     def __post_init__(self) -> None:
-        if any(not isinstance(value, str) or not value for value in (
-            self.panel_id,
-            self.session_id,
-            self.run_id,
-            self.source_attachment_id,
-        )):
+        if any(
+            not isinstance(value, str) or not value
+            for value in (
+                self.panel_id,
+                self.session_id,
+                self.run_id,
+                self.source_attachment_id,
+            )
+        ):
             raise RunError(RunErrorCode.INVALID_REQUEST)
         if not isinstance(self.name, str) or not self.name.strip():
             raise RunError(RunErrorCode.INVALID_REQUEST)

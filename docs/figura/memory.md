@@ -6,7 +6,7 @@
 
 Session Memory 将同一 Session 中目标 Run 之前的终态 Run 投影为有序对话消息，供后续 Provider 请求使用。它读取 Runtime 持久化的 Run 事实，不拥有这些事实，也不创建消息表、历史副本、摘要、裁剪预算或跨 Session 用户记忆。每次模型动作都从提交事实重新构建完整上下文；超过 Provider 硬限制时，由 Agent 在领取 Provider attempt 前失败。
 
-权威内容仍属于 [Run Runtime](runtime.md)：用户输入来自 `RunInput`，助手内容来自 `ModelResponseFact`，工具调用与结果来自 `ToolCallFact`、`ToolAttemptStartedFact`、`ToolResultFact`。Memory 对象只是一组不可变、调用期投影；附件只保留 ID。Agent 的附件/Panel 清单及图像加载规则由[Panels](panels.md)定义，历史附件不会因为进入 Memory 而自动解析为图像字节。
+权威内容仍属于 [Run Runtime](runtime.md)：用户输入来自 `RunInput`，助手内容来自 `ModelResponseFact`，工具调用与结果来自 `ToolCallFact`、`ToolAttemptStartedFact`、`ToolResultFact`。Memory 对象只是一组不可变、调用期投影；附件只保留 ID。Agent 的附件/Panel 清单及图像加载规则由[Agent](agent.md#4-运行时状态字段)定义，附件与 Panel 的持久模型由[Sources](sources.md)定义；历史附件不会因为进入 Memory 而自动解析为图像字节。
 
 ## 2. 模型关系与组件边界
 
@@ -113,4 +113,4 @@ Runtime 在一个 SQLite 读快照内读取目标 Run 的所有较早 ordinal，
 - 完整历史超过 Provider 硬限制时当前 Run 在 Provider attempt claim 前失败；持久 Run 事实与 Memory 投影均不裁剪。
 - Run 创建由 Runtime 保证同一 Session 同时最多一个 running Run；幂等重放先于 active Run 检查。完整创建与读取语义见[运行时流程](runtime.md#2-内部流转)。
 
-代码：[Session Memory 模型](../../src/figura/memory/models.py)、[投影器](../../src/figura/memory/projector.py)、[Agent 请求构建](../../src/figura/agent/request.py)、[历史 Run 读取](../../src/figura/runtime/persistence/run_repository.py)。规格：[Session Memory](../../openspec/figura/openspec/specs/session-memory/spec.md)、[Agent ReAct](../../openspec/figura/openspec/specs/agent-react-execution/spec.md)、[Run 核心](../../openspec/figura/openspec/specs/run-execution-core/spec.md)。
+代码：[Session Memory 模型](../../src/figura/memory/models.py)、[投影器](../../src/figura/memory/projector.py)、[Agent 请求构建](../../src/figura/agent/request.py)、[历史 Run 快照读取](../../src/figura/runtime/persistence/snapshots.py)。规格：[Session Memory](../../openspec/figura/openspec/specs/session-memory/spec.md)、[Agent ReAct](../../openspec/figura/openspec/specs/agent-react-execution/spec.md)、[Run 核心](../../openspec/figura/openspec/specs/run-execution-core/spec.md)。

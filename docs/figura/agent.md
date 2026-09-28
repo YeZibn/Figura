@@ -1,10 +1,10 @@
 # Agent：Run 决策与编排
 
-> [返回总览](../figura-implementation-overview.md)。本篇只描述 Agent 的编排责任；Provider 与 Tool 的完整字段分别见[Provider](provider.md)和[Tool](tools.md)，图像清单和 Panel 生命周期见[Panels](panels.md)，持久执行事实见[Run Runtime](runtime.md)，网页调用和公开投影见[Web 边界](web.md)。
+> [返回总览](../figura-implementation-overview.md)。本篇说明 Agent 编排及其调用期派生运行态；Provider 与 Tool 的完整字段分别见[Provider](provider.md)和[Tool](tools.md)，附件和 Panel 持久模型见[Sources](sources.md)，Run 执行事实见[Run Runtime](runtime.md)，网页调用和公开投影见[Web 边界](web.md)。
 
 ## 1. 职责与边界
 
-`AgentExecutor` 从当前 `RunState.checkpoint.next_action` 选择一步动作；`AgentRequestBuilder` 调用 Session Memory 投影，将同 Session 较早终态 Run 和当前 Run 的已提交前缀组装为完整 Provider 请求，并从 `RunExecutionState` 添加附件/Panel 清单。历史消息中的附件 ID 保留为文本引用，历史附件不会自动解析成图像。只有最新已提交工具批次中成功的 `load_image` 结果会在本次请求里解析为图像块。Agent 协调 Provider、Tool、Runtime、Memory 和 Panels 投影，但不拥有它们的事实或另存一份历史。当前 Agent 执行本身是同步、非流式文本/图像 ReAct；Web Gateway 通过有界 `RunDispatcher` 异步调用 `execute(session_id, run_id)`，HTTP handler 不运行模型请求。Agent 没有独立持久模型。
+`AgentExecutor` 从当前 `RunState.checkpoint.next_action` 选择一步动作；`AgentRequestBuilder` 调用 Session Memory 投影，将同 Session 较早终态 Run 和当前 Run 的已提交前缀组装为完整 Provider 请求，并消费 `RunExecutionState` 提供的附件/Panel 清单。`RunExecutionStateService` 是 Agent 的调用期投影：它读取 Runtime Run 事实和 Sources 资源元数据，不持久化清单或图像状态。历史消息中的附件 ID 保留为文本引用，历史附件不会自动解析成图像。只有最新已提交工具批次中成功的 `load_image` 结果会在本次请求里解析为图像块。当前 Agent 执行本身是同步、非流式文本/图像 ReAct；Web Gateway 通过有界 `RunDispatcher` 异步调用 `execute(session_id, run_id)`，HTTP handler 不运行模型请求。Agent 没有独立的持久模型。
 
 ```mermaid
 flowchart LR
@@ -14,9 +14,10 @@ flowchart LR
     Agent --> Build[AgentRequestBuilder]
     Build --> Memory[Session Memory Projection]
     Memory -->|所有历史和当前已提交消息| Build
-    Build -->|RunExecutionState 清单| Panels[Panels projection]
-    Build -->|只解析最近成功 load_image 的附件| Attach[Attachment Service]
-    Build -->|只解析最近成功 load_image 的 Panel| Panels
+    State -->|当前 / 较早 RunState| ImageState[RunExecutionStateService]
+    Sources[Sources: 附件元数据与 Panels] -->|授权资源与文件读取| ImageState
+    ImageState -->|RunExecutionState 清单| Build
+    Build -->|只解析最近成功 load_image 的附件或 Panel| Sources
     Build -->|ProviderRequest| Provider[Provider Boundary]
     Provider -->|ProviderResponse / Failure| Agent
     Agent -->|ToolInvocation| Tool[Tool Runtime]
@@ -39,13 +40,36 @@ flowchart LR
 |---|---|---|
 | `RunState`、`ExecutionCheckpoint`、`RunInput` | [Run Runtime](runtime.md#4-完整模型字段) | 读取已提交事实和下一动作，不另建持久副本 |
 | `SessionHistory`、`UserMessage`、`AssistantMessage`、`ToolMessage`、`MemoryToolCall` | [Session Memory](memory.md#4-完整模型字段) | 消费从同 Session Run 事实重建的完整历史；Message 模型只在请求期间存在 |
-| `AttachmentMetadata`、图像解析 | [附件](sources.md#3-完整模型字段) | Tool 和请求组装按 Session 读取；仅显式加载的图片进入当前请求 |
-| `RunExecutionState`、`AvailableAttachment`、`PanelRecord` | [Panels](panels.md#3-完整字段合同) | 投影可用图像清单；仅把最新已提交工具批次明确加载的图片放进本次 Provider 请求 |
+| `AttachmentMetadata`、`PanelPoint`、`PanelRecord` | [Sources](sources.md#3-完整模型字段) | 读取 Session 资源；只有已提交分割结果关联的 Panel 才能进入清单 |
+| `RunExecutionState`、`AvailableAttachment` | [本篇第 4 节](#4-运行时状态字段) | 从 Runtime 与 Sources 事实重建可用图像清单；仅把最新已提交工具批次明确加载的图像放进本次 Provider 请求 |
 | `ProviderRequest`、`ProviderResponse` | [Provider](provider.md#4-完整模型字段) | 组装请求、消费规范化结果；字段合同由 Provider 边界定义 |
 | `ToolDefinition`、`ToolInvocation`、`ToolExecutionResult` | [Tool](tools.md#4-完整模型字段) | 投影可用工具、提交调用、消费结果 |
 
-当前 `src/figura/agent/` 没有 Agent 自有 dataclass，因而本篇没有为编排过程虚构字段表；网页创建 Run 后由 Gateway Dispatcher 调度，但 Session、Run 生命周期和恢复事实仍归 Runtime。Gateway 当前注册 `load_image` 与 `decompose_chart_image` 两个图像工具；完整输入、结果和限制见[Tool 图像工具合同](tools.md#6-图像工具合同)。
+`AvailableAttachment` 与 `RunExecutionState` 是当前 Agent 唯一的派生状态 dataclass；它们只存在于请求执行期，不是独立持久事实。Session、Run 生命周期和恢复事实仍归 Runtime。网页创建 Run 后由 Gateway Dispatcher 调度。Gateway 当前注册 `load_image` 与 `decompose_chart_image` 两个图像工具；完整输入、结果和限制见[Tool 图像工具合同](tools.md#6-图像工具合同)。
 
-## 4. 不变量、状态与依据
+## 4. 运行时状态字段
 
-请求必须从同一 Session 的已提交 Run 事实重建；先前 Run 必须全部终态，且 Session Memory 投影不持久化、不裁剪。文本清单会列出完整的当前 Session 可用附件与已提交 Panel；原图像字节只在对应 `load_image` 成功并提交后进入下一次请求，且不会从上一 Run 或更早工具批次自动继承。请求的图片、文本和 Schema 等全部 Provider 限制在 attempt claim 前验证。Provider 和工具的不确定外部效果不会因读取或普通执行循环而自动重试；`decompose_chart_image` 通过幂等本地写确保恢复时 Panel 身份稳定。代码：[AgentExecutor](../../src/figura/agent/executor.py)、[AgentRequestBuilder](../../src/figura/agent/request.py)、[Run Dispatcher](../../src/figura/gateway/dispatcher.py)；Panel 投影、文件与 RunExecutionState 见[Panels](panels.md)；主规格：[Agent ReAct](../../openspec/figura/openspec/specs/agent-react-execution/spec.md)、[Session Memory](../../openspec/figura/openspec/specs/session-memory/spec.md)、[Web Gateway](../../openspec/figura/openspec/specs/figura-web-gateway/spec.md)。
+以下值由 `agent/execution_state.py` 定义并在每次请求构建时重新读取。字段完整列出；Runtime 和 Sources 中的嵌套源模型仍由各自 owner 定义。
+
+### `AvailableAttachment`
+
+Run 图像清单中的一条可访问附件引用，不保存文件或字节。**写入者：**`RunExecutionStateService`。**权威来源：**同 Session 的 RunInput 附件 ID 与 Sources `AttachmentMetadata`。**读取与公开：**Agent/图像工具授权和提示清单；不是独立 Web DTO。[定义](../../src/figura/agent/execution_state.py)。
+
+| 完整字段路径 | 类型 | 构造默认 | 含义与约束 | 构建者 → 权威来源 → 读取/公开 |
+|---|---|---|---|---|
+| `AvailableAttachment.attachment_id` | `str` | 必传 | 不透明 Attachment ID；按较早 Run ordinal 和输入顺序，再当前 Run 输入顺序去重 | `RunExecutionStateService` → `RunInput.attachment_ids` 与 `AttachmentMetadata.attachment_id` → Agent / 图像工具；清单不单独持久化 |
+| `AvailableAttachment.filename` | `str` | 必传 | 来自所属 Session 附件元数据的安全显示文件名 | `RunExecutionStateService` → `AttachmentMetadata.filename` → Agent 图像清单与 `load_image` 结果；不含图像内容 |
+
+### `RunExecutionState`
+
+属于一个目标 Run 的完整附件/Panel 可用性投影。面板须与成功分割 ToolResultFact 匹配才进入清单。**写入者：**`RunExecutionStateService.build`。**权威来源：**Runtime RunState/RunInput、Sources AttachmentMetadata/PanelRecord。**读取与公开：**Agent 请求组装与图像工具；不持久化，整体不作为 Web DTO。[定义](../../src/figura/agent/execution_state.py)。
+
+| 完整字段路径 | 类型 | 构造默认 | 含义与约束 | 构建者 → 权威来源 → 读取/公开 |
+|---|---|---|---|---|
+| `RunExecutionState.run_id` | `str` | 必传 | 该清单所属目标 Run 的 opaque ID | `RunExecutionStateService` → `RunState.run.run_id` → Agent 与图像工具；不持久化 |
+| `RunExecutionState.available_attachments` | `tuple[AvailableAttachment, ...]` | 必传 | 较早终态 Run 与当前 Run 实际引用附件的有序去重清单 | `RunExecutionStateService` → Runtime RunInput + Sources AttachmentMetadata → Agent；不持久化 |
+| `RunExecutionState.panels` | `tuple[PanelRecord, ...]` | 必传 | 当前 Session 中与已提交成功分割事实匹配的 Panel，按 Run 与工具结果顺序排列 | `RunExecutionStateService` → Runtime ToolResultFact + Sources PanelRecord → Agent/图像工具；PanelRecord 源字段见[Sources](sources.md#3-完整模型字段) |
+
+## 5. 不变量、状态与依据
+
+请求必须从同一 Session 的已提交 Run 事实重建；先前 Run 必须全部终态，且 Session Memory 投影不持久化、不裁剪。文本清单会列出完整的当前 Session 可用附件与已提交 Panel；原图像字节只在对应 `load_image` 成功并提交后进入下一次请求，且不会从上一 Run 或更早工具批次自动继承。请求的图片、文本和 Schema 等全部 Provider 限制在 attempt claim 前验证。Provider 和工具的不确定外部效果不会因读取或普通执行循环而自动重试；`decompose_chart_image` 通过幂等本地写确保恢复时 Panel 身份稳定。代码：[AgentExecutor](../../src/figura/agent/executor.py)、[AgentRequestBuilder](../../src/figura/agent/request.py)、[RunExecutionState](../../src/figura/agent/execution_state.py)、[Run Dispatcher](../../src/figura/gateway/dispatcher.py)；Attachment/Panel 持久字段和文件见[Sources](sources.md)；主规格：[Agent ReAct](../../openspec/figura/openspec/specs/agent-react-execution/spec.md)、[Session Memory](../../openspec/figura/openspec/specs/session-memory/spec.md)、[Web Gateway](../../openspec/figura/openspec/specs/figura-web-gateway/spec.md)。

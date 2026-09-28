@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from tests.figura_sources_support import make_attachment_service, make_panel_service
+
 import hashlib
 import io
 import json
@@ -8,23 +10,18 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from figura.attachments import FiguraAttachmentService
-from figura.panels import FiguraPanelService, PanelPoint, RunExecutionStateService
+from figura.sources.models import PanelPoint
+from figura.agent.execution_state import RunExecutionStateService
 from figura.providers import FinishReason, MODEL_IDS, ProviderFactory, ProviderId, ProviderResponse, ProviderToolCall
-from figura.runtime import (
-    ActionKind,
-    DurableToolExecutor,
-    FiguraRunStore,
-    RunCoordinator,
-    RunCreateRequest,
-    RunError,
-    RunErrorCode,
-    ToolFactKind,
-    ToolResultFact,
-)
-from figura.runtime._run_lock import PerRunExecutionLock
+from figura.runtime.coordinator import RunCoordinator
+from figura.runtime.errors import RunError, RunErrorCode
+from figura.runtime.models import ActionKind, RunCreateRequest, ToolFactKind
+from figura.runtime.records import ToolResultFact
+from figura.runtime.store import FiguraRunStore
+from figura.runtime.tool_execution import DurableToolExecutor
+from figura.runtime.run_lock import PerRunExecutionLock
 from figura.tools import ToolContext, ToolInvocation, ToolOutcome, ToolRegistry, ToolRuntime
-from figura.tools.image_tools import image_tool_definitions
+from figura.tools.implementations.image import image_tool_definitions
 
 
 def _image_bytes(width: int = 10, height: int = 10) -> bytes:
@@ -44,7 +41,7 @@ def _setup(tmp_path, attachment_count: int = 1, image_content: bytes | None = No
     )
     coordinator = RunCoordinator(store, factory)
     session = coordinator.create_session()
-    attachments = FiguraAttachmentService(store)
+    attachments = make_attachment_service(store)
     content = image_content if image_content is not None else _image_bytes()
     uploaded = tuple(attachments.upload(session.session_id, f"chart-{index}.png", content) for index in range(attachment_count))
     run = coordinator.create_run(
@@ -57,10 +54,10 @@ def _setup(tmp_path, attachment_count: int = 1, image_content: bytes | None = No
             idempotency_key="panel-tools-run",
         )
     )
-    panels = FiguraPanelService(store.data_root, attachments)
+    panels = make_panel_service(store, attachments)
     execution_state = RunExecutionStateService(coordinator, panels)
     registry = ToolRegistry(
-        "panel-tools-v1", image_tool_definitions(execution_state, attachments, panels)
+        "panel-tools-v1", image_tool_definitions(execution_state.for_run, attachments, panels)
     )
     return store, coordinator, session, run, attachments, panels, execution_state, registry
 
@@ -312,7 +309,7 @@ def test_degenerate_geometry_and_resource_limits_are_rejected(tmp_path, monkeypa
     assert error.value.code is RunErrorCode.INVALID_REQUEST
     assert panels.list(session.session_id) == ()
 
-    monkeypatch.setattr("figura.panels.service._MAX_PANEL_PIXELS", 1)
+    monkeypatch.setattr("figura.sources.imaging.MAX_PANEL_PIXELS", 1)
     with pytest.raises(RunError) as error:
         panels.decompose(
             session.session_id,
@@ -334,7 +331,7 @@ def test_startup_removes_unregistered_panel_files_and_staging_directories(tmp_pa
     staging.mkdir()
     (staging / "partial.png").write_bytes(b"partial")
 
-    FiguraPanelService(store.data_root, attachments)
+    make_panel_service(store, attachments)
 
     assert not orphan.exists()
     assert not staging.exists()

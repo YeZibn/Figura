@@ -10,7 +10,7 @@ from enum import Enum
 from types import MappingProxyType
 from typing import Any, TypeAlias
 
-from ..json_schema import JsonValueError, canonical_json_dumps, normalize_json_value
+from figura.shared.json_schema import JsonValueError, canonical_json_dumps, normalize_json_value
 from .limits import (
     MAX_CALL_ID_BYTES,
     MAX_ERROR_MESSAGE_BYTES,

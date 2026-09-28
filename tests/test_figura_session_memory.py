@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+from tests.figura_sources_support import make_attachment_service
+
 from io import BytesIO
 
 import pytest
 from PIL import Image
 
-from figura.attachments import FiguraAttachmentService
 from figura.memory import (
     AssistantMessage,
     MemoryToolCall,
@@ -23,14 +24,11 @@ from figura.providers import (
     ProviderResponse,
     ProviderToolCall,
 )
-from figura.runtime import (
-    DurableToolExecutor,
-    FiguraRunStore,
-    RunCoordinator,
-    RunCreateRequest,
-    RunError,
-    RunErrorCode,
-)
+from figura.runtime.coordinator import RunCoordinator
+from figura.runtime.errors import RunError, RunErrorCode
+from figura.runtime.models import RunCreateRequest
+from figura.runtime.store import FiguraRunStore
+from figura.runtime.tool_execution import DurableToolExecutor
 from figura.tools import ReplayEffect, ToolDefinition, ToolFailure, ToolRegistry
 
 
@@ -133,7 +131,7 @@ def _image_bytes(color: str) -> bytes:
 
 def test_session_history_preserves_run_order_scope_and_input_attachments(tmp_path) -> None:
     store, coordinator = _app(tmp_path)
-    attachments = FiguraAttachmentService(store)
+    attachments = make_attachment_service(store)
     session = coordinator.create_session()
     other_session = coordinator.create_session()
     first_image = attachments.upload(session.session_id, "first.png", _image_bytes("red"))

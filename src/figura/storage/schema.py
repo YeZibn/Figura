@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
-from ..errors import RunError, RunErrorCode
+from figura.runtime.errors import RunError, RunErrorCode
 
 _SCHEMA_VERSION = 6
 

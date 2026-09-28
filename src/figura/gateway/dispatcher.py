@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from threading import BoundedSemaphore, Lock
 
 from figura.agent import AgentExecutor
-from figura.runtime import Run
+from figura.runtime.models import Run
 
 
 class DispatcherFull(RuntimeError):

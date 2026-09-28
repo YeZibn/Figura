@@ -86,7 +86,7 @@
 
 ## 6. 图像工具合同
 
-工具实现在 [`image_tools.py`](../../src/figura/tools/image_tools.py)，由 Gateway 组合根把 Attachment Service、Panel Service 和 RunExecutionStateService 注入 handler。handler 只通过运行态清单授权资源；结果为耐久 ToolResultFact 的有界 JSON，不包含图像字节或本机路径。Panel 字段、图像文件和可见性由[Panels 专题](panels.md)拥有。
+工具实现在 [`tools/implementations/image.py`](../../src/figura/tools/implementations/image.py)，由 [Bootstrap](../../src/figura/bootstrap.py) 把 Agent 运行态、Attachment Service 与 Panel Service 注入 handler。handler 只通过运行态清单授权资源；结果为 Runtime 持久 ToolResultFact 的有界 JSON，不包含图像字节或本机路径。Panel 模型与文件由[Sources 专题](sources.md)拥有；清单由[Agent](agent.md#4-运行时状态字段)重建。
 
 ### `load_image`
 
@@ -100,7 +100,7 @@
 
 ### `decompose_chart_image`
 
-按模型给出的规范化多边形生成独立 Panel PNG；所有矩形也用四点多边形表达。详细 `PanelRecord` 和 `PanelPoint` 字段见[Panels 完整字段合同](panels.md#3-完整字段合同)。
+按模型给出的规范化多边形生成独立 Panel PNG；所有矩形也用四点多边形表达。详细 `PanelRecord` 和 `PanelPoint` 字段见[Sources 完整模型字段](sources.md#3-完整模型字段)。
 
 | 合同 | 完整字段与边界 |
 |---|---|

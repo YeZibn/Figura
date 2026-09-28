@@ -5,24 +5,30 @@ from __future__ import annotations
 import sqlite3
 import uuid
 
-from .._codec import encode_event_payload, encode_payload
-from ..domain.invariants import _validate_id, _validate_state
-from ..domain.models import (
+from figura.storage.database import SqliteDatabase, _utc_now
+
+from ..codecs.events import (
+    encode_event_payload,
+)
+from ..codecs.records import (
+    encode_payload,
+)
+from ..errors import RunError, RunErrorCode
+from ..models import (
     ActionKind,
     EventKind,
     ExecutionCheckpoint,
     NextAction,
     RecordKind,
     Run,
+    RunStatus,
+)
+from ..records import (
     RunInput,
     RunState,
-    RunStatus,
-    SessionSnapshot,
 )
-from ..errors import RunError, RunErrorCode
-from .database import SqliteDatabase, _utc_now
+from ..validation import _validate_id, _validate_state
 from .mappers import (
-    _attachment_from_row,
     _checkpoint_from_row,
     _continuation_fact_from_row,
     _encode_action,
@@ -30,10 +36,28 @@ from .mappers import (
     _provider_attempt_from_row,
     _record_from_row,
     _run_from_row,
-    _session_from_row,
     _tool_fact_from_row,
 )
-from .session_repository import SessionRepository
+
+
+def _require_attachment_ownership(
+    connection: sqlite3.Connection,
+    session_id: str,
+    attachment_ids: tuple[str, ...],
+    *,
+    integrity: bool = False,
+) -> None:
+    if not attachment_ids:
+        return
+    placeholders = ", ".join("?" for _ in attachment_ids)
+    rows = connection.execute(
+        f"SELECT attachment_id FROM attachments WHERE session_id = ? "
+        f"AND attachment_id IN ({placeholders})",
+        (session_id, *attachment_ids),
+    ).fetchall()
+    if {row["attachment_id"] for row in rows} != set(attachment_ids):
+        code = RunErrorCode.INTEGRITY_ERROR if integrity else RunErrorCode.UNSUPPORTED_PAYLOAD
+        raise RunError(code)
 
 
 def _read_run_state_from_connection(
@@ -98,9 +122,8 @@ def _read_run_state_from_connection(
 class RunRepository:
     """Persist Run creation and hydrate validated RunState aggregates."""
 
-    def __init__(self, database: SqliteDatabase, sessions: SessionRepository) -> None:
+    def __init__(self, database: SqliteDatabase) -> None:
         self._database = database
-        self._sessions = sessions
 
     def _read_run_state_from_connection(
         self, connection: sqlite3.Connection, session_id: str, run_id: str
@@ -181,7 +204,7 @@ class RunRepository:
             if active_run is not None:
                 raise RunError(RunErrorCode.INVALID_TRANSITION)
 
-            self._sessions._require_attachment_ownership(
+            _require_attachment_ownership(
                 connection,
                 session_id,
                 input_payload.attachment_ids,
@@ -243,17 +266,12 @@ class RunRepository:
             input_payload = state.records[0].payload
             if not isinstance(input_payload, RunInput):
                 raise RunError(RunErrorCode.INTEGRITY_ERROR)
-            try:
-                self._sessions._require_attachment_ownership(
-                    connection,
-                    session_id,
-                    input_payload.attachment_ids,
-                    integrity=True,
-                )
-            except RunError as error:
-                if error.code is RunErrorCode.INTEGRITY_ERROR:
-                    raise
-                raise RunError(RunErrorCode.INTEGRITY_ERROR) from None
+            _require_attachment_ownership(
+                connection,
+                session_id,
+                input_payload.attachment_ids,
+                integrity=True,
+            )
             return state
 
     def list_running_runs(self) -> tuple[Run, ...]:
@@ -264,89 +282,7 @@ class RunRepository:
             ).fetchall()
         return tuple(_run_from_row(row) for row in rows)
 
-    def read_session_snapshot(self, session_id: str) -> SessionSnapshot:
-        _validate_id(session_id)
-        with self._database.read_snapshot() as connection:
-            session_row = connection.execute(
-                "SELECT * FROM sessions WHERE session_id = ?", (session_id,)
-            ).fetchone()
-            if session_row is None:
-                raise RunError(RunErrorCode.SESSION_NOT_FOUND)
-            run_rows = connection.execute(
-                "SELECT run_id FROM runs WHERE session_id = ? ORDER BY ordinal",
-                (session_id,),
-            ).fetchall()
-            states: list[RunState] = []
-            for row in run_rows:
-                state = self._read_run_state_from_connection(
-                    connection, session_id, row["run_id"]
-                )
-                input_payload = state.records[0].payload
-                if not isinstance(input_payload, RunInput):
-                    raise RunError(RunErrorCode.INTEGRITY_ERROR)
-                self._sessions._require_attachment_ownership(
-                    connection,
-                    session_id,
-                    input_payload.attachment_ids,
-                    integrity=True,
-                )
-                states.append(state)
-            if [state.run.ordinal for state in states] != list(range(1, len(states) + 1)):
-                raise RunError(RunErrorCode.INTEGRITY_ERROR)
-            attachment_rows = connection.execute(
-                "SELECT * FROM attachments WHERE session_id = ? "
-                "ORDER BY created_at, attachment_id",
-                (session_id,),
-            ).fetchall()
-        return SessionSnapshot(
-            session=_session_from_row(session_row),
-            run_states=tuple(states),
-            attachments=tuple(_attachment_from_row(row) for row in attachment_rows),
-        )
 
-    def read_prior_run_states(self, session_id: str, run_id: str) -> tuple[RunState, ...]:
-        """Load every earlier Run in one Session snapshot, in ordinal order."""
-        _validate_id(session_id)
-        _validate_id(run_id)
-        with self._database.read_snapshot() as connection:
-            target_row = connection.execute(
-                "SELECT ordinal FROM runs WHERE run_id = ? AND session_id = ?",
-                (run_id, session_id),
-            ).fetchone()
-            if target_row is None:
-                raise RunError(RunErrorCode.RUN_NOT_FOUND)
-            target_ordinal = int(target_row["ordinal"])
-            prior_rows = connection.execute(
-                "SELECT run_id, ordinal, status FROM runs "
-                "WHERE session_id = ? AND ordinal < ? ORDER BY ordinal",
-                (session_id, target_ordinal),
-            ).fetchall()
-            if [int(row["ordinal"]) for row in prior_rows] != list(range(1, target_ordinal)):
-                raise RunError(RunErrorCode.INTEGRITY_ERROR)
-            if any(row["status"] == RunStatus.RUNNING.value for row in prior_rows):
-                raise RunError(RunErrorCode.INVALID_TRANSITION)
-
-            states: list[RunState] = []
-            for row in prior_rows:
-                state = self._read_run_state_from_connection(
-                    connection, session_id, row["run_id"]
-                )
-                input_payload = state.records[0].payload
-                if not isinstance(input_payload, RunInput):
-                    raise RunError(RunErrorCode.INTEGRITY_ERROR)
-                try:
-                    self._sessions._require_attachment_ownership(
-                        connection,
-                        session_id,
-                        input_payload.attachment_ids,
-                        integrity=True,
-                    )
-                except RunError as error:
-                    if error.code is RunErrorCode.INTEGRITY_ERROR:
-                        raise
-                    raise RunError(RunErrorCode.INTEGRITY_ERROR) from None
-                states.append(state)
-            return tuple(states)
 
     def _scoped_run(self, connection: sqlite3.Connection, session_id: str, run_id: str) -> Run:
         _validate_id(session_id)

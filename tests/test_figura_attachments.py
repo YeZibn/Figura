@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from tests.figura_sources_support import make_attachment_service
+
 import io
 import os
 import stat
@@ -9,8 +11,8 @@ from dataclasses import fields
 import pytest
 from PIL import Image
 
-from figura.attachments import FiguraAttachmentService
-from figura.runtime import FiguraRunStore, RunError, RunErrorCode
+from figura.runtime.errors import RunError, RunErrorCode
+from figura.runtime.store import FiguraRunStore
 
 
 def _image_bytes(image_format: str = "PNG") -> bytes:
@@ -22,7 +24,7 @@ def _image_bytes(image_format: str = "PNG") -> bytes:
 def _attachment_store(tmp_path):
     store = FiguraRunStore(tmp_path)
     session = store.create_session()
-    attachments = FiguraAttachmentService(store)
+    attachments = make_attachment_service(store)
     return store, session, attachments
 
 
@@ -53,7 +55,9 @@ def test_upload_stores_verified_metadata_and_resolves_original_bytes(tmp_path) -
     if os.name == "posix":
         assert stat.S_IMODE(file_path.stat().st_mode) == 0o600
         assert stat.S_IMODE((tmp_path / "attachments").stat().st_mode) == 0o700
-    assert store.get_attachment_metadata(session.session_id, metadata.attachment_id) == metadata
+    assert attachments._repository.get_attachment_metadata(
+        session.session_id, metadata.attachment_id
+    ) == metadata
 
 
 def test_upload_uses_decoded_media_type_instead_of_filename_extension(tmp_path) -> None:
@@ -87,7 +91,7 @@ def test_upload_rejects_unsupported_image_formats(tmp_path) -> None:
 
 
 def test_upload_rejects_content_over_provider_image_limit(tmp_path, monkeypatch) -> None:
-    import figura.attachments.service as service_module
+    import figura.sources.attachments as service_module
 
     _store, session, attachments = _attachment_store(tmp_path)
     monkeypatch.setattr(service_module, "MAX_IMAGE_BYTES", 4)
@@ -143,7 +147,7 @@ def test_startup_reconciles_tombstones_and_orphaned_files(tmp_path) -> None:
     orphan_tombstone = trash / f"{orphan_id}.{uuid.uuid4().hex}.bin"
     orphan_path.replace(orphan_tombstone)
 
-    recovered = FiguraAttachmentService(store)
+    recovered = make_attachment_service(store)
 
     assert final_path.read_bytes() == _image_bytes()
     assert not tombstone.exists()
@@ -158,7 +162,7 @@ def test_failed_metadata_registration_removes_installed_file(tmp_path, monkeypat
         install_file()
         raise RunError(RunErrorCode.STORAGE_ERROR)
 
-    monkeypatch.setattr(store, "register_attachment", fail_after_install)
+    monkeypatch.setattr(attachments._repository, "register_attachment", fail_after_install)
 
     with pytest.raises(RunError):
         attachments.upload(session.session_id, "chart.png", _image_bytes())

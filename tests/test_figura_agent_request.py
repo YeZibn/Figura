@@ -1,15 +1,16 @@
 from __future__ import annotations
 
+from tests.figura_sources_support import make_attachment_service, make_panel_service
+
 import json
 from io import BytesIO
 
 import pytest
 from PIL import Image
 
-from figura.attachments import FiguraAttachmentService
 from figura.agent.request import AgentRequestBuilder
-from figura.panels import FiguraPanelService, RunExecutionStateService
-from figura.json_schema import canonical_json_dumps
+from figura.agent.execution_state import RunExecutionStateService
+from figura.shared.json_schema import canonical_json_dumps
 import figura.providers.validation as provider_validation
 from figura.providers import (
     MODEL_IDS,
@@ -23,17 +24,13 @@ from figura.providers import (
     ProviderToolCall,
     TextBlock,
 )
-from figura.runtime import (
-    ActionKind,
-    DurableToolExecutor,
-    FiguraRunStore,
-    RunCoordinator,
-    RunCreateRequest,
-    RunError,
-    RunErrorCode,
-)
+from figura.runtime.coordinator import RunCoordinator
+from figura.runtime.errors import RunError, RunErrorCode
+from figura.runtime.models import RunCreateRequest
+from figura.runtime.store import FiguraRunStore
+from figura.runtime.tool_execution import DurableToolExecutor
 from figura.tools import ReplayEffect, ToolDefinition, ToolFailure, ToolRegistry
-from figura.tools.image_tools import image_tool_definitions
+from figura.tools.implementations.image import image_tool_definitions
 
 
 def _registry(*, version: str = "registry-v1") -> ToolRegistry:
@@ -98,7 +95,7 @@ def _image_bytes(color: str) -> bytes:
 
 def _app_with_attachments(tmp_path, image_contents: tuple[bytes, ...]):
     store = FiguraRunStore(tmp_path)
-    attachments = FiguraAttachmentService(store)
+    attachments = make_attachment_service(store)
     factory = ProviderFactory.from_env(
         {
             "FIGURA_QWEN_API_KEY": "qwen-secret",
@@ -126,21 +123,21 @@ def _app_with_attachments(tmp_path, image_contents: tuple[bytes, ...]):
 
 
 def _builder(store, coordinator, attachments=None) -> AgentRequestBuilder:
-    selected_attachments = attachments or FiguraAttachmentService(store)
-    panels = FiguraPanelService(store.data_root, selected_attachments)
+    selected_attachments = attachments or make_attachment_service(store)
+    panels = make_panel_service(store, selected_attachments)
     execution_state = RunExecutionStateService(coordinator, panels)
     return AgentRequestBuilder(selected_attachments, execution_state)
 
 
 def _image_registry(store, coordinator, attachments):
-    panels = FiguraPanelService(store.data_root, attachments)
+    panels = make_panel_service(store, attachments)
     execution_state = RunExecutionStateService(coordinator, panels)
     return (
         panels,
         execution_state,
         ToolRegistry(
             "image-tools-v1",
-            (*image_tool_definitions(execution_state, attachments, panels), *_registry().definitions),
+            (*image_tool_definitions(execution_state.for_run, attachments, panels), *_registry().definitions),
         ),
     )
 

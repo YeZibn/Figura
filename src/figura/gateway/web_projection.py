@@ -2,22 +2,16 @@
 
 from __future__ import annotations
 
-from figura.runtime import (
-    ActionKind,
-    AttachmentMetadata,
-    EventKind,
-    ExecutionRecord,
+from figura.runtime.models import ActionKind, EventKind, RecordKind, Run, Session
+from figura.runtime.records import (
     FinalAnswerFact,
     ModelResponseFact,
-    RecordKind,
-    Run,
     RunInput,
     RunState,
-    Session,
-    SessionSnapshot,
     RunStreamEvent,
+    SessionSnapshot,
 )
-from figura.panels import PanelRecord
+from figura.sources.models import AttachmentMetadata, PanelRecord
 
 
 def session_summary(

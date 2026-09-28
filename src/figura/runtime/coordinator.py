@@ -16,32 +16,46 @@ from figura.providers import (
     ProviderToolCall,
     ProviderUsage,
 )
-from figura.providers.validation import MAX_IMAGE_COUNT
+from figura.shared.image_limits import MAX_IMAGE_COUNT
 
-from ._codec import MAX_PROVIDER_CONTINUATION_BYTES, validate_tool_call_batch
+from .codecs.records import (
+    MAX_PROVIDER_CONTINUATION_BYTES,
+)
+from .codecs.tools import (
+    validate_tool_call_batch,
+)
 from .errors import RunError, RunErrorCode
-from ._run_lock import PerRunExecutionLock, RunExecutionLockUnavailable
-from .domain.models import (
+from .run_lock import PerRunExecutionLock, RunExecutionLockUnavailable
+from .models import (
     ActionKind,
-    ExecutionRecord,
-    ModelResponseFact,
-    ProviderAttempt,
     Run,
     RunCreateRequest,
-    RunInput,
-    RunState,
     RunStatus,
     Session,
     SessionListEntry,
+    TerminalCode,
+)
+from .records import (
+    ExecutionRecord,
+    ModelResponseFact,
+    ProviderAttempt,
+    RunInput,
+    RunState,
     SessionSnapshot,
     ToolCallFact,
-    TerminalCode,
 )
 from .store import FiguraRunStore
 
+
 _MAX_INPUT_BYTES = 64 * 1024
+
+
 _MAX_IDEMPOTENCY_KEY_BYTES = 128
+
+
 _MAX_RESPONSE_BYTES = 128 * 1024
+
+
 _MAX_SESSION_NAME_BYTES = 256
 
 

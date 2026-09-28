@@ -6,7 +6,8 @@ import re
 from typing import Any, Iterable, Mapping
 from urllib.parse import urlsplit
 
-from ..json_schema import (
+from figura.shared.image_limits import MAX_IMAGE_BYTES, MAX_IMAGE_COUNT, MAX_TOTAL_IMAGE_BYTES
+from figura.shared.json_schema import (
     JsonValueError,
     SchemaDefinitionError,
     canonical_json_dumps,
@@ -36,9 +37,6 @@ MAX_INSTRUCTION_COUNT = 32
 MAX_TOOL_COUNT = 64
 MAX_TOOL_CALLS_PER_RESPONSE = 64
 MAX_TOTAL_TEXT_BYTES = 1_048_576
-MAX_IMAGE_COUNT = 16
-MAX_IMAGE_BYTES = 24 * 1024 * 1024 - 64
-MAX_TOTAL_IMAGE_BYTES = 32 * 1024 * 1024
 SUPPORTED_MEDIA_TYPES = frozenset({"image/jpeg", "image/png", "image/gif", "image/webp"})
 _TOOL_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 def fail(

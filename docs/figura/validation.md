@@ -1,6 +1,6 @@
 # Validation：共享 JSON Schema 合同
 
-> [返回总览](../figura-implementation-overview.md)。`figura.json_schema` 是被工具和 ChartSpec 等能力复用的基础合同；它不属于 Agent、Provider 或 Tool 的业务事实。
+> [返回总览](../figura-implementation-overview.md)。`figura.shared.json_schema` 与 `figura.shared.image_limits` 是多个能力复用的基础合同；它们不属于 Agent、Provider 或 Tool 的业务事实。
 
 ## 1. 职责与边界
 
@@ -14,13 +14,13 @@
 
 ### SchemaIssue
 
-JSON Schema 验证的无 payload 问题。 **写入者：**figura.json_schema。**权威位置：**调用期。**读取与公开：**ToolRuntime/Schema 调用方；不回显输入值。[定义](../../src/figura/json_schema.py)。
+JSON Schema 验证的无 payload 问题。 **写入者：**`figura.shared.json_schema`。**权威位置：**调用期。**读取与公开：**ToolRuntime/Schema 调用方；不回显输入值。[定义](../../src/figura/shared/json_schema.py)。
 
 | 完整字段路径 | 类型 | 构造默认 | 含义与约束 | 写入 → 权威 → 读取/公开 |
 |---|---|---|---|---|
-| SchemaIssue.code | str | 必传 | 稳定错误/问题码 | figura.json_schema → 调用期 → ToolRuntime/Schema 调用方；不回显输入值 |
-| SchemaIssue.pointer | str | '' | JSON Pointer 问题路径 | figura.json_schema → 调用期 → ToolRuntime/Schema 调用方；不回显输入值 |
+| SchemaIssue.code | str | 必传 | 稳定错误/问题码 | `figura.shared.json_schema` → 调用期 → ToolRuntime/Schema 调用方；不回显输入值 |
+| SchemaIssue.pointer | str | '' | JSON Pointer 问题路径 | `figura.shared.json_schema` → 调用期 → ToolRuntime/Schema 调用方；不回显输入值 |
 
 ## 4. 依据
 
-代码：[共享 JSON Schema](../../src/figura/json_schema.py)。`JsonValueError` 和 `SchemaDefinitionError` 是异常机制；后者携带 code/pointer，但不是持久领域模型。
+代码：[共享 JSON Schema](../../src/figura/shared/json_schema.py)、[图像限制](../../src/figura/shared/image_limits.py)。`JsonValueError` 和 `SchemaDefinitionError` 是异常机制；后者携带 code/pointer，但不是持久领域模型。

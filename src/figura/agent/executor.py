@@ -4,23 +4,17 @@ from __future__ import annotations
 
 from figura.providers import ProviderFactory, ProviderResponse
 from figura.providers.errors import ProviderCallError, ProviderFailureCode
-from figura.runtime import (
-    ActionKind,
-    DurableToolExecutor,
-    RunCoordinator,
-    RunError,
-    RunErrorCode,
-    RunState,
-    RunStatus,
-    TerminalCode,
-)
-from figura.runtime._run_lock import PerRunExecutionLock, RunExecutionLockUnavailable
-from figura.runtime.domain.models import (
+from figura.runtime.coordinator import RunCoordinator
+from figura.runtime.errors import RunError, RunErrorCode
+from figura.runtime.models import ActionKind, RunStatus, TerminalCode, ToolFactKind
+from figura.runtime.records import (
     ModelResponseFact,
+    RunState,
     ToolAttemptStartedFact,
     ToolCallFact,
-    ToolFactKind,
 )
+from figura.runtime.tool_execution import DurableToolExecutor
+from figura.runtime.run_lock import PerRunExecutionLock, RunExecutionLockUnavailable
 
 from .request import AgentRequestBuilder
 

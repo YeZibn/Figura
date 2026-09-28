@@ -4,20 +4,17 @@ from __future__ import annotations
 
 from collections import defaultdict
 
-from figura.json_schema import JsonValueError, canonical_json_dumps
-from figura.runtime import RunError, RunErrorCode
-from figura.runtime.domain.models import (
+from figura.shared.json_schema import JsonValueError, canonical_json_dumps
+from figura.runtime.errors import RunError, RunErrorCode
+from figura.runtime.models import RecordKind, Run, RunStatus, ToolFactKind
+from figura.runtime.records import (
     FinalAnswerFact,
     ModelResponseFact,
-    RecordKind,
-    Run,
     RunInput,
     RunState,
-    RunStatus,
     ToolAttemptStartedFact,
     ToolCallFact,
     ToolExecutionFact,
-    ToolFactKind,
     ToolResultFact,
 )
 

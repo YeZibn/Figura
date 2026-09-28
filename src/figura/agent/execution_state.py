@@ -5,24 +5,20 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from figura.runtime import (
-    ActionKind,
-    RunCoordinator,
-    RunError,
-    RunErrorCode,
+from figura.runtime.coordinator import RunCoordinator
+from figura.runtime.errors import RunError, RunErrorCode
+from figura.runtime.models import ActionKind, RecordKind, RunStatus, ToolFactKind
+from figura.runtime.records import (
     RunInput,
     RunState,
-    RunStatus,
-    RecordKind,
     SessionSnapshot,
     ToolCallFact,
-    ToolFactKind,
     ToolResultFact,
 )
 from figura.tools import ToolOutcome
 
-from .models import PanelRecord
-from .service import FiguraPanelService
+from figura.sources.models import PanelRecord
+from figura.sources.panels import FiguraPanelService
 
 
 @dataclass(frozen=True)
