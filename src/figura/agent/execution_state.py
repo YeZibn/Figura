@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import Literal
 
 from figura.runtime.coordinator import RunCoordinator
 from figura.runtime.errors import RunError, RunErrorCode
@@ -12,10 +14,12 @@ from figura.runtime.records import (
     RunInput,
     RunState,
     SessionSnapshot,
+    ToolAttemptStartedFact,
     ToolCallFact,
     ToolResultFact,
 )
 from figura.tools import ToolOutcome
+from figura.tools.contracts import ToolExecutionError, freeze_json_value
 
 from figura.sources.models import PanelRecord
 from figura.sources.panels import FiguraPanelService
@@ -28,10 +32,32 @@ class AvailableAttachment:
 
 
 @dataclass(frozen=True)
+class MeasurementObservation:
+    run_id: str
+    call_id: str
+    attempt_id: str
+    tool_name: str
+    source_kind: Literal["attachment", "panel"]
+    source_id: str
+    outcome: ToolOutcome
+    result: Mapping[str, object] | None = None
+    error: ToolExecutionError | None = None
+
+    def __post_init__(self) -> None:
+        if self.outcome is ToolOutcome.SUCCEEDED:
+            if not isinstance(self.result, Mapping) or self.error is not None:
+                raise ValueError("successful measurement must contain only a result")
+            object.__setattr__(self, "result", freeze_json_value(self.result))
+        elif self.result is not None or not isinstance(self.error, ToolExecutionError):
+            raise ValueError("failed measurement must contain only a structured error")
+
+
+@dataclass(frozen=True)
 class RunExecutionState:
     run_id: str
     available_attachments: tuple[AvailableAttachment, ...]
     panels: tuple[PanelRecord, ...]
+    measurements: tuple[MeasurementObservation, ...]
 
 
 class RunExecutionStateService:
@@ -86,7 +112,19 @@ class RunExecutionStateService:
                 available.append(AvailableAttachment(attachment_id, metadata.filename))
 
         committed_panels = _committed_panels(snapshot, self._panels.list(current.run.session_id))
-        return RunExecutionState(current.run.run_id, tuple(available), committed_panels)
+        measurements = _committed_measurements(
+            snapshot,
+            current.run.session_id,
+            current.run.ordinal,
+            frozenset(seen),
+            frozenset(record.panel_id for record in committed_panels),
+        )
+        return RunExecutionState(
+            current.run.run_id,
+            tuple(available),
+            committed_panels,
+            measurements,
+        )
 
     def list_session_panels(self, session_id: str) -> tuple[PanelRecord, ...]:
         snapshot = self._coordinator.read_session_snapshot(session_id)
@@ -124,7 +162,11 @@ def _committed_panels(
                 continue
             result = fact.payload
             call = calls.get(result.tool_call_sequence)
-            if call is None or call.tool_name != "decompose_chart_image" or result.outcome is not ToolOutcome.SUCCEEDED:
+            if (
+                call is None
+                or call.tool_name != "decompose_chart_image"
+                or result.outcome is not ToolOutcome.SUCCEEDED
+            ):
                 continue
             if not isinstance(result.result, Mapping) or not isinstance(result.result.get("panels"), tuple | list):
                 raise RunError(RunErrorCode.INTEGRITY_ERROR)
@@ -145,6 +187,121 @@ def _committed_panels(
                 seen.add(record.panel_id)
                 ordered.append(record)
     return tuple(ordered)
+
+
+def _committed_measurements(
+    snapshot: SessionSnapshot,
+    session_id: str,
+    target_ordinal: int,
+    attachment_ids: frozenset[str],
+    panel_ids: frozenset[str],
+) -> tuple[MeasurementObservation, ...]:
+    ordered: list[tuple[int, int, int, MeasurementObservation]] = []
+    for state in snapshot.run_states:
+        if state.run.session_id != session_id or state.run.ordinal > target_ordinal:
+            continue
+        calls = {
+            fact.tool_sequence: fact.payload
+            for fact in state.tool_facts
+            if fact.fact_kind is ToolFactKind.TOOL_CALL and isinstance(fact.payload, ToolCallFact)
+        }
+        attempts: dict[int, list[ToolAttemptStartedFact]] = {}
+        for fact in state.tool_facts:
+            if (
+                fact.fact_kind is ToolFactKind.TOOL_ATTEMPT_STARTED
+                and isinstance(fact.payload, ToolAttemptStartedFact)
+            ):
+                attempts.setdefault(fact.payload.tool_call_sequence, []).append(fact.payload)
+
+        for fact in state.tool_facts:
+            if fact.fact_kind is not ToolFactKind.TOOL_RESULT or not isinstance(fact.payload, ToolResultFact):
+                continue
+            result_fact = fact.payload
+            if result_fact.tool_name != "measure_bars":
+                continue
+            call = calls.get(result_fact.tool_call_sequence)
+            if (
+                call is None
+                or call.tool_name != "measure_bars"
+                or call.call_id != result_fact.call_id
+                or not any(
+                    attempt.call_id == call.call_id and attempt.attempt_id == result_fact.attempt_id
+                    for attempt in attempts.get(result_fact.tool_call_sequence, ())
+                )
+            ):
+                raise RunError(RunErrorCode.INTEGRITY_ERROR)
+
+            source = _measurement_source(call.arguments_json)
+            if source is None:
+                continue
+            source_kind, source_id = source
+            if source_kind == "attachment" and source_id not in attachment_ids:
+                continue
+            if source_kind == "panel" and source_id not in panel_ids:
+                continue
+
+            if result_fact.outcome is ToolOutcome.SUCCEEDED:
+                if not isinstance(result_fact.result, Mapping) or result_fact.error is not None:
+                    raise RunError(RunErrorCode.INTEGRITY_ERROR)
+                if (
+                    result_fact.result.get("source_kind") != source_kind
+                    or result_fact.result.get("source_id") != source_id
+                ):
+                    raise RunError(RunErrorCode.INTEGRITY_ERROR)
+                observation = MeasurementObservation(
+                    run_id=state.run.run_id,
+                    call_id=call.call_id,
+                    attempt_id=result_fact.attempt_id,
+                    tool_name=call.tool_name,
+                    source_kind=source_kind,
+                    source_id=source_id,
+                    outcome=result_fact.outcome,
+                    result=result_fact.result,
+                )
+            else:
+                if result_fact.result is not None or not isinstance(result_fact.error, ToolExecutionError):
+                    raise RunError(RunErrorCode.INTEGRITY_ERROR)
+                observation = MeasurementObservation(
+                    run_id=state.run.run_id,
+                    call_id=call.call_id,
+                    attempt_id=result_fact.attempt_id,
+                    tool_name=call.tool_name,
+                    source_kind=source_kind,
+                    source_id=source_id,
+                    outcome=result_fact.outcome,
+                    error=result_fact.error,
+                )
+            ordered.append((state.run.ordinal, result_fact.tool_call_sequence, call.position, observation))
+
+    ordered.sort(key=lambda item: (item[0], item[1], item[2]))
+    return tuple(item[3] for item in ordered)
+
+
+def _measurement_source(arguments_json: str) -> tuple[Literal["attachment", "panel"], str] | None:
+    def reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        result: dict[str, object] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate measurement argument")
+            result[key] = value
+        return result
+
+    try:
+        arguments = json.loads(arguments_json, object_pairs_hook=reject_duplicate_keys)
+    except (TypeError, ValueError, RecursionError, OverflowError):
+        return None
+    if not isinstance(arguments, dict):
+        return None
+    kind, source_id = arguments.get("source_kind"), arguments.get("source_id")
+    if (
+        not isinstance(kind, str)
+        or kind not in {"attachment", "panel"}
+        or not isinstance(source_id, str)
+        or not source_id
+        or len(source_id) > 128
+    ):
+        return None
+    return kind, source_id
 
 
 def latest_loaded_images(state: RunState) -> tuple[tuple[str, str, str], ...]:
@@ -180,8 +337,15 @@ def latest_loaded_images(state: RunState) -> tuple[tuple[str, str, str], ...]:
         result = results.get(call_sequence)
         if result is None or result.outcome is not ToolOutcome.SUCCEEDED or not isinstance(result.result, Mapping):
             continue
-        kind, source_id, name = result.result.get("source_kind"), result.result.get("source_id"), result.result.get("name")
-        if not isinstance(kind, str) or kind not in {"attachment", "panel"} or not isinstance(source_id, str) or not isinstance(name, str):
+        kind = result.result.get("source_kind")
+        source_id = result.result.get("source_id")
+        name = result.result.get("name")
+        if (
+            not isinstance(kind, str)
+            or kind not in {"attachment", "panel"}
+            or not isinstance(source_id, str)
+            or not isinstance(name, str)
+        ):
             raise RunError(RunErrorCode.INTEGRITY_ERROR)
         identity = (kind, source_id)
         if identity not in seen:

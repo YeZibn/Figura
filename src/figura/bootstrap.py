@@ -18,6 +18,7 @@ from figura.runtime.tool_execution import DurableToolExecutor
 from figura.runtime.run_lock import PerRunExecutionLock
 from figura.tools import ToolRegistry, ToolRuntime
 from figura.tools.implementations.image import image_tool_definitions
+from figura.tools.implementations.measure_bars import measure_bars_definition
 
 
 def create_application(
@@ -42,7 +43,10 @@ def create_application(
     execution_state = RunExecutionStateService(coordinator, panel_service)
     registry = ToolRegistry(
         "figura-web-v2",
-        image_tool_definitions(execution_state.for_run, attachment_service, panel_service),
+        (
+            *image_tool_definitions(execution_state.for_run, attachment_service, panel_service),
+            measure_bars_definition(execution_state.for_run, attachment_service, panel_service),
+        ),
     )
     runtime = ToolRuntime(registry)
     lock = PerRunExecutionLock(store.data_root)

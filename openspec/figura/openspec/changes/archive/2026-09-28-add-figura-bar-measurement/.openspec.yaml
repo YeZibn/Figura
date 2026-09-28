@@ -1,0 +1,4 @@
+schema: spec-driven
+created: 2026-09-28
+goal: Measure candidate bar geometry safely from authorized attachment or Panel
+  sources and expose committed outcomes through the derived RunExecutionState.
