@@ -10,15 +10,14 @@ import figura.agent.request as request_module
 from figura.agent.request import AgentRequestBuilder
 from figura.agent.executor import AgentExecutor
 from figura.attachments import FiguraAttachmentService
+from figura.panels import FiguraPanelService, RunExecutionStateService
 from figura.providers import (
     MODEL_IDS,
     FinishReason,
-    ImageBlock,
     ProviderFactory,
     ProviderId,
     ProviderResponse,
     ProviderToolCall,
-    TextBlock,
 )
 from figura.providers.errors import ProviderCallError, ProviderFailure, ProviderFailureCode
 from figura.runtime import (
@@ -32,6 +31,7 @@ from figura.runtime import (
 )
 from figura.runtime._run_lock import PerRunExecutionLock
 from figura.tools import ReplayEffect, ToolDefinition, ToolFailure, ToolRegistry
+from figura.tools.image_tools import image_tool_definitions
 
 
 def _registry(
@@ -166,6 +166,11 @@ class _FakeFactory:
 
 
 def _agent(store, coordinator, registry, provider_factory, request_builder=None):
+    if request_builder is None:
+        attachments = FiguraAttachmentService(store)
+        panels = FiguraPanelService(store.data_root, attachments)
+        execution_state = RunExecutionStateService(coordinator, panels)
+        request_builder = AgentRequestBuilder(attachments, execution_state)
     tool_executor = DurableToolExecutor(store, registry)
     return AgentExecutor(
         coordinator,
@@ -174,6 +179,16 @@ def _agent(store, coordinator, registry, provider_factory, request_builder=None)
         PerRunExecutionLock(store.data_root),
         request_builder=request_builder,
     )
+
+
+def _image_runtime(store, coordinator, attachments):
+    panels = FiguraPanelService(store.data_root, attachments)
+    execution_state = RunExecutionStateService(coordinator, panels)
+    registry = ToolRegistry(
+        "registry-v1",
+        (*image_tool_definitions(execution_state, attachments, panels), *_registry().definitions),
+    )
+    return registry, AgentRequestBuilder(attachments, execution_state)
 
 
 def _commit_tool_response(coordinator, session_id, run_id, registry, response):
@@ -248,24 +263,21 @@ def test_agent_completes_a_text_only_run_and_terminal_runs_are_no_ops(tmp_path) 
     assert factory.selections == [(ProviderId.QWEN.value, MODEL_IDS[ProviderId.QWEN])]
 
 
-def test_agent_sends_image_blocks_in_memory_without_persisting_image_bytes(tmp_path) -> None:
+def test_agent_does_not_send_attachment_bytes_without_an_explicit_load(tmp_path) -> None:
     store, coordinator, session, run, attachments, image_bytes, _image_path = _app_with_image(
         tmp_path
     )
     factory = _FakeFactory([_response(content="图表有两个明显峰值。")])
-    agent = _agent(
-        store,
-        coordinator,
-        _registry(),
-        factory,
-        AgentRequestBuilder(attachments),
-    )
+    registry, builder = _image_runtime(store, coordinator, attachments)
+    agent = _agent(store, coordinator, registry, factory, builder)
 
     state = agent.execute(session.session_id, run.run_id)
-    content = factory.client.requests[0].messages[0].content
+    request = factory.client.requests[0]
 
     assert state.run.status is RunStatus.COMPLETED
-    assert content == (TextBlock("请分析图表。"), ImageBlock("image/png", image_bytes))
+    assert request.messages[0].content.endswith(attachments.list(session.session_id)[0].attachment_id)
+    assert "chart.png" in request.messages[-1].content
+    assert all(not isinstance(message.content, tuple) for message in request.messages)
     assert len(state.provider_attempts) == 1
     with sqlite3.connect(store.database_path) as connection:
         payloads = connection.execute(
@@ -275,38 +287,52 @@ def test_agent_sends_image_blocks_in_memory_without_persisting_image_bytes(tmp_p
 
 
 @pytest.mark.parametrize("failure", ["missing", "unreadable", "malformed", "over-limit"])
-def test_invalid_image_fails_before_provider_attempt_or_dispatch(
+def test_loaded_image_failure_stops_before_following_provider_attempt(
     tmp_path, monkeypatch, failure: str
 ) -> None:
     store, coordinator, session, run, attachments, image_bytes, image_path = _app_with_image(
         tmp_path
     )
-    if failure == "missing":
-        image_path.unlink()
-    elif failure == "unreadable":
-        image_path.unlink()
-        image_path.symlink_to(tmp_path / "outside.bin")
-    elif failure == "malformed":
-        image_path.write_bytes(b"x" * len(image_bytes))
+    registry, builder = _image_runtime(store, coordinator, attachments)
+    attachment_id = attachments.list(session.session_id)[0].attachment_id
+    factory = _FakeFactory([
+        _response(
+            content="读取原图。",
+            reason=FinishReason.TOOL_CALLS,
+            calls=(ProviderToolCall(
+                "load-image",
+                "load_image",
+                f'{{"source_kind":"attachment","source_id":"{attachment_id}"}}',
+            ),),
+        ),
+        _response(content="完成。"),
+    ])
+    if failure == "over-limit":
+        monkeypatch.setattr(request_module, "MAX_IMAGE_BYTES", 1)
     else:
-        monkeypatch.setattr(request_module, "MAX_TOTAL_IMAGE_BYTES", 1)
+        original_resolve = FiguraAttachmentService.resolve
 
-    factory = _FakeFactory([_response()])
-    agent = _agent(
-        store,
-        coordinator,
-        _registry(),
-        factory,
-        AgentRequestBuilder(attachments),
-    )
+        def resolve_then_damage(service, session_id, source_id):
+            image = original_resolve(service, session_id, source_id)
+            if failure == "missing":
+                image_path.unlink()
+            elif failure == "unreadable":
+                image_path.unlink()
+                image_path.symlink_to(tmp_path / "outside.bin")
+            else:
+                image_path.write_bytes(b"x" * len(image_bytes))
+            return image
+
+        monkeypatch.setattr(FiguraAttachmentService, "resolve", resolve_then_damage)
+    agent = _agent(store, coordinator, registry, factory, builder)
 
     state = agent.execute(session.session_id, run.run_id)
 
     assert state.run.status is RunStatus.FAILED
     assert state.run.terminal_code == TerminalCode.EXECUTION_FAILED.value
-    assert state.provider_attempts == ()
-    assert factory.selections == []
-    assert factory.client.requests == []
+    assert len(state.provider_attempts) == 1
+    assert len(factory.selections) == 1
+    assert len(factory.client.requests) == 1
 
 
 def test_agent_runs_ordered_tool_round_then_uses_committed_observation(tmp_path) -> None:
@@ -333,11 +359,11 @@ def test_agent_runs_ordered_tool_round_then_uses_committed_observation(tmp_path)
     assert handler_calls == ["call-1", "call-2"]
     assert len(factory.client.requests) == 2
     second_request = factory.client.requests[1]
-    assert [message.tool_call_id for message in second_request.messages[-2:]] == [
+    assert [message.tool_call_id for message in second_request.messages[-3:-1]] == [
         "call-1",
         "call-2",
     ]
-    assert [message.content for message in second_request.messages[-2:]] == [
+    assert [message.content for message in second_request.messages[-3:-1]] == [
         '{"outcome":"succeeded","result":{"value":1}}',
         '{"outcome":"succeeded","result":{"value":2}}',
     ]
@@ -391,7 +417,7 @@ def test_agent_resumes_after_response_or_completed_tool_batch(
     assert completed.run.status is RunStatus.COMPLETED
     assert handler_calls == ["call-resume"]
     assert len(factory.client.requests) == 1
-    assert factory.client.requests[0].messages[-1].tool_call_id == "call-resume"
+    assert factory.client.requests[0].messages[-2].tool_call_id == "call-resume"
 
 
 def test_agent_passes_known_tool_failure_as_observation_without_repeating_call(tmp_path) -> None:
@@ -415,7 +441,7 @@ def test_agent_passes_known_tool_failure_as_observation_without_repeating_call(t
 
     assert state.run.status is RunStatus.COMPLETED
     assert handler_calls == ["call-failed"]
-    observation = factory.client.requests[1].messages[-1]
+    observation = factory.client.requests[1].messages[-2]
     assert observation.tool_call_id == "call-failed"
     assert observation.content == (
         '{"error":{"code":"inspection_failed","message":"无法检查该值。",'
@@ -630,7 +656,7 @@ def test_complete_session_history_message_limit_fails_before_claim(tmp_path, mon
     _assert_request_rejected_before_claim(state, factory)
 
 
-def test_complete_session_history_image_limit_fails_before_claim(tmp_path, monkeypatch) -> None:
+def test_complete_session_history_does_not_attach_unloaded_images(tmp_path, monkeypatch) -> None:
     import figura.providers.validation as provider_validation
 
     store, coordinator, session, prior, attachments, _image_bytes, _image_path = _app_with_image(
@@ -641,15 +667,18 @@ def test_complete_session_history_image_limit_fails_before_claim(tmp_path, monke
     factory = _FakeFactory([_response()])
     monkeypatch.setattr(provider_validation, "MAX_IMAGE_COUNT", 0)
 
+    registry, builder = _image_runtime(store, coordinator, attachments)
     state = _agent(
         store,
         coordinator,
-        _registry(),
+        registry,
         factory,
-        AgentRequestBuilder(attachments),
+        builder,
     ).execute(session.session_id, current.run_id)
 
-    _assert_request_rejected_before_claim(state, factory)
+    assert state.run.status is RunStatus.COMPLETED
+    assert len(factory.client.requests) == 1
+    assert all(not isinstance(message.content, tuple) for message in factory.client.requests[0].messages)
 
 
 def test_tool_schema_limit_fails_before_claim(tmp_path, monkeypatch) -> None:
@@ -667,7 +696,7 @@ def test_tool_schema_limit_fails_before_claim(tmp_path, monkeypatch) -> None:
     _assert_request_rejected_before_claim(state, factory)
 
 
-def test_missing_historical_attachment_fails_before_claim(tmp_path) -> None:
+def test_missing_historical_attachment_is_not_read_without_explicit_load(tmp_path) -> None:
     store, coordinator, session, prior, attachments, _image_bytes, image_path = _app_with_image(
         tmp_path
     )
@@ -676,15 +705,18 @@ def test_missing_historical_attachment_fails_before_claim(tmp_path) -> None:
     current = _create_followup_run(coordinator, session.session_id)
     factory = _FakeFactory([_response()])
 
+    registry, builder = _image_runtime(store, coordinator, attachments)
     state = _agent(
         store,
         coordinator,
-        _registry(),
+        registry,
         factory,
-        AgentRequestBuilder(attachments),
+        builder,
     ).execute(session.session_id, current.run_id)
 
-    _assert_request_rejected_before_claim(state, factory)
+    assert state.run.status is RunStatus.COMPLETED
+    assert len(factory.client.requests) == 1
+    assert "chart.png" in factory.client.requests[0].messages[-1].content
 
 
 def test_historical_tool_registry_mismatch_fails_before_claim(tmp_path) -> None:

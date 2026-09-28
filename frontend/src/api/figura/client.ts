@@ -5,6 +5,7 @@ import type {
   FiguraClient,
   FiguraEventDto,
   FiguraHealth,
+  FiguraPanelDto,
   FiguraRunHandleDto,
   FiguraRunHistoryDto,
   FiguraSessionDataDto,
@@ -83,6 +84,10 @@ export function createFiguraClient(baseUrl = defaultBaseUrl): FiguraClient {
       const payload = await request<{ attachments: FiguraAttachmentDto[] }>(`/sessions/${encodeURIComponent(sessionId)}/attachments`)
       return payload.attachments
     },
+    async listPanels(sessionId) {
+      const payload = await request<{ panels: FiguraPanelDto[] }>(`/sessions/${encodeURIComponent(sessionId)}/panels`)
+      return payload.panels
+    },
     async uploadAttachment(sessionId, file) {
       const query = new URLSearchParams({ filename: file.name })
       const payload = await request<{ attachment: FiguraAttachmentDto }>(`/sessions/${encodeURIComponent(sessionId)}/attachments?${query}`, {
@@ -146,6 +151,9 @@ export function createFiguraClient(baseUrl = defaultBaseUrl): FiguraClient {
     },
     attachmentContentUrl(sessionId, attachmentId) {
       return `${normalizedBaseUrl}/sessions/${encodeURIComponent(sessionId)}/attachments/${encodeURIComponent(attachmentId)}/content`
+    },
+    panelContentUrl(sessionId, panelId) {
+      return `${normalizedBaseUrl}/sessions/${encodeURIComponent(sessionId)}/panels/${encodeURIComponent(panelId)}/content`
     },
   }
 }

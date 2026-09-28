@@ -5,7 +5,7 @@ description: Read Figura's layered system overview and relevant component docume
 
 # 读取 Figura 分层系统文档
 
-先读 `docs/figura-implementation-overview.md`，确定问题涉及的大组件和当前状态；再按**语义与权威 owner**寻找相关 `docs/figura/*.md` 专题。专题集合会随领域变化扩展，不能假定固定目录或按调用链把 Agent、Provider、Tool 当成一个领域。专题中的内部流转与完整字段表是导航，不代替代码和规格核对。用户要求维护这些文档时使用 `$figura-implementation-overview`；本 skill 只读。
+先读 `docs/figura-implementation-overview.md`，确定问题涉及的大组件和当前状态；再按**语义与权威 owner**寻找相关 `docs/figura/*.md` 专题。子文档使用稳定的大领域名称（如 `memory`、`web`）；其具体实现范围以正文为准，不能从短文件名推断尚未实现的能力。专题集合会随领域变化扩展，不能假定固定目录或按调用链把 Agent、Provider、Tool 当成一个领域。专题中的内部流转与完整字段表是导航，不代替代码和规格核对。用户要求维护这些文档时使用 `$figura-implementation-overview`；本 skill 只读。
 
 ## 核对顺序
 

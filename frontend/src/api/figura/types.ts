@@ -28,6 +28,13 @@ export type FiguraAttachmentDto = {
   byteCount: number
   createdAt: string
 }
+export type FiguraPanelDto = {
+  panelId: string
+  runId: string
+  sourceAttachmentId: string
+  name: string
+  points: Array<{ x: number; y: number }>
+}
 export type FiguraMessageDto = {
   id: string
   runId: string
@@ -77,12 +84,14 @@ export type FiguraClient = {
   getSession(sessionId: string): Promise<FiguraSessionDataDto>
   createSession(name: string): Promise<FiguraSessionDto>
   listAttachments(sessionId: string): Promise<FiguraAttachmentDto[]>
+  listPanels(sessionId: string): Promise<FiguraPanelDto[]>
   uploadAttachment(sessionId: string, file: File): Promise<FiguraAttachmentDto>
   deleteAttachment(sessionId: string, attachmentId: string): Promise<void>
   startRun(sessionId: string, text: string, attachmentIds: string[], providerId: FiguraProviderId, idempotencyKey: string): Promise<FiguraRunHandleDto>
   getRunHistory(sessionId: string, runId: string, afterSequence?: number): Promise<FiguraRunHistoryDto>
   subscribeRun(sessionId: string, runId: string, callbacks: { onEvent(event: AgentRunEvent): void; onError(error: Error): void; onComplete(): void }, afterSequence?: number): RunSubscription
   attachmentContentUrl(sessionId: string, attachmentId: string): string
+  panelContentUrl(sessionId: string, panelId: string): string
 }
 
 export type FiguraWorkspaceApi = {
@@ -96,6 +105,10 @@ export type FiguraWorkspaceApi = {
     list(sessionId: string): Promise<Attachment[]>
     upload(sessionId: string, file: File): Promise<Attachment>
     remove(sessionId: string, attachmentId: string): Promise<void>
+  }
+  panels: {
+    list(sessionId: string): Promise<FiguraPanelDto[]>
+    contentUrl(sessionId: string, panelId: string): string
   }
   runs: {
     start(sessionId: string, text: string, attachmentIds: string[], providerId: FiguraProviderId, idempotencyKey: string): Promise<RunHandle>

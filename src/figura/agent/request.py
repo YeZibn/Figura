@@ -13,6 +13,7 @@ from figura.memory import (
     project_run_messages,
     project_session_history,
 )
+from figura.panels import RunExecutionState, RunExecutionStateService
 from figura.providers import (
     ImageBlock,
     InstructionBlock,
@@ -29,8 +30,6 @@ from figura.providers import (
 from figura.providers.errors import ProviderCallError
 from figura.providers.validation import (
     MAX_IMAGE_BYTES,
-    MAX_IMAGE_COUNT,
-    MAX_TOTAL_IMAGE_BYTES,
     validate_request,
 )
 from figura.runtime import RunError, RunErrorCode
@@ -42,6 +41,7 @@ from figura.runtime.domain.models import (
     RunStatus,
 )
 from figura.tools import ToolRegistry, project_provider_tools
+from figura.panels.execution_state import latest_loaded_images
 
 
 _SYSTEM_INSTRUCTION = Path(__file__).with_name("assets").joinpath("system-v1.md").read_text(
@@ -53,12 +53,19 @@ _MAX_COMPLETION_TOKENS = 4096
 class AgentRequestBuilder:
     """Build one validated model request from Session history and the current Run."""
 
-    __slots__ = ("_attachments",)
+    __slots__ = ("_attachments", "_execution_state")
 
-    def __init__(self, attachments: FiguraAttachmentService | None = None) -> None:
-        if attachments is not None and not isinstance(attachments, FiguraAttachmentService):
+    def __init__(
+        self,
+        attachments: FiguraAttachmentService,
+        execution_state: RunExecutionStateService,
+    ) -> None:
+        if not isinstance(attachments, FiguraAttachmentService):
             raise TypeError("attachments must be a FiguraAttachmentService")
+        if not isinstance(execution_state, RunExecutionStateService):
+            raise TypeError("execution_state must be a RunExecutionStateService")
         object.__setattr__(self, "_attachments", attachments)
+        object.__setattr__(self, "_execution_state", execution_state)
 
     def __setattr__(self, name: str, value: object) -> None:
         raise AttributeError("AgentRequestBuilder is immutable")
@@ -83,14 +90,19 @@ class AgentRequestBuilder:
             raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD) from None
 
         history = project_session_history(state.run, prior_run_states)
+        execution_state = self._execution_state.build(state, prior_run_states)
         messages = self._provider_messages(
             (*history.messages, *project_run_messages(state)),
-            session_id=state.run.session_id,
             current_run=state.run,
             continuations=_continuations_by_response(
                 state.provider_continuations, state.run.run_id
             ),
             registry=registry,
+        )
+        messages = (
+            *messages,
+            ProviderMessage(MessageRole.USER, _image_inventory(execution_state)),
+            *self._loaded_image_messages(state, execution_state),
         )
         try:
             tools = project_provider_tools(registry)
@@ -118,7 +130,6 @@ class AgentRequestBuilder:
         self,
         messages: tuple[MemoryMessage, ...],
         *,
-        session_id: str,
         current_run: Run,
         continuations: dict[str, ProviderContinuationFact],
         registry: ToolRegistry,
@@ -129,7 +140,7 @@ class AgentRequestBuilder:
                 projected.append(
                     ProviderMessage(
                         MessageRole.USER,
-                        self._user_content(session_id, message.text, message.attachment_ids),
+                        _user_text(message.text, message.attachment_ids),
                     )
                 )
             elif isinstance(message, AssistantMessage):
@@ -174,21 +185,25 @@ class AgentRequestBuilder:
                 raise RunError(RunErrorCode.INTEGRITY_ERROR)
         return tuple(projected)
 
-    def _user_content(
+    def _loaded_image_messages(
         self,
-        session_id: str,
-        text: str,
-        attachment_ids: tuple[str, ...],
-    ) -> str | tuple[TextBlock | ImageBlock, ...]:
-        if not attachment_ids:
-            return text
-        if len(attachment_ids) > MAX_IMAGE_COUNT or self._attachments is None:
-            raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
-
-        images: list[ImageBlock] = []
-        total_image_bytes = 0
-        for attachment_id in attachment_ids:
-            image = self._attachments.resolve(session_id, attachment_id)
+        state: RunState,
+        execution_state: RunExecutionState,
+    ) -> tuple[ProviderMessage, ...]:
+        available_attachments = {item.attachment_id: item for item in execution_state.available_attachments}
+        available_panels = {item.panel_id: item for item in execution_state.panels}
+        blocks: list[TextBlock | ImageBlock] = []
+        for kind, source_id, name in latest_loaded_images(state):
+            if kind == "attachment":
+                if source_id not in available_attachments:
+                    raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
+                image = self._attachments.resolve(state.run.session_id, source_id)
+            else:
+                if source_id not in available_panels:
+                    raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
+                _record, image, _width, _height = self._execution_state.resolve_panel(
+                    state.run.session_id, source_id
+                )
             if (
                 not isinstance(image, ImageBlock)
                 or not isinstance(image.image_bytes, bytes)
@@ -196,11 +211,10 @@ class AgentRequestBuilder:
                 or len(image.image_bytes) > MAX_IMAGE_BYTES
             ):
                 raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
-            total_image_bytes += len(image.image_bytes)
-            if total_image_bytes > MAX_TOTAL_IMAGE_BYTES:
-                raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
-            images.append(image)
-        return (TextBlock(text), *images)
+            blocks.extend((TextBlock(f"已加载图像 {kind}:{source_id}（{name}）。"), image))
+        if not blocks:
+            return ()
+        return (ProviderMessage(MessageRole.USER, tuple(blocks)),)
 
 
 def _continuations_by_response(
@@ -213,3 +227,26 @@ def _continuations_by_response(
             raise RunError(RunErrorCode.INTEGRITY_ERROR)
         result[fact.response_record_id] = fact
     return result
+
+
+def _user_text(text: str, attachment_ids: tuple[str, ...]) -> str:
+    if not attachment_ids:
+        return text
+    return f"{text}\n\n本条消息附件 ID：{', '.join(attachment_ids)}"
+
+
+def _image_inventory(state: RunExecutionState) -> str:
+    attachments = "\n".join(
+        f"- 附件 {item.attachment_id}：{item.filename}"
+        for item in state.available_attachments
+    ) or "- 无可用附件"
+    panels = "\n".join(
+        f"- Panel {item.panel_id}：{item.name}（源附件 {item.source_attachment_id}）"
+        for item in state.panels
+    ) or "- 无已提交 Panel"
+    return (
+        "当前 Session 图像清单（这里只是名称和 ID，尚未提供图像内容）。\n"
+        f"可用附件：\n{attachments}\n"
+        f"已提交 Panel：\n{panels}\n"
+        "需要观察图像时，先用 load_image 显式读取。矩形也用四点多边形提交给 decompose_chart_image。"
+    )

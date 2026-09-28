@@ -4,14 +4,14 @@
 
 ## 1. 职责与边界
 
-`ToolRegistry` 保存有序、版本化的 `ToolDefinition`；`ToolRuntime` 解析和验证调用参数，运行同步 handler，验证有界成功结果或返回安全错误。`DurableToolExecutor` 属于 Run 执行边界，负责在调用前后提交事实。当前 Registry 基础设施已实现，但无 Figura 生产图表工具集合。
+`ToolRegistry` 保存有序、版本化的 `ToolDefinition`；`ToolRuntime` 解析和验证调用参数，运行同步 handler，验证有界成功结果或返回安全错误。`DurableToolExecutor` 属于 Run 执行边界，负责在调用前后提交事实。当前 Figura Gateway Registry 版本为 `figura-web-v2`，包含 `load_image` 与 `decompose_chart_image` 两个图像工具；测量和图表生成工具尚未实现。
 
 ## 2. 内部流转
 
-1. **注册**：进程组装有序 `ToolDefinition`，检查名称唯一、参数与结果 JSON Schema、描述及总大小。Registry 对外提供只读版本、定义顺序和按名查找。
+1. **注册**：Gateway 组装有序 `ToolDefinition`，检查名称唯一、参数与结果 JSON Schema、描述及总大小。当前图像工具按 `load_image`、`decompose_chart_image` 顺序注册；Registry 对外提供只读版本、定义顺序和按名查找。
 2. **模型投影**：Agent 把允许的工具定义映射为 Provider 的 `FunctionTool`；模型只见名称、说明与参数 Schema，不见 handler、结果 Schema 或本地上下文。
 3. **调用**：`ToolInvocation` 的 call ID、名称和 JSON 参数进入 `ToolRuntime`；解析拒绝重复键、无效数值与不符合 Schema 的内容。handler 只收到已验证参数及 `ToolContext`。
-4. **结果与恢复**：成功时结果必须是有界 JSON 对象；失败时返回 `ToolExecutionError`。`replay_effect` 决定不确定结果能否安全重放或必须显式协调；ToolRuntime 自身不拥有 Run checkpoint。
+4. **结果与恢复**：成功时结果必须是有界 JSON 对象；失败时返回 `ToolExecutionError`。图像读取为 `replay_safe`；Panel 分割为 `idempotent_local_write`，同一 call-scoped 幂等键恢复时复用原 Panel ID。`replay_effect` 决定不确定结果能否安全重放或必须显式协调；ToolRuntime 自身不拥有 Run checkpoint。
 
 ## 3. 模型关系与共同规则
 
@@ -81,5 +81,30 @@
 
 - `ReplayEffect`：`replay_safe`、`idempotent_local_write`、`reconcile_required`。`ToolOutcome`：`succeeded`、`failed`。
 - `ToolRegistry` 是不可变 Registry：只读 `version`、有序 `definitions`、`by_name` 映射；创建于进程内，调用事实只记录当时的 registry 版本。`CancellationSignal` 只暴露 `is_cancelled()`。`ToolHandler` 是同步处理函数合同，不进入模型投影。
-- JSON Schema 的共享 `SchemaIssue` 字段在[共享验证合同](shared-validation.md#3-完整模型字段)定义；本篇只说明 ToolRuntime 怎样消费它。
+- JSON Schema 的共享 `SchemaIssue` 字段在[共享验证合同](validation.md#3-完整模型字段)定义；本篇只说明 ToolRuntime 怎样消费它。
 - 代码：[合同](../../src/figura/tools/contracts.py)、[Registry](../../src/figura/tools/registry.py)、[Runtime](../../src/figura/tools/runtime.py)、[Provider 投影](../../src/figura/tools/provider.py)；主规格：[tool-runtime](../../openspec/figura/openspec/specs/tool-runtime/spec.md)、[durable-tool-execution](../../openspec/figura/openspec/specs/durable-tool-execution/spec.md)。
+
+## 6. 图像工具合同
+
+工具实现在 [`image_tools.py`](../../src/figura/tools/image_tools.py)，由 Gateway 组合根把 Attachment Service、Panel Service 和 RunExecutionStateService 注入 handler。handler 只通过运行态清单授权资源；结果为耐久 ToolResultFact 的有界 JSON，不包含图像字节或本机路径。Panel 字段、图像文件和可见性由[Panels 专题](panels.md)拥有。
+
+### `load_image`
+
+只读图像加载工具。成功结果记入 Run 后，Agent 在紧接的下一次 Provider 请求里读取图像字节；工具结果本身只记录元数据。
+
+| 合同 | 完整字段与边界 |
+|---|---|
+| 参数 | `source_kind: 'attachment' \| 'panel'`；`source_id: string`，1–128 字符。额外属性拒绝。 |
+| 成功结果 | `source_kind`、`source_id`、`name`、`width`、`height`；宽高为 1–100000 的整数。额外属性拒绝。 |
+| 执行效果 | `replay_safe`；授权必须命中本 Run 的 Session 图像清单。Attachment 图片名来自附件文件名，Panel 图片名来自 Panel 名。 |
+
+### `decompose_chart_image`
+
+按模型给出的规范化多边形生成独立 Panel PNG；所有矩形也用四点多边形表达。详细 `PanelRecord` 和 `PanelPoint` 字段见[Panels 完整字段合同](panels.md#3-完整字段合同)。
+
+| 合同 | 完整字段与边界 |
+|---|---|
+| 参数 | `attachment_id: string`，1–128 字符；`panels`：1–32 个 Panel 提议。额外属性拒绝。 |
+| Panel 提议 | 每项含 `name: string`（1–256 字符）和 `points`（3–64 个点）；每个点含整数 `x`、`y`，取值均为 0–1000。 |
+| 成功结果 | `{ panels: [{ panel_id, name, source_attachment_id }] }`，保持输入次序；ID 是小写 64 位十六进制。不得加入点坐标、图片字节或文件路径。 |
+| 执行效果 | `idempotent_local_write`；ID 从工具的 call-scoped 幂等键和 Panel 序号确定。只检查多边形及资源能安全执行，不校验语义准确度、重叠或图表类型。 |

@@ -40,7 +40,7 @@ class AgentExecutor:
         provider_factory: ProviderFactory,
         tools: DurableToolExecutor,
         execution_lock: PerRunExecutionLock,
-        request_builder: AgentRequestBuilder | None = None,
+        request_builder: AgentRequestBuilder,
     ) -> None:
         if not isinstance(coordinator, RunCoordinator):
             raise TypeError("coordinator must be a RunCoordinator")
@@ -48,13 +48,13 @@ class AgentExecutor:
             raise TypeError("tools must be a DurableToolExecutor")
         if not isinstance(execution_lock, PerRunExecutionLock):
             raise TypeError("execution_lock must be a PerRunExecutionLock")
-        if request_builder is not None and not isinstance(request_builder, AgentRequestBuilder):
+        if not isinstance(request_builder, AgentRequestBuilder):
             raise TypeError("request_builder must be an AgentRequestBuilder")
         object.__setattr__(self, "_coordinator", coordinator)
         object.__setattr__(self, "_provider_factory", provider_factory)
         object.__setattr__(self, "_tools", tools)
         object.__setattr__(self, "_lock", execution_lock)
-        object.__setattr__(self, "_requests", request_builder or AgentRequestBuilder())
+        object.__setattr__(self, "_requests", request_builder)
 
     def __setattr__(self, name: str, value: object) -> None:
         raise AttributeError("AgentExecutor is immutable")

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from io import BytesIO
 
 import pytest
@@ -7,6 +8,7 @@ from PIL import Image
 
 from figura.attachments import FiguraAttachmentService
 from figura.agent.request import AgentRequestBuilder
+from figura.panels import FiguraPanelService, RunExecutionStateService
 from figura.json_schema import canonical_json_dumps
 import figura.providers.validation as provider_validation
 from figura.providers import (
@@ -31,6 +33,7 @@ from figura.runtime import (
     RunErrorCode,
 )
 from figura.tools import ReplayEffect, ToolDefinition, ToolFailure, ToolRegistry
+from figura.tools.image_tools import image_tool_definitions
 
 
 def _registry(*, version: str = "registry-v1") -> ToolRegistry:
@@ -122,6 +125,26 @@ def _app_with_attachments(tmp_path, image_contents: tuple[bytes, ...]):
     return store, coordinator, session, run, attachments
 
 
+def _builder(store, coordinator, attachments=None) -> AgentRequestBuilder:
+    selected_attachments = attachments or FiguraAttachmentService(store)
+    panels = FiguraPanelService(store.data_root, selected_attachments)
+    execution_state = RunExecutionStateService(coordinator, panels)
+    return AgentRequestBuilder(selected_attachments, execution_state)
+
+
+def _image_registry(store, coordinator, attachments):
+    panels = FiguraPanelService(store.data_root, attachments)
+    execution_state = RunExecutionStateService(coordinator, panels)
+    return (
+        panels,
+        execution_state,
+        ToolRegistry(
+            "image-tools-v1",
+            (*image_tool_definitions(execution_state, attachments, panels), *_registry().definitions),
+        ),
+    )
+
+
 def _commit_tool_round(
     store,
     coordinator,
@@ -159,6 +182,27 @@ def _commit_tool_round(
     return executor.execute_pending(session.session_id, run.run_id)
 
 
+def _commit_tool_calls(store, coordinator, session, run, registry, calls):
+    state = coordinator.read_run_state(session.session_id, run.run_id)
+    attempt = coordinator.begin_provider_attempt(session.session_id, run.run_id, state.checkpoint.revision)
+    claimed = coordinator.read_run_state(session.session_id, run.run_id)
+    coordinator.commit_model_response(
+        session.session_id,
+        run.run_id,
+        claimed.checkpoint.revision,
+        ProviderResponse(
+            ProviderId.QWEN,
+            MODEL_IDS[ProviderId.QWEN],
+            "显式读取图像。",
+            tuple(calls),
+            FinishReason.TOOL_CALLS,
+        ),
+        provider_attempt_id=attempt.attempt_id,
+        registry_version=registry.version,
+    )
+    return DurableToolExecutor(store, registry).execute_pending(session.session_id, run.run_id)
+
+
 def _request_text_bytes(request) -> int:
     total = sum(len(instruction.content.encode("utf-8")) for instruction in request.instructions)
     for message in request.messages:
@@ -174,10 +218,10 @@ def _request_text_bytes(request) -> int:
 
 
 def test_initial_request_uses_run_selection_fixed_instruction_and_tool_projection(tmp_path) -> None:
-    _store, coordinator, session, run = _app(tmp_path)
+    store, coordinator, session, run = _app(tmp_path)
     registry = _registry()
 
-    request = AgentRequestBuilder().build(
+    request = _builder(store, coordinator).build(
         coordinator.read_run_state(session.session_id, run.run_id), registry
     )
 
@@ -185,35 +229,36 @@ def test_initial_request_uses_run_selection_fixed_instruction_and_tool_projectio
     assert request.model_id == MODEL_IDS[ProviderId.QWEN]
     assert request.instructions[0].role.value == "system"
     assert request.instructions[0].content.startswith("你是 Figura 的图表分析助手")
-    assert len(request.messages) == 1
+    assert len(request.messages) == 2
     assert request.messages[0].role is MessageRole.USER
     assert request.messages[0].content == "请分析以下图表数据。"
+    assert "无可用附件" in request.messages[1].content
     assert request.options.stream is False
     assert request.options.max_completion_tokens == 4096
     assert [tool.name for tool in request.tools] == ["inspect"]
 
 
-def test_request_resolves_images_in_persisted_order_after_user_text(tmp_path) -> None:
+def test_initial_request_lists_images_without_resolving_or_sending_bytes(tmp_path) -> None:
     first_image = _image_bytes("red")
     second_image = _image_bytes("blue")
     _store, coordinator, session, run, attachments = _app_with_attachments(
         tmp_path, (first_image, second_image)
     )
 
-    request = AgentRequestBuilder(attachments).build(
+    request = _builder(_store, coordinator, attachments).build(
         coordinator.read_run_state(session.session_id, run.run_id), _registry()
     )
 
-    blocks = request.messages[0].content
-    assert isinstance(blocks, tuple)
-    assert blocks[0] == TextBlock("请分析这些图表。")
-    assert blocks[1:] == (
-        ImageBlock("image/png", first_image),
-        ImageBlock("image/png", second_image),
+    attachment_ids = [item.attachment_id for item in attachments.list(session.session_id)]
+    assert request.messages[0].content == (
+        f"请分析这些图表。\n\n本条消息附件 ID：{', '.join(attachment_ids)}"
     )
+    inventory = request.messages[-1].content
+    assert "image-0.png" in inventory and "image-1.png" in inventory
+    assert all(not isinstance(block, ImageBlock) for message in request.messages for block in (message.content if isinstance(message.content, tuple) else ()))
 
 
-def test_request_rebuilds_the_original_images_after_a_tool_round(tmp_path) -> None:
+def test_request_does_not_resend_original_images_after_an_unrelated_tool_round(tmp_path) -> None:
     first_image = _image_bytes("green")
     second_image = _image_bytes("yellow")
     store, coordinator, session, run, attachments = _app_with_attachments(
@@ -228,27 +273,56 @@ def test_request_rebuilds_the_original_images_after_a_tool_round(tmp_path) -> No
         call_id="call-image-round",
     )
 
-    request = AgentRequestBuilder(attachments).build(state, _registry())
+    request = _builder(store, coordinator, attachments).build(state, _registry())
 
-    assert request.messages[0].content == (
-        TextBlock("请分析这些图表。"),
-        ImageBlock("image/png", first_image),
-        ImageBlock("image/png", second_image),
-    )
+    assert all(not isinstance(block, ImageBlock) for message in request.messages for block in (message.content if isinstance(message.content, tuple) else ()))
+    assert "image-0.png" in request.messages[-1].content
     assert request.messages[1].role is MessageRole.ASSISTANT
 
 
-def test_request_with_attachments_requires_an_injected_session_resolver(tmp_path) -> None:
-    _store, coordinator, session, run, _attachments = _app_with_attachments(
+def test_latest_load_batch_attaches_multiple_images_once_in_tool_order(tmp_path) -> None:
+    first_image = _image_bytes("red")
+    second_image = _image_bytes("blue")
+    store, coordinator, session, run, attachments = _app_with_attachments(
+        tmp_path, (first_image, second_image)
+    )
+    _panels, _execution_state, registry = _image_registry(store, coordinator, attachments)
+    attachment_ids = [item.attachment_id for item in attachments.list(session.session_id)]
+    loads = [
+        ProviderToolCall(f"load-{index}", "load_image", json.dumps({"source_kind": "attachment", "source_id": attachment_id}))
+        for index, attachment_id in enumerate((attachment_ids[1], attachment_ids[0], attachment_ids[1]))
+    ]
+    state = _commit_tool_calls(store, coordinator, session, run, registry, loads)
+
+    request = _builder(store, coordinator, attachments).build(state, registry)
+    image_message = request.messages[-1]
+    assert image_message.role is MessageRole.USER
+    assert isinstance(image_message.content, tuple)
+    image_blocks = [block for block in image_message.content if isinstance(block, ImageBlock)]
+    assert image_blocks == [ImageBlock("image/png", second_image), ImageBlock("image/png", first_image)]
+    assert sum("已加载图像" in block.text for block in image_message.content if isinstance(block, TextBlock)) == 2
+
+    later_state = _commit_tool_round(
+        store, coordinator, session, run, registry, call_id="later-inspect", value=1
+    )
+    later_request = _builder(store, coordinator, attachments).build(later_state, registry)
+    assert all(
+        not isinstance(block, ImageBlock)
+        for message in later_request.messages
+        for block in (message.content if isinstance(message.content, tuple) else ())
+    )
+
+
+def test_request_with_attachments_uses_inventory_without_a_legacy_image_mode(tmp_path) -> None:
+    store, coordinator, session, run, attachments = _app_with_attachments(
         tmp_path, (_image_bytes("red"),)
     )
 
-    with pytest.raises(RunError) as error:
-        AgentRequestBuilder().build(
-            coordinator.read_run_state(session.session_id, run.run_id), _registry()
-        )
-
-    assert error.value.code is RunErrorCode.UNSUPPORTED_PAYLOAD
+    request = _builder(store, coordinator, attachments).build(
+        coordinator.read_run_state(session.session_id, run.run_id), _registry()
+    )
+    assert "image-0.png" in request.messages[-1].content
+    assert all(not isinstance(message.content, tuple) for message in request.messages)
 
 
 def test_request_rebuilds_tool_round_in_order_and_attaches_continuation(tmp_path) -> None:
@@ -291,7 +365,7 @@ def test_request_rebuilds_tool_round_in_order_and_attaches_continuation(tmp_path
     )
     state = DurableToolExecutor(store, registry).execute_pending(session.session_id, run.run_id)
 
-    request = AgentRequestBuilder().build(state, registry)
+    request = _builder(store, coordinator).build(state, registry)
 
     assert [message.role for message in request.messages] == [
         MessageRole.USER,
@@ -300,13 +374,14 @@ def test_request_rebuilds_tool_round_in_order_and_attaches_continuation(tmp_path
         MessageRole.ASSISTANT,
         MessageRole.TOOL,
         MessageRole.TOOL,
+        MessageRole.USER,
     ]
     assert request.messages[1].continuation == continuation
     assert [call.call_id for call in request.messages[3].tool_calls] == [
         "call-first",
         "call-second",
     ]
-    assert [message.tool_call_id for message in request.messages[4:]] == [
+    assert [message.tool_call_id for message in request.messages[4:6]] == [
         "call-first",
         "call-second",
     ]
@@ -353,7 +428,7 @@ def test_request_includes_complete_prior_run_history_without_prior_continuation(
         )
     )
 
-    request = AgentRequestBuilder().build(
+    request = _builder(_store, coordinator).build(
         coordinator.read_run_state(session.session_id, second_run.run_id),
         _registry(),
         coordinator.read_prior_run_states(session.session_id, second_run.run_id),
@@ -363,11 +438,13 @@ def test_request_includes_complete_prior_run_history_without_prior_continuation(
         MessageRole.USER,
         MessageRole.ASSISTANT,
         MessageRole.USER,
+        MessageRole.USER,
     ]
     assert request.messages[0].content == "请分析以下图表数据。"
     assert request.messages[1].content == "第一轮的完整回答。"
     assert request.messages[1].continuation is None
     assert request.messages[2].content == "第二轮输入。"
+    assert "无可用附件" in request.messages[3].content
 
 
 def test_request_fails_closed_when_recorded_registry_is_unavailable(tmp_path) -> None:
@@ -384,7 +461,7 @@ def test_request_fails_closed_when_recorded_registry_is_unavailable(tmp_path) ->
     )
 
     with pytest.raises(RunError) as error:
-        AgentRequestBuilder().build(state, changed)
+        _builder(store, coordinator).build(state, changed)
 
     assert error.value.code is RunErrorCode.UNSUPPORTED_PAYLOAD
 
@@ -403,7 +480,7 @@ def test_request_preserves_all_complete_rounds_and_fails_when_history_cannot_fit
         call_id="call-old",
         content="o" * 700,
     )
-    builder = AgentRequestBuilder()
+    builder = _builder(store, coordinator)
     first_request = builder.build(first_state, registry)
     second_state = _commit_tool_round(
         store,

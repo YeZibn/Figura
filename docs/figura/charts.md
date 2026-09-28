@@ -1,6 +1,6 @@
-# ChartSpecData：单图内容模型
+# Charts：当前单图内容模型
 
-> [返回总览](../figura-implementation-overview.md)。状态：`src/figura/chartspec/` 当前工作树已有未提交代码；`add-figura-chartspec-core` 已移入未提交归档目录，主规格已出现。本文只说明这一纯内容模型，不把未来持久 ChartSpec、产物或来源合同写成已实现。
+> [返回总览](../figura-implementation-overview.md)。范围：当前已实现的 `src/figura/chartspec/` 单图内容值；`add-figura-chartspec-core` 已归档，主规格已同步。本文不把未来持久 ChartSpec、产物或来源合同写成已实现。
 
 ## 1. 职责与边界
 
@@ -23,7 +23,7 @@ flowchart LR
     Data -.-> Future[未来持久 ChartSpec / 组装工具]
 ```
 
-虚线连接尚未实现。`ChartMetadata.source` 是展示文本，不是来源授权或证据。数据来源、选证与图像发布另见[后续能力边界](future-boundaries.md)。
+虚线连接尚未实现。`ChartMetadata.source` 是展示文本，不是来源授权或证据。数据来源、选证与图像发布的目标关系见[总览中的规划能力](../figura-implementation-overview.md#4-规划能力与边界)。
 
 ## 3. 模型关系与约束
 
@@ -105,4 +105,4 @@ x、y 两个轴的组合。 **写入者：**ChartSpecData 解析/构建。**权�
 
 ## 5. 状态与依据
 
-`ChartType` 的全部取值为 `bar`、`line`、`pie`、`scatter`。`DataPoint` 是上述两个点模型的联合类型。当前工作树代码见[模型](../../src/figura/chartspec/models.py)、[解析和序列化](../../src/figura/chartspec/codec.py)、[校验](../../src/figura/chartspec/validation.py)；合同见[主规格](../../openspec/figura/openspec/specs/chart-spec-core/spec.md)，设计缘由见未提交归档中的[proposal](../../openspec/figura/openspec/changes/archive/2026-09-27-add-figura-chartspec-core/proposal.md)和[design](../../openspec/figura/openspec/changes/archive/2026-09-27-add-figura-chartspec-core/design.md)。归档和主规格在当前工作树可见，不代表这些文件已提交。
+`ChartType` 的全部取值为 `bar`、`line`、`pie`、`scatter`。`DataPoint` 是上述两个点模型的联合类型。实现见[模型](../../src/figura/chartspec/models.py)、[解析和序列化](../../src/figura/chartspec/codec.py)、[校验](../../src/figura/chartspec/validation.py)；合同见[主规格](../../openspec/figura/openspec/specs/chart-spec-core/spec.md)，设计缘由见归档的[proposal](../../openspec/figura/openspec/changes/archive/2026-09-27-add-figura-chartspec-core/proposal.md)和[design](../../openspec/figura/openspec/changes/archive/2026-09-27-add-figura-chartspec-core/design.md)。

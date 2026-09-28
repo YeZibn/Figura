@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { createFiguraClient } from './api/figura/client'
 import { createFiguraWorkspaceApi } from './api/figura/workspace'
-import type { FiguraHealth, FiguraProviderId } from './api/figura/types'
+import type { FiguraHealth, FiguraPanelDto, FiguraProviderId } from './api/figura/types'
 import { validateImageFile } from './attachments'
 import { toUserMessage } from './domain/errors'
 import { createRunController, type RunController } from './domain/run/controller'
@@ -9,6 +9,7 @@ import { mergeEvents, type RunTimeline } from './domain/run/timeline'
 import type { Attachment, ConversationItem, Provider, RunState, Session, SessionData } from './types/protocol'
 import { AttachmentPanel, ConversationPanel, SessionSidebar } from './components/workspace'
 import { CreateSessionDialog } from './components/dialogs'
+import { PanelGallery } from './components/figura/PanelGallery'
 import type { PendingAttachment } from './components/types'
 
 const providers: FiguraProviderId[] = ['qwen', 'deepseek', 'mimo']
@@ -35,6 +36,7 @@ export function FiguraApp() {
   const [sessions, setSessions] = useState<Session[]>([])
   const [activeId, setActiveId] = useState('')
   const [data, setData] = useState<SessionData | null>(null)
+  const [panels, setPanels] = useState<FiguraPanelDto[]>([])
   const [timelines, setTimelines] = useState<RunTimeline[]>([])
   const [pendingUser, setPendingUser] = useState<ConversationItem | null>(null)
   const [pending, setPending] = useState<PendingAttachment[]>([])
@@ -122,13 +124,15 @@ export function FiguraApp() {
           setActiveRunId('')
           activeRunRef.current = null
           try {
-            const [updated, nextSessions] = await Promise.all([
+            const [updated, nextSessions, nextPanels] = await Promise.all([
               api.sessions.get(sessionId),
               api.sessions.list(),
+              api.panels.list(sessionId),
             ])
             if (activeIdRef.current === sessionId) {
               setData(updated)
               setSessions(nextSessions)
+              setPanels(nextPanels)
             }
           } catch {
             // The durable history already contains the terminal outcome.
@@ -151,17 +155,20 @@ export function FiguraApp() {
   useEffect(() => {
     if (!activeId) {
       setData(null)
+      setPanels([])
       setTimelines([])
       setLoadingSession(false)
       return
     }
     let current = true
     setData(null)
+    setPanels([])
     setTimelines([])
     setLoadingSession(true)
-    void api.sessions.get(activeId).then(async (value) => {
+    void Promise.all([api.sessions.get(activeId), api.panels.list(activeId)]).then(async ([value, sessionPanels]) => {
       if (!current || activeIdRef.current !== activeId) return
       setData(value)
+      setPanels(sessionPanels)
       setSelectedIds([])
       const histories = await Promise.all(value.runs.map(async (summary) => {
         try {
@@ -226,6 +233,7 @@ export function FiguraApp() {
     setActiveRunId('')
     clearPending()
     setSelectedIds([])
+    setPanels([])
     setPendingUser(null)
     setTimelines([])
     setExpandedRuns(new Set())
@@ -447,6 +455,7 @@ export function FiguraApp() {
         error={error}
         onToggleRun={chooseRun}
         expandedRuns={expandedRuns}
+        runPanels={(runId) => <PanelGallery panels={panels.filter((item) => item.runId === runId)} contentUrl={(panelId) => api.panels.contentUrl(activeId, panelId)} />}
       />
       <AttachmentPanel
         attachments={data?.attachments ?? []}

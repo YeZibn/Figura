@@ -17,6 +17,7 @@ from figura.runtime import (
     SessionSnapshot,
     RunStreamEvent,
 )
+from figura.panels import PanelRecord
 
 
 def session_summary(
@@ -91,6 +92,16 @@ def attachment(metadata: AttachmentMetadata) -> dict[str, object]:
         "mediaType": metadata.media_type,
         "byteCount": metadata.byte_count,
         "createdAt": metadata.created_at,
+    }
+
+
+def panel(record: PanelRecord) -> dict[str, object]:
+    return {
+        "panelId": record.panel_id,
+        "runId": record.run_id,
+        "sourceAttachmentId": record.source_attachment_id,
+        "name": record.name,
+        "points": [{"x": point.x, "y": point.y} for point in record.points],
     }
 
 

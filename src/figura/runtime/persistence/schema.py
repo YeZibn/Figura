@@ -6,7 +6,7 @@ import sqlite3
 
 from ..errors import RunError, RunErrorCode
 
-_SCHEMA_VERSION = 5
+_SCHEMA_VERSION = 6
 
 _CORE_SCHEMA = (
     """CREATE TABLE sessions (
@@ -197,12 +197,33 @@ _ATTACHMENT_SCHEMA = (
     "CREATE INDEX attachments_by_session_created ON attachments(session_id, created_at, attachment_id)",
 )
 
+_PANEL_SCHEMA = (
+    """CREATE TABLE panels (
+        panel_id TEXT PRIMARY KEY CHECK (
+            length(CAST(panel_id AS BLOB)) = 64
+            AND panel_id NOT GLOB '*[^0-9a-f]*'
+        ),
+        session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE RESTRICT,
+        run_id TEXT NOT NULL,
+        source_attachment_id TEXT NOT NULL REFERENCES attachments(attachment_id) ON DELETE RESTRICT,
+        name TEXT NOT NULL CHECK (length(CAST(name AS BLOB)) BETWEEN 1 AND 256),
+        points_json TEXT NOT NULL CHECK (json_valid(points_json) AND length(CAST(points_json AS BLOB)) <= 16384),
+        FOREIGN KEY(run_id, session_id) REFERENCES runs(run_id, session_id) ON DELETE RESTRICT
+    )""",
+    "CREATE INDEX panels_by_session ON panels(session_id)",
+    """CREATE TRIGGER immutable_panel_update BEFORE UPDATE ON panels
+        BEGIN SELECT RAISE(ABORT, 'immutable panel'); END""",
+    """CREATE TRIGGER immutable_panel_delete BEFORE DELETE ON panels
+        BEGIN SELECT RAISE(ABORT, 'immutable panel'); END""",
+)
+
 _SCHEMA = (
     *_CORE_SCHEMA,
     *_TOOL_SCHEMA,
     *_CONTINUATION_SCHEMA,
     *_PROVIDER_ATTEMPT_SCHEMA,
     *_ATTACHMENT_SCHEMA,
+    *_PANEL_SCHEMA,
 )
 
 def _validate_migration(connection: sqlite3.Connection) -> None:
@@ -249,10 +270,14 @@ def initialize_schema(connection: sqlite3.Connection) -> None:
                 connection.execute(statement)
         elif version == 4:
             pass
+        elif version == 5:
+            pass
         else:
             raise RunError(RunErrorCode.UNSUPPORTED_VERSION)
         if version > 0:
             for statement in _ATTACHMENT_SCHEMA:
+                connection.execute(statement)
+            for statement in _PANEL_SCHEMA:
                 connection.execute(statement)
         _validate_migration(connection)
         connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")

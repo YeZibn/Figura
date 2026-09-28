@@ -10,17 +10,21 @@ from threading import Event
 from PIL import Image
 
 from figura.attachments import FiguraAttachmentService
+from figura.panels import FiguraPanelService, PanelPoint, RunExecutionStateService
 from figura.gateway.application import FiguraGatewayApplication, recover_running_runs
 from figura.gateway.dispatcher import RunDispatcher
 from figura.gateway.server import FiguraHTTPServer
-from figura.providers import MODEL_IDS, ProviderFactory, ProviderId
+from figura.providers import FinishReason, MODEL_IDS, ProviderFactory, ProviderId, ProviderResponse, ProviderToolCall
 from figura.runtime import (
     FiguraRunStore,
     RunCoordinator,
     RunCreateRequest,
+    DurableToolExecutor,
     RunStatus,
     TerminalCode,
 )
+from figura.tools import ToolRegistry
+from figura.tools.image_tools import image_tool_definitions
 
 
 ORIGIN = "http://127.0.0.1:1421"
@@ -61,11 +65,15 @@ def _application(tmp_path, executor: PassiveExecutor | None = None):
     attachments = FiguraAttachmentService(store)
     providers = _provider_factory()
     coordinator = RunCoordinator(store, providers)
+    panels = FiguraPanelService(store.data_root, attachments)
+    execution_state = RunExecutionStateService(coordinator, panels)
     selected_executor = executor or PassiveExecutor()
     dispatcher = RunDispatcher(selected_executor)  # type: ignore[arg-type]
     app = FiguraGatewayApplication(
         coordinator,
         attachments,
+        panels,
+        execution_state,
         providers,
         dispatcher,
         allowed_origins=(ORIGIN,),
@@ -200,6 +208,84 @@ def test_session_snapshot_queries_and_attachment_ownership(tmp_path):
         assert invalid.status == 400
         assert attachments.list(second.session_id) == ()
         assert coordinator.read_run_state(first.session_id, run.run_id).run.status is RunStatus.RUNNING
+    finally:
+        app.close()
+
+
+def test_panel_routes_expose_only_committed_session_owned_pngs(tmp_path):
+    app, store, coordinator, attachments, _ = _application(tmp_path)
+    try:
+        first = coordinator.create_session("甲")
+        second = coordinator.create_session("乙")
+        image = attachments.upload(first.session_id, "chart.png", _png_bytes())
+        run = _create_run(coordinator, first.session_id, attachment_ids=(image.attachment_id,))
+        uncommitted = app.panels.decompose(
+            first.session_id,
+            run.run_id,
+            image.attachment_id,
+            (("未提交", (PanelPoint(0, 0), PanelPoint(1000, 0), PanelPoint(0, 1000))),),
+            "u" * 64,
+        )[0]
+        panel_list = app.handle("GET", f"/api/v1/sessions/{first.session_id}/panels", {})
+        assert panel_list.status == 200
+        assert _json(panel_list)["panels"] == []
+        assert app.handle(
+            "GET",
+            f"/api/v1/sessions/{first.session_id}/panels/{uncommitted.panel_id}/content",
+            {},
+        ).status == 404
+
+        registry = ToolRegistry(
+            "gateway-panel-v1",
+            image_tool_definitions(app.execution_state, attachments, app.panels),
+        )
+        state = coordinator.read_run_state(first.session_id, run.run_id)
+        attempt = coordinator.begin_provider_attempt(first.session_id, run.run_id, state.checkpoint.revision)
+        claimed = coordinator.read_run_state(first.session_id, run.run_id)
+        call = ProviderToolCall(
+            "decompose-web",
+            "decompose_chart_image",
+            json.dumps({
+                "attachment_id": image.attachment_id,
+                "panels": [{
+                    "name": "独立图像",
+                    "points": [{"x": 0, "y": 0}, {"x": 1000, "y": 0}, {"x": 1000, "y": 1000}, {"x": 0, "y": 1000}],
+                }],
+            }),
+        )
+        coordinator.commit_model_response(
+            first.session_id,
+            run.run_id,
+            claimed.checkpoint.revision,
+            ProviderResponse(ProviderId.QWEN, MODEL_IDS[ProviderId.QWEN], "正在分割。", (call,), FinishReason.TOOL_CALLS),
+            provider_attempt_id=attempt.attempt_id,
+            registry_version=registry.version,
+        )
+        DurableToolExecutor(store, registry).execute_pending(first.session_id, run.run_id)
+
+        listed = app.handle("GET", f"/api/v1/sessions/{first.session_id}/panels", {})
+        metadata = _json(listed)["panels"]
+        assert [item["name"] for item in metadata] == ["独立图像"]
+        assert set(metadata[0]) == {"panelId", "runId", "sourceAttachmentId", "name", "points"}
+        panel_id = metadata[0]["panelId"]
+        content = app.handle(
+            "GET", f"/api/v1/sessions/{first.session_id}/panels/{panel_id}/content", {}
+        )
+        assert content.status == 200
+        assert content.headers["Content-Type"] == "image/png"
+        assert content.headers["Cache-Control"] == "no-store"
+        assert Image.open(BytesIO(content.body)).format == "PNG"
+        assert app.handle(
+            "GET", f"/api/v1/sessions/{second.session_id}/panels/{panel_id}/content", {}
+        ).status == 404
+        assert _json(app.handle("GET", f"/api/v1/sessions/{second.session_id}/panels", {}))["panels"] == []
+
+        (tmp_path / "panels" / f"{panel_id}.png").unlink()
+        failed_content = app.handle(
+            "GET", f"/api/v1/sessions/{first.session_id}/panels/{panel_id}/content", {}
+        )
+        assert failed_content.status == 500
+        assert str(tmp_path) not in failed_content.body.decode()
     finally:
         app.close()
 

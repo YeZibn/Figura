@@ -10,6 +10,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from figura.agent import AgentExecutor, AgentRequestBuilder
 from figura.attachments import FiguraAttachmentService
+from figura.panels import FiguraPanelService, RunExecutionStateService
 from figura.providers import MODEL_IDS, ProviderFactory, ProviderId
 from figura.runtime import (
     FiguraRunStore,
@@ -22,9 +23,10 @@ from figura.runtime import (
 from figura.runtime._run_lock import PerRunExecutionLock
 from figura.runtime.tool_execution import DurableToolExecutor
 from figura.tools import ToolRegistry, ToolRuntime
+from figura.tools.image_tools import image_tool_definitions
 
 from .dispatcher import DispatcherFull, RunDispatcher
-from .web_projection import attachment, run_handle, run_history, session_snapshot
+from .web_projection import attachment, panel, run_handle, run_history, session_snapshot
 
 
 _API_PREFIX = "/api/v1"
@@ -43,6 +45,8 @@ class FiguraGatewayApplication:
         self,
         coordinator: RunCoordinator,
         attachments: FiguraAttachmentService,
+        panels: FiguraPanelService,
+        execution_state: RunExecutionStateService,
         providers: ProviderFactory,
         dispatcher: RunDispatcher,
         *,
@@ -50,6 +54,8 @@ class FiguraGatewayApplication:
     ) -> None:
         self.coordinator = coordinator
         self.attachments = attachments
+        self.panels = panels
+        self.execution_state = execution_state
         self.providers = providers
         self.dispatcher = dispatcher
         self.allowed_origins = frozenset(allowed_origins)
@@ -135,6 +141,27 @@ class FiguraGatewayApplication:
                         raise _BadRequest
                     metadata = self.attachments.upload(session_id, filename_values[0], body)
                     return self._json(201, {"attachment": attachment(metadata)}, headers)
+            if len(parts) == 3 and parts[2] == "panels" and method == "GET":
+                return self._json(
+                    200,
+                    {"panels": [panel(item) for item in self.execution_state.list_session_panels(session_id)]},
+                    headers,
+                )
+            if len(parts) == 5 and parts[2] == "panels" and parts[4] == "content" and method == "GET":
+                if not any(item.panel_id == parts[3] for item in self.execution_state.list_session_panels(session_id)):
+                    raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
+                _record, image, _width, _height = self.panels.resolve(session_id, parts[3])
+                return GatewayResponse(
+                    200,
+                    self._cors_headers(headers)
+                    | {
+                        "Content-Type": "image/png",
+                        "Content-Length": str(len(image.image_bytes)),
+                        "Cache-Control": "no-store",
+                        "X-Content-Type-Options": "nosniff",
+                    },
+                    image.image_bytes,
+                )
             if len(parts) == 5 and parts[2] == "attachments" and parts[4] == "content" and method == "GET":
                 image = self.attachments.resolve(session_id, parts[3])
                 return GatewayResponse(
@@ -291,22 +318,29 @@ def create_application(
     store = FiguraRunStore(selected_data_dir)
     attachment_service = FiguraAttachmentService(store)
     factory = provider_factory or ProviderFactory.from_env()
-    registry = ToolRegistry("figura-web-v1", ())
+    coordinator = RunCoordinator(store, factory)
+    panel_service = FiguraPanelService(store.data_root, attachment_service)
+    execution_state = RunExecutionStateService(coordinator, panel_service)
+    registry = ToolRegistry(
+        "figura-web-v2",
+        image_tool_definitions(execution_state, attachment_service, panel_service),
+    )
     runtime = ToolRuntime(registry)
     lock = PerRunExecutionLock(store.data_root)
-    coordinator = RunCoordinator(store, factory)
     tools = DurableToolExecutor(store, registry, runtime, execution_lock=lock)
     agent = AgentExecutor(
         coordinator,
         factory,
         tools,
         lock,
-        AgentRequestBuilder(attachment_service),
+        AgentRequestBuilder(attachment_service, execution_state),
     )
     dispatcher = RunDispatcher(agent, max_workers=max_workers, max_queued=max_queued)
     return FiguraGatewayApplication(
         coordinator,
         attachment_service,
+        panel_service,
+        execution_state,
         factory,
         dispatcher,
         allowed_origins=allowed_origins,

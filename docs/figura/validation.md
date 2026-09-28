@@ -1,4 +1,4 @@
-# 共享验证合同：JSON Schema 边界
+# Validation：共享 JSON Schema 合同
 
 > [返回总览](../figura-implementation-overview.md)。`figura.json_schema` 是被工具和 ChartSpec 等能力复用的基础合同；它不属于 Agent、Provider 或 Tool 的业务事实。
 

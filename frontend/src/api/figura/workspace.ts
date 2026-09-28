@@ -26,6 +26,10 @@ export function createFiguraWorkspaceApi(client: FiguraClient): FiguraWorkspaceA
       },
       remove: (sessionId, attachmentId) => client.deleteAttachment(sessionId, attachmentId),
     },
+    panels: {
+      list: (sessionId) => client.listPanels(sessionId),
+      contentUrl: (sessionId, panelId) => client.panelContentUrl(sessionId, panelId),
+    },
     runs: {
       async start(sessionId, text, attachmentIds, providerId, idempotencyKey) {
         return mapRunHandle(await client.startRun(sessionId, text, attachmentIds, providerId, idempotencyKey))

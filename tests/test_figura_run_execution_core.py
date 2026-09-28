@@ -194,6 +194,10 @@ def test_v4_migration_adds_attachment_table_without_changing_run_state(tmp_path)
     before = app.read_run_state(session.session_id, run.run_id)
 
     with sqlite3.connect(store.database_path) as connection:
+        connection.execute("DROP INDEX panels_by_session")
+        connection.execute("DROP TRIGGER immutable_panel_update")
+        connection.execute("DROP TRIGGER immutable_panel_delete")
+        connection.execute("DROP TABLE panels")
         connection.execute("DROP INDEX attachments_by_session_created")
         connection.execute("DROP TABLE attachments")
         connection.execute("PRAGMA user_version = 4")
@@ -202,11 +206,14 @@ def test_v4_migration_adds_attachment_table_without_changing_run_state(tmp_path)
     after = migrated_store.read_run_state(session.session_id, run.run_id)
 
     with sqlite3.connect(store.database_path) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 5
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 6
         assert connection.execute("PRAGMA quick_check").fetchone()[0] == "ok"
         assert connection.execute(
             "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'attachments'"
         ).fetchone() == ("attachments",)
+        assert connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'panels'"
+        ).fetchone() == ("panels",)
 
     assert after == before
 
