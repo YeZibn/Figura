@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from io import BytesIO
 from math import hypot
 from typing import Any
 
 import numpy as np
-from PIL import Image
 
 from .cartesian import (
     associate_legend_labels,
@@ -17,13 +15,17 @@ from .cartesian import (
 )
 from .colors import color_mask, hex_color, series_palette
 from .ocr import OCRSnippet, recognize_text
+from .observation_scope import decode_scoped_image
 
 
-def measure_line_image(image_bytes: bytes) -> dict[str, Any]:
+def measure_line_image(
+    image_bytes: bytes,
+    observation_scope: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     """Return source-coordinate line traces and only supported point samples."""
-    rgb = _decode_image(image_bytes)
+    rgb, observation_mask = decode_scoped_image(image_bytes, observation_scope)
     height, width = rgb.shape[:2]
-    ocr = recognize_text(rgb)
+    ocr = recognize_text(rgb, observation_mask) if observation_mask is not None else recognize_text(rgb)
     axes = observe_cartesian_axes(rgb, ocr.snippets, None)
     bounds = _plot_bounds(axes, width, height)
     left, top, right, bottom = bounds
@@ -85,17 +87,6 @@ def measure_line_image(image_bytes: bytes) -> dict[str, Any]:
         },
         "warnings": _unique(warnings),
     }
-
-
-def _decode_image(image_bytes: bytes) -> np.ndarray:
-    if not isinstance(image_bytes, bytes) or not image_bytes:
-        raise ValueError("image bytes are required")
-    try:
-        with Image.open(BytesIO(image_bytes)) as image:
-            image.load()
-            return np.asarray(image.convert("RGB"))
-    except (OSError, ValueError, SyntaxError, Image.DecompressionBombWarning, Image.DecompressionBombError):
-        raise ValueError("image cannot be decoded") from None
 
 
 def _plot_bounds(axes: Mapping[str, object], width: int, height: int) -> tuple[int, int, int, int]:

@@ -59,6 +59,24 @@ def test_ocr_bounds_candidate_count_and_text_length(monkeypatch) -> None:
     assert len(result.snippets[0].text) == 128
 
 
+def test_ocr_drops_boxes_that_cross_or_leave_the_observation_scope(monkeypatch) -> None:
+    fake_engine = lambda _image: SimpleNamespace(
+        boxes=[
+            [(4, 4), (14, 4), (14, 14), (4, 14)],
+            [(24, 4), (34, 4), (34, 14), (24, 14)],
+        ],
+        txts=["inside", "crossing"],
+        scores=[0.9, 0.8],
+    )
+    monkeypatch.setattr(ocr, "_engine", fake_engine)
+    mask = np.zeros((40, 60), dtype=bool)
+    mask[:, :30] = True
+
+    result = recognize_text(np.zeros((40, 60, 3), dtype=np.uint8), mask)
+
+    assert [snippet.text for snippet in result.snippets] == ["inside"]
+
+
 def test_numeric_tick_parser_accepts_common_numeric_labels_only() -> None:
     assert parse_numeric_text("−1,250.5%") == -1250.5
     assert parse_numeric_text("$2,000") == 2000

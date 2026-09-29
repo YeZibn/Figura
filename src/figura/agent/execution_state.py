@@ -25,7 +25,7 @@ from figura.sources.models import PanelRecord
 from figura.sources.panels import FiguraPanelService
 
 
-_MEASUREMENT_TOOL_NAMES = frozenset({"measure_bars", "measure_lines", "measure_scatter"})
+_MEASUREMENT_TOOL_NAMES = frozenset({"measure_bars", "measure_lines", "measure_scatter", "measure_pie"})
 
 
 @dataclass(frozen=True)

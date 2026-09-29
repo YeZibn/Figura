@@ -42,6 +42,16 @@ def test_measures_vertical_bars_in_source_pixel_coordinates() -> None:
     ]
 
 
+def test_bar_observation_scope_filters_geometry_without_changing_coordinates() -> None:
+    result = measure_bar_image(
+        _png(_vertical_chart),
+        {"include": [[[100, 150], [650, 150], [650, 1000], [100, 1000]]]},
+    )
+
+    assert [bar["geometry"]["bbox_px"][0] for bar in result["bars"]] == [60, 130]
+    assert result["image_size"] == {"width": 300, "height": 200}
+
+
 def test_measures_horizontal_bars_and_finds_the_vertical_baseline() -> None:
     def draw(draw_context: ImageDraw.ImageDraw) -> None:
         draw_context.line((40, 20, 40, 180), fill="black", width=2)

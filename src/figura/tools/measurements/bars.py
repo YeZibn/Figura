@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from io import BytesIO
+from collections.abc import Mapping, Sequence
 from itertools import combinations
 from math import exp, isfinite, sqrt
 from typing import Any, Literal
 
 import numpy as np
-from PIL import Image
 
 from .cartesian import (
     associate_legend_labels,
@@ -18,30 +16,21 @@ from .cartesian import (
     observe_cartesian_axes,
 )
 from .ocr import recognize_text
+from .observation_scope import decode_scoped_image
 
 
 Orientation = Literal["vertical", "horizontal"]
 
 
-def measure_bar_image(image_bytes: bytes) -> dict[str, Any]:
+def measure_bar_image(
+    image_bytes: bytes,
+    observation_scope: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     """Return JSON-compatible bar geometry from image bytes, without file or overlay data."""
-    if not isinstance(image_bytes, bytes) or not image_bytes:
-        raise ValueError("image bytes are required")
-    try:
-        with Image.open(BytesIO(image_bytes)) as image:
-            image.load()
-            rgb = np.asarray(image.convert("RGB"))
-    except (
-        OSError,
-        ValueError,
-        SyntaxError,
-        Image.DecompressionBombWarning,
-        Image.DecompressionBombError,
-    ):
-        raise ValueError("image cannot be decoded") from None
+    rgb, observation_mask = decode_scoped_image(image_bytes, observation_scope)
 
     height, width = rgb.shape[:2]
-    ocr = recognize_text(rgb)
+    ocr = recognize_text(rgb, observation_mask) if observation_mask is not None else recognize_text(rgb)
     candidates, orientation, palette, orientation_confidence = _find_candidates(rgb)
     if not candidates:
         axes = observe_cartesian_axes(rgb, ocr.snippets, None)

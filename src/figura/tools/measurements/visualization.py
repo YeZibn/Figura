@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from io import BytesIO
+from math import cos, radians, sin
 
 from PIL import Image, ImageDraw
 
@@ -40,8 +41,12 @@ def render_measurement_overlay(
         _draw_lines(draw, result)
     elif tool_name == "measure_scatter":
         _draw_scatter(draw, result)
+    elif tool_name == "measure_pie":
+        _draw_pie(draw, result)
+    elif tool_name == "extract_text":
+        _draw_text(draw, result)
     else:
-        raise ValueError("unsupported measurement tool")
+        raise ValueError("unsupported observation tool")
 
     output = BytesIO()
     image.save(output, format="PNG", optimize=True)
@@ -95,6 +100,58 @@ def _draw_scatter(draw: ImageDraw.ImageDraw, result: Mapping[str, object]) -> No
             position = point.get("position_px")
             radius = point.get("radius_px")
             _draw_point(draw, position, color, max(4, round(float(radius or 0))))
+
+
+def _draw_pie(draw: ImageDraw.ImageDraw, result: Mapping[str, object]) -> None:
+    region = result.get("plot_region")
+    if not isinstance(region, Mapping):
+        return
+    center, radius = region.get("center_px"), region.get("radius_px")
+    if not isinstance(center, (list, tuple)) or len(center) != 2 or not isinstance(radius, (int, float)):
+        return
+    cx, cy = (float(value) for value in center)
+    radius = float(radius)
+    draw.ellipse(
+        (round(cx - radius), round(cy - radius), round(cx + radius), round(cy + radius)),
+        outline="#ff8c00",
+        width=3,
+    )
+    sectors = result.get("sectors", [])
+    if not isinstance(sectors, (list, tuple)):
+        return
+    for sector in sectors:
+        if not isinstance(sector, Mapping):
+            continue
+        start, sweep = sector.get("start_angle_deg"), sector.get("sweep_angle_deg")
+        if not isinstance(start, (int, float)) or not isinstance(sweep, (int, float)):
+            continue
+        for angle in (float(start), float(start) + float(sweep)):
+            theta = radians(angle)
+            point = (round(cx + radius * sin(theta)), round(cy - radius * cos(theta)))
+            draw.line((round(cx), round(cy), *point), fill="#ff8c00", width=3)
+        middle = radians(float(start) + float(sweep) / 2.0)
+        label_point = (
+            round(cx + radius * 0.68 * sin(middle)),
+            round(cy - radius * 0.68 * cos(middle)),
+        )
+        draw.text(label_point, f"{sector.get('id')}", fill="#17202a")
+
+
+def _draw_text(draw: ImageDraw.ImageDraw, result: Mapping[str, object]) -> None:
+    snippets = result.get("snippets", [])
+    if not isinstance(snippets, (list, tuple)):
+        return
+    for snippet in snippets:
+        if not isinstance(snippet, Mapping):
+            continue
+        bbox = snippet.get("bbox_px")
+        if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+            continue
+        x, y, width, height = (int(value) for value in bbox)
+        draw.rectangle((x, y, x + width, y + height), outline="#ff8c00", width=2)
+        text = snippet.get("text")
+        if isinstance(text, str):
+            draw.text((x, max(23, y - 13)), f"{snippet.get('snippet_id')}: {text[:32]}", fill="#17202a")
 
 
 def _series(result: Mapping[str, object]) -> list[Mapping[str, object]]:

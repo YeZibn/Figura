@@ -46,6 +46,22 @@ def test_line_sensor_preserves_fragments_and_explicit_markers(monkeypatch) -> No
     assert all(point["x_value"] is None or isinstance(point["x_value"], float) for point in result["series"][0]["points"])
 
 
+def test_line_scope_limits_trace_pixels_without_rescaling_source_coordinates(monkeypatch) -> None:
+    def draw(image: ImageDraw.ImageDraw) -> None:
+        image.line((35, 180, 35, 30), fill="#444444", width=2)
+        image.line((35, 180, 280, 40), fill="#cc3344", width=4)
+
+    monkeypatch.setattr(line_sensor, "recognize_text", lambda *_args: OCRObservation((), True))
+    result = measure_line_image(
+        _png(draw),
+        {"include": [[[0, 0], [500, 0], [500, 1000], [0, 1000]]]},
+    )
+
+    assert result["image_size"] == {"width": 300, "height": 220}
+    assert result["series"]
+    assert all(point[0] <= 150 for trace in result["series"][0]["trace"] for point in trace)
+
+
 def test_line_sensor_samples_only_recognized_x_ticks_when_markers_are_absent(monkeypatch) -> None:
     def draw(image: ImageDraw.ImageDraw) -> None:
         _axes(image)
@@ -209,3 +225,21 @@ def test_scatter_sensor_preserves_points_for_unsupported_axis_geometry(monkeypat
     assert point["position_px"] == [150.0, 95.0]
     assert point["x_value"] is None and point["y_value"] is None
     assert result["warnings"]
+
+
+def test_scatter_scope_excludes_outside_points_and_keeps_source_positions(monkeypatch) -> None:
+    def draw(image: ImageDraw.ImageDraw) -> None:
+        _axes(image)
+        for x, y in ((70, 130), (115, 90), (205, 125), (250, 65)):
+            image.ellipse((x - 5, y - 5, x + 5, y + 5), fill="#cc3344")
+
+    monkeypatch.setattr(scatter_sensor, "recognize_text", lambda *_args: OCRObservation((), True))
+    result = measure_scatter_image(
+        _png(draw),
+        {"include": [[[0, 0], [500, 0], [500, 1000], [0, 1000]]]},
+    )
+
+    assert result["image_size"] == {"width": 300, "height": 220}
+    points = result["series"][0]["points"]
+    assert len(points) == 2
+    assert max(point["position_px"][0] for point in points) < 150

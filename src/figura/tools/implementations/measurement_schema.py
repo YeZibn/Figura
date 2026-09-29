@@ -1,10 +1,34 @@
-"""Provider-facing JSON Schema fragments shared by chart measurement tools."""
+"""Provider-facing JSON Schema fragments shared by image observation tools."""
+
+_SCOPE_POINT = {
+    "type": "array",
+    "items": {"type": "integer", "minimum": 0, "maximum": 1000},
+    "minItems": 2,
+    "maxItems": 2,
+}
+
+_SCOPE_POLYGON = {
+    "type": "array",
+    "items": _SCOPE_POINT,
+    "minItems": 3,
+    "maxItems": 32,
+}
+
+OBSERVATION_SCOPE = {
+    "type": "object",
+    "properties": {
+        "include": {"type": "array", "items": _SCOPE_POLYGON, "minItems": 1, "maxItems": 4},
+        "exclude": {"type": "array", "items": _SCOPE_POLYGON, "minItems": 1, "maxItems": 4},
+    },
+    "additionalProperties": False,
+}
 
 SOURCE_PARAMETERS = {
     "type": "object",
     "properties": {
         "source_kind": {"type": "string", "enum": ["attachment", "panel"]},
         "source_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "observation_scope": OBSERVATION_SCOPE,
     },
     "required": ["source_kind", "source_id"],
     "additionalProperties": False,

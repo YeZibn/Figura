@@ -10,6 +10,7 @@ from figura.sources.panels import FiguraPanelService
 
 from ..contracts import ReplayEffect, ToolContext, ToolDefinition, ToolFailure
 from ..measurements.bars import measure_bar_image
+from ..measurements.observation_scope import ObservationScopeError
 from .measurement_schema import COMMON_REQUIRED, MEASUREMENT_PROPERTIES, SOURCE_PARAMETERS
 from .measurement_source import resolve_measurement_source
 
@@ -126,7 +127,10 @@ def measure_bars_definition(
         )
 
         try:
-            result = measure_bar_image(source.image_bytes)
+            scope = arguments.get("observation_scope")
+            result = measure_bar_image(source.image_bytes, scope) if scope is not None else measure_bar_image(source.image_bytes)
+        except ObservationScopeError:
+            raise ToolFailure("invalid_observation_scope", "图像观察范围无效或不包含可观察像素。") from None
         except ValueError:
             raise ToolFailure("image_unavailable", "图像内容当前无法用于测量。", retryable=True) from None
         result.update({
@@ -140,7 +144,7 @@ def measure_bars_definition(
         name="measure_bars",
         description=(
             "测量指定附件或 Panel 中的二维柱状图，返回图像像素坐标下的柱体几何、基线、相对长度和置信度。"
-            "只能使用 source_kind 与 source_id 选择图像；警告和不确定结果由你判断，不会自动重试。"
+            "使用 observation_scope 包含或排除图像区域；省略时分析完整来源。警告和不确定结果由你判断，不会自动重试。"
         ),
         parameters_schema=SOURCE_PARAMETERS,
         result_schema=_RESULT,

@@ -10,6 +10,7 @@ from PIL import Image
 
 from figura.agent.request import AgentRequestBuilder
 from figura.agent.execution_state import RunExecutionStateService
+from figura.memory import AssistantMessage, MemoryToolCall
 from figura.shared.json_schema import canonical_json_dumps
 import figura.providers.validation as provider_validation
 from figura.providers import (
@@ -462,6 +463,34 @@ def test_request_keeps_fully_resolved_history_from_a_prior_registry_version(tmp_
     assert request.messages[1].tool_calls[0].name == "inspect"
     assert request.messages[2].role is MessageRole.TOOL
     assert request.messages[2].tool_call_id == "call-registry"
+
+
+def test_request_fails_closed_for_unresolved_call_from_an_older_registry_version(tmp_path) -> None:
+    store, coordinator, session, run = _app(tmp_path)
+    builder = _builder(store, coordinator)
+    unresolved = AssistantMessage(
+        run_id="prior-run",
+        run_ordinal=1,
+        source_record_id="prior-response",
+        content="",
+        tool_calls=(MemoryToolCall(
+            "old-pie-call",
+            "extract_pie_slices",
+            '{"image_path":"/private/chart.png"}',
+            0,
+            "figura-web-v3",
+        ),),
+    )
+
+    with pytest.raises(RunError) as error:
+        builder._provider_messages(
+            (unresolved,),
+            current_run=coordinator.read_run_state(session.session_id, run.run_id).run,
+            continuations={},
+            registry=_registry(version="figura-web-v4"),
+        )
+
+    assert error.value.code is RunErrorCode.UNSUPPORTED_PAYLOAD
 
 
 def test_request_preserves_all_complete_rounds_and_fails_when_history_cannot_fit(

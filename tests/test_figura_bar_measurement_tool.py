@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
 from PIL import Image, ImageDraw
@@ -21,8 +22,10 @@ from figura.sources.repository import SourcesRepository
 from figura.tools import ReplayEffect, ToolContext, ToolInvocation, ToolOutcome, ToolRegistry, ToolRuntime
 from figura.tools.limits import MAX_RESULT_BYTES
 from figura.tools.implementations.image import image_tool_definitions
+from figura.tools.implementations.extract_text import extract_text_definition
 from figura.tools.implementations.measure_bars import measure_bars_definition
 from figura.tools.implementations.measure_lines import measure_lines_definition
+from figura.tools.implementations.measure_pie import measure_pie_definition
 from figura.tools.implementations.measure_scatter import measure_scatter_definition
 
 
@@ -45,6 +48,18 @@ def _blank_bytes() -> bytes:
 
     output = io.BytesIO()
     Image.new("RGB", (300, 200), "white").save(output, format="PNG")
+    return output.getvalue()
+
+
+def _pie_chart_bytes() -> bytes:
+    import io
+
+    image = Image.new("RGB", (300, 200), "white")
+    draw = ImageDraw.Draw(image)
+    for start, end, color in ((0, 120, "#e53935"), (120, 240, "#43a047"), (240, 360, "#1e88e5")):
+        draw.pieslice((70, 30, 170, 130), start, end, fill=color)
+    output = io.BytesIO()
+    image.save(output, format="PNG")
     return output.getvalue()
 
 
@@ -88,11 +103,15 @@ def _invoke(
     source_id: str,
     call_id: str = "measure-call",
     tool_name: str = "measure_bars",
+    observation_scope: dict | None = None,
 ):
+    arguments = {"source_kind": source_kind, "source_id": source_id}
+    if observation_scope is not None:
+        arguments["observation_scope"] = observation_scope
     invocation = ToolInvocation(
         call_id,
         tool_name,
-        json.dumps({"source_kind": source_kind, "source_id": source_id}),
+        json.dumps(arguments),
     )
     return runtime.invoke(invocation, ToolContext(run_id, session_id, call_id))
 
@@ -162,13 +181,39 @@ def _commit_measurements(store, coordinator, session_id, run_id, registry, calls
     ).execute_pending(session_id, run_id)
 
 
-def test_measure_bars_definition_exposes_only_opaque_source_identity() -> None:
+def test_measure_bars_definition_exposes_source_identity_and_optional_scope() -> None:
     definition = measure_bars_definition(lambda *_: None, None, None)
     registry = ToolRegistry("measure-schema", (definition,))
 
     assert definition.replay_effect is ReplayEffect.REPLAY_SAFE
-    assert set(definition.parameters_schema["properties"]) == {"source_kind", "source_id"}
+    assert set(definition.parameters_schema["properties"]) == {"source_kind", "source_id", "observation_scope"}
     assert len(registry) == 1
+
+
+def test_measurement_tool_rejects_invalid_scope_without_unscoped_fallback(tmp_path) -> None:
+    (
+        _store, _coordinator, session, run, attachments, panels, execution_state,
+        _registry, _runtime, attachment,
+    ) = _setup(tmp_path)
+    definitions = (
+        measure_bars_definition(execution_state.for_run, attachments, panels),
+        measure_lines_definition(execution_state.for_run, attachments, panels),
+        measure_scatter_definition(execution_state.for_run, attachments, panels),
+    )
+
+    for definition in definitions:
+        runtime = ToolRuntime(ToolRegistry(f"invalid-scope-{definition.name}", (definition,)))
+        result = _invoke(
+            runtime,
+            run.run_id,
+            session.session_id,
+            "attachment",
+            attachment.attachment_id,
+            tool_name=definition.name,
+            observation_scope={},
+        )
+        assert result.outcome is ToolOutcome.FAILED
+        assert result.error.code == "invalid_observation_scope"
 
 
 def test_line_and_scatter_tools_use_the_same_authorized_source_contract(tmp_path) -> None:
@@ -184,7 +229,7 @@ def test_line_and_scatter_tools_use_the_same_authorized_source_contract(tmp_path
     runtime = ToolRuntime(registry)
 
     for definition in definitions:
-        assert set(definition.parameters_schema["properties"]) == {"source_kind", "source_id"}
+        assert set(definition.parameters_schema["properties"]) == {"source_kind", "source_id", "observation_scope"}
         execution = _invoke(
             runtime,
             run.run_id,
@@ -493,6 +538,73 @@ def test_execution_state_projects_ordered_committed_measurements_across_runs(tmp
     ]
 
 
+def test_execution_state_projects_pie_results_across_runs_but_excludes_ocr(tmp_path, monkeypatch) -> None:
+    import figura.tools.measurements.ocr as ocr_module
+
+    (
+        store, coordinator, session, first_run, attachments, panels, execution_state,
+        _registry, _runtime, attachment,
+    ) = _setup(tmp_path)
+    monkeypatch.setattr(ocr_module, "_engine", lambda _image: SimpleNamespace(
+        boxes=[], txts=[], scores=[],
+    ))
+    registry = ToolRegistry(
+        "figura-web-v4",
+        (
+            *image_tool_definitions(execution_state.for_run, attachments, panels),
+            extract_text_definition(execution_state.for_run, attachments, panels),
+            measure_bars_definition(execution_state.for_run, attachments, panels),
+            measure_lines_definition(execution_state.for_run, attachments, panels),
+            measure_scatter_definition(execution_state.for_run, attachments, panels),
+            measure_pie_definition(execution_state.for_run, attachments, panels),
+        ),
+    )
+    source = json.dumps({"source_kind": "attachment", "source_id": attachment.attachment_id})
+    _commit_measurements(
+        store,
+        coordinator,
+        session.session_id,
+        first_run.run_id,
+        registry,
+        (
+            ProviderToolCall("pie-success", "measure_pie", source),
+            ProviderToolCall("ocr-history-only", "extract_text", source),
+        ),
+    )
+    first_projection = execution_state.for_run(session.session_id, first_run.run_id).measurements
+    assert [item.tool_name for item in first_projection] == ["measure_pie"]
+    assert first_projection[0].outcome is ToolOutcome.SUCCEEDED
+
+    _finish_run(coordinator, session.session_id, first_run.run_id)
+    second_run = coordinator.create_run(
+        RunCreateRequest(
+            session_id=session.session_id,
+            text="继续查看饼图。",
+            attachment_ids=(),
+            provider_id=ProviderId.QWEN.value,
+            model_id=MODEL_IDS[ProviderId.QWEN],
+            idempotency_key="pie-projection-next-run",
+        )
+    )
+    _commit_measurements(
+        store,
+        coordinator,
+        session.session_id,
+        second_run.run_id,
+        registry,
+        (ProviderToolCall("pie-failed", "measure_pie", json.dumps({
+            "source_kind": "attachment",
+            "source_id": attachment.attachment_id,
+            "observation_scope": {},
+        })),),
+    )
+
+    projection = execution_state.for_run(session.session_id, second_run.run_id).measurements
+    assert [item.call_id for item in projection] == ["pie-success", "pie-failed"]
+    assert [item.outcome for item in projection] == [ToolOutcome.SUCCEEDED, ToolOutcome.FAILED]
+    assert projection[-1].error.code == "invalid_observation_scope"
+
+
 def test_measurement_feedback_uses_latest_batch_order_and_is_not_repeated(tmp_path) -> None:
     (
         store, coordinator, session, run, attachments, panels, execution_state,
@@ -563,6 +675,162 @@ def test_measurement_feedback_uses_latest_batch_order_and_is_not_repeated(tmp_pa
     ]) == 1
 
 
+def test_ocr_and_pie_feedback_is_rebuilt_only_for_the_latest_committed_batch(tmp_path, monkeypatch) -> None:
+    import figura.tools.measurements.ocr as ocr_module
+
+    (
+        store, coordinator, session, run, attachments, panels, execution_state,
+        _registry, _runtime, attachment,
+    ) = _setup(tmp_path, _pie_chart_bytes())
+    monkeypatch.setattr(ocr_module, "_engine", lambda _image: SimpleNamespace(
+        boxes=[[(140, 55), (190, 55), (190, 68), (140, 68)]],
+        txts=["Quarter 1"],
+        scores=[0.91],
+    ))
+    registry = ToolRegistry(
+        "figura-web-v4",
+        (
+            *image_tool_definitions(execution_state.for_run, attachments, panels),
+            extract_text_definition(execution_state.for_run, attachments, panels),
+            measure_pie_definition(execution_state.for_run, attachments, panels),
+        ),
+    )
+    source = json.dumps({"source_kind": "attachment", "source_id": attachment.attachment_id})
+    _commit_measurements(
+        store,
+        coordinator,
+        session.session_id,
+        run.run_id,
+        registry,
+        (
+            ProviderToolCall("ocr-feedback", "extract_text", source),
+            ProviderToolCall("pie-feedback", "measure_pie", source),
+        ),
+    )
+
+    request = AgentRequestBuilder(attachments, execution_state).build(
+        coordinator.read_run_state(session.session_id, run.run_id), registry
+    )
+    blocks = request.messages[-1].content
+    assert isinstance(blocks, tuple)
+    assert [block.text for block in blocks if hasattr(block, "text")] == [
+        "OCR 结果图像回看：extract_text；调用 ID：ocr-feedback。",
+        "测量结果图像回看：measure_pie；调用 ID：pie-feedback。",
+    ]
+    images = [block for block in blocks if isinstance(block, ImageBlock)]
+    assert len(images) == 2
+    original = attachments.resolve(session.session_id, attachment.attachment_id).image_bytes
+    assert all(block.image_bytes != original for block in images)
+    assert [item.tool_name for item in execution_state.for_run(session.session_id, run.run_id).measurements] == [
+        "measure_pie"
+    ]
+    assert all(
+        fact.payload.registry_version == "figura-web-v4"
+        for fact in coordinator.read_run_state(session.session_id, run.run_id).tool_facts
+        if fact.fact_kind is ToolFactKind.TOOL_CALL
+    )
+    assert all(
+        "image_bytes" not in fact.payload.result
+        for fact in coordinator.read_run_state(session.session_id, run.run_id).tool_facts
+        if fact.fact_kind is ToolFactKind.TOOL_RESULT
+        and isinstance(fact.payload, ToolResultFact)
+        and fact.payload.outcome is ToolOutcome.SUCCEEDED
+    )
+
+    _commit_measurements(
+        store,
+        coordinator,
+        session.session_id,
+        run.run_id,
+        registry,
+        (ProviderToolCall("later-load", "load_image", source),),
+    )
+    later = AgentRequestBuilder(attachments, execution_state).build(
+        coordinator.read_run_state(session.session_id, run.run_id), registry
+    )
+    latest_blocks = later.messages[-1].content
+    assert isinstance(latest_blocks, tuple)
+    assert len([block for block in latest_blocks if isinstance(block, ImageBlock)]) == 1
+    assert [block.text for block in latest_blocks if hasattr(block, "text")] == [
+        f"已加载图像 attachment:{attachment.attachment_id}（bars.png）。"
+    ]
+
+
+def test_ocr_and_pie_feedback_image_limit_fails_before_next_provider_attempt(tmp_path, monkeypatch) -> None:
+    import figura.providers.validation as provider_validation
+    import figura.tools.measurements.ocr as ocr_module
+
+    (
+        store, coordinator, session, run, attachments, panels, execution_state,
+        _registry, _runtime, attachment,
+    ) = _setup(tmp_path, _pie_chart_bytes())
+    monkeypatch.setattr(ocr_module, "_engine", lambda _image: SimpleNamespace(
+        boxes=[], txts=[], scores=[],
+    ))
+    registry = ToolRegistry(
+        "figura-web-v4",
+        (
+            extract_text_definition(execution_state.for_run, attachments, panels),
+            measure_pie_definition(execution_state.for_run, attachments, panels),
+        ),
+    )
+    source = json.dumps({"source_kind": "attachment", "source_id": attachment.attachment_id})
+    _commit_measurements(
+        store,
+        coordinator,
+        session.session_id,
+        run.run_id,
+        registry,
+        (
+            ProviderToolCall("ocr-limit", "extract_text", source),
+            ProviderToolCall("pie-limit", "measure_pie", source),
+        ),
+    )
+    prior_attempts = coordinator.read_run_state(session.session_id, run.run_id).provider_attempts
+    monkeypatch.setattr(provider_validation, "MAX_IMAGE_COUNT", 1)
+
+    with pytest.raises(RunError):
+        AgentRequestBuilder(attachments, execution_state).build(
+            coordinator.read_run_state(session.session_id, run.run_id), registry
+        )
+
+    assert coordinator.read_run_state(session.session_id, run.run_id).provider_attempts == prior_attempts
+
+
+def test_ocr_feedback_fails_if_authorized_source_disappears(tmp_path, monkeypatch) -> None:
+    import figura.tools.measurements.ocr as ocr_module
+
+    (
+        store, coordinator, session, run, attachments, panels, execution_state,
+        _registry, _runtime, attachment,
+    ) = _setup(tmp_path)
+    monkeypatch.setattr(ocr_module, "_engine", lambda _image: SimpleNamespace(
+        boxes=[], txts=[], scores=[],
+    ))
+    registry = ToolRegistry(
+        "figura-web-v4",
+        (extract_text_definition(execution_state.for_run, attachments, panels),),
+    )
+    source = json.dumps({"source_kind": "attachment", "source_id": attachment.attachment_id})
+    _commit_measurements(
+        store,
+        coordinator,
+        session.session_id,
+        run.run_id,
+        registry,
+        (ProviderToolCall("ocr-missing-source", "extract_text", source),),
+    )
+    prior_attempts = coordinator.read_run_state(session.session_id, run.run_id).provider_attempts
+    (store.data_root / "attachments" / f"{attachment.attachment_id}.bin").unlink()
+
+    with pytest.raises(RunError):
+        AgentRequestBuilder(attachments, execution_state).build(
+            coordinator.read_run_state(session.session_id, run.run_id), registry
+        )
+
+    assert coordinator.read_run_state(session.session_id, run.run_id).provider_attempts == prior_attempts
+
+
 def test_measurement_history_assembles_with_the_retained_registry_version(tmp_path) -> None:
     (
         store, coordinator, session, first_run, attachments, panels, execution_state,
@@ -599,12 +867,14 @@ def test_measurement_history_assembles_with_the_retained_registry_version(tmp_pa
         )
     )
     next_registry = ToolRegistry(
-        "figura-web-v3",
+        "figura-web-v4",
         (
             *image_tool_definitions(execution_state.for_run, attachments, panels),
+            extract_text_definition(execution_state.for_run, attachments, panels),
             measure_bars_definition(execution_state.for_run, attachments, panels),
             measure_lines_definition(execution_state.for_run, attachments, panels),
             measure_scatter_definition(execution_state.for_run, attachments, panels),
+            measure_pie_definition(execution_state.for_run, attachments, panels),
         ),
     )
     request = AgentRequestBuilder(attachments, execution_state).build(
@@ -619,9 +889,9 @@ def test_measurement_history_assembles_with_the_retained_registry_version(tmp_pa
     assert request.messages[2].tool_call_id == "historical-measurement"
     assert "当前 Session 图像清单" in request.messages[-1].content
     assert "measurements" not in request.messages[-1].content
-    assert [tool.name for tool in request.tools][-3:] == [
-        "measure_bars", "measure_lines", "measure_scatter"
-    ]
+    tool_names = {tool.name for tool in request.tools}
+    assert {"extract_text", "measure_bars", "measure_lines", "measure_scatter", "measure_pie"} <= tool_names
+    assert "extract_pie_slices" not in tool_names
     assert all(
         not isinstance(block, ImageBlock)
         for message in request.messages

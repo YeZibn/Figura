@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -47,7 +48,7 @@ _SYSTEM_INSTRUCTION = Path(__file__).with_name("assets").joinpath("system-v1.md"
     encoding="utf-8"
 )
 _MAX_COMPLETION_TOKENS = 4096
-_MEASUREMENT_TOOLS = frozenset({"measure_bars", "measure_lines", "measure_scatter"})
+_MEASUREMENT_TOOLS = frozenset({"measure_bars", "measure_lines", "measure_scatter", "measure_pie"})
 
 
 class AgentRequestBuilder:
@@ -262,6 +263,31 @@ class AgentRequestBuilder:
                 )
                 blocks.extend((TextBlock(f"已加载图像 {kind}:{source_id}（{name}）。"), image))
                 continue
+            if call.tool_name == "extract_text":
+                kind, source_id = _tool_source_identity(call.arguments_json)
+                if (
+                    result.result.get("source_kind") != kind
+                    or result.result.get("source_id") != source_id
+                ):
+                    raise RunError(RunErrorCode.INTEGRITY_ERROR)
+                image = self._resolve_source_image(
+                    state.run.session_id, kind, source_id, available_attachments, available_panels
+                )
+                try:
+                    annotated_bytes = render_measurement_overlay(
+                        image.image_bytes,
+                        result.result,
+                        call.tool_name,
+                    )
+                except (TypeError, ValueError, OSError):
+                    raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD) from None
+                if not annotated_bytes or len(annotated_bytes) > MAX_IMAGE_BYTES:
+                    raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
+                blocks.extend((
+                    TextBlock(f"OCR 结果图像回看：extract_text；调用 ID：{call.call_id}。"),
+                    ImageBlock("image/png", annotated_bytes),
+                ))
+                continue
             if call.tool_name not in _MEASUREMENT_TOOLS:
                 continue
             observation = observations.get(call.call_id)
@@ -344,6 +370,32 @@ def _user_text(text: str, attachment_ids: tuple[str, ...]) -> str:
     return f"{text}\n\n本条消息附件 ID：{', '.join(attachment_ids)}"
 
 
+def _tool_source_identity(arguments_json: str) -> tuple[str, str]:
+    def reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        result: dict[str, object] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate tool argument")
+            result[key] = value
+        return result
+
+    try:
+        arguments = json.loads(arguments_json, object_pairs_hook=reject_duplicate_keys)
+    except (TypeError, ValueError, RecursionError, OverflowError):
+        raise RunError(RunErrorCode.INTEGRITY_ERROR) from None
+    if not isinstance(arguments, dict):
+        raise RunError(RunErrorCode.INTEGRITY_ERROR)
+    kind, source_id = arguments.get("source_kind"), arguments.get("source_id")
+    if (
+        not isinstance(kind, str)
+        or kind not in {"attachment", "panel"}
+        or not isinstance(source_id, str)
+        or not source_id
+    ):
+        raise RunError(RunErrorCode.INTEGRITY_ERROR)
+    return kind, source_id
+
+
 def _image_inventory(state: RunExecutionState) -> str:
     attachments = "\n".join(
         f"- 附件 {item.attachment_id}：{item.filename}"
@@ -357,6 +409,6 @@ def _image_inventory(state: RunExecutionState) -> str:
         "当前 Session 图像清单（这里只是名称和 ID，尚未提供图像内容）。\n"
         f"可用附件：\n{attachments}\n"
         f"已提交 Panel：\n{panels}\n"
-        "需要直接查看原始图像时使用 load_image；measure_bars、measure_lines、measure_scatter 可直接选择来源进行测量，无需先加载图像。"
+        "需要查看原图时使用 load_image；extract_text、measure_bars、measure_lines、measure_scatter、measure_pie 可直接选择来源观察，无需先加载图像。"
         "矩形也用四点多边形提交给 decompose_chart_image。"
     )

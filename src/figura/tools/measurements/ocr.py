@@ -9,6 +9,7 @@ from typing import Any
 
 import numpy as np
 
+from .observation_scope import contains_observed_box
 
 _MAX_OCR_SNIPPETS = 512
 _MAX_OCR_TEXT_LENGTH = 128
@@ -33,7 +34,10 @@ _engine: Any = None
 _engine_lock = Lock()
 
 
-def recognize_text(image_rgb: np.ndarray) -> OCRObservation:
+def recognize_text(
+    image_rgb: np.ndarray,
+    observation_mask: np.ndarray | None = None,
+) -> OCRObservation:
     """Return bounded OCR snippets without exposing provider-facing images."""
     if (
         not isinstance(image_rgb, np.ndarray)
@@ -67,6 +71,10 @@ def recognize_text(image_rgb: np.ndarray) -> OCRObservation:
             confidence = float(score)
             if not normalized_text or bbox is None or not isfinite(confidence):
                 continue
+            if not contains_observed_box(bbox, observation_mask):
+                continue
+            if len(normalized_text) > _MAX_OCR_TEXT_LENGTH:
+                truncated = True
             snippets.append(
                 OCRSnippet(
                     f"text_{index}",

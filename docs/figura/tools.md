@@ -4,14 +4,14 @@
 
 ## 1. 职责与边界
 
-`ToolRegistry` 保存有序、版本化的 `ToolDefinition`；`ToolRuntime` 解析和验证调用参数，运行同步 handler，验证有界成功结果或返回安全错误。`DurableToolExecutor` 属于 Run 执行边界，负责在调用前后提交事实。当前工作树中的 Figura Gateway Registry 版本为 `figura-web-v3`，按顺序包含 `load_image`、`decompose_chart_image`、`measure_bars`、`measure_lines` 和 `measure_scatter`。三种测量工具共享 Attachment/Panel 来源授权、OCR 文字观察与笛卡尔轴识别，并分别生成柱、线、散点几何及有门槛的数值坐标；图表生成工具尚未实现。
+`ToolRegistry` 保存有序、版本化的 `ToolDefinition`；`ToolRuntime` 解析和验证调用参数，运行同步 handler，验证有界成功结果或返回安全错误。`DurableToolExecutor` 属于 Run 执行边界，负责在调用前后提交事实。当前工作树中的 Figura Gateway Registry 版本为 `figura-web-v4`，按顺序包含 `load_image`、`decompose_chart_image`、`extract_text`、`measure_bars`、`measure_lines`、`measure_scatter` 和 `measure_pie`。OCR 与四种测量工具均可读取 Run 已授权的 Attachment/Panel，并接受可选的多边形观察范围；柱、线、散点共享笛卡尔轴识别，Pie 使用极坐标扇区观察。该版本实现目前存在于未提交工作树。
 
 ## 2. 内部流转
 
-1. **注册**：Gateway 组装有序 `ToolDefinition`，检查名称唯一、参数与结果 JSON Schema、描述及总大小。当前工具按 `load_image`、`decompose_chart_image`、`measure_bars`、`measure_lines`、`measure_scatter` 顺序注册；Registry 对外提供只读版本、定义顺序和按名查找。
+1. **注册**：Gateway 组装有序 `ToolDefinition`，检查名称唯一、参数与结果 JSON Schema、描述及总大小。当前工具按 `load_image`、`decompose_chart_image`、`extract_text`、`measure_bars`、`measure_lines`、`measure_scatter`、`measure_pie` 顺序注册；Registry 对外提供只读版本、定义顺序和按名查找。
 2. **模型投影**：Agent 把允许的工具定义映射为 Provider 的 `FunctionTool`；模型只见名称、说明与参数 Schema，不见 handler、结果 Schema 或本地上下文。
 3. **调用**：`ToolInvocation` 的 call ID、名称和 JSON 参数进入 `ToolRuntime`；解析拒绝重复键、无效数值与不符合 Schema 的内容。handler 只收到已验证参数及 `ToolContext`。
-4. **结果与恢复**：成功时结果必须是有界 JSON 对象；失败时返回 `ToolExecutionError`。图像读取和三种测量为 `replay_safe`；Panel 分割为 `idempotent_local_write`，同一 call-scoped 幂等键恢复时复用原 Panel ID。测量没有外部副作用，恢复重放会重新读取授权图像源并运行对应传感器。结果超出既有大小上限时整体拒绝，不静默截断或删减观测。`replay_effect` 决定不确定结果能否安全重放或必须显式协调；ToolRuntime 自身不拥有 Run checkpoint。
+4. **结果与恢复**：成功时结果必须是有界 JSON 对象；失败时返回 `ToolExecutionError`。图像读取、OCR 与四种测量为 `replay_safe`；Panel 分割为 `idempotent_local_write`，同一 call-scoped 幂等键恢复时复用原 Panel ID。观察工具没有外部副作用，恢复重放会重新读取授权图像源并运行对应处理。结果超出既有大小上限时整体拒绝，不静默截断或删减观测。`replay_effect` 决定不确定结果能否安全重放或必须显式协调；ToolRuntime 自身不拥有 Run checkpoint。
 
 ## 3. 模型关系与共同规则
 
@@ -86,7 +86,7 @@
 
 ## 6. 图像与测量工具合同
 
-图像适配器在 [image.py](../../src/figura/tools/implementations/image.py)；测量适配器分别在 [measure_bars.py](../../src/figura/tools/implementations/measure_bars.py)、[measure_lines.py](../../src/figura/tools/implementations/measure_lines.py) 和 [measure_scatter.py](../../src/figura/tools/implementations/measure_scatter.py)。共享来源解析、结果 Schema 和测量传感器分别见 [measurement_source.py](../../src/figura/tools/implementations/measurement_source.py)、[measurement_schema.py](../../src/figura/tools/implementations/measurement_schema.py) 与 tools/measurements/。Bootstrap 注入 RunExecutionStateService、Attachment Service 和 Panel Service。handler 先用目标 Run 的 Session 清单授权，再由 Sources 验证所有权并读取图像；模型不能提交路径、URL 或图片字节。
+图像适配器在 [image.py](../../src/figura/tools/implementations/image.py)；文字与测量适配器分别在 [extract_text.py](../../src/figura/tools/implementations/extract_text.py)、[measure_bars.py](../../src/figura/tools/implementations/measure_bars.py)、[measure_lines.py](../../src/figura/tools/implementations/measure_lines.py)、[measure_scatter.py](../../src/figura/tools/implementations/measure_scatter.py) 和 [measure_pie.py](../../src/figura/tools/implementations/measure_pie.py)。共享来源解析、输入/结果 Schema、观察范围与传感器分别见 [measurement_source.py](../../src/figura/tools/implementations/measurement_source.py)、[measurement_schema.py](../../src/figura/tools/implementations/measurement_schema.py) 与 tools/measurements/。Bootstrap 注入 RunExecutionStateService、Attachment Service 和 Panel Service。handler 先用目标 Run 的 Session 清单授权，再由 Sources 验证所有权并读取图像；模型不能提交路径、URL 或图片字节。
 
 测量结果是有界 JSON。成功结果随 ToolResultFact.result 持久化并通过 Session Memory 的 ToolMessage 进入后续对话；Agent 的 MeasurementObservation 只建立调用期索引，不拥有结果字段或第二份存储。结果不含图像字节、覆盖图或本机路径，也没有单独的测量 Web API。所有 Schema 对象拒绝未声明属性；超出 ToolRuntime 结果大小限制时整体失败，不静默截断字段或观测。
 
@@ -129,7 +129,7 @@
 
 #### OCRSnippet 与 OCRObservation
 
-OCR 只提供轴刻度、轴标签和图例关联候选，不把原始图片发给 Provider。当前实现每次最多保留 512 个片段，每个文字最多 128 字符；置信度限制在 0–1。OCR 不可用或失败时，几何测量仍可继续；候选截断会进入测量 warnings。
+OCR 既为笛卡尔/Pie 测量提供轴刻度、标签与关联候选，也由 `extract_text` 作为独立的有界文字观察工具暴露；不把原始图片发给 Provider。当前实现每次最多保留 512 个片段，每个文字最多 128 字符；置信度限制在 0–1。OCR 不可用或失败时，独立工具返回 `available: false`，几何测量仍可继续；候选截断会进入测量 warnings。
 
 | 完整字段路径 | 类型、默认与约束 | 含义 | 写入者 → 权威位置 → 读取者 |
 |---|---|---|---|
@@ -141,20 +141,49 @@ OCR 只提供轴刻度、轴标签和图例关联候选，不把原始图片发�
 | OCRObservation.available | bool，无默认 | 本次 OCR 调用是否可用；不可用不阻止几何分析 | OCR recognizer → 调用期内存 → 测量传感器 |
 | OCRObservation.truncated | bool，默认 False | 超过候选上限时为 True；对应测量结果会增加警告 | OCR recognizer → 调用期内存 → 测量 warnings |
 
-### 三种测量的共同输入与结果字段
+### 五种观察工具的共同输入与范围
 
-柱、线、散点测量共享 source 参数、轴观察、刻度字段、标定字段、置信度结构。measure_bars、measure_lines、measure_scatter 的结果 JSON 都在顶层展开 measurement_schema.py 的 MEASUREMENT_PROPERTIES；它不是一个嵌套输出对象。下表的路径以该 Schema 片段为根，逐项对应三个结果的同名顶层字段或嵌套字段。
+`extract_text`、`measure_bars`、`measure_lines`、`measure_scatter` 与 `measure_pie` 共享来源参数和可选 `observation_scope`。柱、线、散点结果在顶层展开 `measurement_schema.py` 的 `MEASUREMENT_PROPERTIES`；它不是一个嵌套输出对象。下表的路径以该 Schema 片段为根，逐项对应三种笛卡尔结果的同名顶层字段或嵌套字段。Pie 使用自己的极坐标结果合同。
 
 所有 JSON 结果字段的权威位置均为对应 ToolResultFact.result；Provider 模型通过 Memory ToolMessage 读取，Agent 的 MeasurementObservation 引用完整成功对象，下一轮标注器读取成功测量对象。source_kind、source_id、coordinate_system 由来源适配器写入，其余共同字段由传感器写入。对象字段均必需，除明示 nullable 外不以缺省代替 null。
 
 #### 来源参数
 
-三个 measure 工具都只接受下列必需字段，拒绝额外属性，并且不要求先调用 load_image。
+五个观察工具都接受下列 `source_kind`、`source_id` 和可选范围字段，拒绝额外属性，并且不要求先调用 `load_image`。
 
 | 完整字段路径 | 类型、约束 | 含义 | 写入者 → 权威位置 → 读取者 |
 |---|---|---|---|
 | SOURCE_PARAMETERS.source_kind | string，枚举 attachment、panel | 选择来源服务 | Provider 模型 → ToolCallFact / ToolInvocation → 来源解析器 |
 | SOURCE_PARAMETERS.source_id | string，长度 1–128 | 选定来源的不透明 ID，必须命中 RunExecutionState 授权清单 | Provider 模型 → ToolCallFact / ToolInvocation → 来源解析器；未授权时不读字节 |
+| SOURCE_PARAMETERS.observation_scope | 对象，可选；仅允许 include、exclude | 对图像指定本次调用期观察范围；省略时观察完整来源 | Provider 模型 → ToolCallFact.arguments_json / ToolInvocation → handler 校验 → 像素 mask；不写入 RunExecutionState |
+| OBSERVATION_SCOPE.include | Polygon 数组，可选；若存在为 1–4 个 Polygon | 多个包含区域的并集；未提供 include 时默认包含全图 | Provider 模型 → ToolCallFact.arguments_json → 范围解析器 |
+| OBSERVATION_SCOPE.exclude | Polygon 数组，可选；若存在为 1–4 个 Polygon | 多个排除区域的并集；与 include 重叠时排除优先 | Provider 模型 → ToolCallFact.arguments_json → 范围解析器 |
+| OBSERVATION_SCOPE.include[] / OBSERVATION_SCOPE.exclude[] | `ScopePoint[]`；每个 Polygon 含 3–32 个点 | 一个闭合观察多边形；坐标按所选来源图像宽高归一化到 0–1000 | Provider 模型 → ToolCallFact.arguments_json → 原尺寸 mask 构造器 |
+| OBSERVATION_SCOPE.include[][] / OBSERVATION_SCOPE.exclude[][] | 整数二元组 `[x, y]`；每项 0–1000 | 一个归一化顶点；额外维度、浮点数和越界值拒绝 | Provider 模型 → ToolCallFact.arguments_json → 原尺寸 mask 构造器 |
+
+范围对象本身若同时缺少 `include` 与 `exclude`、包含未知字段、数组/点数越界或结果掩码不含任何像素，工具返回有界结构化失败，不会回退到全图分析。每个顶点按原始图像尺寸栅格化；处理保留原图尺寸且不裁剪缩放，输出框和几何继续使用完整 Attachment/Panel 坐标。掩码外像素不作为几何、OCR 或标签关联证据；OCR 文字框必须完整落在有效区域内才会保留。
+
+#### extract_text 结果字段
+
+独立 OCR 工具返回受限文字观察；结果整体是 `ToolResultFact.result`，字段由 OCR handler 写入，模型从 ToolMessage 读取，Agent 仅用其授权来源和结果临时重建标注图。对象拒绝未声明字段；OCR 未完成仍是成功的工具结果，使用 `available: false` 和空 snippets 表示，不伪造识别文本。
+
+| 完整字段路径 | 类型、必填与约束 | 含义 | 写入者 → 权威位置 → 读取者 |
+|---|---|---|---|
+| `extract_text.result.source_kind` | string，必填；`attachment` 或 `panel` | 实际授权来源种类 | 来源适配器 → `ToolResultFact.result` → Memory ToolMessage / 标注器 |
+| `extract_text.result.source_id` | string，必填；长度 1–128 | 实际授权来源 ID | 来源适配器 → `ToolResultFact.result` → Memory ToolMessage / 标注器 |
+| `extract_text.result.image_size` | object，必填；仅含 `width`、`height` | 完整来源图像尺寸 | OCR handler → `ToolResultFact.result` → Agent / Memory |
+| `extract_text.result.image_size.width` | integer，必填；1–100000 | 来源图像宽度，像素 | OCR handler → `ToolResultFact.result` → Agent / Memory |
+| `extract_text.result.image_size.height` | integer，必填；1–100000 | 来源图像高度，像素 | OCR handler → `ToolResultFact.result` → Agent / Memory |
+| `extract_text.result.coordinate_system` | string，必填；`attachment_px` 或 `panel_px` | `bbox_px` 使用的完整源图坐标系 | 来源适配器 → `ToolResultFact.result` → Agent / Memory |
+| `extract_text.result.available` | bool，必填 | 本次 OCR 是否完成；完成但无文字时仍为 true | OCR recognizer → `ToolResultFact.result` → Agent / Memory |
+| `extract_text.result.truncated` | bool，必填 | 超过 512 片段或单段 128 字符限制时为 true | OCR recognizer → `ToolResultFact.result` → Agent / Memory |
+| `extract_text.result.snippets` | OCRSnippet[]，必填；最多 512 项 | 有序文字及像素框；无识别文字或 OCR 不可用时为空 | OCR recognizer / handler → `ToolResultFact.result` → Memory / 标注器 |
+| `extract_text.result.snippets[].snippet_id` | string，必填；长度 1–32；本结果内稳定唯一 | 片段的结果内身份 | OCR recognizer → `ToolResultFact.result` → Memory / 标注器 |
+| `extract_text.result.snippets[].text` | string，必填；1–128 字符 | 截断后的 OCR 文本 | OCR recognizer → `ToolResultFact.result` → Memory / 标注器 |
+| `extract_text.result.snippets[].bbox_px` | integer[4]，必填；四项各 0–100000，输出宽高至少为 1 | 完整源图中的 `[x, y, width, height]` 文字框 | OCR recognizer → `ToolResultFact.result` → Memory / 标注器 |
+| `extract_text.result.snippets[].confidence` | number，必填；0–1 | 识别置信度 | OCR recognizer → `ToolResultFact.result` → Memory |
+
+`available: true` 且 `snippets: []` 表示 OCR 完成但未识别到文本；`available: false` 且 `snippets: []` 表示 OCR 不可用或未能完成。授权失败和图像读取失败走有界结构化工具错误，不伪装成 OCR 空结果。
 
 #### MEASUREMENT_PROPERTIES 共同结果字段
 
@@ -296,8 +325,40 @@ OCR 只提供轴刻度、轴标签和图例关联候选，不把原始图片发�
 | measure_scatter.result.series[].points[].confidence | number，必填；0–1 | 点检测置信度 | 散点传感器 |
 | measure_scatter.result.series[].points[].flags | string 数组，必填；每项为 merged、occluded、dense、overlap 之一 | 可见重叠、融合或密集不确定性 | 散点传感器 |
 
-### MeasurementOverlay 与失败边界
+### measure_pie
 
-视觉反馈不是新的工具结果或持久模型。AgentRequestBuilder 只检查当前 Run 最新模型响应对应的完整已提交工具批次：成功 load_image 的同一来源去重后还原原图；每个成功测量调用各还原其被授权的源图并绘制对应几何、状态、首条警告、工具名和 call ID。混合批次仍按调用顺序；更早批次和旧 Run 的图像不再附加。PNG 在调用期内生成，不写 ToolResultFact、RunExecutionState、Panel 或 Web DTO。
+测量授权来源中的普通二维圆形饼图。结果采用源图坐标中的圆心/半径和极坐标扇区，不创建笛卡尔轴，也不从 OCR 标签、颜色或图形外观反推源数据值。`ratio` 只表示 `sweep_angle_deg / 360`：总角度覆盖至少 0.80 且扇区平均径向边界支持至少 0.56 时才为非空；整体状态为 `measured` 还要求所有已检测扇区比例非空、扇区总角度与 360 度相差不超过 12 度、非空比例之和与 1.0 相差不超过 0.035。证据不足时保留可见角度并以 `partial`、空比例和警告表达不确定性；透视、3D、爆炸、椭圆及甜甜圈形状以 `unsupported` 表达。观察范围同时限制几何、OCR 与标签关联。结果 Schema 拒绝额外字段。
 
-来源 ID 未授权时 handler 在读取图像字节前返回有界工具失败。可读图像但没有候选时以 no_evidence 成功返回；不支持或证据不足以 partial/unsupported 和 warnings 表达。OCR 不可用只意味着缺少 OCR 支持，不阻止几何候选；标注源图缺失、图像尺寸与提交结果不符、覆盖图无效或请求图片超限时，Agent 在 Provider attempt claim 前失败。ToolDefinition 与全部输入/结果 Schema 由 [测量适配器](../../src/figura/tools/implementations/measure_bars.py)、[折线适配器](../../src/figura/tools/implementations/measure_lines.py)、[散点适配器](../../src/figura/tools/implementations/measure_scatter.py)定义；主规格分别见 [柱状图](../../openspec/figura/openspec/specs/bar-chart-measurement/spec.md)、[折线图](../../openspec/figura/openspec/specs/line-chart-measurement/spec.md)和[散点图](../../openspec/figura/openspec/specs/scatter-chart-measurement/spec.md)。
+| 完整字段路径 | 类型、必填与约束 | 含义 | 写入者 → 权威位置 → 读取者 |
+|---|---|---|---|
+| `measure_pie.result.source_kind` | string，必填；`attachment` 或 `panel` | 实际授权来源种类 | 来源适配器 → `ToolResultFact.result` → Memory / Agent 投影 |
+| `measure_pie.result.source_id` | string，必填；长度 1–128 | 实际授权来源 ID | 来源适配器 → `ToolResultFact.result` → Memory / Agent 投影 |
+| `measure_pie.result.image_size` | object，必填；仅含 `width`、`height` | 完整来源图像尺寸 | Pie 传感器 → `ToolResultFact.result` → Memory / Agent |
+| `measure_pie.result.image_size.width` | integer，必填；1–100000 | 来源图像宽度，像素 | Pie 传感器 → `ToolResultFact.result` → Memory / Agent |
+| `measure_pie.result.image_size.height` | integer，必填；1–100000 | 来源图像高度，像素 | Pie 传感器 → `ToolResultFact.result` → Memory / Agent |
+| `measure_pie.result.coordinate_system` | string，必填；`attachment_px` 或 `panel_px` | 圆心、半径相关位置所用源图坐标系 | 来源适配器 → `ToolResultFact.result` → Memory / 标注器 |
+| `measure_pie.result.status` | string，必填；`measured`、`partial`、`no_evidence`、`unsupported` 之一 | 可支持的扇区观察完整性 | Pie 传感器 → `ToolResultFact.result` → Agent / Memory |
+| `measure_pie.result.plot_region` | object 或 null，必填 | 可识别的圆形区域；无法建立时为 null | Pie 传感器 → `ToolResultFact.result` → Memory / 标注器 |
+| `measure_pie.result.plot_region.center_px` | number[2]，条件必填；每项 0–100000 | `[x, y]` 圆心；`x` 向右、`y` 向下 | Pie 传感器 → `ToolResultFact.result` → Memory / 标注器 |
+| `measure_pie.result.plot_region.radius_px` | number，条件必填；`0 < value ≤ 100000` | 源图像像素半径 | Pie 传感器 → `ToolResultFact.result` → Memory / 标注器 |
+| `measure_pie.result.sectors` | PieSector[]，必填；最多 512 项 | 按起始角升序排列的可见扇区 | Pie 传感器 → `ToolResultFact.result` → Memory / Agent / 标注器 |
+| `measure_pie.result.sectors[].id` | integer，必填；1–512 | 本结果中的扇区 ID | Pie 传感器 → `ToolResultFact.result` → Memory / 标注器 |
+| `measure_pie.result.sectors[].start_angle_deg` | number，必填；`0 ≤ value < 360` | 扇区起始角；0 度朝图像 12 点方向，顺时针增加 | Pie 传感器 → `ToolResultFact.result` → Memory / 标注器 |
+| `measure_pie.result.sectors[].sweep_angle_deg` | number，必填；`0 < value ≤ 360` | 扇区覆盖角度 | Pie 传感器 → `ToolResultFact.result` → Memory / 标注器 |
+| `measure_pie.result.sectors[].ratio` | number 或 null，必填；非空值 0–1 | 有足够角度覆盖和边界证据时的角度占比 | Pie 传感器 → `ToolResultFact.result` → Agent / Memory |
+| `measure_pie.result.sectors[].color` | string 或 null，必填；非空值匹配 `#RRGGBB` | 扇区近似颜色，不代表数据值 | Pie 传感器 → `ToolResultFact.result` → Agent / Memory / 标注器 |
+| `measure_pie.result.sectors[].label_text` | string 或 null，必填；非空值最多 128 字符 | 与扇区关联的 OCR 文字 | OCR / 扇区关联 → `ToolResultFact.result` → Agent / Memory / 标注器 |
+| `measure_pie.result.sectors[].label_confidence` | number 或 null，必填；非空值 0–1 | OCR 标签与扇区的关联置信度 | 扇区关联 → `ToolResultFact.result` → Agent / Memory |
+| `measure_pie.result.sectors[].confidence` | number，必填；0–1 | 扇区几何/分割置信度 | Pie 传感器 → `ToolResultFact.result` → Agent / Memory |
+| `measure_pie.result.confidence` | object，必填；恰含 `overall`、`geometry`、`segmentation`、`association` | 饼图结果的分维度置信度 | Pie 传感器 → `ToolResultFact.result` → Agent / Memory |
+| `measure_pie.result.confidence.overall` | number，必填；0–1 | 综合置信度 | Pie 传感器 → `ToolResultFact.result` → Agent / Memory |
+| `measure_pie.result.confidence.geometry` | number，必填；0–1 | 圆形几何识别置信度 | Pie 传感器 → `ToolResultFact.result` → Agent / Memory |
+| `measure_pie.result.confidence.segmentation` | number，必填；0–1 | 扇区分割和覆盖置信度 | Pie 传感器 → `ToolResultFact.result` → Agent / Memory |
+| `measure_pie.result.confidence.association` | number，必填；0–1 | OCR 标签关联置信度 | Pie 传感器 → `ToolResultFact.result` → Agent / Memory |
+| `measure_pie.result.warnings` | string[]，必填；最多 32 项，每项最多 256 字符 | OCR 不可用、证据缺口或不支持形状等限制 | Pie 传感器 → `ToolResultFact.result` → Agent / Memory |
+
+### 观察标注图与失败边界
+
+视觉反馈不是新的工具结果或持久模型。AgentRequestBuilder 只检查当前 Run 最新模型响应对应的完整已提交工具批次：成功 `load_image` 的同一来源去重后还原原图；每个成功 `extract_text` 和四种测量调用各还原其被授权源图并绘制对应文字框或几何、状态、首条警告、工具名和 call ID。混合批次仍按调用顺序；更早批次和旧 Run 的图像不再附加。PNG 在调用期内生成，不写 ToolResultFact、RunExecutionState、Panel 或 Web DTO。
+
+来源 ID 未授权时 handler 在读取图像字节前返回有界工具失败。可读图像但没有候选时以 `no_evidence` 成功返回；不支持或证据不足以 `partial`/`unsupported` 和 warnings 表达。独立 OCR 不可用时返回 `available: false`，不会阻止笛卡尔或 Pie 几何候选；标注源图缺失、图像尺寸与提交结果不符、覆盖图无效或请求图片超限时，Agent 在 Provider attempt claim 前失败。ToolDefinition 与输入/结果 Schema 由各工具适配器及共享 Schema 定义；主规格见 [OCR](../../openspec/figura/openspec/specs/ocr-text-observation/spec.md)、[柱状图](../../openspec/figura/openspec/specs/bar-chart-measurement/spec.md)、[折线图](../../openspec/figura/openspec/specs/line-chart-measurement/spec.md)、[散点图](../../openspec/figura/openspec/specs/scatter-chart-measurement/spec.md)和[饼图](../../openspec/figura/openspec/specs/pie-chart-measurement/spec.md)。

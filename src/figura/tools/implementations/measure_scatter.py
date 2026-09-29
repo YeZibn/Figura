@@ -10,6 +10,7 @@ from figura.sources.panels import FiguraPanelService
 
 from ..contracts import ReplayEffect, ToolContext, ToolDefinition, ToolFailure
 from ..measurements.scatter import measure_scatter_image
+from ..measurements.observation_scope import ObservationScopeError
 from .measurement_schema import COMMON_REQUIRED, MEASUREMENT_PROPERTIES, PIXEL_POINT, SOURCE_PARAMETERS
 from .measurement_source import resolve_measurement_source
 
@@ -71,7 +72,10 @@ def measure_scatter_definition(
             context.run_id,
         )
         try:
-            result = measure_scatter_image(source.image_bytes)
+            scope = arguments.get("observation_scope")
+            result = measure_scatter_image(source.image_bytes, scope) if scope is not None else measure_scatter_image(source.image_bytes)
+        except ObservationScopeError:
+            raise ToolFailure("invalid_observation_scope", "图像观察范围无效或不包含可观察像素。") from None
         except ValueError:
             raise ToolFailure("image_unavailable", "图像内容当前无法用于测量。", retryable=True) from None
         result.update({
@@ -85,7 +89,7 @@ def measure_scatter_definition(
         name="measure_scatter",
         description=(
             "测量指定附件或 Panel 中的二维散点图，返回源图像像素坐标下的可见点、系列及坐标轴观察。"
-            "重叠、遮挡或密集标记会作为不确定标记；未标定坐标保留为空。"
+            "使用 observation_scope 包含或排除图像区域；省略时分析完整来源。重叠、遮挡或密集标记会作为不确定标记。"
         ),
         parameters_schema=SOURCE_PARAMETERS,
         result_schema=_RESULT,
