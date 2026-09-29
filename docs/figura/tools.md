@@ -4,14 +4,14 @@
 
 ## 1. 职责与边界
 
-`ToolRegistry` 保存有序、版本化的 `ToolDefinition`；`ToolRuntime` 解析和验证调用参数，运行同步 handler，验证有界成功结果或返回安全错误。`DurableToolExecutor` 属于 Run 执行边界，负责在调用前后提交事实。当前工作树中的 Figura Gateway Registry 版本为 `figura-web-v2`，按顺序包含 `load_image`、`decompose_chart_image` 和 `measure_bars`。柱状图测量使用无路径输入的像素传感器；图表生成工具尚未实现。
+`ToolRegistry` 保存有序、版本化的 `ToolDefinition`；`ToolRuntime` 解析和验证调用参数，运行同步 handler，验证有界成功结果或返回安全错误。`DurableToolExecutor` 属于 Run 执行边界，负责在调用前后提交事实。当前工作树中的 Figura Gateway Registry 版本为 `figura-web-v3`，按顺序包含 `load_image`、`decompose_chart_image`、`measure_bars`、`measure_lines` 和 `measure_scatter`。三种测量工具共享 Attachment/Panel 来源授权、OCR 文字观察与笛卡尔轴识别，并分别生成柱、线、散点几何及有门槛的数值坐标；图表生成工具尚未实现。
 
 ## 2. 内部流转
 
-1. **注册**：Gateway 组装有序 `ToolDefinition`，检查名称唯一、参数与结果 JSON Schema、描述及总大小。当前工具按 `load_image`、`decompose_chart_image`、`measure_bars` 顺序注册；Registry 对外提供只读版本、定义顺序和按名查找。
+1. **注册**：Gateway 组装有序 `ToolDefinition`，检查名称唯一、参数与结果 JSON Schema、描述及总大小。当前工具按 `load_image`、`decompose_chart_image`、`measure_bars`、`measure_lines`、`measure_scatter` 顺序注册；Registry 对外提供只读版本、定义顺序和按名查找。
 2. **模型投影**：Agent 把允许的工具定义映射为 Provider 的 `FunctionTool`；模型只见名称、说明与参数 Schema，不见 handler、结果 Schema 或本地上下文。
 3. **调用**：`ToolInvocation` 的 call ID、名称和 JSON 参数进入 `ToolRuntime`；解析拒绝重复键、无效数值与不符合 Schema 的内容。handler 只收到已验证参数及 `ToolContext`。
-4. **结果与恢复**：成功时结果必须是有界 JSON 对象；失败时返回 `ToolExecutionError`。图像读取和 `measure_bars` 为 `replay_safe`；Panel 分割为 `idempotent_local_write`，同一 call-scoped 幂等键恢复时复用原 Panel ID。测量没有外部副作用，恢复重放会重新读取授权图像源并运行像素传感器。`replay_effect` 决定不确定结果能否安全重放或必须显式协调；ToolRuntime 自身不拥有 Run checkpoint。
+4. **结果与恢复**：成功时结果必须是有界 JSON 对象；失败时返回 `ToolExecutionError`。图像读取和三种测量为 `replay_safe`；Panel 分割为 `idempotent_local_write`，同一 call-scoped 幂等键恢复时复用原 Panel ID。测量没有外部副作用，恢复重放会重新读取授权图像源并运行对应传感器。结果超出既有大小上限时整体拒绝，不静默截断或删减观测。`replay_effect` 决定不确定结果能否安全重放或必须显式协调；ToolRuntime 自身不拥有 Run checkpoint。
 
 ## 3. 模型关系与共同规则
 
@@ -86,92 +86,218 @@
 
 ## 6. 图像与测量工具合同
 
-图像工具实现在 [`tools/implementations/image.py`](../../src/figura/tools/implementations/image.py)，测量适配器在 [`tools/implementations/measure_bars.py`](../../src/figura/tools/implementations/measure_bars.py)，纯像素传感器在 [`tools/measurements/bars.py`](../../src/figura/tools/measurements/bars.py)。[Bootstrap](../../src/figura/bootstrap.py) 注入 Agent 运行态、Attachment Service 与 Panel Service。handler 先用运行态清单授权资源，再通过 Sources 服务解析图像；结果为 Runtime 持久 `ToolResultFact` 的有界 JSON，不包含图像字节或本机路径。Panel 模型与文件由[Sources 专题](sources.md)拥有；附件、Panel 和测量投影由[Agent](agent.md#4-运行时状态字段)重建。
+图像适配器在 [image.py](../../src/figura/tools/implementations/image.py)；测量适配器分别在 [measure_bars.py](../../src/figura/tools/implementations/measure_bars.py)、[measure_lines.py](../../src/figura/tools/implementations/measure_lines.py) 和 [measure_scatter.py](../../src/figura/tools/implementations/measure_scatter.py)。共享来源解析、结果 Schema 和测量传感器分别见 [measurement_source.py](../../src/figura/tools/implementations/measurement_source.py)、[measurement_schema.py](../../src/figura/tools/implementations/measurement_schema.py) 与 tools/measurements/。Bootstrap 注入 RunExecutionStateService、Attachment Service 和 Panel Service。handler 先用目标 Run 的 Session 清单授权，再由 Sources 验证所有权并读取图像；模型不能提交路径、URL 或图片字节。
 
-### `load_image`
+测量结果是有界 JSON。成功结果随 ToolResultFact.result 持久化并通过 Session Memory 的 ToolMessage 进入后续对话；Agent 的 MeasurementObservation 只建立调用期索引，不拥有结果字段或第二份存储。结果不含图像字节、覆盖图或本机路径，也没有单独的测量 Web API。所有 Schema 对象拒绝未声明属性；超出 ToolRuntime 结果大小限制时整体失败，不静默截断字段或观测。
 
-只读图像加载工具。成功结果记入 Run 后，Agent 在紧接的下一次 Provider 请求里读取图像字节；工具结果本身只记录元数据。
+### load_image
 
-| 合同 | 完整字段与边界 |
-|---|---|
-| 参数 | `source_kind: 'attachment' \| 'panel'`；`source_id: string`，1–128 字符。额外属性拒绝。 |
-| 成功结果 | `source_kind`、`source_id`、`name`、`width`、`height`；宽高为 1–100000 的整数。额外属性拒绝。 |
-| 执行效果 | `replay_safe`；授权必须命中本 Run 的 Session 图像清单。Attachment 图片名来自附件文件名，Panel 图片名来自 Panel 名。 |
-
-### `decompose_chart_image`
-
-按模型给出的规范化多边形生成独立 Panel PNG；所有矩形也用四点多边形表达。详细 `PanelRecord` 和 `PanelPoint` 字段见[Sources 完整模型字段](sources.md#3-完整模型字段)。
+只读图像加载工具。成功结果提交后，Agent 在紧接的下一次 Provider 请求里解析原图字节；工具结果本身只记录元数据。
 
 | 合同 | 完整字段与边界 |
 |---|---|
-| 参数 | `attachment_id: string`，1–128 字符；`panels`：1–32 个 Panel 提议。额外属性拒绝。 |
-| Panel 提议 | 每项含 `name: string`（1–256 字符）和 `points`（3–64 个点）；每个点含整数 `x`、`y`，取值均为 0–1000。 |
-| 成功结果 | `{ panels: [{ panel_id, name, source_attachment_id }] }`，保持输入次序；ID 是小写 64 位十六进制。不得加入点坐标、图片字节或文件路径。 |
-| 执行效果 | `idempotent_local_write`；ID 从工具的 call-scoped 幂等键和 Panel 序号确定。只检查多边形及资源能安全执行，不校验语义准确度、重叠或图表类型。 |
+| 参数 | source_kind: attachment 或 panel；source_id: string，长度 1–128。额外属性拒绝。 |
+| 成功结果 | source_kind、source_id、name、width、height；宽高为 1–100000 的整数。额外属性拒绝。 |
+| 执行效果 | replay_safe；来源必须命中目标 Run 的 Session 图像清单。Attachment 名来自净化后的文件名，Panel 名来自 Panel 名。 |
 
-### `measure_bars`
+### decompose_chart_image
 
-对整个授权附件或 Panel 图像运行纯像素传感器。它不要求先调用 `load_image`，也不接受路径、URL 或图像字节作为模型参数。来源先匹配 `RunExecutionState` 清单，再由 Attachment/Panel Service 验证 Session 所有权并读取私有字节；传感器只得到字节并返回 JSON 几何。失败的来源读取或解码映射为有界、可重试的 `ToolExecutionError`，不泄露本机路径。成功结果进入 `ToolResultFact`；Session Memory 之后以 ToolMessage 提供该结果。没有独立测量表或可修改的 measurement record；Agent 的 `MeasurementObservation` 是调用期索引投影，见[Agent 专题](agent.md#4-运行时状态字段)。
+按模型给出的规范化多边形生成独立 Panel PNG；矩形也使用四点多边形。PanelRecord 和 PanelPoint 的完整字段由 [Sources](sources.md#3-完整模型字段)拥有。
 
-| 输入路径 | 类型与必填 | 语义和约束 | 写入者 → 权威位置 → 读取/公开 |
+| 合同 | 完整字段与边界 |
+|---|---|
+| 参数 | attachment_id: string，长度 1–128；panels：1–32 个 Panel 提议。额外属性拒绝。 |
+| Panel 提议 | 每项含 name: string（长度 1–256）和 points（3–64 个点）；每个点含整数 x、y，均在 0–1000。 |
+| 成功结果 | { panels: [{ panel_id, name, source_attachment_id }] }，与输入同序；ID 为小写 64 位十六进制。不得带点坐标、图像字节或文件路径。 |
+| 执行效果 | idempotent_local_write；同一 call-scoped 幂等键恢复时复用 Panel 身份。只检查区域能否安全执行，不判断语义准确度、重叠或图表类型。 |
+
+### 测量来源与内部值
+
+以下 dataclass 仅在工具调用期存在。图像字节不会进入工具结果或持久状态。
+
+#### MeasurementSource
+
+来源适配器解析后的图像值。构建者为 resolve_measurement_source；Attachment 和 Panel 的权威元数据/字节仍属于 [Sources](sources.md)。失败的来源授权在读取字节前拒绝。
+
+| 完整字段路径 | 类型、默认与约束 | 含义 | 写入者 → 权威位置 → 读取者 |
 |---|---|---|---|
-| `measure_bars.arguments.source_kind` | `string`，必填 | `attachment` 或 `panel` | Provider 模型 → 经 ToolRuntime Schema 校验的 `ToolInvocation` → handler 用它选择 Sources 服务；保留在 ToolCallFact 参数中 |
-| `measure_bars.arguments.source_id` | `string`，必填 | 不透明 ID，1–128 字符；必须命中同 Session 的可用附件或 Panel 清单 | Provider 模型 → ToolCallFact 参数 → handler 与 Sources 服务；未授权时不读取图像 |
+| MeasurementSource.source_kind | Literal[attachment, panel]，必传 | 来源类型 | 来源解析器 → 调用期内存 → 测量 handler |
+| MeasurementSource.source_id | str，必传 | 来源不透明 ID | 来源解析器 → 调用期内存 → 测量 handler |
+| MeasurementSource.name | str，必传 | 安全显示名；Attachment 文件名或 Panel 名 | 来源解析器 → Sources 元数据的调用期副本 → 测量 handler |
+| MeasurementSource.coordinate_system | Literal[attachment_px, panel_px]，必传 | 后续结果所用像素坐标系 | 来源解析器 → 调用期内存 → handler 写入测量 JSON |
+| MeasurementSource.image_bytes | bytes，必传且非空 | 已授权源图像字节 | Attachment/Panel Service → 调用期内存 → 传感器；不持久化、不公开 |
 
-参数对象只允许以上两项；额外属性拒绝。工具定义及参数 Schema 位于[测量适配器](../../src/figura/tools/implementations/measure_bars.py)。
+#### OCRSnippet 与 OCRObservation
 
-#### 完整成功结果字段
+OCR 只提供轴刻度、轴标签和图例关联候选，不把原始图片发给 Provider。当前实现每次最多保留 512 个片段，每个文字最多 128 字符；置信度限制在 0–1。OCR 不可用或失败时，几何测量仍可继续；候选截断会进入测量 warnings。
 
-以下是成功 JSON Schema 的全部字段，非 Python dataclass。除明确标为可选的 `bars[].stack` 外，表列字段均必填；`null` 是字段值而不是字段缺省。每个输出字段由测量 handler 产生并随成功 `ToolResultFact.result` 成为权威持久内容，再通过 Session Memory 的 ToolMessage 进入后续模型历史；没有独立 API DTO 或就地修改规则。来源适配器写入 `source_kind`、`source_id` 和 `coordinate_system`，像素传感器写入其余测量字段。
-
-| 完整字段路径 | 类型、必填与约束 | 含义 | 写入者 → 权威位置 → 读取/公开 |
+| 完整字段路径 | 类型、默认与约束 | 含义 | 写入者 → 权威位置 → 读取者 |
 |---|---|---|---|
-| `measure_bars.result.source_kind` | `string`，必填；`attachment` \| `panel` | 与已授权输入来源类型一致 | Sources 适配器 → ToolResultFact.result → Agent ToolMessage；不独立修订 |
-| `measure_bars.result.source_id` | `string`，必填；1–128 字符 | 实际测量的来源不透明 ID | Sources 适配器 → ToolResultFact.result → Agent ToolMessage；不暴露路径 |
-| `measure_bars.result.image_size` | 对象，必填 | 被测源图像尺寸，恰含宽、高 | 像素传感器 → ToolResultFact.result → Agent ToolMessage |
-| `measure_bars.result.image_size.width` | 整数，必填；1–100000 | 图像宽度，像素 | 像素传感器 → ToolResultFact.result → Agent ToolMessage |
-| `measure_bars.result.image_size.height` | 整数，必填；1–100000 | 图像高度，像素 | 像素传感器 → ToolResultFact.result → Agent ToolMessage |
-| `measure_bars.result.coordinate_system` | `string`，必填；`attachment_px` \| `panel_px` | 坐标绑定到整个 Attachment 或独立 Panel 图像 | Sources 适配器 → ToolResultFact.result → Agent ToolMessage |
-| `measure_bars.result.status` | `string`，必填；`measured` \| `partial` \| `no_evidence` \| `unsupported` | 观测完整性；不表示已校准图表数值 | 像素传感器 → ToolResultFact.result → Agent ToolMessage |
-| `measure_bars.result.orientation` | `string`，必填；`vertical` \| `horizontal` \| `oblique` \| `unknown` | 检测到的柱体主方向 | 像素传感器 → ToolResultFact.result → Agent ToolMessage |
-| `measure_bars.result.bar_mode` | `string`，必填；`single` \| `grouped` \| `stacked` \| `unknown` | 检测到的单系列、分组或堆叠形态 | 像素传感器 → ToolResultFact.result → Agent ToolMessage |
-| `measure_bars.result.plot_area_px` | 对象或 `null`，必填 | 候选绘图区像素边界；无证据时为 `null` | 像素传感器 → ToolResultFact.result → Agent ToolMessage |
-| `measure_bars.result.plot_area_px.x` | 整数，条件必填；≥0 | 绘图区左上 x 坐标 | 像素传感器 → ToolResultFact.result → Agent ToolMessage |
-| `measure_bars.result.plot_area_px.y` | 整数，条件必填；≥0 | 绘图区左上 y 坐标 | 像素传感器 → ToolResultFact.result → Agent ToolMessage |
-| `measure_bars.result.plot_area_px.width` | 整数，条件必填；≥1 | 绘图区宽度 | 像素传感器 → ToolResultFact.result → Agent ToolMessage |
-| `measure_bars.result.plot_area_px.height` | 整数，条件必填；≥1 | 绘图区高度 | 像素传感器 → ToolResultFact.result → Agent ToolMessage |
-| `measure_bars.result.baseline` | 对象或 `null`，必填 | 可拟合的零基线；不能可靠建立时为 `null` | 像素传感器 → ToolResultFact.result → Agent ToolMessage |
-| `measure_bars.result.baseline.points_px` | 两个像素点组成的数组，条件必填 | 基线两端点 | 像素传感器 → ToolResultFact.result → Agent ToolMessage |
-| `measure_bars.result.baseline.points_px[]` | `[x, y]` 整数二元组；各值 0–100000 | 每个基线点的坐标 | 像素传感器 → ToolResultFact.result → Agent ToolMessage |
-| `measure_bars.result.baseline.axis` | `string`，条件必填；`x` \| `y` | 拟合基线对应的轴 | 像素传感器 → ToolResultFact.result → Agent ToolMessage |
-| `measure_bars.result.baseline.slope` | 数值，条件必填 | 拟合线斜率 | 像素传感器 → ToolResultFact.result → Agent ToolMessage |
-| `measure_bars.result.baseline.intercept` | 数值，条件必填 | 拟合线截距 | 像素传感器 → ToolResultFact.result → Agent ToolMessage |
-| `measure_bars.result.baseline.residual_px` | 数值，条件必填；≥0 | 基线拟合残差，像素 | 像素传感器 → ToolResultFact.result → Agent ToolMessage |
-| `measure_bars.result.baseline.confidence` | 数值，条件必填；0–1 | 基线拟合置信度 | 像素传感器 → ToolResultFact.result → Agent ToolMessage |
-| `measure_bars.result.series` | 数组，必填；元素为对象 | 检测到的颜色系列；不推断语义标签 | 像素传感器 → ToolResultFact.result → Agent ToolMessage |
-| `measure_bars.result.series[].id` | `string`，必填；1–32 字符 | 结果内稳定的系列 ID | 像素传感器 → ToolResultFact.result → Agent ToolMessage |
-| `measure_bars.result.series[].color` | `string`，必填；小写 `#rrggbb` | 检测到的系列颜色 | 像素传感器 → ToolResultFact.result → Agent ToolMessage |
-| `measure_bars.result.bars` | 数组，必填；元素为对象 | 按结果顺序排列的柱体候选 | 像素传感器 → ToolResultFact.result → Agent ToolMessage |
-| `measure_bars.result.bars[].id` | 整数，必填；≥1 | 结果内柱体 ID | 像素传感器 → ToolResultFact.result → Agent ToolMessage |
-| `measure_bars.result.bars[].category_index` | 整数，必填；≥1 | 一基类别序号 | 像素传感器 → ToolResultFact.result → Agent ToolMessage |
-| `measure_bars.result.bars[].series_id` | `string`，必填；1–32 字符 | 对应 `series[].id` | 像素传感器 → ToolResultFact.result → Agent ToolMessage |
-| `measure_bars.result.bars[].geometry` | 对象，必填；恰含 bbox 与四角多边形 | 柱体像素几何 | 像素传感器 → ToolResultFact.result → Agent ToolMessage |
-| `measure_bars.result.bars[].geometry.bbox_px` | 四整数数组，必填；各值 0–100000 | `[x, y, width, height]` | 像素传感器 → ToolResultFact.result → Agent ToolMessage |
-| `measure_bars.result.bars[].geometry.polygon_px` | 四点数组，必填 | 柱体矩形的四角，使用来源坐标系 | 像素传感器 → ToolResultFact.result → Agent ToolMessage |
-| `measure_bars.result.bars[].geometry.polygon_px[]` | `[x, y]` 整数二元组；各值 0–100000 | 一个四角多边形顶点 | 像素传感器 → ToolResultFact.result → Agent ToolMessage |
-| `measure_bars.result.bars[].measure` | 对象，必填；恰含长度与比例 | 像素测量值，不含图表单位 | 像素传感器 → ToolResultFact.result → Agent ToolMessage |
-| `measure_bars.result.bars[].measure.value_length_px` | 数值或 `null`，必填 | 相对基线的有符号像素长度；基线不确定时为 `null` | 像素传感器 → ToolResultFact.result → Agent ToolMessage |
-| `measure_bars.result.bars[].measure.ratio_to_shortest` | 数值 ≥1 或 `null`，必填 | 相对最短有效柱的长度比例；不能测量时为 `null` | 像素传感器 → ToolResultFact.result → Agent ToolMessage |
-| `measure_bars.result.bars[].stack` | 对象或 `null`，可选 | 堆叠柱段的补充总量几何；非堆叠柱可省略 | 像素传感器 → ToolResultFact.result → Agent ToolMessage |
-| `measure_bars.result.bars[].stack.segment_index` | 整数，条件必填；≥1 | 堆叠类别中的一基段序号 | 像素传感器 → ToolResultFact.result → Agent ToolMessage |
-| `measure_bars.result.bars[].stack.total_length_px` | 数值 ≥0 或 `null`，条件必填 | 堆叠总长；没有可靠基线时为 `null` | 像素传感器 → ToolResultFact.result → Agent ToolMessage |
-| `measure_bars.result.bars[].stack.total_geometry` | 几何对象，条件必填 | 堆叠总量外接框及四角；字段结构同 `bars[].geometry` | 像素传感器 → ToolResultFact.result → Agent ToolMessage |
-| `measure_bars.result.confidence` | 对象，必填；恰含四项 | 置信度集合 | 像素传感器 → ToolResultFact.result → Agent ToolMessage |
-| `measure_bars.result.confidence.overall` | 数值，必填；0–1 | 总体置信度 | 像素传感器 → ToolResultFact.result → Agent ToolMessage |
-| `measure_bars.result.confidence.geometry` | 数值，必填；0–1 | 几何检测置信度 | 像素传感器 → ToolResultFact.result → Agent ToolMessage |
-| `measure_bars.result.confidence.baseline` | 数值，必填；0–1 | 基线置信度 | 像素传感器 → ToolResultFact.result → Agent ToolMessage |
-| `measure_bars.result.confidence.association` | 数值，必填；0–1 | 柱体与系列关联置信度 | 像素传感器 → ToolResultFact.result → Agent ToolMessage |
-| `measure_bars.result.warnings` | 字符串数组，必填 | 不确定、证据不完整或不支持几何的说明；不自动阻断 Agent | 像素传感器 → ToolResultFact.result → Agent ToolMessage |
-| `measure_bars.result.warnings[]` | `string`，必填 | 一条测量警告文本 | 像素传感器 → ToolResultFact.result → Agent ToolMessage |
+| OCRSnippet.snippet_id | str，无默认 | OCR 顺序生成的片段 ID | OCR recognizer → 调用期内存 → 轴刻度/标签关联 |
+| OCRSnippet.text | str，无默认；最多 128 字符 | 去除首尾空白后的 OCR 文本 | OCR recognizer → 调用期内存 → 轴刻度与图例关联 |
+| OCRSnippet.bbox_px | tuple[int, int, int, int]，无默认 | 文字框 x、y、width、height；宽高至少为 1 | OCR recognizer → 调用期内存 → 空间关联 |
+| OCRSnippet.confidence | float，无默认；0–1 | OCR 置信度 | OCR recognizer → 调用期内存 → 标签/刻度置信度计算 |
+| OCRObservation.snippets | tuple[OCRSnippet, ...]，无默认；最多 512 项 | 有界文字框序列 | OCR recognizer → 调用期内存 → 笛卡尔传感器 |
+| OCRObservation.available | bool，无默认 | 本次 OCR 调用是否可用；不可用不阻止几何分析 | OCR recognizer → 调用期内存 → 测量传感器 |
+| OCRObservation.truncated | bool，默认 False | 超过候选上限时为 True；对应测量结果会增加警告 | OCR recognizer → 调用期内存 → 测量 warnings |
 
-成功结果顶层及所有嵌套对象拒绝未声明字段。主要数值均处于来源图像像素坐标；即使有可靠基线，也不将长度换算成图表单位。主规格：[bar-chart-measurement](../../openspec/figura/openspec/specs/bar-chart-measurement/spec.md)。
+### 三种测量的共同输入与结果字段
+
+柱、线、散点测量共享 source 参数、轴观察、刻度字段、标定字段、置信度结构。measure_bars、measure_lines、measure_scatter 的结果 JSON 都在顶层展开 measurement_schema.py 的 MEASUREMENT_PROPERTIES；它不是一个嵌套输出对象。下表的路径以该 Schema 片段为根，逐项对应三个结果的同名顶层字段或嵌套字段。
+
+所有 JSON 结果字段的权威位置均为对应 ToolResultFact.result；Provider 模型通过 Memory ToolMessage 读取，Agent 的 MeasurementObservation 引用完整成功对象，下一轮标注器读取成功测量对象。source_kind、source_id、coordinate_system 由来源适配器写入，其余共同字段由传感器写入。对象字段均必需，除明示 nullable 外不以缺省代替 null。
+
+#### 来源参数
+
+三个 measure 工具都只接受下列必需字段，拒绝额外属性，并且不要求先调用 load_image。
+
+| 完整字段路径 | 类型、约束 | 含义 | 写入者 → 权威位置 → 读取者 |
+|---|---|---|---|
+| SOURCE_PARAMETERS.source_kind | string，枚举 attachment、panel | 选择来源服务 | Provider 模型 → ToolCallFact / ToolInvocation → 来源解析器 |
+| SOURCE_PARAMETERS.source_id | string，长度 1–128 | 选定来源的不透明 ID，必须命中 RunExecutionState 授权清单 | Provider 模型 → ToolCallFact / ToolInvocation → 来源解析器；未授权时不读字节 |
+
+#### MEASUREMENT_PROPERTIES 共同结果字段
+
+| 完整字段路径 | 类型、必填与约束 | 含义 | 写入者 |
+|---|---|---|---|
+| MEASUREMENT_PROPERTIES.source_kind | string，必填；attachment 或 panel | 与实际授权来源一致 | 来源适配器 |
+| MEASUREMENT_PROPERTIES.source_id | string，必填；长度 1–128 | 实际被测来源 ID | 来源适配器 |
+| MEASUREMENT_PROPERTIES.image_size | object，必填；只含 width、height | 解码后的源图尺寸 | 传感器 |
+| MEASUREMENT_PROPERTIES.image_size.width | integer，必填；1–100000 | 图像宽度，像素 | 传感器 |
+| MEASUREMENT_PROPERTIES.image_size.height | integer，必填；1–100000 | 图像高度，像素 | 传感器 |
+| MEASUREMENT_PROPERTIES.coordinate_system | string，必填；attachment_px 或 panel_px | 源图像坐标系 | 来源适配器 |
+| MEASUREMENT_PROPERTIES.status | string，必填；measured、partial、no_evidence、unsupported 之一 | 结果完整性，不保证所有字段均有数值 | 传感器 |
+| MEASUREMENT_PROPERTIES.plot_area_px | object 或 null，必填 | 候选绘图区；无证据时可空 | 传感器 |
+| MEASUREMENT_PROPERTIES.plot_area_px.x | integer，必填；≥0 | 绘图区左上角 x | 传感器 |
+| MEASUREMENT_PROPERTIES.plot_area_px.y | integer，必填；≥0 | 绘图区左上角 y | 传感器 |
+| MEASUREMENT_PROPERTIES.plot_area_px.width | integer，必填；≥1 | 绘图区宽度 | 传感器 |
+| MEASUREMENT_PROPERTIES.plot_area_px.height | integer，必填；≥1 | 绘图区高度 | 传感器 |
+| MEASUREMENT_PROPERTIES.axes | object，必填；恰含 x、y | 横轴与纵轴观察 | 笛卡尔轴处理 |
+| MEASUREMENT_PROPERTIES.axes.{x,y} | object，必填；恰含下列六字段 | 单条轴观察；花括号仅表示分别展开为 axes.x 和 axes.y | 笛卡尔轴处理 |
+| MEASUREMENT_PROPERTIES.axes.{x,y}.kind | string，必填；numeric、categorical、unknown 之一 | 轴类别 | 笛卡尔轴处理 |
+| MEASUREMENT_PROPERTIES.axes.{x,y}.label_text | string 或 null，必填 | OCR 关联的轴标题 | OCR/轴关联 |
+| MEASUREMENT_PROPERTIES.axes.{x,y}.label_confidence | number 或 null，必填；当前计算值在 0–1 | 轴标题关联置信度 | OCR/轴关联 |
+| MEASUREMENT_PROPERTIES.axes.{x,y}.points_px | 恰含两个 PixelPoint 的数组或 null，必填 | 拟合轴段端点；PixelPoint 的坐标均为 0–100000 的数值 | 笛卡尔轴处理 |
+| MEASUREMENT_PROPERTIES.axes.{x,y}.points_px[] | number[2]，条件存在；每项恰含 x、y | 单个像素坐标点 | 笛卡尔轴处理 |
+| MEASUREMENT_PROPERTIES.axes.{x,y}.ticks | TickObservation 数组，必填 | 与该轴关联的 OCR 刻度或类别文字 | OCR/轴关联 |
+| MEASUREMENT_PROPERTIES.axes.{x,y}.ticks[].id | string，必填；长度 1–64 | 结果内稳定刻度 ID | OCR/轴关联 |
+| MEASUREMENT_PROPERTIES.axes.{x,y}.ticks[].text | string，必填；长度 1–128 | OCR 原文 | OCR |
+| MEASUREMENT_PROPERTIES.axes.{x,y}.ticks[].value | number 或 null，必填 | 可解析的数值刻度；类别文字为 null | 数值文本解析 |
+| MEASUREMENT_PROPERTIES.axes.{x,y}.ticks[].bbox_px | integer[4]，必填；每项 0–100000 | OCR 框 [x, y, width, height] | OCR |
+| MEASUREMENT_PROPERTIES.axes.{x,y}.ticks[].point_px | number[2]，必填；每项 0–100000 | 刻度框中心在图像坐标中的位置 | OCR/轴关联 |
+| MEASUREMENT_PROPERTIES.axes.{x,y}.ticks[].confidence | number，必填；0–1 | OCR 置信度 | OCR |
+| MEASUREMENT_PROPERTIES.axes.{x,y}.calibration | Calibration 或 null，必填 | 线性轴拟合结果；无法拟合时为 null | 笛卡尔轴处理 |
+| MEASUREMENT_PROPERTIES.axes.{x,y}.calibration.slope | number，条件必填 | 每像素单位变化率 | 线性拟合 |
+| MEASUREMENT_PROPERTIES.axes.{x,y}.calibration.intercept | number，条件必填 | 线性拟合截距 | 线性拟合 |
+| MEASUREMENT_PROPERTIES.axes.{x,y}.calibration.residual_value | number，必填于对象；≥0 | 数值刻度拟合的均方根残差 | 线性拟合 |
+| MEASUREMENT_PROPERTIES.axes.{x,y}.calibration.support_count | integer，必填于对象；≥2 | 参与拟合的不同数值刻度数 | 线性拟合 |
+| MEASUREMENT_PROPERTIES.axes.{x,y}.calibration.support_span_px | number，必填于对象；≥0 | 刻度在轴上的像素跨度 | 线性拟合 |
+| MEASUREMENT_PROPERTIES.axes.{x,y}.calibration.confidence | number，必填于对象；0–1 | 标定置信度 | 线性拟合 |
+| MEASUREMENT_PROPERTIES.axes.{x,y}.calibration.calibrated | bool，必填于对象 | 是否通过标定门槛；false 时不生成该轴的图表单位坐标 | 线性拟合 |
+| MEASUREMENT_PROPERTIES.confidence | object，必填；恰含四项 | 总体、几何、标定、关联置信度 | 测量传感器 |
+| MEASUREMENT_PROPERTIES.confidence.overall | number，必填；0–1 | 总体置信度 | 测量传感器 |
+| MEASUREMENT_PROPERTIES.confidence.geometry | number，必填；0–1 | 几何检测置信度 | 测量传感器 |
+| MEASUREMENT_PROPERTIES.confidence.calibration | number，必填；0–1 | 轴标定置信度 | 测量传感器 |
+| MEASUREMENT_PROPERTIES.confidence.association | number，必填；0–1 | 类别、系列或刻度关联置信度 | 测量传感器 |
+| MEASUREMENT_PROPERTIES.warnings | string 数组，必填；整体受 ToolRuntime 大小上限约束 | 歧义、缺失或不支持情况 | 测量传感器 |
+| MEASUREMENT_PROPERTIES.warnings[] | string，必填；每项最多 256 字符 | 单条有界警告 | 测量传感器 |
+
+共享 Calibration 只使用至少两个不同数值、不同轴位置的 OCR 刻度拟合。当前通过门槛要求刻度支持跨度至少 40 px、均方根残差不超过 max(1.5, 数值跨度的 8%)、置信度至少 0.35。门槛未通过时保留像素几何与刻度观察，数值坐标为 null。对象与数组元素的严格 Schema 见 [measurement_schema.py](../../src/figura/tools/implementations/measurement_schema.py) 和各工具 adapter。
+
+### measure_bars
+
+处理授权来源中的垂直、水平及候选斜向柱形。保留柱体像素几何；图表单位 value 仅在基线和值轴线性标定有效时产生。类别 tick 与 legend 文字属于 OCR 关联候选，警告不会自动触发重测。
+
+共同 source 参数见上节；结果含 MEASUREMENT_PROPERTIES 的全部字段，再加下表字段。所有 result 对象拒绝额外属性；除 stack 明确可选外，表中字段均必需。全部 JSON 字段写入 ToolResultFact.result；柱传感器负责几何与计算值，轴关联值使用共享笛卡尔处理；Agent Memory ToolMessage 消费结果，MeasurementObservation 引用它，overlay renderer 仅用于即时显示。
+
+| 完整字段路径 | 类型、必填与约束 | 含义 | 写入者 |
+|---|---|---|---|
+| measure_bars.result.orientation | string，必填；vertical、horizontal、oblique、unknown 之一 | 柱体方向 | 柱传感器 |
+| measure_bars.result.bar_mode | string，必填；single、grouped、stacked、unknown 之一 | 柱体分组模式 | 柱传感器 |
+| measure_bars.result.baseline | object 或 null，必填 | 零基线拟合 | 柱传感器 |
+| measure_bars.result.baseline.points_px | 两个 PixelPoint 的数组，条件必填 | 基线端点 | 柱传感器 |
+| measure_bars.result.baseline.points_px[] | integer[2]，条件存在；每项 0–100000 | 基线的一个像素点 | 柱传感器 |
+| measure_bars.result.baseline.axis | string，条件必填；x 或 y | 基线所在轴 | 柱传感器 |
+| measure_bars.result.baseline.slope | number，条件必填 | 基线斜率 | 柱传感器 |
+| measure_bars.result.baseline.intercept | number，条件必填 | 基线截距 | 柱传感器 |
+| measure_bars.result.baseline.residual_px | number，条件必填；≥0 | 基线像素拟合残差 | 柱传感器 |
+| measure_bars.result.baseline.confidence | number，条件必填；0–1 | 基线置信度 | 柱传感器 |
+| measure_bars.result.series | SeriesObservation 数组，必填 | 颜色系列 | 柱传感器/图例关联 |
+| measure_bars.result.series[].id | string，必填；长度 1–32 | 结果内系列 ID | 柱传感器 |
+| measure_bars.result.series[].color | string，必填；小写 #rrggbb | 系列颜色 | 柱传感器 |
+| measure_bars.result.series[].label | string 或 null，必填；最多 128 字符 | OCR 关联的图例文字 | 图例关联 |
+| measure_bars.result.series[].label_confidence | number 或 null，必填；非空值 0–1 | 图例关联置信度 | 图例关联 |
+| measure_bars.result.bars | BarObservation 数组，必填 | 柱体候选，按结果顺序排列 | 柱传感器 |
+| measure_bars.result.bars[].id | integer，必填；≥1 | 结果内柱 ID | 柱传感器 |
+| measure_bars.result.bars[].category_index | integer，必填；≥1 | 一基类别序号 | 柱传感器 |
+| measure_bars.result.bars[].category_label | string 或 null，必填；非空值最多 128 字符 | 类别轴 OCR 文本 | 类别关联 |
+| measure_bars.result.bars[].category_tick_id | string 或 null，必填；非空值最多 64 字符 | 关联的结果内类别刻度 ID | 类别关联 |
+| measure_bars.result.bars[].series_id | string，必填；长度 1–32 | 对应 series[].id | 柱传感器 |
+| measure_bars.result.bars[].geometry | BarGeometry，必填 | 柱体像素边界 | 柱传感器 |
+| measure_bars.result.bars[].geometry.bbox_px | integer[4]，必填；每项 0–100000 | [x, y, width, height] 外接框 | 柱传感器 |
+| measure_bars.result.bars[].geometry.polygon_px | 四个 PixelPoint 的数组，必填 | 矩形四角 | 柱传感器 |
+| measure_bars.result.bars[].geometry.polygon_px[] | integer[2]；每项 0–100000 | 一个矩形角点 | 柱传感器 |
+| measure_bars.result.bars[].measure | object，必填；恰含三项 | 柱长、比例和校准图表值 | 柱传感器 |
+| measure_bars.result.bars[].measure.value_length_px | number 或 null，必填 | 相对基线的有符号像素长度 | 柱传感器 |
+| measure_bars.result.bars[].measure.ratio_to_shortest | number 或 null，必填；非空值 ≥1 | 相对最短有效柱的长度比例 | 柱传感器 |
+| measure_bars.result.bars[].measure.value | number 或 null，必填 | 标定通过后的图表单位数值；未标定或基线无效时为 null | 柱传感器 |
+| measure_bars.result.bars[].stack | object 或 null，可选 | 堆叠段总量观察；非堆叠柱可省略此键 | 柱传感器 |
+| measure_bars.result.bars[].stack.segment_index | integer，条件必填；≥1 | 堆叠类别中的一基段序号 | 柱传感器 |
+| measure_bars.result.bars[].stack.total_length_px | number 或 null，条件必填；非空值 ≥0 | 堆叠总像素长度 | 柱传感器 |
+| measure_bars.result.bars[].stack.total_geometry | BarGeometry，条件必填 | 堆叠总量几何，字段同 bars[].geometry | 柱传感器 |
+| measure_bars.result.bars[].stack.total_value | number 或 null，条件必填 | 标定通过后的堆叠总数值 | 柱传感器 |
+
+### measure_lines
+
+处理授权来源中的多颜色折线。trace 保存一个或多个彼此独立的折线片段，不补齐中断段；存在显式 marker 时按 marker 输出点，没有 marker 时只在可关联的 x 轴刻度采样。图表单位 x、y 坐标分别要求对应轴标定通过；分类 x 轴保留类别标签而不伪造数值。
+
+结果含 MEASUREMENT_PROPERTIES 的全部字段和 series。所有 JSON 字段写入 ToolResultFact.result；折线传感器写入轨迹、采样点与几何字段，颜色和 legend label 由颜色/图例关联处理。Memory ToolMessage 是模型读取方式，MeasurementObservation 是 Agent 投影，覆盖图只在下一请求调用期生成。
+
+| 完整字段路径 | 类型、必填与约束 | 含义 | 写入者 |
+|---|---|---|---|
+| measure_lines.result.series | LineSeries 数组，必填 | 多颜色曲线系列 | 折线传感器 |
+| measure_lines.result.series[].id | string，必填；长度 1–32 | 结果内系列 ID | 折线传感器 |
+| measure_lines.result.series[].color | string，必填；小写 #rrggbb | 系列颜色 | 折线传感器 |
+| measure_lines.result.series[].label | string 或 null，必填；非空值最多 128 字符 | OCR 关联图例标签 | 图例关联 |
+| measure_lines.result.series[].label_confidence | number 或 null，必填；非空值 0–1 | 标签关联置信度 | 图例关联 |
+| measure_lines.result.series[].trace | PixelPoint[][]，必填；每条 polyline 至少两点 | 保留缺口的轨迹片段；不跨缺口连接 | 折线传感器 |
+| measure_lines.result.series[].trace[][] | number[2]，条件存在；坐标各 0–100000 | 轨迹上的像素点 [x,y] | 折线传感器 |
+| measure_lines.result.series[].points | LinePoint 数组，必填 | marker 或轴刻度采样观察 | 折线传感器 |
+| measure_lines.result.series[].points[].id | string，必填；长度 1–64 | 结果内点 ID | 折线传感器 |
+| measure_lines.result.series[].points[].position_px | number[2]，必填；坐标各 0–100000 | 点的来源像素位置 | 折线传感器 |
+| measure_lines.result.series[].points[].x_value | number 或 null，必填 | x 轴数值标定通过后的坐标 | 折线传感器 |
+| measure_lines.result.series[].points[].y_value | number 或 null，必填 | y 轴数值标定通过后的坐标 | 折线传感器 |
+| measure_lines.result.series[].points[].x_tick_id | string 或 null，必填；非空值最多 64 字符 | 关联的 x 轴刻度 | 折线传感器 |
+| measure_lines.result.series[].points[].x_category_label | string 或 null，必填；非空值最多 128 字符 | 分类 x 轴文字，不作为数值坐标 | 折线传感器 |
+| measure_lines.result.series[].points[].source | string，必填；marker 或 axis_tick_sample | 该点来自显式标记或轴刻度采样 | 折线传感器 |
+| measure_lines.result.series[].points[].confidence | number，必填；0–1 | 点观察置信度 | 折线传感器 |
+
+### measure_scatter
+
+检测授权来源中的可见散点和颜色系列。x、y 数值独立受对应轴标定门槛控制。merged、occluded、dense、overlap 只描述可见的不确定区域，不推断隐藏点的精确数量。
+
+结果含 MEASUREMENT_PROPERTIES 的全部字段和 series。所有 JSON 字段写入 ToolResultFact.result；散点传感器写入点位置、半径、标定坐标和不确定标志，颜色/图例关联写入系列字段。Memory ToolMessage 是模型读取方式，MeasurementObservation 是 Agent 投影，覆盖图只在下一请求调用期生成。
+
+| 完整字段路径 | 类型、必填与约束 | 含义 | 写入者 |
+|---|---|---|---|
+| measure_scatter.result.series | ScatterSeries 数组，必填 | 可见颜色系列 | 散点传感器 |
+| measure_scatter.result.series[].id | string，必填；长度 1–32 | 结果内系列 ID | 散点传感器 |
+| measure_scatter.result.series[].color | string，必填；小写 #rrggbb | 系列颜色 | 散点传感器 |
+| measure_scatter.result.series[].label | string 或 null，必填；非空值最多 128 字符 | OCR 关联图例标签 | 图例关联 |
+| measure_scatter.result.series[].label_confidence | number 或 null，必填；非空值 0–1 | 标签关联置信度 | 图例关联 |
+| measure_scatter.result.series[].points | ScatterPoint 数组，必填 | 可见点候选 | 散点传感器 |
+| measure_scatter.result.series[].points[].id | string，必填；长度 1–64 | 结果内点 ID | 散点传感器 |
+| measure_scatter.result.series[].points[].position_px | number[2]，必填；坐标各 0–100000 | 来源像素位置 [x,y] | 散点传感器 |
+| measure_scatter.result.series[].points[].x_value | number 或 null，必填 | x 轴标定通过后的图表坐标 | 散点传感器 |
+| measure_scatter.result.series[].points[].y_value | number 或 null，必填 | y 轴标定通过后的图表坐标 | 散点传感器 |
+| measure_scatter.result.series[].points[].x_tick_id | string 或 null，必填；非空值最多 64 字符 | 最近的 x 轴刻度关联 | 散点传感器 |
+| measure_scatter.result.series[].points[].y_tick_id | string 或 null，必填；非空值最多 64 字符 | 最近的 y 轴刻度关联 | 散点传感器 |
+| measure_scatter.result.series[].points[].radius_px | number 或 null，必填；非空值 ≥0 | 可见组件的像素半径估计 | 散点传感器 |
+| measure_scatter.result.series[].points[].confidence | number，必填；0–1 | 点检测置信度 | 散点传感器 |
+| measure_scatter.result.series[].points[].flags | string 数组，必填；每项为 merged、occluded、dense、overlap 之一 | 可见重叠、融合或密集不确定性 | 散点传感器 |
+
+### MeasurementOverlay 与失败边界
+
+视觉反馈不是新的工具结果或持久模型。AgentRequestBuilder 只检查当前 Run 最新模型响应对应的完整已提交工具批次：成功 load_image 的同一来源去重后还原原图；每个成功测量调用各还原其被授权的源图并绘制对应几何、状态、首条警告、工具名和 call ID。混合批次仍按调用顺序；更早批次和旧 Run 的图像不再附加。PNG 在调用期内生成，不写 ToolResultFact、RunExecutionState、Panel 或 Web DTO。
+
+来源 ID 未授权时 handler 在读取图像字节前返回有界工具失败。可读图像但没有候选时以 no_evidence 成功返回；不支持或证据不足以 partial/unsupported 和 warnings 表达。OCR 不可用只意味着缺少 OCR 支持，不阻止几何候选；标注源图缺失、图像尺寸与提交结果不符、覆盖图无效或请求图片超限时，Agent 在 Provider attempt claim 前失败。ToolDefinition 与全部输入/结果 Schema 由 [测量适配器](../../src/figura/tools/implementations/measure_bars.py)、[折线适配器](../../src/figura/tools/implementations/measure_lines.py)、[散点适配器](../../src/figura/tools/implementations/measure_scatter.py)定义；主规格分别见 [柱状图](../../openspec/figura/openspec/specs/bar-chart-measurement/spec.md)、[折线图](../../openspec/figura/openspec/specs/line-chart-measurement/spec.md)和[散点图](../../openspec/figura/openspec/specs/scatter-chart-measurement/spec.md)。

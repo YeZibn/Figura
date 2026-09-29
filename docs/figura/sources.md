@@ -1,6 +1,6 @@
 # Sources：附件与 Panel 图像资源
 
-> [返回总览](../figura-implementation-overview.md)。范围：当前 `src/figura/sources/` 中的附件和 Panel 生命周期、图像文件及授权读取。Sources 是这两类 Session 图像资源的共同 owner；Agent 的 `RunExecutionState` 是从 Runtime 与 Sources 重建的调用期视图，见 [Agent](agent.md#4-运行时状态字段)。Sources 不拥有测量结果；当前工作树中的 Tools 已提供像素级 `measure_bars`，通用 Evidence 模型、轴刻度校准和测量的图表单位转换尚未实现，详见 [Tools](tools.md#6-图像与测量工具合同)。
+> [返回总览](../figura-implementation-overview.md)。范围：当前 `src/figura/sources/` 中的附件和 Panel 生命周期、图像文件及授权读取。Sources 是这两类 Session 图像资源的共同 owner；Agent 的 `RunExecutionState` 是从 Runtime 与 Sources 重建的调用期视图，见 [Agent](agent.md#4-运行时状态字段)。Sources 不拥有测量结果；当前工作树中的 Tools 提供柱状图、折线图和散点图像素几何，并在轴标定通过时输出图表单位观察。通用 Evidence 模型和证据生命周期尚未实现，测量结果合同见 [Tools](tools.md#6-图像与测量工具合同)。
 
 ## 1. 职责与边界
 

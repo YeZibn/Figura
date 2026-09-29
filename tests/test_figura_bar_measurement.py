@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from io import BytesIO
 
+import pytest
 from PIL import Image, ImageDraw
 
 import figura.tools.measurements.bars as bar_sensor
 from figura.tools.measurements.bars import measure_bar_image
+from figura.tools.measurements.ocr import OCRObservation, OCRSnippet
 
 
 def _png(draw_chart, size: tuple[int, int] = (300, 200)) -> bytes:
@@ -27,7 +29,7 @@ def test_measures_vertical_bars_in_source_pixel_coordinates() -> None:
     result = measure_bar_image(_png(_vertical_chart))
 
     assert result["image_size"] == {"width": 300, "height": 200}
-    assert result["status"] == "measured"
+    assert result["status"] == "partial"
     assert result["orientation"] == "vertical"
     assert result["bar_mode"] == "single"
     assert [bar["geometry"]["bbox_px"] for bar in result["bars"]] == [
@@ -49,7 +51,7 @@ def test_measures_horizontal_bars_and_finds_the_vertical_baseline() -> None:
 
     result = measure_bar_image(_png(draw))
 
-    assert result["status"] == "measured"
+    assert result["status"] == "partial"
     assert result["orientation"] == "horizontal"
     assert [bar["measure"]["value_length_px"] for bar in result["bars"]] == [140.0, 200.0, 80.0]
 
@@ -87,7 +89,7 @@ def test_reports_oblique_baseline_orientation() -> None:
 
     result = measure_bar_image(_png(draw))
 
-    assert result["status"] == "measured"
+    assert result["status"] == "partial"
     assert result["orientation"] == "oblique"
     assert result["baseline"]["axis"] == "y"
     assert result["baseline"]["slope"] < 0
@@ -104,7 +106,7 @@ def test_keeps_geometry_when_baseline_is_missing_or_unsupported() -> None:
 
     assert uncertain["status"] == "partial"
     assert uncertain["baseline"] is None
-    assert uncertain["bars"][0]["measure"] == {"value_length_px": None, "ratio_to_shortest": None}
+    assert uncertain["bars"][0]["measure"] == {"value_length_px": None, "ratio_to_shortest": None, "value": None}
     assert unsupported["status"] == "unsupported"
     assert unsupported["bars"]
     assert unsupported["bars"][0]["measure"]["value_length_px"] is None
@@ -130,3 +132,26 @@ def test_returns_empty_observation_for_readable_image_without_bars() -> None:
     assert result["plot_area_px"] is None
     assert result["baseline"] is None
     assert result["warnings"]
+
+
+def test_calibrates_bar_values_and_associates_category_ticks(monkeypatch) -> None:
+    def draw(draw_context: ImageDraw.ImageDraw) -> None:
+        draw_context.line((30, 170, 270, 170), fill="#444444", width=2)
+        draw_context.line((30, 30, 30, 170), fill="#444444", width=2)
+        draw_context.rectangle((60, 100, 95, 169), fill="#3366cc")
+
+    snippets = (
+        OCRSnippet("zero", "0", (12, 164, 12, 12), 0.96),
+        OCRSnippet("five", "5", (12, 94, 12, 12), 0.96),
+        OCRSnippet("ten", "10", (8, 24, 16, 12), 0.96),
+        OCRSnippet("category_a", "A", (72, 178, 12, 12), 0.92),
+    )
+    monkeypatch.setattr(bar_sensor, "recognize_text", lambda _image: OCRObservation(snippets, True))
+
+    result = measure_bar_image(_png(draw))
+
+    assert result["status"] == "measured"
+    assert result["axes"]["y"]["calibration"]["calibrated"] is True
+    assert result["bars"][0]["measure"]["value"] == pytest.approx(5.0, abs=0.01)
+    assert result["bars"][0]["category_label"] == "A"
+    assert result["bars"][0]["category_tick_id"] == "x_category_a"

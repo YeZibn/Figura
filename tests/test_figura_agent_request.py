@@ -444,7 +444,7 @@ def test_request_includes_complete_prior_run_history_without_prior_continuation(
     assert "无可用附件" in request.messages[3].content
 
 
-def test_request_fails_closed_when_recorded_registry_is_unavailable(tmp_path) -> None:
+def test_request_keeps_fully_resolved_history_from_a_prior_registry_version(tmp_path) -> None:
     store, coordinator, session, run = _app(tmp_path)
     original = _registry()
     changed = _registry(version="registry-v2")
@@ -457,10 +457,11 @@ def test_request_fails_closed_when_recorded_registry_is_unavailable(tmp_path) ->
         call_id="call-registry",
     )
 
-    with pytest.raises(RunError) as error:
-        _builder(store, coordinator).build(state, changed)
+    request = _builder(store, coordinator).build(state, changed)
 
-    assert error.value.code is RunErrorCode.UNSUPPORTED_PAYLOAD
+    assert request.messages[1].tool_calls[0].name == "inspect"
+    assert request.messages[2].role is MessageRole.TOOL
+    assert request.messages[2].tool_call_id == "call-registry"
 
 
 def test_request_preserves_all_complete_rounds_and_fails_when_history_cannot_fit(

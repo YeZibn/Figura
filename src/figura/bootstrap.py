@@ -19,6 +19,8 @@ from figura.runtime.run_lock import PerRunExecutionLock
 from figura.tools import ToolRegistry, ToolRuntime
 from figura.tools.implementations.image import image_tool_definitions
 from figura.tools.implementations.measure_bars import measure_bars_definition
+from figura.tools.implementations.measure_lines import measure_lines_definition
+from figura.tools.implementations.measure_scatter import measure_scatter_definition
 
 
 def create_application(
@@ -42,10 +44,12 @@ def create_application(
     panel_service = FiguraPanelService(sources, store.data_root, attachment_service)
     execution_state = RunExecutionStateService(coordinator, panel_service)
     registry = ToolRegistry(
-        "figura-web-v2",
+        "figura-web-v3",
         (
             *image_tool_definitions(execution_state.for_run, attachment_service, panel_service),
             measure_bars_definition(execution_state.for_run, attachment_service, panel_service),
+            measure_lines_definition(execution_state.for_run, attachment_service, panel_service),
+            measure_scatter_definition(execution_state.for_run, attachment_service, panel_service),
         ),
     )
     runtime = ToolRuntime(registry)

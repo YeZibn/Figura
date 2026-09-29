@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 
 from figura.sources.attachments import FiguraAttachmentService
@@ -31,16 +32,22 @@ from figura.providers.errors import ProviderCallError
 from figura.providers.validation import validate_request
 from figura.shared.image_limits import MAX_IMAGE_BYTES
 from figura.runtime.errors import RunError, RunErrorCode
-from figura.runtime.models import ActionKind, Run, RunStatus
-from figura.runtime.records import ProviderContinuationFact, RunState
-from figura.tools import ToolRegistry, project_provider_tools
-from figura.agent.execution_state import latest_loaded_images
+from figura.runtime.models import ActionKind, RecordKind, Run, RunStatus, ToolFactKind
+from figura.runtime.records import (
+    ProviderContinuationFact,
+    RunState,
+    ToolCallFact,
+    ToolResultFact,
+)
+from figura.tools import ToolOutcome, ToolRegistry, project_provider_tools
+from figura.tools.measurements.visualization import render_measurement_overlay
 
 
 _SYSTEM_INSTRUCTION = Path(__file__).with_name("assets").joinpath("system-v1.md").read_text(
     encoding="utf-8"
 )
 _MAX_COMPLETION_TOKENS = 4096
+_MEASUREMENT_TOOLS = frozenset({"measure_bars", "measure_lines", "measure_scatter"})
 
 
 class AgentRequestBuilder:
@@ -95,7 +102,7 @@ class AgentRequestBuilder:
         messages = (
             *messages,
             ProviderMessage(MessageRole.USER, _image_inventory(execution_state)),
-            *self._loaded_image_messages(state, execution_state),
+            *self._tool_image_messages(state, execution_state),
         )
         try:
             tools = project_provider_tools(registry)
@@ -128,6 +135,17 @@ class AgentRequestBuilder:
         registry: ToolRegistry,
     ) -> tuple[ProviderMessage, ...]:
         projected: list[ProviderMessage] = []
+        resolved_calls_by_response: dict[tuple[str, str], set[str]] = {}
+        for index, message in enumerate(messages):
+            if not isinstance(message, AssistantMessage):
+                continue
+            key = (message.run_id, message.source_record_id)
+            paired = set()
+            for following in messages[index + 1 :]:
+                if not isinstance(following, ToolMessage):
+                    break
+                paired.add(following.tool_call_id)
+            resolved_calls_by_response[key] = paired
         for message in messages:
             if isinstance(message, UserMessage):
                 projected.append(
@@ -137,7 +155,13 @@ class AgentRequestBuilder:
                     )
                 )
             elif isinstance(message, AssistantMessage):
-                if any(call.registry_version != registry.version for call in message.tool_calls):
+                paired_calls = resolved_calls_by_response.get(
+                    (message.run_id, message.source_record_id), set()
+                )
+                if any(
+                    call.registry_version != registry.version and call.call_id not in paired_calls
+                    for call in message.tool_calls
+                ):
                     raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
                 continuation = None
                 if message.run_id == current_run.run_id:
@@ -178,7 +202,7 @@ class AgentRequestBuilder:
                 raise RunError(RunErrorCode.INTEGRITY_ERROR)
         return tuple(projected)
 
-    def _loaded_image_messages(
+    def _tool_image_messages(
         self,
         state: RunState,
         execution_state: RunExecutionState,
@@ -186,28 +210,120 @@ class AgentRequestBuilder:
         available_attachments = {item.attachment_id: item for item in execution_state.available_attachments}
         available_panels = {item.panel_id: item for item in execution_state.panels}
         blocks: list[TextBlock | ImageBlock] = []
-        for kind, source_id, name in latest_loaded_images(state):
-            if kind == "attachment":
-                if source_id not in available_attachments:
-                    raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
-                image = self._attachments.resolve(state.run.session_id, source_id)
-            else:
-                if source_id not in available_panels:
-                    raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
-                _record, image, _width, _height = self._execution_state.resolve_panel(
-                    state.run.session_id, source_id
+        response_id = next(
+            (record.record_id for record in reversed(state.records) if record.record_kind is RecordKind.MODEL_RESPONSE),
+            None,
+        )
+        if response_id is None:
+            return ()
+        calls = sorted(
+            (
+                (fact.tool_sequence, fact.payload)
+                for fact in state.tool_facts
+                if fact.fact_kind is ToolFactKind.TOOL_CALL
+                and isinstance(fact.payload, ToolCallFact)
+                and fact.payload.response_record_id == response_id
+            ),
+            key=lambda item: item[1].position,
+        )
+        results = {
+            fact.payload.tool_call_sequence: fact.payload
+            for fact in state.tool_facts
+            if fact.fact_kind is ToolFactKind.TOOL_RESULT
+            and isinstance(fact.payload, ToolResultFact)
+        }
+        observations = {
+            item.call_id: item
+            for item in execution_state.measurements
+            if item.run_id == state.run.run_id
+        }
+        loaded_sources: set[tuple[str, str]] = set()
+        for sequence, call in calls:
+            result = results.get(sequence)
+            if result is None or result.outcome is not ToolOutcome.SUCCEEDED or not isinstance(result.result, Mapping):
+                continue
+            if call.tool_name == "load_image":
+                kind, source_id, name = (
+                    result.result.get("source_kind"),
+                    result.result.get("source_id"),
+                    result.result.get("name"),
                 )
+                if (
+                    not isinstance(kind, str) or kind not in {"attachment", "panel"}
+                    or not isinstance(source_id, str) or not isinstance(name, str)
+                ):
+                    raise RunError(RunErrorCode.INTEGRITY_ERROR)
+                identity = (kind, source_id)
+                if identity in loaded_sources:
+                    continue
+                loaded_sources.add(identity)
+                image = self._resolve_source_image(
+                    state.run.session_id, kind, source_id, available_attachments, available_panels
+                )
+                blocks.extend((TextBlock(f"已加载图像 {kind}:{source_id}（{name}）。"), image))
+                continue
+            if call.tool_name not in _MEASUREMENT_TOOLS:
+                continue
+            observation = observations.get(call.call_id)
             if (
-                not isinstance(image, ImageBlock)
-                or not isinstance(image.image_bytes, bytes)
-                or not image.image_bytes
-                or len(image.image_bytes) > MAX_IMAGE_BYTES
+                observation is None
+                or observation.outcome is not ToolOutcome.SUCCEEDED
+                or observation.result is None
+                or observation.source_kind != result.result.get("source_kind")
+                or observation.source_id != result.result.get("source_id")
             ):
+                raise RunError(RunErrorCode.INTEGRITY_ERROR)
+            image = self._resolve_source_image(
+                state.run.session_id,
+                observation.source_kind,
+                observation.source_id,
+                available_attachments,
+                available_panels,
+            )
+            try:
+                annotated_bytes = render_measurement_overlay(
+                    image.image_bytes,
+                    observation.result,
+                    call.tool_name,
+                )
+            except (TypeError, ValueError, OSError):
+                raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD) from None
+            if not annotated_bytes or len(annotated_bytes) > MAX_IMAGE_BYTES:
                 raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
-            blocks.extend((TextBlock(f"已加载图像 {kind}:{source_id}（{name}）。"), image))
+            blocks.extend((
+                TextBlock(f"测量结果图像回看：{call.tool_name}；调用 ID：{call.call_id}。"),
+                ImageBlock("image/png", annotated_bytes),
+            ))
         if not blocks:
             return ()
         return (ProviderMessage(MessageRole.USER, tuple(blocks)),)
+
+    def _resolve_source_image(
+        self,
+        session_id: str,
+        kind: str,
+        source_id: str,
+        available_attachments: Mapping[str, object],
+        available_panels: Mapping[str, object],
+    ) -> ImageBlock:
+        if kind == "attachment":
+            if source_id not in available_attachments:
+                raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
+            image = self._attachments.resolve(session_id, source_id)
+        elif kind == "panel":
+            if source_id not in available_panels:
+                raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
+            _record, image, _width, _height = self._execution_state.resolve_panel(session_id, source_id)
+        else:
+            raise RunError(RunErrorCode.INTEGRITY_ERROR)
+        if (
+            not isinstance(image, ImageBlock)
+            or not isinstance(image.image_bytes, bytes)
+            or not image.image_bytes
+            or len(image.image_bytes) > MAX_IMAGE_BYTES
+        ):
+            raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
+        return image
 
 
 def _continuations_by_response(
@@ -241,5 +357,6 @@ def _image_inventory(state: RunExecutionState) -> str:
         "当前 Session 图像清单（这里只是名称和 ID，尚未提供图像内容）。\n"
         f"可用附件：\n{attachments}\n"
         f"已提交 Panel：\n{panels}\n"
-        "需要观察图像时，先用 load_image 显式读取。矩形也用四点多边形提交给 decompose_chart_image。"
+        "需要直接查看原始图像时使用 load_image；measure_bars、measure_lines、measure_scatter 可直接选择来源进行测量，无需先加载图像。"
+        "矩形也用四点多边形提交给 decompose_chart_image。"
     )

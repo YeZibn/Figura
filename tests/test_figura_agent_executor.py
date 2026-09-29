@@ -16,6 +16,7 @@ from figura.agent.execution_state import RunExecutionStateService
 from figura.providers import (
     MODEL_IDS,
     FinishReason,
+    MessageRole,
     ProviderFactory,
     ProviderId,
     ProviderResponse,
@@ -23,7 +24,7 @@ from figura.providers import (
 )
 from figura.providers.errors import ProviderCallError, ProviderFailure, ProviderFailureCode
 from figura.runtime.coordinator import RunCoordinator
-from figura.runtime.models import ActionKind, RunCreateRequest, RunStatus, TerminalCode
+from figura.runtime.models import ActionKind, RunCreateRequest, RunStatus, TerminalCode, ToolFactKind
 from figura.runtime.store import FiguraRunStore
 from figura.runtime.tool_execution import DurableToolExecutor
 from figura.runtime.run_lock import PerRunExecutionLock
@@ -716,7 +717,7 @@ def test_missing_historical_attachment_is_not_read_without_explicit_load(tmp_pat
     assert "chart.png" in factory.client.requests[0].messages[-1].content
 
 
-def test_historical_tool_registry_mismatch_fails_before_claim(tmp_path) -> None:
+def test_historical_resolved_tool_registry_mismatch_is_kept_as_inert_history(tmp_path) -> None:
     store, coordinator, session, prior = _app(tmp_path)
     historical_registry = _registry()
     call_response = _response(
@@ -749,7 +750,50 @@ def test_historical_tool_registry_mismatch_fails_before_claim(tmp_path) -> None:
         session.session_id, current.run_id
     )
 
-    _assert_request_rejected_before_claim(state, factory)
+    assert state.run.status is RunStatus.COMPLETED
+    assert len(factory.client.requests) == 1
+    request_messages = factory.client.requests[0].messages
+    assert any(
+        message.role is MessageRole.ASSISTANT
+        and any(call.call_id == "prior-call" for call in message.tool_calls)
+        for message in request_messages
+    )
+    assert any(
+        message.role is MessageRole.TOOL and message.tool_call_id == "prior-call"
+        for message in request_messages
+    )
+
+
+def test_unresolved_old_registry_call_is_not_executed_under_the_new_registry(tmp_path) -> None:
+    store, coordinator, session, run = _app(tmp_path)
+    old_registry = _registry()
+    _commit_tool_response(
+        coordinator,
+        session.session_id,
+        run.run_id,
+        old_registry,
+        _response(
+            content="尚未解析的历史工具调用。",
+            reason=FinishReason.TOOL_CALLS,
+            calls=(ProviderToolCall("old-pending", "inspect", '{"value":1}'),),
+        ),
+    )
+    active_registry = ToolRegistry("registry-v2", old_registry.definitions)
+    factory = _FakeFactory([_response()])
+
+    state = _agent(store, coordinator, active_registry, factory).execute(
+        session.session_id, run.run_id
+    )
+
+    assert state.run.status is RunStatus.FAILED
+    assert len(state.provider_attempts) == 1
+    assert factory.selections == []
+    assert factory.client.requests == []
+    assert not any(
+        fact.fact_kind is ToolFactKind.TOOL_RESULT
+        and getattr(fact.payload, "call_id", None) == "old-pending"
+        for fact in state.tool_facts
+    )
 
 
 def test_incomplete_prior_tool_work_fails_before_claim(tmp_path) -> None:

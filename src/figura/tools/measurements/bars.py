@@ -11,6 +11,14 @@ from typing import Any, Literal
 import numpy as np
 from PIL import Image
 
+from .cartesian import (
+    associate_legend_labels,
+    axis_scalar,
+    calibrated_axis_value,
+    observe_cartesian_axes,
+)
+from .ocr import recognize_text
+
 
 Orientation = Literal["vertical", "horizontal"]
 
@@ -33,9 +41,11 @@ def measure_bar_image(image_bytes: bytes) -> dict[str, Any]:
         raise ValueError("image cannot be decoded") from None
 
     height, width = rgb.shape[:2]
+    ocr = recognize_text(rgb)
     candidates, orientation, palette, orientation_confidence = _find_candidates(rgb)
     if not candidates:
-        return _empty_result(width, height)
+        axes = observe_cartesian_axes(rgb, ocr.snippets, None)
+        return _empty_result(width, height, axes, ocr.truncated)
 
     stacked = _has_stacked_bars(candidates, orientation)
     _assign_categories(candidates, orientation, stacked)
@@ -52,6 +62,8 @@ def measure_bar_image(image_bytes: bytes) -> dict[str, Any]:
     axis_hint = _axis_hint(rgb, candidates, orientation)
     baseline = _fit_baseline(candidates, orientation, axis_hint, stacked)
     warnings: list[str] = []
+    if ocr.truncated:
+        warnings.append("OCR candidate limit reached; axis and legend associations may be incomplete")
     if orientation_confidence < 0.56:
         warnings.append("bar orientation is ambiguous")
     if len({item["_series_index"] for item in candidates}) > 1:
@@ -79,19 +91,37 @@ def measure_bar_image(image_bytes: bytes) -> dict[str, Any]:
         warnings.append("some bars do not align with the fitted baseline")
     valid_lengths = [abs(value) for value in values if value is not None and abs(value) > 0]
     shortest = min(valid_lengths) if valid_lengths else None
-    series = [
-        {"id": f"series_{index}", "color": _hex(palette[index - 1])}
+    series_colors = {
+        f"series_{index}": _hex(palette[index - 1])
         for index in sorted({item["_series_index"] for item in candidates})
+    }
+    axes = observe_cartesian_axes(rgb, ocr.snippets, None)
+    labels = associate_legend_labels(rgb, ocr.snippets, palette)
+    series = [
+        {
+            "id": series_id,
+            "color": color,
+            "label": labels.get(color, (None, None))[0],
+            "label_confidence": labels.get(color, (None, None))[1],
+        }
+        for series_id, color in series_colors.items()
     ]
+    category_axis_name = "x" if orientation == "vertical" else "y"
+    category_associations = _category_associations(candidates, orientation, axes[category_axis_name])
+    value_axis_name = "y" if orientation == "vertical" else "x"
     bars: list[dict[str, Any]] = []
     for bar_id, (candidate, value) in enumerate(zip(candidates, values, strict=True), start=1):
+        category_label, category_tick_id = category_associations.get(candidate["_category_index"], (None, None))
         measure = {
             "value_length_px": value,
             "ratio_to_shortest": round(abs(value) / shortest, 6) if value is not None and shortest else None,
+            "value": _bar_chart_value(candidate, baseline, orientation, axes[value_axis_name]) if baseline is not None else None,
         }
         bar: dict[str, Any] = {
             "id": bar_id,
             "category_index": candidate["_category_index"],
+            "category_label": category_label,
+            "category_tick_id": category_tick_id,
             "series_id": f"series_{candidate['_series_index']}",
             "geometry": _geometry(candidate),
             "measure": measure,
@@ -103,6 +133,17 @@ def measure_bar_image(image_bytes: bytes) -> dict[str, Any]:
                 "segment_index": members.index(candidate) + 1,
                 "total_length_px": stack["total_length_px"] if baseline is not None else None,
                 "total_geometry": stack["total_geometry"],
+                "total_value": _bar_chart_value(
+                    {
+                        "_left": stack["total_geometry"]["bbox_px"][0],
+                        "_top": stack["total_geometry"]["bbox_px"][1],
+                        "_right": stack["total_geometry"]["bbox_px"][0] + stack["total_geometry"]["bbox_px"][2],
+                        "_bottom": stack["total_geometry"]["bbox_px"][1] + stack["total_geometry"]["bbox_px"][3],
+                    },
+                    baseline,
+                    orientation,
+                    axes[value_axis_name],
+                ) if baseline is not None else None,
             }
         bars.append(bar)
 
@@ -119,9 +160,19 @@ def measure_bar_image(image_bytes: bytes) -> dict[str, Any]:
         )}
         baseline_confidence = baseline["confidence"]
 
+    value_calibration = axes[value_axis_name].get("calibration")
+    calibration_confidence = (
+        float(value_calibration["confidence"])
+        if isinstance(value_calibration, dict) and value_calibration.get("calibrated") is True
+        else 0.0
+    )
+    if not calibration_confidence:
+        warnings.append("numeric value-axis calibration is unavailable; chart-unit values are null")
+        if status == "measured":
+            status = "partial"
     geometry_confidence = _clamp(float(np.mean([item["_density"] for item in candidates])))
     association_confidence = 0.78 if len(series) == 1 else 0.62
-    overall = _clamp(0.45 * geometry_confidence + 0.35 * baseline_confidence + 0.2 * association_confidence)
+    overall = _clamp(0.4 * geometry_confidence + 0.25 * baseline_confidence + 0.2 * calibration_confidence + 0.15 * association_confidence)
     plot_area = _plot_area(candidates)
     return {
         "image_size": {"width": width, "height": height},
@@ -130,19 +181,25 @@ def measure_bar_image(image_bytes: bytes) -> dict[str, Any]:
         "bar_mode": "stacked" if stacked else "grouped" if len(series) > 1 else "single",
         "plot_area_px": plot_area,
         "baseline": public_baseline,
+        "axes": axes,
         "series": series,
         "bars": bars,
         "confidence": {
             "overall": overall,
             "geometry": geometry_confidence,
-            "baseline": baseline_confidence,
+            "calibration": calibration_confidence,
             "association": association_confidence,
         },
         "warnings": warnings,
     }
 
 
-def _empty_result(width: int, height: int) -> dict[str, Any]:
+def _empty_result(
+    width: int,
+    height: int,
+    axes: dict[str, dict[str, object]],
+    ocr_truncated: bool,
+) -> dict[str, Any]:
     return {
         "image_size": {"width": width, "height": height},
         "status": "no_evidence",
@@ -150,11 +207,79 @@ def _empty_result(width: int, height: int) -> dict[str, Any]:
         "bar_mode": "unknown",
         "plot_area_px": None,
         "baseline": None,
+        "axes": axes,
         "series": [],
         "bars": [],
-        "confidence": {"overall": 0.0, "geometry": 0.0, "baseline": 0.0, "association": 0.0},
-        "warnings": ["no bar geometry was detected"],
+        "confidence": {"overall": 0.0, "geometry": 0.0, "calibration": 0.0, "association": 0.0},
+        "warnings": [
+            "no bar geometry was detected",
+            *(["OCR candidate limit reached; axis and legend associations may be incomplete"] if ocr_truncated else []),
+        ],
     }
+
+
+def _category_associations(
+    candidates: Sequence[dict[str, Any]],
+    orientation: Orientation,
+    axis: dict[str, object],
+) -> dict[int, tuple[str | None, str | None]]:
+    points, ticks = axis.get("points_px"), axis.get("ticks")
+    if not isinstance(points, list) or len(points) != 2 or not isinstance(ticks, list) or not ticks:
+        return {}
+    center_key = "_center_x" if orientation == "vertical" else "_center_y"
+    groups: dict[int, list[dict[str, Any]]] = {}
+    for candidate in candidates:
+        groups.setdefault(candidate["_category_index"], []).append(candidate)
+    axis_length = float(np.linalg.norm(np.asarray(points[1], dtype=float) - np.asarray(points[0], dtype=float)))
+    max_distance = max(20.0, axis_length / max(2.0, len(ticks) * 1.5))
+    result: dict[int, tuple[str | None, str | None]] = {}
+    for category_index, members in groups.items():
+        coordinate = float(np.mean([item[center_key] for item in members]))
+        if orientation == "vertical":
+            y = float(np.interp(coordinate, [points[0][0], points[1][0]], [points[0][1], points[1][1]]))
+            center = [coordinate, y]
+        else:
+            y0, y1 = float(points[0][1]), float(points[1][1])
+            x = float(points[0][0]) + (coordinate - y0) * (float(points[1][0]) - float(points[0][0])) / (y1 - y0)
+            center = [x, coordinate]
+        projection = axis_scalar(center, points)
+        candidates_by_distance = [
+            (abs(axis_scalar(tick["point_px"], points) - projection), tick)
+            for tick in ticks
+            if isinstance(tick, dict) and isinstance(tick.get("point_px"), list)
+        ]
+        if not candidates_by_distance:
+            continue
+        distance, tick = min(candidates_by_distance, key=lambda item: item[0])
+        if distance > max_distance:
+            continue
+        category_text = tick.get("text") if axis.get("kind") == "categorical" else None
+        result[category_index] = (
+            category_text if isinstance(category_text, str) else None,
+            tick.get("id") if isinstance(tick.get("id"), str) else None,
+        )
+    return result
+
+
+def _bar_chart_value(
+    candidate: dict[str, Any],
+    baseline: dict[str, Any],
+    orientation: Orientation,
+    axis: dict[str, object],
+) -> float | None:
+    if orientation == "vertical":
+        coordinate = (candidate["_left"] + candidate["_right"]) / 2.0
+        baseline_point = [coordinate, baseline["slope"] * coordinate + baseline["intercept"]]
+        edge_points = [[coordinate, candidate["_top"]], [coordinate, candidate["_bottom"]]]
+    else:
+        coordinate = (candidate["_top"] + candidate["_bottom"]) / 2.0
+        baseline_point = [baseline["slope"] * coordinate + baseline["intercept"], coordinate]
+        edge_points = [[candidate["_left"], coordinate], [candidate["_right"], coordinate]]
+    near_index = min(range(2), key=lambda index: abs(edge_points[index][0 if orientation == "horizontal" else 1] - baseline_point[0 if orientation == "horizontal" else 1]))
+    far_point = edge_points[1 - near_index]
+    near_value = calibrated_axis_value(baseline_point, axis)
+    far_value = calibrated_axis_value(far_point, axis)
+    return round(far_value - near_value, 6) if near_value is not None and far_value is not None else None
 
 
 def _find_candidates(

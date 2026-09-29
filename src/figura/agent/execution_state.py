@@ -25,6 +25,9 @@ from figura.sources.models import PanelRecord
 from figura.sources.panels import FiguraPanelService
 
 
+_MEASUREMENT_TOOL_NAMES = frozenset({"measure_bars", "measure_lines", "measure_scatter"})
+
+
 @dataclass(frozen=True)
 class AvailableAttachment:
     attachment_id: str
@@ -217,12 +220,12 @@ def _committed_measurements(
             if fact.fact_kind is not ToolFactKind.TOOL_RESULT or not isinstance(fact.payload, ToolResultFact):
                 continue
             result_fact = fact.payload
-            if result_fact.tool_name != "measure_bars":
+            if result_fact.tool_name not in _MEASUREMENT_TOOL_NAMES:
                 continue
             call = calls.get(result_fact.tool_call_sequence)
             if (
                 call is None
-                or call.tool_name != "measure_bars"
+                or call.tool_name not in _MEASUREMENT_TOOL_NAMES
                 or call.call_id != result_fact.call_id
                 or not any(
                     attempt.call_id == call.call_id and attempt.attempt_id == result_fact.attempt_id
@@ -302,53 +305,3 @@ def _measurement_source(arguments_json: str) -> tuple[Literal["attachment", "pan
     ):
         return None
     return kind, source_id
-
-
-def latest_loaded_images(state: RunState) -> tuple[tuple[str, str, str], ...]:
-    """Return distinct successful image loads from the latest committed tool batch."""
-    if state.checkpoint.next_action is None or state.checkpoint.next_action.action_kind is not ActionKind.MODEL:
-        raise RunError(RunErrorCode.INVALID_TRANSITION)
-    response_id = next(
-        (record.record_id for record in reversed(state.records) if record.record_kind is RecordKind.MODEL_RESPONSE),
-        None,
-    )
-    if response_id is None:
-        return ()
-    calls = sorted(
-        (
-            (fact.tool_sequence, fact.payload)
-            for fact in state.tool_facts
-            if fact.fact_kind is ToolFactKind.TOOL_CALL
-            and isinstance(fact.payload, ToolCallFact)
-            and fact.payload.response_record_id == response_id
-        ),
-        key=lambda pair: pair[1].position,
-    )
-    results = {
-        fact.payload.tool_call_sequence: fact.payload
-        for fact in state.tool_facts
-        if fact.fact_kind is ToolFactKind.TOOL_RESULT and isinstance(fact.payload, ToolResultFact)
-    }
-    loaded: list[tuple[str, str, str]] = []
-    seen: set[tuple[str, str]] = set()
-    for call_sequence, call in calls:
-        if call.tool_name != "load_image":
-            continue
-        result = results.get(call_sequence)
-        if result is None or result.outcome is not ToolOutcome.SUCCEEDED or not isinstance(result.result, Mapping):
-            continue
-        kind = result.result.get("source_kind")
-        source_id = result.result.get("source_id")
-        name = result.result.get("name")
-        if (
-            not isinstance(kind, str)
-            or kind not in {"attachment", "panel"}
-            or not isinstance(source_id, str)
-            or not isinstance(name, str)
-        ):
-            raise RunError(RunErrorCode.INTEGRITY_ERROR)
-        identity = (kind, source_id)
-        if identity not in seen:
-            seen.add(identity)
-            loaded.append((kind, source_id, name))
-    return tuple(loaded)

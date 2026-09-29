@@ -1,29 +1,4 @@
-# bar-chart-measurement Specification
-
-## Purpose
-
-Provides structured, source-bound pixel measurements for two-dimensional bar charts so the Agent can use geometric evidence without treating uncertain image analysis as exact chart data.
-
-## Requirements
-
-### Requirement: Measure bars from an authorized Attachment or Panel
-Figura SHALL register a `measure_bars` tool accepting exactly `source_kind` (`attachment` or `panel`) and an opaque `source_id`. For `attachment`, Figura SHALL resolve only an attachment in the target Run's `RunExecutionState.available_attachments`; for `panel`, it SHALL resolve only a Panel in `RunExecutionState.panels`. Figura SHALL verify ownership through the corresponding source service before reading image bytes. The tool SHALL analyze the entire selected source, SHALL NOT require a preceding `load_image` call, and SHALL NOT accept a filesystem path, URL, or image bytes from the model.
-
-#### Scenario: Measure an authorized Attachment
-- **WHEN** the model calls `measure_bars` with `source_kind: attachment` and an attachment ID in the target Run's available attachment inventory
-- **THEN** Figura resolves that Attachment within the same Session and measures its image without exposing its local path or bytes in the tool result
-
-#### Scenario: Measure an authorized Panel
-- **WHEN** the model calls `measure_bars` with `source_kind: panel` and a Panel ID in `RunExecutionState.panels`
-- **THEN** Figura resolves that Panel within the same Session and measures the independent Panel image
-
-#### Scenario: Reject a source outside the Run inventory
-- **WHEN** the model supplies an unknown, unreferenced, or cross-Session Attachment or Panel ID
-- **THEN** Figura returns a bounded structured tool failure and reads no image bytes
-
-#### Scenario: Measure an Attachment containing multiple charts
-- **WHEN** the model selects an authorized Attachment that contains multiple chart regions
-- **THEN** Figura analyzes the entire Attachment and returns source-coordinate candidates and any sensor warnings without silently substituting or cropping to a Panel
+## MODIFIED Requirements
 
 ### Requirement: Return pixel-based bar geometry and measurements
 For a readable selected source, `measure_bars` SHALL return a bounded JSON object with `source_kind`, `source_id`, `image_size` (`width`, `height`), `coordinate_system` (`attachment_px` or `panel_px`), `status` (`measured`, `partial`, `no_evidence`, or `unsupported`), `orientation` (`vertical`, `horizontal`, `oblique`, or `unknown`), `bar_mode` (`single`, `grouped`, `stacked`, or `unknown`), `plot_area_px`, `baseline`, `axes`, `series`, `bars`, `confidence`, and `warnings`. Pixel geometry SHALL use the selected source's coordinate system. `axes` SHALL contain `x` and `y` observations. Each axis SHALL contain `kind` (`numeric`, `categorical`, or `unknown`), nullable `label_text`, nullable `label_confidence`, nullable two-point `points_px`, `ticks`, and nullable `calibration`. Each tick SHALL contain a stable result-local `id`, OCR `text`, nullable numeric `value`, `bbox_px`, `point_px`, and bounded `confidence`. A non-null calibration SHALL contain `slope`, `intercept`, `residual_value`, `support_count`, `support_span_px`, bounded `confidence`, and `calibrated`. Each detected bar SHALL include an integer `id`, one-based `category_index`, nullable `category_label` and `category_tick_id`, `series_id`, rectangular `geometry` (`bbox_px` as `[x, y, width, height]` and its four-corner `polygon_px`), and `measure` containing signed `value_length_px`, `ratio_to_shortest`, and nullable calibrated `value`. Stacked bars MAY additionally include `stack` with `segment_index`, `total_length_px`, `total_geometry`, and nullable calibrated `total_value`. Each series SHALL include a stable `id`, detected `color`, and nullable OCR-associated `label` and `label_confidence`. `baseline` SHALL be null or include `points_px`, `axis`, `slope`, `intercept`, `residual_px`, and bounded `confidence`. `confidence` SHALL contain bounded numeric `overall`, `geometry`, `calibration`, and `association` values. `warnings` SHALL describe ambiguity, incomplete evidence, or unsupported geometry.
