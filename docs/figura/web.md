@@ -209,27 +209,27 @@ Session 详情的用户可见对话投影，不是 Agent Session Memory。由 `w
 | `FiguraRunDto.terminalCode` | `string \| null` | 必填，可空 | 持久安全终态原因码；活动 Run 为空 | run projection → `Run.terminal_code` → UI 安全状态；不含异常堆栈 |
 | `FiguraRunDto.terminalMessage` | `string \| null` | 必填，可空 | 可安全显示的终态说明 | run projection → `Run.terminal_message` → UI；无终态时为空 |
 | `FiguraRunDto.executionState` | `'active' \| 'needs_reconciliation'` | 必填 | `needs_reconciliation` 当且仅当 Run 仍 running 且 checkpoint action 是 `TOOL_ATTEMPT`；否则为 `active` | `run_summary` → Run + ExecutionCheckpoint → UI reconciliation 状态；纯派生，不写回 Runtime |
-| `FiguraRunDto.chartRenders` | `ChartRenderSummary[]` | 必填 | 当前 Run 成功提交的渲染摘要；无成功渲染时为空数组 | `run_summary` → `RunExecutionState.chart_renders` 和已接受 Figure → React Gallery；PNG 字节另走受授权路由 |
+| `FiguraRunDto.chartRenders` | `ChartRenderSummary[]` | 必填 | 当前 Run 成功提交的渲染摘要；无成功渲染时为空数组 | `run_summary` → Agent 资源目录的成功 ChartRenderContent 与被引用 ChartFigureContent → React Gallery；PNG 字节另走受授权路由 |
 
 `FiguraRunHandleDto = Omit<FiguraRunDto, 'executionState' | 'chartRenders'>` 的完整字段为 `runId`、`sessionId`、`ordinal`、`status`、`provider`、`model`、`createdAt`、`startedAt`、`finishedAt`、`terminalCode`、`terminalMessage`；每字段类型、来源与公开规则与 `FiguraRunDto` 相同。Handle 由 `web_projection.run_handle` 从 `Run` 生成。
 
 ### `ChartRenderSummary`
 
-`FiguraRunDto.chartRenders` 和 `FiguraRunHistoryDto.run.chartRenders` 中的已成功渲染摘要，由 `web_projection.chart_render_summaries` 依据 `RunExecutionState.chart_renders` 与已接受 Figure 摘要构造。数组按渲染发生顺序排列，归属于发起渲染工具调用的 Run；图片字节不在 DTO 中，前端需要时使用 `FiguraClient.chartRenderContentUrl` 懒加载。失败渲染不出现在 Web DTO。
+`FiguraRunDto.chartRenders` 和 `FiguraRunHistoryDto.run.chartRenders` 中的已成功渲染摘要，由 `web_projection.chart_render_summaries` 查询 Agent 资源目录的 `chart_render` 与 `chart_figure` 两类资源构造。数组按渲染发生顺序排列，归属于发起渲染工具调用的 Run；图片字节不在 DTO 中，前端需要时使用 `FiguraClient.chartRenderContentUrl` 懒加载。失败渲染不出现在 Web DTO。
 
 | 完整字段路径 | JSON 类型 | 必填/默认 | 含义与约束 | 写入者 → 权威来源 → 读取/公开规则 |
 |---|---|---|---|---|
-| `ChartRenderSummary.callId` | `string` | 必填 | 发起 `render_chart_figure` 的 call ID，也是渲染文件内容路径键 | `chart_render_summaries` → `ChartRenderObservation.call_id` → Gallery key 与受授权 PNG URL |
-| `ChartRenderSummary.figureRef` | object | 必填；恰含 `runId`、`callId` | 已接受 Figure 的来源引用 | `chart_render_summaries` → `ChartRenderObservation.figure_ref` → 展示/一致性检查；不直接授权内容读取 |
-| `ChartRenderSummary.figureRef.runId` | `string` | 必填 | Figure assembly 来源 Run ID | `ChartFigureReference.run_id` → Gallery 元信息 |
-| `ChartRenderSummary.figureRef.callId` | `string` | 必填 | Figure assembly 调用 ID | `ChartFigureReference.call_id` → Gallery 元信息 |
-| `ChartRenderSummary.figureTitle` | `string` | 必填 | 被渲染 Figure 标题，可为空 | `chart_render_summaries` → 同 Session 已接受 `ChartFigureSummary.title` → figcaption 与图片 alt |
-| `ChartRenderSummary.figureDigest` | `string` | 必填；64 位小写十六进制 | 被渲染 Figure 的 canonical digest | 成功 ToolResultFact.result → `ChartRenderObservation.result` → 安全 Run DTO |
-| `ChartRenderSummary.imageSha256` | `string` | 必填；64 位小写十六进制 | PNG 内容 SHA-256，Gateway 读取文件时校验 | 成功 ToolResultFact.result → `ChartRenderObservation.result` → Web 内容路由完整性核验 |
-| `ChartRenderSummary.mediaType` | `'image/png'` | 必填；固定值 | 媒体类型 | 成功 ToolResultFact.result → `ChartRenderObservation.result` → 图片路由 Content-Type |
-| `ChartRenderSummary.byteCount` | `number` | 必填；1–`MAX_IMAGE_BYTES` | PNG 精确字节数 | 成功 ToolResultFact.result → `ChartRenderObservation.result` → 读取时与文件长度比较 |
-| `ChartRenderSummary.width` | `number` | 必填；1–1280 | PNG 像素宽度 | 成功 ToolResultFact.result → `ChartRenderObservation.result` → 读取时与图片解码尺寸比较 |
-| `ChartRenderSummary.height` | `number` | 必填；1–1962 | PNG 像素高度 | 成功 ToolResultFact.result → `ChartRenderObservation.result` → 读取时与图片解码尺寸比较 |
+| `ChartRenderSummary.callId` | `string` | 必填 | 发起 `render_chart_figure` 的 call ID，也是渲染文件内容路径键 | `chart_render_summaries` → `ToolResourceRef.call_id` 的 ChartRenderContent → Gallery key 与受授权 PNG URL |
+| `ChartRenderSummary.figureRef` | object | 必填；恰含 `runId`、`callId` | 已接受 Figure 的来源引用 | `chart_render_summaries` → `ChartRenderContent.figure_ref` → 展示/一致性检查；不直接授权内容读取 |
+| `ChartRenderSummary.figureRef.runId` | `string` | 必填 | Figure assembly 来源 Run ID | `ToolResourceRef.run_id` → Gallery 元信息 |
+| `ChartRenderSummary.figureRef.callId` | `string` | 必填 | Figure assembly 调用 ID | `ToolResourceRef.call_id` → Gallery 元信息 |
+| `ChartRenderSummary.figureTitle` | `string` | 必填 | 被渲染 Figure 标题，可为空 | `chart_render_summaries` → 同 Session 已接受 `ChartFigureContent.result.figure.title` → figcaption 与图片 alt |
+| `ChartRenderSummary.figureDigest` | `string` | 必填；64 位小写十六进制 | 被渲染 Figure 的 canonical digest | 成功 ToolResultFact.result → `ChartRenderContent.result` → 安全 Run DTO |
+| `ChartRenderSummary.imageSha256` | `string` | 必填；64 位小写十六进制 | PNG 内容 SHA-256，Gateway 读取文件时校验 | 成功 ToolResultFact.result → `ChartRenderContent.result` → Web 内容路由完整性核验 |
+| `ChartRenderSummary.mediaType` | `'image/png'` | 必填；固定值 | 媒体类型 | 成功 ToolResultFact.result → `ChartRenderContent.result` → 图片路由 Content-Type |
+| `ChartRenderSummary.byteCount` | `number` | 必填；1–`MAX_IMAGE_BYTES` | PNG 精确字节数 | 成功 ToolResultFact.result → `ChartRenderContent.result` → 读取时与文件长度比较 |
+| `ChartRenderSummary.width` | `number` | 必填；1–1280 | PNG 像素宽度 | 成功 ToolResultFact.result → `ChartRenderContent.result` → 读取时与图片解码尺寸比较 |
+| `ChartRenderSummary.height` | `number` | 必填；1–1962 | PNG 像素高度 | 成功 ToolResultFact.result → `ChartRenderContent.result` → 读取时与图片解码尺寸比较 |
 
 ### `FiguraEventDto` 与 `FiguraRunHistoryDto`
 

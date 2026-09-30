@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from figura.agent.execution_state import RunExecutionState
+from figura.agent.execution_resources import (
+    ChartFigureContent,
+    ChartRenderContent,
+    RunExecutionState,
+    ToolResourceRef,
+)
 from figura.runtime.models import ActionKind, EventKind, RecordKind, Run, Session
 from figura.runtime.records import (
     FinalAnswerFact,
@@ -112,21 +117,30 @@ def panel(record: PanelRecord) -> dict[str, object]:
 def chart_render_summaries(
     execution_state: RunExecutionState,
 ) -> dict[str, tuple[dict[str, object], ...]]:
-    figure_titles = {item.figure_ref: item.title for item in execution_state.chart_figures}
+    figure_titles = {
+        resource.ref: resource.content.result.figure.title
+        for resource in execution_state.list("chart_figure")
+        if isinstance(resource.ref, ToolResourceRef)
+        and isinstance(resource.content, ChartFigureContent)
+        and resource.content.result is not None
+    }
     summaries: dict[str, list[dict[str, object]]] = {}
-    for item in execution_state.chart_renders:
-        if item.outcome.value != "succeeded" or item.result is None:
+    for resource in execution_state.list("chart_render"):
+        if not isinstance(resource.ref, ToolResourceRef) or not isinstance(resource.content, ChartRenderContent):
             continue
-        figure_title = figure_titles.get(item.figure_ref)
+        content = resource.content
+        if content.outcome.value != "succeeded" or content.result is None or content.figure_ref is None:
+            continue
+        figure_title = figure_titles.get(content.figure_ref)
         if figure_title is None:
             continue
-        result = item.result
-        summaries.setdefault(item.run_id, []).append(
+        result = content.result
+        summaries.setdefault(resource.ref.run_id, []).append(
             {
-                "callId": item.call_id,
+                "callId": resource.ref.call_id,
                 "figureRef": {
-                    "runId": item.figure_ref.run_id,
-                    "callId": item.figure_ref.call_id,
+                    "runId": content.figure_ref.run_id,
+                    "callId": content.figure_ref.call_id,
                 },
                 "figureTitle": figure_title,
                 "figureDigest": result["figure_digest"],

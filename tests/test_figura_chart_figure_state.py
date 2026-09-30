@@ -1,17 +1,27 @@
 from __future__ import annotations
 
-from tests.figura_sources_support import make_attachment_service, make_panel_service
+from tests.figura_sources_support import (
+    make_attachment_service,
+    make_execution_image_reader,
+    make_panel_service,
+)
 
 import json
 import hashlib
-from dataclasses import replace
-from types import SimpleNamespace
 
 import pytest
 
-from figura.agent.execution_state import ChartFigureReference, RunExecutionStateService
+from figura.agent.execution_resources import (
+    ChartFigureContent,
+    ChartFigureResult,
+    ChartRenderContent,
+    RunExecutionState,
+    ToolResourceRef,
+)
+from figura.agent.execution_state import RunExecutionStateService
 from figura.agent.request import AgentRequestBuilder
 from figura.charts.chartfigure.rendering import render_chart_figure_image
+from figura.charts.chartfigure import parse_chart_figure
 from figura.providers import (
     MODEL_IDS,
     FinishReason,
@@ -74,10 +84,40 @@ def _setup(tmp_path):
         "figura-web-v6",
         (
             assemble_chart_figure_definition(execution_state.for_run),
-            render_chart_figure_definition(execution_state.for_run, coordinator, renders),
+            render_chart_figure_definition(execution_state.for_run, renders),
         ),
     )
     return store, coordinator, attachments, execution_state, registry
+
+
+def _accepted_figures(state: RunExecutionState):
+    return tuple(
+        resource
+        for resource in state.list("chart_figure")
+        if isinstance(resource.content, ChartFigureContent)
+        and resource.content.result is not None
+    )
+
+
+def _request_builder(store, attachments, execution_state):
+    panels = make_panel_service(store, attachments)
+    return AgentRequestBuilder(
+        execution_state,
+        make_execution_image_reader(
+            attachments,
+            panels,
+            FiguraChartRenderService(store.data_root),
+        ),
+    )
+
+
+def _render_entries(state: RunExecutionState):
+    return tuple(
+        (resource.ref, resource.content)
+        for resource in state.list("chart_render")
+        if isinstance(resource.ref, ToolResourceRef)
+        and isinstance(resource.content, ChartRenderContent)
+    )
 
 
 def _create_run(coordinator: RunCoordinator, session_id: str, key: str):
@@ -248,7 +288,11 @@ def test_successful_figure_is_retained_in_existing_tool_call_and_result_facts(tm
     assert set(results[0].result) == {"figure_ref", "figure_digest", "title", "charts"}
     assert results[0].result["figure_ref"] == {"run_id": run.run_id, "call_id": "figure-call"}
     assert results[0].result["title"] == "Durable figure"
-    assert execution_state.for_run(session.session_id, run.run_id).chart_figures[0].figure_ref.call_id == "figure-call"
+    resource = _accepted_figures(execution_state.for_run(session.session_id, run.run_id))[0]
+    assert resource.ref == ToolResourceRef("chart_figure", run.run_id, "figure-call")
+    assert resource.content.result is not None
+    assert resource.content.result.figure.title == "Durable figure"
+    assert resource.content.result.figure == parse_chart_figure(figure)
 
 
 def test_state_projection_orders_prior_and_current_figures_and_omits_failed_or_pending_calls(
@@ -299,11 +343,12 @@ def test_state_projection_orders_prior_and_current_figures_and_omits_failed_or_p
     )
     partial_projection = execution_state.for_run(session.session_id, current_run.run_id)
 
-    assert [item.title for item in partial_projection.chart_figures] == [
+    partial_figures = _accepted_figures(partial_projection)
+    assert [item.content.result.figure.title for item in partial_figures] == [
         "Prior figure",
         "Current figure",
     ]
-    assert all(item.figure_ref.run_id != foreign_run.run_id for item in partial_projection.chart_figures)
+    assert all(item.ref.run_id != foreign_run.run_id for item in partial_figures)
     assert partially_executed.checkpoint.next_action is not None
 
     completed_tools = DurableToolExecutor(store, registry).execute_pending(
@@ -311,20 +356,19 @@ def test_state_projection_orders_prior_and_current_figures_and_omits_failed_or_p
     )
     projection = execution_state.for_run(session.session_id, current_run.run_id)
 
-    assert [item.title for item in projection.chart_figures] == [
+    accepted_figures = _accepted_figures(projection)
+    assert [item.content.result.figure.title for item in accepted_figures] == [
         "Prior figure",
         "Current figure",
         "Pending figure",
     ]
-    assert [item.figure_ref.run_id for item in projection.chart_figures] == [
+    assert [item.ref.run_id for item in accepted_figures] == [
         prior_run.run_id,
         current_run.run_id,
         current_run.run_id,
     ]
 
-    request = AgentRequestBuilder(
-        attachments, execution_state, FiguraChartRenderService(store.data_root)
-    ).build(
+    request = _request_builder(store, attachments, execution_state).build(
         completed_tools,
         registry,
         coordinator.read_prior_run_states(session.session_id, current_run.run_id),
@@ -334,7 +378,7 @@ def test_state_projection_orders_prior_and_current_figures_and_omits_failed_or_p
         for message in request.messages
         if message.role is MessageRole.USER
         and isinstance(message.content, str)
-        and "已接受 Figure：" in message.content
+        and "ChartFigure：" in message.content
     )
     assert "Prior figure" in inventory
     assert "Current figure" in inventory
@@ -402,34 +446,37 @@ def test_render_observations_include_prior_and_current_runs_and_structured_failu
     )
     executor = DurableToolExecutor(store, registry)
     partial = executor.execute_pending(session.session_id, later_run.run_id, max_calls=3)
-    observations = execution_state.for_run(session.session_id, later_run.run_id).chart_renders
+    observations = _render_entries(execution_state.for_run(session.session_id, later_run.run_id))
 
-    assert [item.call_id for item in observations] == [
+    assert [ref.call_id for ref, _content in observations] == [
         f"render-{prior_run.run_id}",
         f"render-{current_run.run_id}",
         "failed-render",
         "successful-render",
         "successful-current-render",
     ]
-    assert observations[-3].outcome is ToolOutcome.FAILED
-    assert observations[-3].result is None
-    assert observations[-3].error is not None
-    assert observations[-2].outcome is ToolOutcome.SUCCEEDED
-    assert observations[-1].outcome is ToolOutcome.SUCCEEDED
-    assert observations[-1].error is None
-    assert "figure_ref" not in observations[-1].result
-    assert observations[-1].result["media_type"] == "image/png"
+    assert observations[-3][1].outcome is ToolOutcome.FAILED
+    assert observations[-3][1].result is None
+    assert observations[-3][1].error is not None
+    assert observations[-2][1].outcome is ToolOutcome.SUCCEEDED
+    assert observations[-1][1].outcome is ToolOutcome.SUCCEEDED
+    assert observations[-1][1].error is None
+    assert "figure_ref" not in observations[-1][1].result
+    assert observations[-1][1].result["media_type"] == "image/png"
     assert partial.checkpoint.next_action is not None
-    assert all(item.call_id != "unknown-render" for item in observations)
+    assert all(ref.call_id != "unknown-render" for ref, _content in observations)
 
     completed = executor.execute_pending(session.session_id, later_run.run_id)
     finished_projection = execution_state.for_run(session.session_id, later_run.run_id)
-    assert all(item.call_id != "unknown-render" for item in finished_projection.chart_renders)
-    request = AgentRequestBuilder(
-        _attachments,
-        execution_state,
-        FiguraChartRenderService(store.data_root),
-    ).build(
+    unknown_render = next(
+        content
+        for ref, content in _render_entries(finished_projection)
+        if ref.call_id == "unknown-render"
+    )
+    assert unknown_render.outcome is ToolOutcome.FAILED
+    assert unknown_render.error is not None
+    assert unknown_render.error.code == "figure_reference_not_found"
+    request = _request_builder(store, _attachments, execution_state).build(
         completed,
         registry,
         coordinator.read_prior_run_states(session.session_id, later_run.run_id),
@@ -498,7 +545,7 @@ def test_render_tool_returns_bounded_metadata_and_replays_the_same_artifact(tmp_
     assert (width, height) == (result.result["width"], result.result["height"])
 
 
-def test_render_tool_rejects_foreign_figure_and_digest_mismatch(tmp_path) -> None:
+def test_render_tool_rejects_foreign_figure_and_typed_resource_rejects_digest_mismatch(tmp_path) -> None:
     store, coordinator, _attachments, execution_state, registry = _setup(tmp_path)
     session = coordinator.create_session()
     run = _create_run(coordinator, session.session_id, "target-render-run")
@@ -532,26 +579,11 @@ def test_render_tool_rejects_foreign_figure_and_digest_mismatch(tmp_path) -> Non
     assert foreign_result.outcome is ToolOutcome.FAILED
     assert foreign_result.error.code == "figure_reference_not_found"
 
-    accepted = execution_state.for_run(session.session_id, run.run_id).chart_figures[0]
-    forged_summary = replace(accepted, figure_digest="0" * 64)
-    forged_state = SimpleNamespace(chart_figures=(forged_summary,))
-    forged_definition = render_chart_figure_definition(
-        lambda _session_id, _run_id: forged_state,
-        coordinator,
-        FiguraChartRenderService(store.data_root),
-    )
-    forged_runtime = ToolRuntime(ToolRegistry(registry.version, (forged_definition,)))
-    forged_invocation = ToolInvocation(
-        "forged-render",
-        "render_chart_figure",
-        json.dumps({"figure_ref": {"run_id": run.run_id, "call_id": "figure-call"}}),
-    )
-    forged_result = forged_runtime.invoke(
-        forged_invocation,
-        ToolContext(run.run_id, session.session_id, "forged-render", idempotency_key="a" * 64),
-    )
-    assert forged_result.outcome is ToolOutcome.FAILED
-    assert forged_result.error.code == "figure_integrity_error"
+    accepted = _accepted_figures(execution_state.for_run(session.session_id, run.run_id))[0]
+    assert isinstance(accepted.content, ChartFigureContent)
+    assert accepted.content.result is not None
+    with pytest.raises(ValueError, match="invalid ChartFigure resource result"):
+        ChartFigureResult(accepted.content.result.figure, "0" * 64)
 
 
 def test_completed_v5_tool_call_stays_inert_under_v6_registry(tmp_path) -> None:
@@ -592,11 +624,7 @@ def test_render_feedback_fails_on_corrupt_png_before_provider_attempt(tmp_path) 
     path.write_bytes(b"corrupted png")
     prior_attempts = coordinator.read_run_state(session.session_id, run.run_id).provider_attempts
 
-    builder = AgentRequestBuilder(
-        attachments,
-        execution_state,
-        FiguraChartRenderService(store.data_root),
-    )
+    builder = _request_builder(store, attachments, execution_state)
     with pytest.raises(RunError) as error:
         builder.build(state, registry)
 
@@ -621,11 +649,7 @@ def test_render_feedback_provider_image_limit_fails_before_provider_attempt(
     prior_attempts = coordinator.read_run_state(session.session_id, run.run_id).provider_attempts
     monkeypatch.setattr(provider_validation, limit_name, limit_value)
 
-    builder = AgentRequestBuilder(
-        attachments,
-        execution_state,
-        FiguraChartRenderService(store.data_root),
-    )
+    builder = _request_builder(store, attachments, execution_state)
     with pytest.raises(RunError) as error:
         builder.build(state, registry)
 

@@ -4,47 +4,20 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Callable, Mapping
-from typing import Any, Protocol
+from typing import Any
 
-from figura.charts.chartfigure import (
-    ChartFigure,
-    ChartFigureParseError,
-    chart_figure_digest,
-    parse_chart_figure_json,
-    validate_chart_figure,
-)
+from figura.agent.execution_resources import ChartFigureContent, RunExecutionState, ToolResourceRef
 from figura.charts.chartfigure.rendering import render_chart_figure_image
-from figura.runtime.coordinator import RunCoordinator
 from figura.runtime.errors import RunError, RunErrorCode
-from figura.runtime.models import ToolFactKind
-from figura.runtime.records import (
-    ToolAttemptStartedFact,
-    ToolCallFact,
-    ToolResultFact,
-)
 from figura.shared.image_limits import MAX_IMAGE_BYTES
 from figura.sources.chart_renders import FiguraChartRenderService
+from figura.tools import ToolOutcome
 from figura.tools.contracts import (
     ReplayEffect,
     ToolContext,
     ToolDefinition,
     ToolFailure,
-    ToolOutcome,
 )
-
-
-class _ChartFigureSummary(Protocol):
-    figure_ref: _ChartFigureReference
-    figure_digest: str
-
-
-class _ChartFigureReference(Protocol):
-    run_id: str
-    call_id: str
-
-
-class _ExecutionState(Protocol):
-    chart_figures: tuple[_ChartFigureSummary, ...]
 
 
 _PARAMETERS_SCHEMA = {
@@ -89,8 +62,7 @@ _RESULT_SCHEMA = {
 
 
 def render_chart_figure_definition(
-    execution_state_for_run: Callable[[str, str], _ExecutionState],
-    coordinator: RunCoordinator,
+    execution_state_for_run: Callable[[str, str], RunExecutionState],
     renders: FiguraChartRenderService,
 ) -> ToolDefinition:
     def render(context: ToolContext, arguments: Mapping[str, Any]) -> dict[str, object]:
@@ -106,40 +78,35 @@ def render_chart_figure_definition(
                 retryable=True,
             ) from None
 
-        summary = next(
-            (
-                item
-                for item in execution_state.chart_figures
-                if item.figure_ref.run_id == reference_run_id
-                and item.figure_ref.call_id == reference_call_id
-            ),
-            None,
-        )
-        if summary is None:
+        try:
+            resource = execution_state.get(
+                ToolResourceRef("chart_figure", reference_run_id, reference_call_id)
+            )
+        except RunError as error:
+            if error.code is RunErrorCode.RUN_NOT_FOUND:
+                raise ToolFailure(
+                    "figure_reference_not_found",
+                    "Figure 引用不存在，或不属于当前 Session 的已接受历史。",
+                ) from None
+            raise ToolFailure(
+                "figure_unavailable",
+                "已接受的 Figure 内容当前无法读取。",
+                retryable=True,
+            ) from None
+
+        content = resource.content
+        if (
+            not isinstance(content, ChartFigureContent)
+            or content.outcome is not ToolOutcome.SUCCEEDED
+            or content.result is None
+        ):
             raise ToolFailure(
                 "figure_reference_not_found",
                 "Figure 引用不存在，或不属于当前 Session 的已接受历史。",
             )
 
         try:
-            figure = _accepted_figure(
-                context.session_id,
-                reference_run_id,
-                reference_call_id,
-                summary.figure_digest,
-                coordinator,
-            )
-        except RunError:
-            raise ToolFailure(
-                "figure_unavailable",
-                "已接受的 Figure 内容当前无法读取。",
-                retryable=True,
-            ) from None
-        except (ChartFigureParseError, ValueError):
-            raise ToolFailure("figure_integrity_error", "已接受的 Figure 内容未通过完整性检查。") from None
-
-        try:
-            png, _width, _height = render_chart_figure_image(figure)
+            png, _width, _height = render_chart_figure_image(content.result.figure)
         except (ValueError, RuntimeError):
             raise ToolFailure("chart_render_failed", "Figure 当前无法生成 PNG 图像。") from None
 
@@ -155,7 +122,7 @@ def render_chart_figure_definition(
 
         return {
             "figure_ref": {"run_id": reference_run_id, "call_id": reference_call_id},
-            "figure_digest": summary.figure_digest,
+            "figure_digest": content.result.figure_digest,
             "image_sha256": hashlib.sha256(png).hexdigest(),
             "media_type": "image/png",
             "byte_count": len(png),
@@ -174,58 +141,3 @@ def render_chart_figure_definition(
         replay_effect=ReplayEffect.IDEMPOTENT_LOCAL_WRITE,
         handler=render,
     )
-
-
-def _accepted_figure(
-    session_id: str,
-    reference_run_id: str,
-    reference_call_id: str,
-    expected_digest: str,
-    coordinator: RunCoordinator,
-) -> ChartFigure:
-    state = coordinator.read_run_state(session_id, reference_run_id)
-    if state.run.session_id != session_id:
-        raise RunError(RunErrorCode.INTEGRITY_ERROR)
-
-    calls = {
-        fact.tool_sequence: fact.payload
-        for fact in state.tool_facts
-        if fact.fact_kind is ToolFactKind.TOOL_CALL and isinstance(fact.payload, ToolCallFact)
-    }
-    results = {
-        fact.payload.tool_call_sequence: fact.payload
-        for fact in state.tool_facts
-        if fact.fact_kind is ToolFactKind.TOOL_RESULT and isinstance(fact.payload, ToolResultFact)
-    }
-    attempts: dict[int, list[ToolAttemptStartedFact]] = {}
-    for fact in state.tool_facts:
-        if (
-            fact.fact_kind is ToolFactKind.TOOL_ATTEMPT_STARTED
-            and isinstance(fact.payload, ToolAttemptStartedFact)
-        ):
-            attempts.setdefault(fact.payload.tool_call_sequence, []).append(fact.payload)
-
-    for sequence, call in calls.items():
-        if call.tool_name != "assemble_chart_figure" or call.call_id != reference_call_id:
-            continue
-        result = results.get(sequence)
-        if (
-            result is None
-            or result.outcome is not ToolOutcome.SUCCEEDED
-            or result.tool_name != call.tool_name
-            or result.call_id != call.call_id
-            or not any(
-                attempt.call_id == call.call_id and attempt.attempt_id == result.attempt_id
-                for attempt in attempts.get(sequence, ())
-            )
-            or not isinstance(result.result, Mapping)
-            or result.result.get("figure_digest") != expected_digest
-            or result.result.get("figure_ref") != {"run_id": reference_run_id, "call_id": reference_call_id}
-        ):
-            break
-        figure = parse_chart_figure_json(call.arguments_json)
-        issues = validate_chart_figure(figure)
-        if issues or chart_figure_digest(figure) != expected_digest:
-            break
-        return figure
-    raise ValueError("accepted Figure facts do not agree")

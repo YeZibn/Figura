@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from tests.figura_sources_support import make_attachment_service, make_panel_service
+from tests.figura_sources_support import make_attachment_service, make_panel_service, make_execution_image_reader
 
 import sqlite3
 from io import BytesIO
@@ -169,8 +169,13 @@ def _agent(store, coordinator, registry, provider_factory, request_builder=None)
         attachments = make_attachment_service(store)
         panels = make_panel_service(store, attachments)
         execution_state = RunExecutionStateService(coordinator, panels)
+        image_reader = make_execution_image_reader(
+            attachments,
+            panels,
+            FiguraChartRenderService(store.data_root),
+        )
         request_builder = AgentRequestBuilder(
-            attachments, execution_state, FiguraChartRenderService(store.data_root)
+            execution_state, image_reader
         )
     tool_executor = DurableToolExecutor(store, registry)
     return AgentExecutor(
@@ -185,13 +190,16 @@ def _agent(store, coordinator, registry, provider_factory, request_builder=None)
 def _image_runtime(store, coordinator, attachments):
     panels = make_panel_service(store, attachments)
     execution_state = RunExecutionStateService(coordinator, panels)
+    image_reader = make_execution_image_reader(
+        attachments,
+        panels,
+        FiguraChartRenderService(store.data_root),
+    )
     registry = ToolRegistry(
         "registry-v1",
-        (*image_tool_definitions(execution_state.for_run, attachments, panels), *_registry().definitions),
+        (*image_tool_definitions(execution_state.for_run, image_reader, panels), *_registry().definitions),
     )
-    return registry, AgentRequestBuilder(
-        attachments, execution_state, FiguraChartRenderService(store.data_root)
-    )
+    return registry, AgentRequestBuilder(execution_state, image_reader)
 
 
 def _commit_tool_response(coordinator, session_id, run_id, registry, response):

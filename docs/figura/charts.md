@@ -21,8 +21,8 @@ src/figura/charts/
 2. **语义校验**：`validate_chart_spec_data` 按图型检查点形状、类别/系列完整性、顺序、范围和有限数值，返回有序且最多 32 条 `ChartSpecIssue`。它不读取 Run、附件或 Evidence。
 3. **规范序列化**：按版本一合同输出确定性 JSON，保持 dataset 和 categories 顺序；序列化上限 256 KiB。未来工具参数仍受工具运行时更小的参数上限约束。
 4. **组装画布**：`parse_chart_figure` 拒绝重复 JSON key、未知字段、非有限数值、布尔数值和超过 64 KiB 的完整 Figure；遗漏 `title` 与 `measurement_refs` 分别规范为 `""` 与空数组。`validate_chart_figure` 检查图表数、唯一 chart_id、列数、引用形状及每个嵌套 ChartSpecData 的语义，返回有界字段路径问题。
-5. **验证引用与留存**：`assemble_chart_figure` 先完成 Charts 校验，再读取当前 Run 的新鲜 `RunExecutionState`，确认每个 `MeasurementRef` 对应同 Session 中已提交成功的测量调用。任一引用不满足就整体失败；成功结果返回 `(run_id, call_id)`、规范 JSON 的 SHA-256、标题和有序子图摘要。完整输入/摘要由 Runtime 的既有工具事实保存，Agent 后续请求只注入摘要清单；完整 Figure 继续在普通工具调用历史中。
-6. **绘制画布**：`render_chart_figure_image` 接收已接受的 `ChartFigure` 值并再次运行纯语义校验，按 `layout.columns` 与子图顺序绘制 bar、line、scatter 或 pie，返回 `(png_bytes, width, height)`。绘制函数不解析工具引用、不读附件或文件，也不自行保存产物；`render_chart_figure` 的调用、持久化和 Agent 回看由[Tools](tools.md#8-图表渲染工具)、[Sources](sources.md#4-存储失败与访问边界)和[Agent](agent.md#4-运行时状态字段)分别负责。
+5. **验证引用与留存**：`assemble_chart_figure` 先完成 Charts 校验，再读取当前 Run 的新鲜 `RunExecutionState`，确认每个 `MeasurementRef` 对应同 Session 中已提交成功的测量资源。任一引用不满足就整体失败；成功结果返回 `(run_id, call_id)`、规范 JSON 的 SHA-256、标题和有序子图摘要。Runtime 的既有工具事实保存完整输入与成功结果；Agent 重建的 `chart_figure` 资源保留完整值和 digest，提示清单只包含精简索引，完整结果仍可从普通工具调用历史读取。
+6. **绘制画布**：`render_chart_figure_image` 接收已接受的 `ChartFigure` 值并再次运行纯语义校验，按 `layout.columns` 与子图顺序绘制 bar、line、scatter 或 pie，返回 `(png_bytes, width, height)`。绘制函数不解析工具引用、不读附件或文件，也不自行保存产物；`render_chart_figure` 的调用、持久化和 Agent 回看由[Tools](tools.md#8-图表渲染工具)、[Sources](sources.md#4-存储失败与访问边界)和[Agent](agent.md#4-runexecutionstate-资源合同与完整字段)分别负责。
 
 ```mermaid
 flowchart LR
@@ -34,7 +34,8 @@ flowchart LR
     Figure --> FigureCheck[Figure 与嵌套单图校验]
     FigureCheck --> Tool[assemble_chart_figure]
     Tool --> Runtime[既有 ToolCallFact / ToolResultFact]
-    Runtime --> Summary[RunExecutionState.chart_figures]
+    Runtime --> Catalog[Agent RunExecutionState.resources]
+    Catalog --> Summary[chart_figure resource: 完整值与 digest]
     Data --> Serialize[规范序列化]
     Figure --> FigureSerialize[≤64 KiB 规范序列化与 SHA-256]
     Serialize --> JSON[ChartSpec JSON]
@@ -43,7 +44,7 @@ flowchart LR
     Render --> PNG[PNG bytes / width / height]
 ```
 
-`Charts` 的解析、校验和绘制保持纯函数边界；Runtime 引用解析、PNG 文件保存与图片预览分别留在 Tool、Sources 与 Web。Agent 状态只保存可寻址的摘要，不复制完整 Figure。`ChartMetadata.source` 是展示文本，不是来源授权或证据。当前已可生成并预览 PNG，但尚无独立图表实体、来源证据、生成图验证或发布；边界见[总览中的规划能力](../figura-implementation-overview.md#4-规划能力与边界)。
+`Charts` 的解析、校验和绘制保持纯函数边界；Runtime 引用解析、PNG 文件保存与图片预览分别留在 Tool、Sources 与 Web。Agent 的 `chart_figure` 资源保留完整已接受 Figure 与 digest；请求提示只给精简索引，完整工具响应仍由 Memory ToolMessage 提供。资源目录是从已提交 Run 事实重建的调用期值，不复制或替代 Runtime 的权威事实。`ChartMetadata.source` 是展示文本，不是来源授权或证据。当前已可生成并预览 PNG，但尚无独立图表实体、来源证据、生成图验证或发布；边界见[总览中的规划能力](../figura-implementation-overview.md#4-规划能力与边界)。
 
 ## 3. 模型关系与约束
 
@@ -152,7 +153,7 @@ x、y 两个轴的组合。 **写入者：**ChartSpecData 解析/构建。**权�
 
 ### ChartFigure
 
-版本一多图画布内容值。标题和测量引用可在输入省略并规范化为默认值；图表顺序与引用顺序均有意义。完整内容最多 64 KiB。**写入者：**Agent 模型提出、Charts 严格解析。**权威位置：**只有成功的 `assemble_chart_figure` ToolCallFact/ToolResultFact 配对使该 Figure 被接受；没有独立 Figure 表或 ID。**读取与公开：**普通工具调用历史保留完整 JSON，Agent `RunExecutionState.chart_figures` 只投影摘要。[定义](../../src/figura/charts/chartfigure/models.py)。
+版本一多图画布内容值。标题和测量引用可在输入省略并规范化为默认值；图表顺序与引用顺序均有意义。完整内容最多 64 KiB。**写入者：**Agent 模型提出、Charts 严格解析。**权威位置：**只有成功的 `assemble_chart_figure` ToolCallFact/ToolResultFact 配对使该 Figure 被接受；没有独立 Figure 表或 ID。**读取与公开：**普通工具调用历史保留完整 JSON，Agent `RunExecutionState.resources` 中的 `chart_figure` 项重建完整 Figure 与 digest；请求提示只投影精简索引。[定义](../../src/figura/charts/chartfigure/models.py)。
 
 | 完整字段路径 | 类型 | 构造默认 | 含义与约束 | 写入 → 权威 → 读取/公开 |
 |---|---|---|---|---|

@@ -1,10 +1,17 @@
 from __future__ import annotations
 
 import json
-from types import SimpleNamespace
 
 import pytest
 
+from figura.agent.execution_resources import (
+    ChartFigureContent,
+    ExecutionResource,
+    ImageResourceRef,
+    MeasurementContent,
+    RunExecutionState,
+    ToolResourceRef,
+)
 from figura.charts.chartfigure import chart_figure_digest, parse_chart_figure
 from figura.shared.json_schema import normalize_json_value
 from figura.tools import (
@@ -15,6 +22,7 @@ from figura.tools import (
     ToolRegistry,
     ToolRuntime,
 )
+from figura.tools.contracts import ToolExecutionError
 from figura.tools.implementations.assemble_chart_figure import assemble_chart_figure_definition
 
 
@@ -39,10 +47,11 @@ def _figure(*, title: str = "Revenue", reference: tuple[str, str] | None = None)
 
 
 def _runtime(measurements=()):
+    state = RunExecutionState("current-run", tuple(measurements))
     definition = assemble_chart_figure_definition(
-        lambda _session_id, _run_id: SimpleNamespace(measurements=tuple(measurements))
+        lambda _session_id, _run_id: state
     )
-    return ToolRuntime(ToolRegistry("figura-web-v5", (definition,)))
+    return ToolRuntime(ToolRegistry("figura-web-v6", (definition,)))
 
 
 def _invoke(runtime, figure: dict[str, object], *, call_id: str = "assembly-call"):
@@ -53,12 +62,37 @@ def _invoke(runtime, figure: dict[str, object], *, call_id: str = "assembly-call
 
 
 def _measurement(run_id: str, call_id: str, outcome: ToolOutcome = ToolOutcome.SUCCEEDED):
-    return SimpleNamespace(
-        run_id=run_id,
-        call_id=call_id,
-        tool_name="measure_bars",
-        outcome=outcome,
+    ref = ToolResourceRef("measurement", run_id, call_id)
+    source_ref = ImageResourceRef("attachment", "attachment-1")
+    if outcome is ToolOutcome.SUCCEEDED:
+        content = MeasurementContent(
+            "attempt-1",
+            "measure_bars",
+            source_ref,
+            None,
+            outcome,
+            result={},
+        )
+    else:
+        content = MeasurementContent(
+            "attempt-1",
+            "measure_bars",
+            source_ref,
+            None,
+            outcome,
+            error=ToolExecutionError("measure_failed", "测量失败。", False),
+        )
+    return ExecutionResource(ref, content)
+
+
+def _wrong_kind_resource():
+    ref = ToolResourceRef("chart_figure", "prior-run", "measure-call")
+    content = ChartFigureContent(
+        "attempt-1",
+        ToolOutcome.FAILED,
+        error=ToolExecutionError("assembly_failed", "装配失败。", False),
     )
+    return ExecutionResource(ref, content)
 
 
 def test_tool_is_replay_safe_and_returns_only_figure_reference_digest_and_summary() -> None:
@@ -67,7 +101,7 @@ def test_tool_is_replay_safe_and_returns_only_figure_reference_digest_and_summar
 
     result = _invoke(runtime, raw)
 
-    assert runtime.registry.version == "figura-web-v5"
+    assert runtime.registry.version == "figura-web-v6"
     assert runtime.registry["assemble_chart_figure"].replay_effect is ReplayEffect.REPLAY_SAFE
     assert result.outcome is ToolOutcome.SUCCEEDED
     assert normalize_json_value(result.result) == {
@@ -97,7 +131,7 @@ def test_empty_measurement_references_are_accepted_without_inference() -> None:
         ((), ("prior-run", "measure-call"), "measurement_reference_not_found"),
         ((), ("other-session-run", "measure-call"), "measurement_reference_not_found"),
         ((_measurement("prior-run", "measure-call"),), ("prior-run", "uncommitted-call"), "measurement_reference_not_found"),
-        ((SimpleNamespace(run_id="prior-run", call_id="measure-call", tool_name="assemble_chart_figure", outcome=ToolOutcome.SUCCEEDED),), ("prior-run", "measure-call"), "measurement_reference_not_found"),
+        ((_wrong_kind_resource(),), ("prior-run", "measure-call"), "measurement_reference_not_found"),
     ],
 )
 def test_invalid_measurement_references_reject_the_whole_figure(

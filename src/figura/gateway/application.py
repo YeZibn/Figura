@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import json
-import hashlib
 from dataclasses import dataclass
 from typing import Mapping
 from urllib.parse import parse_qs, urlsplit
 
 from figura.sources.attachments import FiguraAttachmentService
-from figura.sources.chart_renders import FiguraChartRenderService
 from figura.sources.panels import FiguraPanelService
+from figura.agent.execution_images import RunExecutionImageReader
+from figura.agent.execution_resources import ChartRenderContent, ToolResourceRef
 from figura.agent.execution_state import RunExecutionStateService
 from figura.providers import MODEL_IDS, ProviderFactory, ProviderId
 from figura.runtime.coordinator import RunCoordinator
@@ -46,7 +46,7 @@ class FiguraGatewayApplication:
         attachments: FiguraAttachmentService,
         panels: FiguraPanelService,
         execution_state: RunExecutionStateService,
-        chart_renders: FiguraChartRenderService,
+        execution_images: RunExecutionImageReader,
         providers: ProviderFactory,
         dispatcher: RunDispatcher,
         *,
@@ -56,7 +56,7 @@ class FiguraGatewayApplication:
         self.attachments = attachments
         self.panels = panels
         self.execution_state = execution_state
-        self.chart_renders = chart_renders
+        self.execution_images = execution_images
         self.providers = providers
         self.dispatcher = dispatcher
         self.allowed_origins = frozenset(allowed_origins)
@@ -244,31 +244,22 @@ class FiguraGatewayApplication:
                 render_run_id, render_call_id = parts[3], parts[5]
                 self.coordinator.read_run_state(session_id, render_run_id)
                 execution = self.execution_state.for_run(session_id, render_run_id)
-                observation = next(
-                    (
-                        item
-                        for item in execution.chart_renders
-                        if item.run_id == render_run_id and item.call_id == render_call_id
-                    ),
-                    None,
-                )
-                if observation is None or observation.result is None:
+                ref = ToolResourceRef("chart_render", render_run_id, render_call_id)
+                try:
+                    resource = execution.get(ref)
+                except RunError as error:
+                    if error.code is RunErrorCode.RUN_NOT_FOUND:
+                        raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD) from None
+                    raise
+                content = resource.content
+                if not isinstance(content, ChartRenderContent) or content.result is None:
                     raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
                 try:
-                    image_bytes, width, height = self.chart_renders.resolve(
-                        render_run_id, render_call_id
+                    image_bytes, width, height = self.execution_images.read(
+                        session_id, execution, ref
                     )
                 except RunError:
                     raise RunError(RunErrorCode.INTEGRITY_ERROR) from None
-                result = observation.result
-                if (
-                    hashlib.sha256(image_bytes).hexdigest() != result.get("image_sha256")
-                    or len(image_bytes) != result.get("byte_count")
-                    or width != result.get("width")
-                    or height != result.get("height")
-                    or result.get("media_type") != "image/png"
-                ):
-                    raise RunError(RunErrorCode.INTEGRITY_ERROR)
                 return GatewayResponse(
                     200,
                     self._cors_headers(headers)

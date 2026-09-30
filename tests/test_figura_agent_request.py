@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from tests.figura_sources_support import make_attachment_service, make_panel_service
+from tests.figura_sources_support import make_attachment_service, make_panel_service, make_execution_image_reader
 
 import json
 from io import BytesIO
@@ -128,10 +128,14 @@ def _builder(store, coordinator, attachments=None) -> AgentRequestBuilder:
     selected_attachments = attachments or make_attachment_service(store)
     panels = make_panel_service(store, selected_attachments)
     execution_state = RunExecutionStateService(coordinator, panels)
-    return AgentRequestBuilder(
+    image_reader = make_execution_image_reader(
         selected_attachments,
-        execution_state,
+        panels,
         FiguraChartRenderService(store.data_root),
+    )
+    return AgentRequestBuilder(
+        execution_state,
+        image_reader,
     )
 
 
@@ -143,7 +147,7 @@ def _image_registry(store, coordinator, attachments):
         execution_state,
         ToolRegistry(
             "image-tools-v1",
-            (*image_tool_definitions(execution_state.for_run, attachments, panels), *_registry().definitions),
+            (*image_tool_definitions(execution_state.for_run, make_execution_image_reader(attachments, panels), panels), *_registry().definitions),
         ),
     )
 
@@ -235,7 +239,7 @@ def test_initial_request_uses_run_selection_fixed_instruction_and_tool_projectio
     assert len(request.messages) == 2
     assert request.messages[0].role is MessageRole.USER
     assert request.messages[0].content == "请分析以下图表数据。"
-    assert "无可用附件" in request.messages[1].content
+    assert "附件：\n- 无" in request.messages[1].content
     assert request.options.stream is False
     assert request.options.max_completion_tokens == 4096
     assert [tool.name for tool in request.tools] == ["inspect"]
@@ -447,7 +451,7 @@ def test_request_includes_complete_prior_run_history_without_prior_continuation(
     assert request.messages[1].content == "第一轮的完整回答。"
     assert request.messages[1].continuation is None
     assert request.messages[2].content == "第二轮输入。"
-    assert "无可用附件" in request.messages[3].content
+    assert "附件：\n- 无" in request.messages[3].content
 
 
 def test_request_keeps_fully_resolved_history_from_a_prior_registry_version(tmp_path) -> None:

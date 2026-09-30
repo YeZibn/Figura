@@ -11,6 +11,7 @@ from figura.sources.panels import FiguraPanelService
 from figura.sources.repository import SourcesRepository
 from figura.gateway.application import FiguraGatewayApplication
 from figura.gateway.dispatcher import RunDispatcher
+from figura.agent.execution_images import RunExecutionImageReader
 from figura.agent.execution_state import RunExecutionStateService
 from figura.providers import ProviderFactory
 from figura.runtime.coordinator import RunCoordinator
@@ -49,17 +50,18 @@ def create_application(
     panel_service = FiguraPanelService(sources, store.data_root, attachment_service)
     chart_renders = FiguraChartRenderService(store.data_root)
     execution_state = RunExecutionStateService(coordinator, panel_service)
+    execution_images = RunExecutionImageReader(attachment_service, panel_service, chart_renders)
     registry = ToolRegistry(
         "figura-web-v6",
         (
-            *image_tool_definitions(execution_state.for_run, attachment_service, panel_service),
-            extract_text_definition(execution_state.for_run, attachment_service, panel_service),
-            measure_bars_definition(execution_state.for_run, attachment_service, panel_service),
-            measure_lines_definition(execution_state.for_run, attachment_service, panel_service),
-            measure_scatter_definition(execution_state.for_run, attachment_service, panel_service),
-            measure_pie_definition(execution_state.for_run, attachment_service, panel_service),
+            *image_tool_definitions(execution_state.for_run, execution_images, panel_service),
+            extract_text_definition(execution_state.for_run, execution_images),
+            measure_bars_definition(execution_state.for_run, execution_images),
+            measure_lines_definition(execution_state.for_run, execution_images),
+            measure_scatter_definition(execution_state.for_run, execution_images),
+            measure_pie_definition(execution_state.for_run, execution_images),
             assemble_chart_figure_definition(execution_state.for_run),
-            render_chart_figure_definition(execution_state.for_run, coordinator, chart_renders),
+            render_chart_figure_definition(execution_state.for_run, chart_renders),
         ),
     )
     runtime = ToolRuntime(registry)
@@ -70,7 +72,7 @@ def create_application(
         factory,
         tools,
         lock,
-        AgentRequestBuilder(attachment_service, execution_state, chart_renders),
+        AgentRequestBuilder(execution_state, execution_images),
     )
     dispatcher = RunDispatcher(agent, max_workers=max_workers, max_queued=max_queued)
     return FiguraGatewayApplication(
@@ -78,7 +80,7 @@ def create_application(
         attachment_service,
         panel_service,
         execution_state,
-        chart_renders,
+        execution_images,
         factory,
         dispatcher,
         allowed_origins=allowed_origins,

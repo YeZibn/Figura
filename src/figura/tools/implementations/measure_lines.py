@@ -5,8 +5,8 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from figura.sources.attachments import FiguraAttachmentService
-from figura.sources.panels import FiguraPanelService
+from figura.agent.execution_images import RunExecutionImageReader
+from figura.agent.execution_resources import RunExecutionState
 
 from ..contracts import ReplayEffect, ToolContext, ToolDefinition, ToolFailure
 from ..measurements.lines import measure_line_image
@@ -47,7 +47,7 @@ _SERIES = {
     "additionalProperties": False,
 }
 
-_RESULT = {
+MEASURE_LINES_RESULT_SCHEMA = {
     "type": "object",
     "properties": {**MEASUREMENT_PROPERTIES, "series": {"type": "array", "items": _SERIES}},
     "required": [*COMMON_REQUIRED, "series"],
@@ -56,9 +56,8 @@ _RESULT = {
 
 
 def measure_lines_definition(
-    image_inventory: Callable[[str, str], Any],
-    attachments: FiguraAttachmentService,
-    panels: FiguraPanelService,
+    image_inventory: Callable[[str, str], RunExecutionState],
+    image_reader: RunExecutionImageReader,
 ) -> ToolDefinition:
     def measure(context: ToolContext, arguments: Mapping[str, Any]) -> dict[str, object]:
         kind, source_id = arguments["source_kind"], arguments["source_id"]
@@ -67,8 +66,7 @@ def measure_lines_definition(
             kind,
             source_id,
             image_inventory,
-            attachments,
-            panels,
+            image_reader,
             context.run_id,
         )
         try:
@@ -92,7 +90,7 @@ def measure_lines_definition(
             "使用 observation_scope 包含或排除图像区域；省略时分析完整来源。未标定坐标保留为空，警告由你判断。"
         ),
         parameters_schema=SOURCE_PARAMETERS,
-        result_schema=_RESULT,
+        result_schema=MEASURE_LINES_RESULT_SCHEMA,
         replay_effect=ReplayEffect.REPLAY_SAFE,
         handler=measure,
     )

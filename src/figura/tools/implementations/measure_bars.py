@@ -5,8 +5,8 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from figura.sources.attachments import FiguraAttachmentService
-from figura.sources.panels import FiguraPanelService
+from figura.agent.execution_images import RunExecutionImageReader
+from figura.agent.execution_resources import RunExecutionState
 
 from ..contracts import ReplayEffect, ToolContext, ToolDefinition, ToolFailure
 from ..measurements.bars import measure_bar_image
@@ -94,7 +94,7 @@ _BAR = {
     "required": ["id", "category_index", "category_label", "category_tick_id", "series_id", "geometry", "measure"],
     "additionalProperties": False,
 }
-_RESULT = {
+MEASURE_BARS_RESULT_SCHEMA = {
     "type": "object",
     "properties": {
         **MEASUREMENT_PROPERTIES,
@@ -110,9 +110,8 @@ _RESULT = {
 
 
 def measure_bars_definition(
-    image_inventory: Callable[[str, str], _RunImageInventory],
-    attachments: FiguraAttachmentService,
-    panels: FiguraPanelService,
+    image_inventory: Callable[[str, str], RunExecutionState],
+    image_reader: RunExecutionImageReader,
 ) -> ToolDefinition:
     def measure(context: ToolContext, arguments: Mapping[str, Any]) -> dict[str, object]:
         kind, source_id = arguments["source_kind"], arguments["source_id"]
@@ -121,8 +120,7 @@ def measure_bars_definition(
             kind,
             source_id,
             image_inventory,
-            attachments,
-            panels,
+            image_reader,
             context.run_id,
         )
 
@@ -147,7 +145,7 @@ def measure_bars_definition(
             "使用 observation_scope 包含或排除图像区域；省略时分析完整来源。警告和不确定结果由你判断，不会自动重试。"
         ),
         parameters_schema=SOURCE_PARAMETERS,
-        result_schema=_RESULT,
+        result_schema=MEASURE_BARS_RESULT_SCHEMA,
         replay_effect=ReplayEffect.REPLAY_SAFE,
         handler=measure,
     )

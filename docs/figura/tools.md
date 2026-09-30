@@ -86,9 +86,9 @@
 
 ## 6. 图像与测量工具合同
 
-图像适配器在 [image.py](../../src/figura/tools/implementations/image.py)；文字与测量适配器分别在 [extract_text.py](../../src/figura/tools/implementations/extract_text.py)、[measure_bars.py](../../src/figura/tools/implementations/measure_bars.py)、[measure_lines.py](../../src/figura/tools/implementations/measure_lines.py)、[measure_scatter.py](../../src/figura/tools/implementations/measure_scatter.py) 和 [measure_pie.py](../../src/figura/tools/implementations/measure_pie.py)。共享来源解析、输入/结果 Schema、观察范围与传感器分别见 [measurement_source.py](../../src/figura/tools/implementations/measurement_source.py)、[measurement_schema.py](../../src/figura/tools/implementations/measurement_schema.py) 与 tools/measurements/。Bootstrap 注入 RunExecutionStateService、Attachment Service 和 Panel Service。handler 先用目标 Run 的 Session 清单授权，再由 Sources 验证所有权并读取图像；模型不能提交路径、URL 或图片字节。
+图像适配器在 [image.py](../../src/figura/tools/implementations/image.py)；文字与测量适配器分别在 [extract_text.py](../../src/figura/tools/implementations/extract_text.py)、[measure_bars.py](../../src/figura/tools/implementations/measure_bars.py)、[measure_lines.py](../../src/figura/tools/implementations/measure_lines.py)、[measure_scatter.py](../../src/figura/tools/implementations/measure_scatter.py) 和 [measure_pie.py](../../src/figura/tools/implementations/measure_pie.py)。共享来源解析、输入/结果 Schema、观察范围与传感器分别见 [measurement_source.py](../../src/figura/tools/implementations/measurement_source.py)、[measurement_schema.py](../../src/figura/tools/implementations/measurement_schema.py) 与 tools/measurements/。Bootstrap 注入 RunExecutionStateService 和 RunExecutionImageReader；Reader 持有 Sources 的 Attachment、Panel 与 ChartRender 服务。handler 先以完整类型化引用查询目标 Run 资源目录，再由 Reader 核对 Session 所有权并读取图像；模型不能提交路径、URL 或图片字节。
 
-测量结果是有界 JSON。成功结果随 ToolResultFact.result 持久化并通过 Session Memory 的 ToolMessage 进入后续对话；Agent 的 MeasurementObservation 只建立调用期索引，不拥有结果字段或第二份存储。结果不含图像字节、覆盖图或本机路径，也没有单独的测量 Web API。所有 Schema 对象拒绝未声明属性；超出 ToolRuntime 结果大小限制时整体失败，不静默截断字段或观测。
+OCR 与测量结果是有界 JSON。成功或失败结果随 ToolResultFact 持久化并通过 Session Memory 的 ToolMessage 进入后续对话；Agent 又按 `(kind, run_id, call_id)` 将每次已提交调用重建为独立 `OcrContent` 或 `MeasurementContent`，保留来源、范围、完整结果或安全错误，不创建第二份事实存储。结果不含图像字节、覆盖图或本机路径，也没有单独的测量 Web API。所有 Schema 对象拒绝未声明属性；超出 ToolRuntime 结果大小限制时整体失败，不静默截断字段或观测。
 
 ### load_image
 
@@ -145,7 +145,7 @@ OCR 既为笛卡尔/Pie 测量提供轴刻度、标签与关联候选，也由 `
 
 `extract_text`、`measure_bars`、`measure_lines`、`measure_scatter` 与 `measure_pie` 共享来源参数和可选 `observation_scope`。柱、线、散点结果在顶层展开 `measurement_schema.py` 的 `MEASUREMENT_PROPERTIES`；它不是一个嵌套输出对象。下表的路径以该 Schema 片段为根，逐项对应三种笛卡尔结果的同名顶层字段或嵌套字段。Pie 使用自己的极坐标结果合同。
 
-所有 JSON 结果字段的权威位置均为对应 ToolResultFact.result；Provider 模型通过 Memory ToolMessage 读取，Agent 的 MeasurementObservation 引用完整成功对象，下一轮标注器读取成功测量对象。source_kind、source_id、coordinate_system 由来源适配器写入，其余共同字段由传感器写入。对象字段均必需，除明示 nullable 外不以缺省代替 null。
+所有 JSON 结果字段的权威位置均为对应 ToolResultFact.result；Provider 模型通过 Memory ToolMessage 读取，Agent 的 `MeasurementContent` 资源保留完整成功对象，下一轮请求构建器按资源引用读取成功 OCR/测量对象并重建标注图。source_kind、source_id、coordinate_system 由来源适配器写入，其余共同字段由传感器写入。对象字段均必需，除明示 nullable 外不以缺省代替 null。
 
 #### 来源参数
 
@@ -237,7 +237,7 @@ OCR 既为笛卡尔/Pie 测量提供轴刻度、标签与关联候选，也由 `
 
 处理授权来源中的垂直、水平及候选斜向柱形。保留柱体像素几何；图表单位 value 仅在基线和值轴线性标定有效时产生。类别 tick 与 legend 文字属于 OCR 关联候选，警告不会自动触发重测。
 
-共同 source 参数见上节；结果含 MEASUREMENT_PROPERTIES 的全部字段，再加下表字段。所有 result 对象拒绝额外属性；除 stack 明确可选外，表中字段均必需。全部 JSON 字段写入 ToolResultFact.result；柱传感器负责几何与计算值，轴关联值使用共享笛卡尔处理；Agent Memory ToolMessage 消费结果，MeasurementObservation 引用它，overlay renderer 仅用于即时显示。
+共同 source 参数见上节；结果含 MEASUREMENT_PROPERTIES 的全部字段，再加下表字段。所有 result 对象拒绝额外属性；除 stack 明确可选外，表中字段均必需。全部 JSON 字段写入 ToolResultFact.result；柱传感器负责几何与计算值，轴关联值使用共享笛卡尔处理；Agent Memory ToolMessage 消费结果，`MeasurementContent` 资源按调用引用完整保留结果，overlay renderer 仅在后续请求中临时生成图像。
 
 | 完整字段路径 | 类型、必填与约束 | 含义 | 写入者 |
 |---|---|---|---|
@@ -280,7 +280,7 @@ OCR 既为笛卡尔/Pie 测量提供轴刻度、标签与关联候选，也由 `
 
 处理授权来源中的多颜色折线。trace 保存一个或多个彼此独立的折线片段，不补齐中断段；存在显式 marker 时按 marker 输出点，没有 marker 时只在可关联的 x 轴刻度采样。图表单位 x、y 坐标分别要求对应轴标定通过；分类 x 轴保留类别标签而不伪造数值。
 
-结果含 MEASUREMENT_PROPERTIES 的全部字段和 series。所有 JSON 字段写入 ToolResultFact.result；折线传感器写入轨迹、采样点与几何字段，颜色和 legend label 由颜色/图例关联处理。Memory ToolMessage 是模型读取方式，MeasurementObservation 是 Agent 投影，覆盖图只在下一请求调用期生成。
+结果含 MEASUREMENT_PROPERTIES 的全部字段和 series。所有 JSON 字段写入 ToolResultFact.result；折线传感器写入轨迹、采样点与几何字段，颜色和 legend label 由颜色/图例关联处理。Memory ToolMessage 是模型读取方式，Agent 以 `MeasurementContent` 资源保留完整调用结果，覆盖图只在下一请求调用期生成。
 
 | 完整字段路径 | 类型、必填与约束 | 含义 | 写入者 |
 |---|---|---|---|
@@ -305,7 +305,7 @@ OCR 既为笛卡尔/Pie 测量提供轴刻度、标签与关联候选，也由 `
 
 检测授权来源中的可见散点和颜色系列。x、y 数值独立受对应轴标定门槛控制。merged、occluded、dense、overlap 只描述可见的不确定区域，不推断隐藏点的精确数量。
 
-结果含 MEASUREMENT_PROPERTIES 的全部字段和 series。所有 JSON 字段写入 ToolResultFact.result；散点传感器写入点位置、半径、标定坐标和不确定标志，颜色/图例关联写入系列字段。Memory ToolMessage 是模型读取方式，MeasurementObservation 是 Agent 投影，覆盖图只在下一请求调用期生成。
+结果含 MEASUREMENT_PROPERTIES 的全部字段和 series。所有 JSON 字段写入 ToolResultFact.result；散点传感器写入点位置、半径、标定坐标和不确定标志，颜色/图例关联写入系列字段。Memory ToolMessage 是模型读取方式，Agent 以 `MeasurementContent` 资源保留完整调用结果，覆盖图只在下一请求调用期生成。
 
 | 完整字段路径 | 类型、必填与约束 | 含义 | 写入者 |
 |---|---|---|---|
@@ -359,7 +359,7 @@ OCR 既为笛卡尔/Pie 测量提供轴刻度、标签与关联候选，也由 `
 
 ### 观察标注图与失败边界
 
-视觉反馈不是新的工具结果或持久模型。AgentRequestBuilder 只检查当前 Run 最新模型响应对应的完整已提交工具批次：成功 `load_image` 的同一来源去重后还原原图；每个成功 `extract_text` 和四种测量调用各还原其被授权源图并绘制对应文字框或几何、状态、首条警告、工具名和 call ID。混合批次仍按调用顺序；更早批次和旧 Run 的图像不再附加。PNG 在调用期内生成，不写 ToolResultFact、RunExecutionState、Panel 或 Web DTO。
+视觉反馈不是新的工具结果或持久模型。AgentRequestBuilder 只检查当前 Run 最新模型响应对应的完整已提交工具批次，并以类型化资源引用调用 Agent 的 RunExecutionImageReader：成功 `load_image` 的同一来源去重后读取原图；每个成功 `extract_text` 和四种测量资源从授权源图及完整结果重建标注图；成功 render 资源读取经摘要验证的私有 PNG。混合批次仍按调用顺序；更早批次和旧 Run 的图像不再附加。OCR/测量标注 PNG 在调用期生成，不写 ToolResultFact、RunExecutionState、Panel 或 Web DTO。
 
 来源 ID 未授权时 handler 在读取图像字节前返回有界工具失败。可读图像但没有候选时以 `no_evidence` 成功返回；不支持或证据不足以 `partial`/`unsupported` 和 warnings 表达。独立 OCR 不可用时返回 `available: false`，不会阻止笛卡尔或 Pie 几何候选；标注源图缺失、图像尺寸与提交结果不符、覆盖图无效或请求图片超限时，Agent 在 Provider attempt claim 前失败。ToolDefinition 与输入/结果 Schema 由各工具适配器及共享 Schema 定义；主规格见 [OCR](../../openspec/figura/openspec/specs/ocr-text-observation/spec.md)、[柱状图](../../openspec/figura/openspec/specs/bar-chart-measurement/spec.md)、[折线图](../../openspec/figura/openspec/specs/line-chart-measurement/spec.md)、[散点图](../../openspec/figura/openspec/specs/scatter-chart-measurement/spec.md)和[饼图](../../openspec/figura/openspec/specs/pie-chart-measurement/spec.md)。
 
@@ -370,7 +370,7 @@ OCR 既为笛卡尔/Pie 测量提供轴刻度、标签与关联候选，也由 `
 ### 调用流转
 
 1. ToolRuntime 先以 `CHART_FIGURE_SCHEMA` 拒绝缺失字段、额外字段、类型不符及越界输入；handler 再用 Charts codec 解析 canonical Figure，并运行 `validate_chart_figure` 验证唯一 chart ID、布局和全部嵌套 ChartSpecData。
-2. handler 为本次调用读取新鲜的同 Session `RunExecutionState`。每个 `measurement_refs` 必须精确匹配一个 `measure_bars`、`measure_lines`、`measure_scatter` 或 `measure_pie` 的已提交成功结果；支持先前终态 Run，也支持目标 Run 中已经先提交的结果。不存在、失败、尚未提交、未授权来源或其他 Session 的引用都会使整份 Figure 失败，并返回相应的 JSON Pointer `field_path`。引用为空表示该子图没有选择测量，不从文本或数据值推断引用。
+2. handler 为本次调用读取新鲜的同 Session `RunExecutionState`，并按 `ToolResourceRef("measurement", run_id, call_id)` 精确查询。每个 `measurement_refs` 必须命中已提交成功的 MeasurementContent；支持先前终态 Run，也支持目标 Run 中已经先提交的结果。不存在、失败、尚未提交、未授权来源或其他 Session 的引用都会使整份 Figure 失败，并返回相应的 JSON Pointer `field_path`。引用为空表示该子图没有选择测量，不从文本或数据值推断引用。
 3. 全部校验通过后，工具返回摘要。任一子图或引用失败时没有部分成功结果；ToolRuntime 将有界错误结果交给 DurableToolExecutor，执行事实仍由 Runtime 提交。
 
 ### 成功结果合同
@@ -407,7 +407,7 @@ OCR 既为笛卡尔/Pie 测量提供轴刻度、标签与关联候选，也由 `
 | `render_chart_figure.arguments.figure_ref.run_id` | string | 必填；1–128 字符 | 组装 Figure 的 Run opaque ID |
 | `render_chart_figure.arguments.figure_ref.call_id` | string | 必填；1–256 字符 | 成功 `assemble_chart_figure` 调用的逻辑 ID |
 
-**解析与授权：**handler 从目标 Run 的新鲜 `RunExecutionState.chart_figures` 确认引用属于当前 Session 的已接受 Figure，再读取来源 Run 的已提交成功 `assemble_chart_figure` ToolCallFact/ToolResultFact。它重新解析并校验完整 ChartFigure，核对 canonical digest；未知、失败、未提交、跨 Session、内容损坏或摘要不一致时返回有界失败，不创建可见产物。
+**解析与授权：**handler 从目标 Run 的新鲜资源目录按 `ToolResourceRef("chart_figure", run_id, call_id)` 读取已接受 Figure。ChartFigureContent 已由 Agent 从已提交 assembly 调用参数完整重建并核对 canonical digest；handler 使用其中的完整 ChartFigure 交给 Charts 绘图，不再实现一条独立的 Runtime 事实查找路径。未知、失败、未提交、跨 Session、内容损坏或摘要不一致时返回有界失败，不创建可见产物。
 
 ### 成功结果字段
 
@@ -429,7 +429,7 @@ OCR 既为笛卡尔/Pie 测量提供轴刻度、标签与关联候选，也由 `
 
 1. Tool handler 通过 Charts 纯函数生成 PNG；Sources 使用渲染调用 `(run_id, call_id)` 派生文件名，并原子安装、校验并返回已存内容和尺寸。相同调用重放时复用既有文件并从原字节重新得到相同摘要，不创建重复文件。
 2. DurableToolExecutor 随后提交普通 ToolResultFact；工具调用参数保留 Figure 引用，成功结果只保存上表摘要。没有新增 Runtime fact kind、Figure 表、render ID 或渲染元数据表。
-3. `RunExecutionState.chart_renders` 只收录结果已提交且引用已接受 Figure 的成功/失败调用；成功观察中的 `result` 去掉重复的 `figure_ref`，完整状态字段归[Agent](agent.md#4-运行时状态字段)。无结果、无效引用或其他 Session 的文件不能通过运行态/Web 投影读取。
+3. Agent 资源目录以 `ToolResourceRef("chart_render", run_id, call_id)` 收录已提交渲染结果；ChartRenderContent 将 `figure_ref` 与 result/error 分开，成功 metadata 不重复存放该引用。完整状态字段归[Agent](agent.md#4-runexecutionstate-资源合同与完整字段)。未提交结果、无效引用或其他 Session 的文件不能通过运行态/Web 投影读取。
 4. AgentRequestBuilder 对当前 Run 最新工具响应中的成功 render call 再读取 PNG，校验字节数、尺寸、媒体类型及 SHA-256，将图像追加到紧接着的 Provider 请求。后续 Run 不会自动重放旧 PNG 图像；模型可再次调用渲染工具按引用读取生成图。
 
 | 错误码 | 触发边界 | 对外行为 |

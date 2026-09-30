@@ -6,7 +6,7 @@
 
 Session Memory 将同一 Session 中目标 Run 之前的终态 Run 投影为有序对话消息，供后续 Provider 请求使用。它读取 Runtime 持久化的 Run 事实，不拥有这些事实，也不创建消息表、历史副本、摘要、裁剪预算或跨 Session 用户记忆。每次模型动作都从提交事实重新构建完整上下文；超过 Provider 硬限制时，由 Agent 在领取 Provider attempt 前失败。
 
-权威内容仍属于 [Run Runtime](runtime.md)：用户输入来自 `RunInput`，助手内容来自 `ModelResponseFact`，工具调用与结果来自 `ToolCallFact`、`ToolAttemptStartedFact`、`ToolResultFact`。Memory 对象只是一组不可变、调用期投影；附件只保留 ID。Agent 的附件/Panel 清单及图像加载规则由[Agent](agent.md#4-运行时状态字段)定义，附件与 Panel 的持久模型由[Sources](sources.md)定义；历史附件不会因为进入 Memory 而自动解析为图像字节。
+权威内容仍属于 [Run Runtime](runtime.md)：用户输入来自 `RunInput`，助手内容来自 `ModelResponseFact`，工具调用与结果来自 `ToolCallFact`、`ToolAttemptStartedFact`、`ToolResultFact`。Memory 对象只是一组不可变、调用期投影；附件只保留 ID。Agent 的附件、Panel、OCR、测量、ChartFigure 与 ChartRender 资源目录及图像加载规则由[Agent](agent.md#4-runexecutionstate-资源合同与完整字段)定义，附件与 Panel 的持久模型由[Sources](sources.md)定义；历史附件不会因为进入 Memory 而自动解析为图像字节。
 
 ## 2. 模型关系与组件边界
 
@@ -20,10 +20,11 @@ flowchart LR
     Repo --> Store --> Coordinator -->|先前 RunState tuple| Agent
     Agent -->|目标 Run 与先前 RunState| Memory[Session Memory 投影]
     Memory -->|SessionHistory 与角色消息| Agent
-    Agent -->|Run 输入和工具事实| State[RunExecutionState]
-    State -->|附件清单与已提交 Panel 清单| Agent
-    Agent -->|仅解析成功 load_image 结果| Attach[Attachment / Panel services]
-    Attach -->|调用期 ImageBlock| Agent
+    Agent -->|Run 输入、已提交工具事实和 Sources 元数据| State[RunExecutionState]
+    State -->|六类类型化资源与精简清单| Agent
+    Agent -->|最新工具批次的图像资源引用| Reader[RunExecutionImageReader]
+    Reader -->|授权解析 Attachment / Panel / ChartRender| Sources[Sources services]
+    Reader -->|原图、OCR/测量标注图或 ChartRender PNG| Agent
     Agent -->|完整且通过限制校验的 ProviderRequest| Provider[Provider Boundary]
 ```
 
@@ -34,7 +35,7 @@ Runtime 在一个 SQLite 读快照内读取目标 Run 的所有较早 ordinal，
 1. **读取稳定前缀**：Agent 在模型动作中调用 `RunCoordinator.read_prior_run_states(session_id, run_id)`。RunRepository 对目标 Run 做同 Session 校验，在单个 SQLite 读事务中加载所有较小 ordinal 的 RunState；缺失、ordinal 缺口、跨 Session 或先前仍为 running 时不返回部分历史。
 2. **投影旧 Run**：`project_session_history` 要求先前 Run ordinal 恰为 `1..target_run.ordinal-1`，且 Session 相同、全部终态。它按 Run ordinal 顺序调用 `project_run_messages`。每个 Run 先生成一条用户消息，再按 ExecutionRecord 顺序生成助手消息；工具调用保留 provider 顺序，且每个工具结果与其原 call ID 配对。
 3. **投影当前 Run**：AgentRequestBuilder 同样对当前 Run 已提交前缀调用 `project_run_messages`，将其接在 SessionHistory 后面。最终回答记录只引用已有助手响应，不再产生重复消息。未完成工具批次、无匹配调用的结果、重复/错误来源引用或不受支持的事实会使整次投影失败；不会省略问题消息后继续。
-4. **恢复图像和调用期字段**：每条用户消息保留原文本和有序 attachment ID。AgentRequestBuilder 把消息文本与附件 ID 保留在完整对话中；另外从 RunExecutionState 加入当前 Session 图像清单。只有最新已提交工具批次里的成功 `load_image` 结果，才由附件或 Panel 服务解析为 ImageBlock，按调用顺序组成一条 user 消息。历史工具调用的 registry 版本必须与当前 Registry 匹配。Provider continuation 不属于 Memory 投影；仅当前 Run 的助手响应可从其私有 continuation 事实恢复 continuation。
+4. **恢复图像和调用期字段**：每条用户消息保留原文本和有序 attachment ID。AgentRequestBuilder 把消息文本与附件 ID 保留在完整对话中；另外从 RunExecutionState 加入完整的类型化资源清单。当前 Run 最新已提交工具批次中成功的 `load_image`、`extract_text`、四种测量和 `render_chart_figure` 结果，按对应资源引用交给 `RunExecutionImageReader`；Reader 解析原图、内存重建 OCR/测量标注图，或读取校验后的 ChartRender PNG，再按工具调用顺序加入紧接着的 Provider 请求。ChartFigure 资源本身不会隐式渲染，必须由模型显式调用渲染工具。历史 Run 图像不会自动重放。历史工具调用的 registry 版本必须与当前 Registry 匹配。Provider continuation 不属于 Memory 投影；仅当前 Run 的助手响应可从其私有 continuation 事实恢复 continuation。
 5. **先校验再领取 attempt**：AgentRequestBuilder 组装完整 ProviderRequest 后使用 Provider 的既有校验器检查消息数、指令数、工具数、图片数与字节数、文本和工具 Schema 总字节等限制。Memory 不删旧 Run、不删消息、不总结、不做预算。附件无法解析、历史无效或请求超限时，Agent 将当前 Run 失败，且不创建 Provider client、不领取 Provider attempt、不发送 Provider 请求。
 
 旧 Run 的执行事实不因后续 Run 重写。新消息只有在所属 Run 中提交后，才会在之后的模型动作中被重建；Session Memory 自身没有独立写入、更新或恢复流程。

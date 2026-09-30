@@ -26,7 +26,7 @@ from figura.tools.implementations.measure_lines import measure_lines_definition
 from figura.tools.implementations.measure_scatter import measure_scatter_definition
 from figura.tools.measurements.ocr import OCRObservation, OCRSnippet
 from figura.tools.measurements.pie import measure_pie_image
-from tests.figura_sources_support import make_attachment_service, make_panel_service
+from tests.figura_sources_support import make_attachment_service, make_panel_service, make_execution_image_reader
 
 
 def _image_bytes(image: Image.Image) -> bytes:
@@ -98,7 +98,7 @@ def test_extract_text_returns_available_empty_and_unavailable_observations(tmp_p
     (_store, _coordinator, session, run, attachments, panels, state, attachment) = _setup(
         tmp_path, _image_bytes(Image.new("RGB", (80, 60), "white"))
     )
-    definition = extract_text_definition(state.for_run, attachments, panels)
+    definition = extract_text_definition(state.for_run, make_execution_image_reader(attachments, panels))
     runtime = ToolRuntime(ToolRegistry("ocr-tests", (definition,)))
 
     monkeypatch.setattr(ocr_module, "_engine", lambda _image: SimpleNamespace(boxes=[], txts=[], scores=[]))
@@ -137,7 +137,7 @@ def test_extract_text_authorizes_source_and_keeps_scoped_boxes_in_source_coordin
         return original_resolve(service, session_id, attachment_id)
 
     monkeypatch.setattr(type(attachments), "resolve", track_resolve)
-    runtime = ToolRuntime(ToolRegistry("ocr-source-tests", (extract_text_definition(state.for_run, attachments, panels),)))
+    runtime = ToolRuntime(ToolRegistry("ocr-source-tests", (extract_text_definition(state.for_run, make_execution_image_reader(attachments, panels)),)))
     rejected = _invoke(runtime, "extract_text", {
         "source_kind": "attachment", "source_id": foreign.attachment_id,
     }, run.run_id, session.session_id)
@@ -169,7 +169,7 @@ def test_extract_text_applies_both_output_truncation_limits(tmp_path, monkeypatc
     (_store, _coordinator, session, run, attachments, panels, state, attachment) = _setup(
         tmp_path, _image_bytes(Image.new("RGB", (100, 80), "white"))
     )
-    runtime = ToolRuntime(ToolRegistry("ocr-bounds", (extract_text_definition(state.for_run, attachments, panels),)))
+    runtime = ToolRuntime(ToolRegistry("ocr-bounds", (extract_text_definition(state.for_run, make_execution_image_reader(attachments, panels)),)))
 
     monkeypatch.setattr(ocr_module, "_engine", lambda _image: SimpleNamespace(
         boxes=[[(2, 2), (8, 2), (8, 8), (2, 8)]],
@@ -259,7 +259,7 @@ def test_measure_pie_adapter_authorizes_sources_and_rejects_invalid_scope(tmp_pa
 
     monkeypatch.setattr(type(attachments), "resolve", track_resolve)
     monkeypatch.setattr(pie_module, "recognize_text", lambda *_args: OCRObservation((), True))
-    definition = measure_pie_definition(state.for_run, attachments, panels)
+    definition = measure_pie_definition(state.for_run, make_execution_image_reader(attachments, panels))
     runtime = ToolRuntime(ToolRegistry("pie-tool-tests", (definition,)))
     rejected = _invoke(runtime, "measure_pie", {
         "source_kind": "attachment", "source_id": foreign.attachment_id,
@@ -291,11 +291,11 @@ def test_v4_observation_registry_uses_one_scope_contract_without_legacy_aliases(
         tmp_path, _pie_bytes()
     )
     definitions = (
-        extract_text_definition(state.for_run, attachments, panels),
-        measure_bars_definition(state.for_run, attachments, panels),
-        measure_lines_definition(state.for_run, attachments, panels),
-        measure_scatter_definition(state.for_run, attachments, panels),
-        measure_pie_definition(state.for_run, attachments, panels),
+        extract_text_definition(state.for_run, make_execution_image_reader(attachments, panels)),
+        measure_bars_definition(state.for_run, make_execution_image_reader(attachments, panels)),
+        measure_lines_definition(state.for_run, make_execution_image_reader(attachments, panels)),
+        measure_scatter_definition(state.for_run, make_execution_image_reader(attachments, panels)),
+        measure_pie_definition(state.for_run, make_execution_image_reader(attachments, panels)),
     )
     registry = ToolRegistry("figura-web-v4", definitions)
 
@@ -313,7 +313,7 @@ def test_extract_text_accepts_authorized_panel_images(tmp_path, monkeypatch) -> 
     )
     panel_registry = ToolRegistry(
         "panel-test-tools",
-        image_tool_definitions(state.for_run, attachments, panels),
+        image_tool_definitions(state.for_run, make_execution_image_reader(attachments, panels), panels),
     )
     args = json.dumps({
         "attachment_id": attachment.attachment_id,
@@ -339,7 +339,7 @@ def test_extract_text_accepts_authorized_panel_images(tmp_path, monkeypatch) -> 
         panel_registry,
         execution_lock=PerRunExecutionLock(store.data_root),
     ).execute_pending(session.session_id, run.run_id)
-    panel_id = state.for_run(session.session_id, run.run_id).panels[0].panel_id
+    panel_id = state.for_run(session.session_id, run.run_id).list("panel")[0].ref.id
     monkeypatch.setattr(ocr_module, "_engine", lambda _image: SimpleNamespace(
         boxes=[[(8, 9), (28, 9), (28, 21), (8, 21)]],
         txts=["Panel label"],
@@ -347,7 +347,7 @@ def test_extract_text_accepts_authorized_panel_images(tmp_path, monkeypatch) -> 
     ))
     runtime = ToolRuntime(ToolRegistry(
         "panel-ocr-tests",
-        (extract_text_definition(state.for_run, attachments, panels),),
+        (extract_text_definition(state.for_run, make_execution_image_reader(attachments, panels)),),
     ))
 
     result = _invoke(runtime, "extract_text", {"source_kind": "panel", "source_id": panel_id}, run.run_id, session.session_id)

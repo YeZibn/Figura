@@ -1,4 +1,5 @@
 from __future__ import annotations
+from tests.figura_sources_support import make_execution_image_reader
 
 import json
 from types import SimpleNamespace
@@ -6,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 from PIL import Image, ImageDraw
 
+from figura.agent.execution_resources import MeasurementContent, RunExecutionState, ToolResourceRef
 from figura.agent.execution_state import RunExecutionStateService
 from figura.agent.request import AgentRequestBuilder
 from figura.providers import FinishReason, ImageBlock, MODEL_IDS, ProviderFactory, ProviderId, ProviderResponse, ProviderToolCall
@@ -90,17 +92,29 @@ def _setup(tmp_path, image_bytes: bytes | None = None):
     )
     panels = FiguraPanelService(repository, store.data_root, attachments)
     execution_state = RunExecutionStateService(coordinator, panels)
-    definition = measure_bars_definition(execution_state.for_run, attachments, panels)
+    definition = measure_bars_definition(execution_state.for_run, make_execution_image_reader(attachments, panels))
     registry = ToolRegistry("figura-web-v2", (definition,))
     runtime = ToolRuntime(registry)
     return store, coordinator, session, run, attachments, panels, execution_state, registry, runtime, attachment
 
 
-def _request_builder(store, attachments, execution_state) -> AgentRequestBuilder:
+def _measurements(state: RunExecutionState):
+    return tuple(
+        (resource.ref, resource.content)
+        for resource in state.list("measurement")
+        if isinstance(resource.ref, ToolResourceRef)
+        and isinstance(resource.content, MeasurementContent)
+    )
+
+
+def _request_builder(store, attachments, panels, execution_state) -> AgentRequestBuilder:
     return AgentRequestBuilder(
-        attachments,
         execution_state,
-        FiguraChartRenderService(store.data_root),
+        make_execution_image_reader(
+            attachments,
+            panels,
+            FiguraChartRenderService(store.data_root),
+        ),
     )
 
 
@@ -141,7 +155,7 @@ def _finish_run(coordinator, session_id: str, run_id: str) -> None:
 
 
 def _commit_decomposition(store, coordinator, session_id, run_id, execution_state, attachments, panels) -> str:
-    definitions = image_tool_definitions(execution_state.for_run, attachments, panels)
+    definitions = image_tool_definitions(execution_state.for_run, make_execution_image_reader(attachments, panels), panels)
     registry = ToolRegistry("panel-tools", definitions)
     source_id = attachments.list(session_id)[0].attachment_id
     arguments = json.dumps({
@@ -168,7 +182,7 @@ def _commit_decomposition(store, coordinator, session_id, run_id, execution_stat
         registry,
         execution_lock=PerRunExecutionLock(store.data_root),
     ).execute_pending(session_id, run_id)
-    return execution_state.for_run(session_id, run_id).panels[0].panel_id
+    return execution_state.for_run(session_id, run_id).list("panel")[0].ref.id
 
 
 def _commit_measurements(store, coordinator, session_id, run_id, registry, calls) -> None:
@@ -191,7 +205,7 @@ def _commit_measurements(store, coordinator, session_id, run_id, registry, calls
 
 
 def test_measure_bars_definition_exposes_source_identity_and_optional_scope() -> None:
-    definition = measure_bars_definition(lambda *_: None, None, None)
+    definition = measure_bars_definition(lambda *_: None, None)
     registry = ToolRegistry("measure-schema", (definition,))
 
     assert definition.replay_effect is ReplayEffect.REPLAY_SAFE
@@ -205,9 +219,9 @@ def test_measurement_tool_rejects_invalid_scope_without_unscoped_fallback(tmp_pa
         _registry, _runtime, attachment,
     ) = _setup(tmp_path)
     definitions = (
-        measure_bars_definition(execution_state.for_run, attachments, panels),
-        measure_lines_definition(execution_state.for_run, attachments, panels),
-        measure_scatter_definition(execution_state.for_run, attachments, panels),
+        measure_bars_definition(execution_state.for_run, make_execution_image_reader(attachments, panels)),
+        measure_lines_definition(execution_state.for_run, make_execution_image_reader(attachments, panels)),
+        measure_scatter_definition(execution_state.for_run, make_execution_image_reader(attachments, panels)),
     )
 
     for definition in definitions:
@@ -231,8 +245,8 @@ def test_line_and_scatter_tools_use_the_same_authorized_source_contract(tmp_path
         _registry, _runtime, attachment,
     ) = _setup(tmp_path)
     definitions = (
-        measure_lines_definition(execution_state.for_run, attachments, panels),
-        measure_scatter_definition(execution_state.for_run, attachments, panels),
+        measure_lines_definition(execution_state.for_run, make_execution_image_reader(attachments, panels)),
+        measure_scatter_definition(execution_state.for_run, make_execution_image_reader(attachments, panels)),
     )
     registry = ToolRegistry("measure-v3", definitions)
     runtime = ToolRuntime(registry)
@@ -264,8 +278,8 @@ def test_line_and_scatter_reject_cross_session_sources_before_reading(tmp_path, 
     other_session = coordinator.create_session("另一个会话")
     foreign = attachments.upload(other_session.session_id, "foreign.png", _chart_bytes())
     definitions = (
-        measure_lines_definition(execution_state.for_run, attachments, panels),
-        measure_scatter_definition(execution_state.for_run, attachments, panels),
+        measure_lines_definition(execution_state.for_run, make_execution_image_reader(attachments, panels)),
+        measure_scatter_definition(execution_state.for_run, make_execution_image_reader(attachments, panels)),
     )
     runtime = ToolRuntime(ToolRegistry("measure-v3", definitions))
     original_resolve = FiguraAttachmentService.resolve
@@ -300,7 +314,7 @@ def test_oversized_measurement_result_is_rejected_without_truncation(tmp_path, m
     monkeypatch.setattr(line_implementation, "measure_line_image", lambda _image: {"payload": "x" * MAX_RESULT_BYTES})
     runtime = ToolRuntime(ToolRegistry(
         "measure-v3",
-        (measure_lines_definition(execution_state.for_run, attachments, panels),),
+        (measure_lines_definition(execution_state.for_run, make_execution_image_reader(attachments, panels)),),
     ))
 
     execution = _invoke(
@@ -356,7 +370,7 @@ def test_can_measure_an_attachment_referenced_by_a_prior_run(tmp_path) -> None:
     )
     runtime = ToolRuntime(ToolRegistry(
         "figura-web-v2",
-        (measure_bars_definition(execution_state.for_run, attachments, panels),),
+        (measure_bars_definition(execution_state.for_run, make_execution_image_reader(attachments, panels)),),
     ))
 
     execution = _invoke(runtime, second_run.run_id, session.session_id, "attachment", attachment.attachment_id)
@@ -395,7 +409,7 @@ def test_measures_only_committed_panels_in_panel_coordinates(tmp_path) -> None:
     )
     runtime = ToolRuntime(ToolRegistry(
         "figura-web-v2",
-        (measure_bars_definition(execution_state.for_run, attachments, panels),),
+        (measure_bars_definition(execution_state.for_run, make_execution_image_reader(attachments, panels)),),
     ))
 
     execution = _invoke(runtime, run.run_id, session.session_id, "panel", panel_id)
@@ -433,10 +447,10 @@ def test_execution_state_projects_ordered_committed_measurements_across_runs(tmp
     registry = ToolRegistry(
         "figura-web-v3",
         (
-            *image_tool_definitions(execution_state.for_run, attachments, panels),
-            measure_bars_definition(execution_state.for_run, attachments, panels),
-            measure_lines_definition(execution_state.for_run, attachments, panels),
-            measure_scatter_definition(execution_state.for_run, attachments, panels),
+            *image_tool_definitions(execution_state.for_run, make_execution_image_reader(attachments, panels), panels),
+            measure_bars_definition(execution_state.for_run, make_execution_image_reader(attachments, panels)),
+            measure_lines_definition(execution_state.for_run, make_execution_image_reader(attachments, panels)),
+            measure_scatter_definition(execution_state.for_run, make_execution_image_reader(attachments, panels)),
         ),
     )
     arguments = json.dumps({"source_kind": "attachment", "source_id": attachment.attachment_id})
@@ -446,12 +460,12 @@ def test_execution_state_projects_ordered_committed_measurements_across_runs(tmp
     )
     _commit_measurements(store, coordinator, session.session_id, first_run.run_id, registry, first_calls)
 
-    first_projection = execution_state.for_run(session.session_id, first_run.run_id).measurements
-    assert [item.call_id for item in first_projection] == ["measure-first", "measure-second"]
-    assert all(item.outcome is ToolOutcome.SUCCEEDED for item in first_projection)
-    assert all(item.attempt_id for item in first_projection)
+    first_projection = _measurements(execution_state.for_run(session.session_id, first_run.run_id))
+    assert [ref.call_id for ref, _content in first_projection] == ["measure-first", "measure-second"]
+    assert all(content.outcome is ToolOutcome.SUCCEEDED for _ref, content in first_projection)
+    assert all(content.attempt_id for _ref, content in first_projection)
     with pytest.raises(TypeError):
-        first_projection[0].result["source_id"] = "changed"
+        first_projection[0][1].result["source_id"] = "changed"
 
     _finish_run(coordinator, session.session_id, first_run.run_id)
     second_run = coordinator.create_run(
@@ -475,23 +489,23 @@ def test_execution_state_projects_ordered_committed_measurements_across_runs(tmp
             ProviderToolCall("measure-scatter", "measure_scatter", arguments),
         ),
     )
-    prior_and_current = execution_state.for_run(session.session_id, second_run.run_id).measurements
-    assert [item.call_id for item in prior_and_current] == [
+    prior_and_current = _measurements(execution_state.for_run(session.session_id, second_run.run_id))
+    assert [ref.call_id for ref, _content in prior_and_current] == [
         "measure-first", "measure-second", "measure-line", "measure-scatter"
     ]
-    assert [item.tool_name for item in prior_and_current] == [
+    assert [content.tool_name for _ref, content in prior_and_current] == [
         "measure_bars", "measure_bars", "measure_lines", "measure_scatter"
     ]
     (store.data_root / "attachments" / f"{attachment.attachment_id}.bin").unlink()
     failed_call = ProviderToolCall("measure-read-failed", "measure_bars", arguments)
     _commit_measurements(store, coordinator, session.session_id, second_run.run_id, registry, (failed_call,))
 
-    with_failure = execution_state.for_run(session.session_id, second_run.run_id).measurements
-    assert [item.call_id for item in with_failure] == [
+    with_failure = _measurements(execution_state.for_run(session.session_id, second_run.run_id))
+    assert [ref.call_id for ref, _content in with_failure] == [
         "measure-first", "measure-second", "measure-line", "measure-scatter", "measure-read-failed"
     ]
-    assert with_failure[-1].outcome is ToolOutcome.FAILED
-    assert with_failure[-1].error.code == "image_unavailable"
+    assert with_failure[-1][1].outcome is ToolOutcome.FAILED
+    assert with_failure[-1][1].error.code == "image_unavailable"
 
     other_session = coordinator.create_session("隔离的会话")
     foreign = attachments.upload(other_session.session_id, "foreign.png", _chart_bytes())
@@ -501,9 +515,10 @@ def test_execution_state_projects_ordered_committed_measurements_across_runs(tmp
         json.dumps({"source_kind": "attachment", "source_id": foreign.attachment_id}),
     )
     _commit_measurements(store, coordinator, session.session_id, second_run.run_id, registry, (unauthorized,))
-    with_unauthorized = execution_state.for_run(session.session_id, second_run.run_id).measurements
-    assert [item.call_id for item in with_unauthorized] == [
-        "measure-first", "measure-second", "measure-line", "measure-scatter", "measure-read-failed"
+    with_unauthorized = _measurements(execution_state.for_run(session.session_id, second_run.run_id))
+    assert [ref.call_id for ref, _content in with_unauthorized] == [
+        "measure-first", "measure-second", "measure-line", "measure-scatter",
+        "measure-read-failed", "measure-foreign",
     ]
 
     unresolved = ProviderToolCall("measure-unresolved", "measure_bars", arguments)
@@ -542,12 +557,13 @@ def test_execution_state_projects_ordered_committed_measurements_across_runs(tmp
         and fact.payload.call_id == "measure-unresolved"
         for fact in unresolved_state.tool_facts
     )
-    assert [item.call_id for item in execution_state.for_run(session.session_id, second_run.run_id).measurements] == [
-        "measure-first", "measure-second", "measure-line", "measure-scatter", "measure-read-failed"
+    assert [ref.call_id for ref, _content in _measurements(execution_state.for_run(session.session_id, second_run.run_id))] == [
+        "measure-first", "measure-second", "measure-line", "measure-scatter",
+        "measure-read-failed", "measure-foreign",
     ]
 
 
-def test_execution_state_projects_pie_results_across_runs_but_excludes_ocr(tmp_path, monkeypatch) -> None:
+def test_execution_state_projects_pie_and_ocr_results_across_runs(tmp_path, monkeypatch) -> None:
     import figura.tools.measurements.ocr as ocr_module
 
     (
@@ -560,12 +576,12 @@ def test_execution_state_projects_pie_results_across_runs_but_excludes_ocr(tmp_p
     registry = ToolRegistry(
         "figura-web-v4",
         (
-            *image_tool_definitions(execution_state.for_run, attachments, panels),
-            extract_text_definition(execution_state.for_run, attachments, panels),
-            measure_bars_definition(execution_state.for_run, attachments, panels),
-            measure_lines_definition(execution_state.for_run, attachments, panels),
-            measure_scatter_definition(execution_state.for_run, attachments, panels),
-            measure_pie_definition(execution_state.for_run, attachments, panels),
+            *image_tool_definitions(execution_state.for_run, make_execution_image_reader(attachments, panels), panels),
+            extract_text_definition(execution_state.for_run, make_execution_image_reader(attachments, panels)),
+            measure_bars_definition(execution_state.for_run, make_execution_image_reader(attachments, panels)),
+            measure_lines_definition(execution_state.for_run, make_execution_image_reader(attachments, panels)),
+            measure_scatter_definition(execution_state.for_run, make_execution_image_reader(attachments, panels)),
+            measure_pie_definition(execution_state.for_run, make_execution_image_reader(attachments, panels)),
         ),
     )
     source = json.dumps({"source_kind": "attachment", "source_id": attachment.attachment_id})
@@ -580,9 +596,12 @@ def test_execution_state_projects_pie_results_across_runs_but_excludes_ocr(tmp_p
             ProviderToolCall("ocr-history-only", "extract_text", source),
         ),
     )
-    first_projection = execution_state.for_run(session.session_id, first_run.run_id).measurements
-    assert [item.tool_name for item in first_projection] == ["measure_pie"]
-    assert first_projection[0].outcome is ToolOutcome.SUCCEEDED
+    first_projection = _measurements(execution_state.for_run(session.session_id, first_run.run_id))
+    assert [content.tool_name for _ref, content in first_projection] == ["measure_pie"]
+    assert first_projection[0][1].outcome is ToolOutcome.SUCCEEDED
+    assert [resource.ref.call_id for resource in execution_state.for_run(
+        session.session_id, first_run.run_id
+    ).list("ocr")] == ["ocr-history-only"]
 
     _finish_run(coordinator, session.session_id, first_run.run_id)
     second_run = coordinator.create_run(
@@ -608,10 +627,10 @@ def test_execution_state_projects_pie_results_across_runs_but_excludes_ocr(tmp_p
         })),),
     )
 
-    projection = execution_state.for_run(session.session_id, second_run.run_id).measurements
-    assert [item.call_id for item in projection] == ["pie-success", "pie-failed"]
-    assert [item.outcome for item in projection] == [ToolOutcome.SUCCEEDED, ToolOutcome.FAILED]
-    assert projection[-1].error.code == "invalid_observation_scope"
+    projection = _measurements(execution_state.for_run(session.session_id, second_run.run_id))
+    assert [ref.call_id for ref, _content in projection] == ["pie-success", "pie-failed"]
+    assert [content.outcome for _ref, content in projection] == [ToolOutcome.SUCCEEDED, ToolOutcome.FAILED]
+    assert projection[-1][1].error.code == "invalid_observation_scope"
 
 
 def test_measurement_feedback_uses_latest_batch_order_and_is_not_repeated(tmp_path) -> None:
@@ -622,10 +641,10 @@ def test_measurement_feedback_uses_latest_batch_order_and_is_not_repeated(tmp_pa
     registry = ToolRegistry(
         "figura-web-v3",
         (
-            *image_tool_definitions(execution_state.for_run, attachments, panels),
-            measure_bars_definition(execution_state.for_run, attachments, panels),
-            measure_lines_definition(execution_state.for_run, attachments, panels),
-            measure_scatter_definition(execution_state.for_run, attachments, panels),
+            *image_tool_definitions(execution_state.for_run, make_execution_image_reader(attachments, panels), panels),
+            measure_bars_definition(execution_state.for_run, make_execution_image_reader(attachments, panels)),
+            measure_lines_definition(execution_state.for_run, make_execution_image_reader(attachments, panels)),
+            measure_scatter_definition(execution_state.for_run, make_execution_image_reader(attachments, panels)),
         ),
     )
     source = json.dumps({"source_kind": "attachment", "source_id": attachment.attachment_id})
@@ -638,7 +657,7 @@ def test_measurement_feedback_uses_latest_batch_order_and_is_not_repeated(tmp_pa
     )
     _commit_measurements(store, coordinator, session.session_id, run.run_id, registry, calls)
 
-    request = _request_builder(store, attachments, execution_state).build(
+    request = _request_builder(store, attachments, panels, execution_state).build(
         coordinator.read_run_state(session.session_id, run.run_id), registry
     )
 
@@ -655,7 +674,7 @@ def test_measurement_feedback_uses_latest_batch_order_and_is_not_repeated(tmp_pa
     ]
     assert image_blocks[0].image_bytes == attachments.resolve(session.session_id, attachment.attachment_id).image_bytes
     assert all(block.image_bytes != image_blocks[0].image_bytes for block in image_blocks[1:])
-    assert [item.tool_name for item in execution_state.for_run(session.session_id, run.run_id).measurements] == [
+    assert [content.tool_name for _ref, content in _measurements(execution_state.for_run(session.session_id, run.run_id))] == [
         "measure_bars", "measure_lines", "measure_scatter"
     ]
 
@@ -667,7 +686,7 @@ def test_measurement_feedback_uses_latest_batch_order_and_is_not_repeated(tmp_pa
         registry,
         (ProviderToolCall("later-load", "load_image", source),),
     )
-    later_request = _request_builder(store, attachments, execution_state).build(
+    later_request = _request_builder(store, attachments, panels, execution_state).build(
         coordinator.read_run_state(session.session_id, run.run_id), registry
     )
     assert "测量结果图像回看" not in " ".join(
@@ -699,9 +718,9 @@ def test_ocr_and_pie_feedback_is_rebuilt_only_for_the_latest_committed_batch(tmp
     registry = ToolRegistry(
         "figura-web-v4",
         (
-            *image_tool_definitions(execution_state.for_run, attachments, panels),
-            extract_text_definition(execution_state.for_run, attachments, panels),
-            measure_pie_definition(execution_state.for_run, attachments, panels),
+            *image_tool_definitions(execution_state.for_run, make_execution_image_reader(attachments, panels), panels),
+            extract_text_definition(execution_state.for_run, make_execution_image_reader(attachments, panels)),
+            measure_pie_definition(execution_state.for_run, make_execution_image_reader(attachments, panels)),
         ),
     )
     source = json.dumps({"source_kind": "attachment", "source_id": attachment.attachment_id})
@@ -717,7 +736,7 @@ def test_ocr_and_pie_feedback_is_rebuilt_only_for_the_latest_committed_batch(tmp
         ),
     )
 
-    request = _request_builder(store, attachments, execution_state).build(
+    request = _request_builder(store, attachments, panels, execution_state).build(
         coordinator.read_run_state(session.session_id, run.run_id), registry
     )
     blocks = request.messages[-1].content
@@ -730,7 +749,7 @@ def test_ocr_and_pie_feedback_is_rebuilt_only_for_the_latest_committed_batch(tmp
     assert len(images) == 2
     original = attachments.resolve(session.session_id, attachment.attachment_id).image_bytes
     assert all(block.image_bytes != original for block in images)
-    assert [item.tool_name for item in execution_state.for_run(session.session_id, run.run_id).measurements] == [
+    assert [content.tool_name for _ref, content in _measurements(execution_state.for_run(session.session_id, run.run_id))] == [
         "measure_pie"
     ]
     assert all(
@@ -754,7 +773,7 @@ def test_ocr_and_pie_feedback_is_rebuilt_only_for_the_latest_committed_batch(tmp
         registry,
         (ProviderToolCall("later-load", "load_image", source),),
     )
-    later = _request_builder(store, attachments, execution_state).build(
+    later = _request_builder(store, attachments, panels, execution_state).build(
         coordinator.read_run_state(session.session_id, run.run_id), registry
     )
     latest_blocks = later.messages[-1].content
@@ -779,8 +798,8 @@ def test_ocr_and_pie_feedback_image_limit_fails_before_next_provider_attempt(tmp
     registry = ToolRegistry(
         "figura-web-v4",
         (
-            extract_text_definition(execution_state.for_run, attachments, panels),
-            measure_pie_definition(execution_state.for_run, attachments, panels),
+            extract_text_definition(execution_state.for_run, make_execution_image_reader(attachments, panels)),
+            measure_pie_definition(execution_state.for_run, make_execution_image_reader(attachments, panels)),
         ),
     )
     source = json.dumps({"source_kind": "attachment", "source_id": attachment.attachment_id})
@@ -799,7 +818,7 @@ def test_ocr_and_pie_feedback_image_limit_fails_before_next_provider_attempt(tmp
     monkeypatch.setattr(provider_validation, "MAX_IMAGE_COUNT", 1)
 
     with pytest.raises(RunError):
-        _request_builder(store, attachments, execution_state).build(
+        _request_builder(store, attachments, panels, execution_state).build(
             coordinator.read_run_state(session.session_id, run.run_id), registry
         )
 
@@ -818,7 +837,7 @@ def test_ocr_feedback_fails_if_authorized_source_disappears(tmp_path, monkeypatc
     ))
     registry = ToolRegistry(
         "figura-web-v4",
-        (extract_text_definition(execution_state.for_run, attachments, panels),),
+        (extract_text_definition(execution_state.for_run, make_execution_image_reader(attachments, panels)),),
     )
     source = json.dumps({"source_kind": "attachment", "source_id": attachment.attachment_id})
     _commit_measurements(
@@ -833,7 +852,7 @@ def test_ocr_feedback_fails_if_authorized_source_disappears(tmp_path, monkeypatc
     (store.data_root / "attachments" / f"{attachment.attachment_id}.bin").unlink()
 
     with pytest.raises(RunError):
-        _request_builder(store, attachments, execution_state).build(
+        _request_builder(store, attachments, panels, execution_state).build(
             coordinator.read_run_state(session.session_id, run.run_id), registry
         )
 
@@ -848,8 +867,8 @@ def test_measurement_history_assembles_with_the_retained_registry_version(tmp_pa
     registry = ToolRegistry(
         "figura-web-v2",
         (
-            *image_tool_definitions(execution_state.for_run, attachments, panels),
-            measure_bars_definition(execution_state.for_run, attachments, panels),
+            *image_tool_definitions(execution_state.for_run, make_execution_image_reader(attachments, panels), panels),
+            measure_bars_definition(execution_state.for_run, make_execution_image_reader(attachments, panels)),
         ),
     )
     _commit_measurements(
@@ -878,15 +897,15 @@ def test_measurement_history_assembles_with_the_retained_registry_version(tmp_pa
     next_registry = ToolRegistry(
         "figura-web-v4",
         (
-            *image_tool_definitions(execution_state.for_run, attachments, panels),
-            extract_text_definition(execution_state.for_run, attachments, panels),
-            measure_bars_definition(execution_state.for_run, attachments, panels),
-            measure_lines_definition(execution_state.for_run, attachments, panels),
-            measure_scatter_definition(execution_state.for_run, attachments, panels),
-            measure_pie_definition(execution_state.for_run, attachments, panels),
+            *image_tool_definitions(execution_state.for_run, make_execution_image_reader(attachments, panels), panels),
+            extract_text_definition(execution_state.for_run, make_execution_image_reader(attachments, panels)),
+            measure_bars_definition(execution_state.for_run, make_execution_image_reader(attachments, panels)),
+            measure_lines_definition(execution_state.for_run, make_execution_image_reader(attachments, panels)),
+            measure_scatter_definition(execution_state.for_run, make_execution_image_reader(attachments, panels)),
+            measure_pie_definition(execution_state.for_run, make_execution_image_reader(attachments, panels)),
         ),
     )
-    request = _request_builder(store, attachments, execution_state).build(
+    request = _request_builder(store, attachments, panels, execution_state).build(
         coordinator.read_run_state(session.session_id, next_run.run_id),
         next_registry,
         coordinator.read_prior_run_states(session.session_id, next_run.run_id),
@@ -896,7 +915,7 @@ def test_measurement_history_assembles_with_the_retained_registry_version(tmp_pa
     assert request.messages[1].tool_calls[0].name == "measure_bars"
     assert request.messages[2].role.value == "tool"
     assert request.messages[2].tool_call_id == "historical-measurement"
-    assert "当前 Session 图像清单" in request.messages[-1].content
+    assert "当前 Run 可访问资源索引" in request.messages[-1].content
     assert "measurements" not in request.messages[-1].content
     tool_names = {tool.name for tool in request.tools}
     assert {"extract_text", "measure_bars", "measure_lines", "measure_scatter", "measure_pie"} <= tool_names
@@ -915,7 +934,7 @@ def test_no_evidence_measurement_still_gets_a_status_overlay(tmp_path) -> None:
     ) = _setup(tmp_path, _blank_bytes())
     registry = ToolRegistry(
         "figura-web-v3",
-        (measure_bars_definition(execution_state.for_run, attachments, panels),),
+        (measure_bars_definition(execution_state.for_run, make_execution_image_reader(attachments, panels)),),
     )
     arguments = json.dumps({"source_kind": "attachment", "source_id": attachment.attachment_id})
     _commit_measurements(
@@ -927,10 +946,10 @@ def test_no_evidence_measurement_still_gets_a_status_overlay(tmp_path) -> None:
         (ProviderToolCall("empty-measurement", "measure_bars", arguments),),
     )
 
-    request = _request_builder(store, attachments, execution_state).build(
+    request = _request_builder(store, attachments, panels, execution_state).build(
         coordinator.read_run_state(session.session_id, run.run_id), registry
     )
-    observation = execution_state.for_run(session.session_id, run.run_id).measurements[-1]
+    _ref, observation = _measurements(execution_state.for_run(session.session_id, run.run_id))[-1]
     blocks = request.messages[-1].content
 
     assert observation.result["status"] == "no_evidence"
@@ -947,7 +966,7 @@ def test_measurement_feedback_fails_if_authorized_source_disappears(tmp_path) ->
     ) = _setup(tmp_path)
     registry = ToolRegistry(
         "figura-web-v3",
-        (measure_bars_definition(execution_state.for_run, attachments, panels),),
+        (measure_bars_definition(execution_state.for_run, make_execution_image_reader(attachments, panels)),),
     )
     arguments = json.dumps({"source_kind": "attachment", "source_id": attachment.attachment_id})
     _commit_measurements(
@@ -962,7 +981,7 @@ def test_measurement_feedback_fails_if_authorized_source_disappears(tmp_path) ->
     (store.data_root / "attachments" / f"{attachment.attachment_id}.bin").unlink()
 
     with pytest.raises(RunError):
-        _request_builder(store, attachments, execution_state).build(
+        _request_builder(store, attachments, panels, execution_state).build(
             coordinator.read_run_state(session.session_id, run.run_id), registry
         )
     assert coordinator.read_run_state(session.session_id, run.run_id).provider_attempts == prior_attempts
@@ -988,8 +1007,8 @@ def test_measurement_feedback_keeps_multiple_source_images_in_call_order(tmp_pat
     registry = ToolRegistry(
         "figura-web-v3",
         (
-            measure_bars_definition(execution_state.for_run, attachments, panels),
-            measure_scatter_definition(execution_state.for_run, attachments, panels),
+            measure_bars_definition(execution_state.for_run, make_execution_image_reader(attachments, panels)),
+            measure_scatter_definition(execution_state.for_run, make_execution_image_reader(attachments, panels)),
         ),
     )
     calls = (
@@ -1006,7 +1025,7 @@ def test_measurement_feedback_keeps_multiple_source_images_in_call_order(tmp_pat
     )
     _commit_measurements(store, coordinator, session.session_id, second_run.run_id, registry, calls)
 
-    request = _request_builder(store, attachments, execution_state).build(
+    request = _request_builder(store, attachments, panels, execution_state).build(
         coordinator.read_run_state(session.session_id, second_run.run_id),
         registry,
         coordinator.read_prior_run_states(session.session_id, second_run.run_id),
@@ -1031,8 +1050,8 @@ def test_measurement_overlay_obeys_provider_image_count_limit(tmp_path, monkeypa
     registry = ToolRegistry(
         "figura-web-v3",
         (
-            *image_tool_definitions(execution_state.for_run, attachments, panels),
-            measure_bars_definition(execution_state.for_run, attachments, panels),
+            *image_tool_definitions(execution_state.for_run, make_execution_image_reader(attachments, panels), panels),
+            measure_bars_definition(execution_state.for_run, make_execution_image_reader(attachments, panels)),
         ),
     )
     arguments = json.dumps({"source_kind": "attachment", "source_id": attachment.attachment_id})
@@ -1050,7 +1069,7 @@ def test_measurement_overlay_obeys_provider_image_count_limit(tmp_path, monkeypa
     monkeypatch.setattr(provider_validation, "MAX_IMAGE_COUNT", 1)
 
     with pytest.raises(RunError) as error:
-        _request_builder(store, attachments, execution_state).build(
+        _request_builder(store, attachments, panels, execution_state).build(
             coordinator.read_run_state(session.session_id, run.run_id), registry
         )
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from tests.figura_sources_support import make_attachment_service, make_panel_service
+from tests.figura_sources_support import make_attachment_service, make_panel_service, make_execution_image_reader
 
 import hashlib
 import io
@@ -11,6 +11,7 @@ import pytest
 from PIL import Image
 
 from figura.sources.models import PanelPoint
+from figura.agent.execution_resources import ImageResourceRef, PanelContent
 from figura.agent.execution_state import RunExecutionStateService
 from figura.providers import FinishReason, MODEL_IDS, ProviderFactory, ProviderId, ProviderResponse, ProviderToolCall
 from figura.runtime.coordinator import RunCoordinator
@@ -57,9 +58,18 @@ def _setup(tmp_path, attachment_count: int = 1, image_content: bytes | None = No
     panels = make_panel_service(store, attachments)
     execution_state = RunExecutionStateService(coordinator, panels)
     registry = ToolRegistry(
-        "panel-tools-v1", image_tool_definitions(execution_state.for_run, attachments, panels)
+        "panel-tools-v1", image_tool_definitions(execution_state.for_run, make_execution_image_reader(attachments, panels), panels)
     )
     return store, coordinator, session, run, attachments, panels, execution_state, registry
+
+
+def _panels(state):
+    return tuple(
+        (resource.ref.id, resource.content)
+        for resource in state.list("panel")
+        if isinstance(resource.ref, ImageResourceRef)
+        and isinstance(resource.content, PanelContent)
+    )
 
 
 def _commit_tool_call(coordinator, session_id: str, run_id: str, registry, call: ProviderToolCall):
@@ -106,26 +116,28 @@ def test_decomposition_persists_ordered_independent_polygon_pngs(tmp_path) -> No
     _commit_tool_call(coordinator, session.session_id, run.run_id, registry, _decompose_call("decompose-1", attachment_id, proposals))
 
     state = DurableToolExecutor(store, registry).execute_pending(session.session_id, run.run_id)
-    records = state_service.for_run(session.session_id, run.run_id).panels
+    records = _panels(state_service.for_run(session.session_id, run.run_id))
 
-    assert [record.name for record in records] == ["矩形区域", "三角区域"]
-    assert [record.points[0] for record in records] == [PanelPoint(100, 100), PanelPoint(400, 400)]
-    first_record, first_image, width, height = panels.resolve(session.session_id, records[0].panel_id)
+    assert [content.name for _panel_id, content in records] == ["矩形区域", "三角区域"]
+    assert [content.points[0] for _panel_id, content in records] == [PanelPoint(100, 100), PanelPoint(400, 400)]
+    first_panel_id, first_content = records[0]
+    first_record, first_image, width, height = panels.resolve(session.session_id, first_panel_id)
     assert (width, height) == (5, 5)
     assert Image.open(io.BytesIO(first_image.image_bytes)).getpixel((0, 0))[3] == 255
-    _record, triangle_image, width, height = panels.resolve(session.session_id, records[1].panel_id)
+    _record, triangle_image, width, height = panels.resolve(session.session_id, records[1][0])
     triangle = Image.open(io.BytesIO(triangle_image.image_bytes))
     assert (width, height) == (5, 5)
     assert triangle.mode == "RGBA"
     assert triangle.getpixel((4, 4))[3] == 0
-    assert first_record.panel_id == hashlib.sha256(f"{hashlib.sha256(json.dumps([run.run_id, 'decompose-1'], separators=(',', ':')).encode()).hexdigest()}:0".encode()).hexdigest()
+    assert first_record.panel_id == first_panel_id
+    assert first_content.source_attachment_id == attachment_id
 
     result_fact = next(
         fact.payload for fact in state.tool_facts
         if fact.fact_kind is ToolFactKind.TOOL_RESULT and isinstance(fact.payload, ToolResultFact)
     )
     assert result_fact.outcome is ToolOutcome.SUCCEEDED
-    assert [item["panel_id"] for item in result_fact.result["panels"]] == [item.panel_id for item in records]
+    assert [item["panel_id"] for item in result_fact.result["panels"]] == [panel_id for panel_id, _content in records]
     assert set(result_fact.result) == {"panels"}
     assert all(set(item) == {"panel_id", "name", "source_attachment_id"} for item in result_fact.result["panels"])
     assert all(str(tmp_path / "panels") not in repr(item) for item in result_fact.result["panels"])
@@ -168,7 +180,7 @@ def test_uncommitted_panel_is_hidden_and_cross_session_attachment_is_rejected(tm
     )[0]
     state = state_service.for_run(session.session_id, run.run_id)
 
-    assert record not in state.panels
+    assert state.list("panel") == ()
     assert state_service.list_session_panels(session.session_id) == ()
 
     runtime = ToolRuntime(registry)
@@ -232,11 +244,12 @@ def test_attachment_inventory_uses_earlier_run_then_current_input_order(tmp_path
 
     execution_state = state_service.for_run(session.session_id, current.run_id)
 
-    assert [item.attachment_id for item in execution_state.available_attachments] == [
+    attachments_in_state = execution_state.list("attachment")
+    assert [item.ref.id for item in attachments_in_state] == [
         first.attachment_id,
         second.attachment_id,
     ]
-    assert [item.filename for item in execution_state.available_attachments] == [
+    assert [item.content.filename for item in attachments_in_state] == [
         "chart-0.png",
         "chart-1.png",
     ]
@@ -265,16 +278,16 @@ def test_decomposition_replay_reuses_panel_ids_after_tool_result_commit_failure(
     with pytest.raises(RunError):
         executor.execute_pending(session.session_id, run.run_id)
     uncommitted = state_service.for_run(session.session_id, run.run_id)
-    assert uncommitted.panels == ()
+    assert uncommitted.list("panel") == ()
     first_ids = [item.panel_id for item in panels.list(session.session_id)]
     assert len(first_ids) == 1
 
     monkeypatch.setattr(FiguraRunStore, "commit_tool_result", original_commit)
     recovered = executor.recover_unknown_attempt(session.session_id, run.run_id)
-    visible = state_service.for_run(session.session_id, run.run_id).panels
+    visible = _panels(state_service.for_run(session.session_id, run.run_id))
 
     assert recovered.checkpoint.next_action.action_kind is ActionKind.MODEL
-    assert [item.panel_id for item in visible] == first_ids
+    assert [panel_id for panel_id, _content in visible] == first_ids
     assert len(panels.list(session.session_id)) == 1
 
 

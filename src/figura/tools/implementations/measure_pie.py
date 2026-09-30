@@ -5,8 +5,8 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from figura.sources.attachments import FiguraAttachmentService
-from figura.sources.panels import FiguraPanelService
+from figura.agent.execution_images import RunExecutionImageReader
+from figura.agent.execution_resources import RunExecutionState
 
 from ..contracts import ReplayEffect, ToolContext, ToolDefinition, ToolFailure
 from ..measurements.observation_scope import ObservationScopeError
@@ -62,7 +62,7 @@ _CONFIDENCE = {
     "required": ["overall", "geometry", "segmentation", "association"],
     "additionalProperties": False,
 }
-_RESULT = {
+MEASURE_PIE_RESULT_SCHEMA = {
     "type": "object",
     "properties": {
         "source_kind": {"type": "string", "enum": ["attachment", "panel"]},
@@ -99,9 +99,8 @@ _RESULT = {
 
 
 def measure_pie_definition(
-    image_inventory: Callable[[str, str], Any],
-    attachments: FiguraAttachmentService,
-    panels: FiguraPanelService,
+    image_inventory: Callable[[str, str], RunExecutionState],
+    image_reader: RunExecutionImageReader,
 ) -> ToolDefinition:
     def measure(context: ToolContext, arguments: Mapping[str, Any]) -> dict[str, object]:
         kind, source_id = arguments["source_kind"], arguments["source_id"]
@@ -110,8 +109,7 @@ def measure_pie_definition(
             kind,
             source_id,
             image_inventory,
-            attachments,
-            panels,
+            image_reader,
             context.run_id,
         )
         try:
@@ -143,7 +141,7 @@ def measure_pie_definition(
             "不支持甜甜圈、爆炸、椭圆、透视或 3D 饼图；警告不会自动触发重试。"
         ),
         parameters_schema=SOURCE_PARAMETERS,
-        result_schema=_RESULT,
+        result_schema=MEASURE_PIE_RESULT_SCHEMA,
         replay_effect=ReplayEffect.REPLAY_SAFE,
         handler=measure,
     )

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from typing import Any, Literal, Protocol
+from typing import Any
 
 from figura.charts.chartfigure import (
     CHART_FIGURE_SCHEMA,
@@ -14,6 +14,7 @@ from figura.charts.chartfigure import (
     validate_chart_figure,
 )
 from figura.charts.chartspec import ChartType
+from figura.agent.execution_resources import MeasurementContent, RunExecutionState, ToolResourceRef
 from figura.runtime.errors import RunError
 from figura.tools.contracts import (
     ReplayEffect,
@@ -22,17 +23,6 @@ from figura.tools.contracts import (
     ToolFailure,
     ToolOutcome,
 )
-
-
-class _MeasurementObservation(Protocol):
-    run_id: str
-    call_id: str
-    tool_name: str
-    outcome: ToolOutcome
-
-
-class _ExecutionState(Protocol):
-    measurements: tuple[_MeasurementObservation, ...]
 
 
 _RESULT_SCHEMA = {
@@ -75,7 +65,7 @@ _MEASUREMENT_TOOLS = frozenset(
 
 
 def assemble_chart_figure_definition(
-    execution_state_for_run: Callable[[str, str], _ExecutionState],
+    execution_state_for_run: Callable[[str, str], RunExecutionState],
 ) -> ToolDefinition:
     def assemble(context: ToolContext, arguments: Mapping[str, Any]) -> dict[str, object]:
         try:
@@ -106,16 +96,23 @@ def assemble_chart_figure_definition(
                 retryable=True,
             ) from None
 
-        observations = {
-            (item.run_id, item.call_id): item
-            for item in state.measurements
-            if item.tool_name in _MEASUREMENT_TOOLS
-        }
         for chart_index, chart in enumerate(figure.charts):
             for reference_index, reference in enumerate(chart.measurement_refs):
-                observation = observations.get((reference.run_id, reference.call_id))
+                resource_ref = ToolResourceRef("measurement", reference.run_id, reference.call_id)
                 field_path = f"/charts/{chart_index}/measurement_refs/{reference_index}"
-                if observation is None:
+                try:
+                    resource = state.get(resource_ref)
+                except RunError:
+                    raise ToolFailure(
+                        "measurement_reference_not_found",
+                        "测量引用不存在，或不属于当前 Session 的已授权历史。",
+                        field_path=f"{field_path}/call_id",
+                    )
+                observation = resource.content
+                if (
+                    not isinstance(observation, MeasurementContent)
+                    or observation.tool_name not in _MEASUREMENT_TOOLS
+                ):
                     raise ToolFailure(
                         "measurement_reference_not_found",
                         "测量引用不存在，或不属于当前 Session 的已授权历史。",

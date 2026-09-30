@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from tests.figura_sources_support import make_attachment_service, make_panel_service
+from tests.figura_sources_support import (
+    make_attachment_service,
+    make_execution_image_reader,
+    make_panel_service,
+)
 
 import json
 import hashlib
@@ -79,7 +83,7 @@ def _application(tmp_path, executor: PassiveExecutor | None = None):
         attachments,
         panels,
         execution_state,
-        chart_renders,
+        make_execution_image_reader(attachments, panels, chart_renders),
         providers,
         dispatcher,
         allowed_origins=(ORIGIN,),
@@ -113,8 +117,7 @@ def _commit_chart_render(app, store, session_id: str, run_id: str):
             assemble_chart_figure_definition(app.execution_state.for_run),
             render_chart_figure_definition(
                 app.execution_state.for_run,
-                app.coordinator,
-                app.chart_renders,
+                FiguraChartRenderService(store.data_root),
             ),
         ),
     )
@@ -309,7 +312,11 @@ def test_panel_routes_expose_only_committed_session_owned_pngs(tmp_path):
 
         registry = ToolRegistry(
             "gateway-panel-v1",
-            image_tool_definitions(app.execution_state.for_run, attachments, app.panels),
+            image_tool_definitions(
+                app.execution_state.for_run,
+                make_execution_image_reader(attachments, app.panels),
+                app.panels,
+            ),
         )
         state = coordinator.read_run_state(first.session_id, run.run_id)
         attempt = coordinator.begin_provider_attempt(first.session_id, run.run_id, state.checkpoint.revision)
@@ -417,7 +424,7 @@ def test_chart_render_summaries_and_session_scoped_png_route(tmp_path):
             {},
         ).status == 404
 
-        app.chart_renders.store(run.run_id, "orphan-render", _png_bytes())
+        FiguraChartRenderService(store.data_root).store(run.run_id, "orphan-render", _png_bytes())
         assert app.handle(
             "GET",
             content_path.replace("gateway-render", "orphan-render"),
