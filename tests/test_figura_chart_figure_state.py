@@ -373,18 +373,21 @@ def test_state_projection_orders_prior_and_current_figures_and_omits_failed_or_p
         registry,
         coordinator.read_prior_run_states(session.session_id, current_run.run_id),
     )
-    inventory = next(
-        message.content
-        for message in request.messages
-        if message.role is MessageRole.USER
-        and isinstance(message.content, str)
-        and "ChartFigure：" in message.content
+    inventory = json.loads(request.instructions[2].content.split("\n", 1)[1])
+    figure_resources = [
+        resource
+        for resource in inventory["resources"]
+        if resource["ref"]["kind"] == "chart_figure"
+    ]
+    titles = [resource["title"] for resource in figure_resources if "title" in resource]
+    assert titles == ["Prior figure", "Current figure", "Pending figure"]
+    assert any(
+        resource["ref"]["call_id"] == "failed-figure"
+        and resource["outcome"] == "failed"
+        for resource in figure_resources
     )
-    assert "Prior figure" in inventory
-    assert "Current figure" in inventory
-    assert "Pending figure" in inventory
-    assert "Foreign figure" not in inventory
-    assert '"dataset"' not in inventory
+    assert "Foreign figure" not in titles
+    assert '"dataset"' not in json.dumps(figure_resources, ensure_ascii=False)
     full_chart_calls = [
         call
         for message in request.messages

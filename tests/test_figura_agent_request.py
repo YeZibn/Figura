@@ -224,25 +224,39 @@ def _request_text_bytes(request) -> int:
     return total
 
 
+def _execution_inventory(request) -> dict[str, object]:
+    return json.loads(request.instructions[2].content.split("\n", 1)[1])
+
+
 def test_initial_request_uses_run_selection_fixed_instruction_and_tool_projection(tmp_path) -> None:
     store, coordinator, session, run = _app(tmp_path)
     registry = _registry()
+    state = coordinator.read_run_state(session.session_id, run.run_id)
 
-    request = _builder(store, coordinator).build(
-        coordinator.read_run_state(session.session_id, run.run_id), registry
-    )
+    request = _builder(store, coordinator).build(state, registry)
 
     assert request.provider_id is ProviderId.QWEN
     assert request.model_id == MODEL_IDS[ProviderId.QWEN]
-    assert request.instructions[0].role.value == "system"
-    assert request.instructions[0].content.startswith("你是 Figura 的图表分析助手")
-    assert len(request.messages) == 2
+    assert len(request.instructions) == 3
+    assert all(instruction.role.value == "system" for instruction in request.instructions)
+    assert request.instructions[0].content.startswith("# Figura 助手职责")
+    assert request.instructions[1].content.startswith("当前可用工具说明")
+    assert json.loads(request.instructions[1].content.split("\n", 1)[1]) == {
+        "tools": [
+            {"name": definition.name, "description": definition.description}
+            for definition in registry
+        ]
+    }
+    inventory = _execution_inventory(request)
+    assert inventory == {"run_id": run.run_id, "resources": []}
+    assert len(request.messages) == 1
     assert request.messages[0].role is MessageRole.USER
     assert request.messages[0].content == "请分析以下图表数据。"
-    assert "附件：\n- 无" in request.messages[1].content
     assert request.options.stream is False
     assert request.options.max_completion_tokens == 4096
     assert [tool.name for tool in request.tools] == ["inspect"]
+    assert coordinator.read_run_state(session.session_id, run.run_id).records == state.records
+    assert all(instruction.content not in repr(state.records) for instruction in request.instructions)
 
 
 def test_initial_request_lists_images_without_resolving_or_sending_bytes(tmp_path) -> None:
@@ -260,8 +274,14 @@ def test_initial_request_lists_images_without_resolving_or_sending_bytes(tmp_pat
     assert request.messages[0].content == (
         f"请分析这些图表。\n\n本条消息附件 ID：{', '.join(attachment_ids)}"
     )
-    inventory = request.messages[-1].content
-    assert "image-0.png" in inventory and "image-1.png" in inventory
+    inventory = _execution_inventory(request)
+    resources = inventory["resources"]
+    assert [item["ref"] for item in resources] == [
+        {"kind": "attachment", "id": item.attachment_id}
+        for item in attachments.list(session.session_id)
+    ]
+    filenames = [item["filename"] for item in resources]
+    assert "image-0.png" in filenames and "image-1.png" in filenames
     assert all(not isinstance(block, ImageBlock) for message in request.messages for block in (message.content if isinstance(message.content, tuple) else ()))
 
 
@@ -283,7 +303,8 @@ def test_request_does_not_resend_original_images_after_an_unrelated_tool_round(t
     request = _builder(store, coordinator, attachments).build(state, _registry())
 
     assert all(not isinstance(block, ImageBlock) for message in request.messages for block in (message.content if isinstance(message.content, tuple) else ()))
-    assert "image-0.png" in request.messages[-1].content
+    filenames = [item["filename"] for item in _execution_inventory(request)["resources"]]
+    assert "image-0.png" in filenames and "image-1.png" in filenames
     assert request.messages[1].role is MessageRole.ASSISTANT
 
 
@@ -328,7 +349,8 @@ def test_request_with_attachments_uses_inventory_without_a_legacy_image_mode(tmp
     request = _builder(store, coordinator, attachments).build(
         coordinator.read_run_state(session.session_id, run.run_id), _registry()
     )
-    assert "image-0.png" in request.messages[-1].content
+    filenames = [item["filename"] for item in _execution_inventory(request)["resources"]]
+    assert "image-0.png" in filenames
     assert all(not isinstance(message.content, tuple) for message in request.messages)
 
 
@@ -381,7 +403,6 @@ def test_request_rebuilds_tool_round_in_order_and_attaches_continuation(tmp_path
         MessageRole.ASSISTANT,
         MessageRole.TOOL,
         MessageRole.TOOL,
-        MessageRole.USER,
     ]
     assert request.messages[1].continuation == continuation
     assert [call.call_id for call in request.messages[3].tool_calls] == [
@@ -445,13 +466,12 @@ def test_request_includes_complete_prior_run_history_without_prior_continuation(
         MessageRole.USER,
         MessageRole.ASSISTANT,
         MessageRole.USER,
-        MessageRole.USER,
     ]
     assert request.messages[0].content == "请分析以下图表数据。"
     assert request.messages[1].content == "第一轮的完整回答。"
     assert request.messages[1].continuation is None
     assert request.messages[2].content == "第二轮输入。"
-    assert "附件：\n- 无" in request.messages[3].content
+    assert _execution_inventory(request)["resources"] == []
 
 
 def test_request_keeps_fully_resolved_history_from_a_prior_registry_version(tmp_path) -> None:
@@ -533,7 +553,12 @@ def test_request_preserves_all_complete_rounds_and_fails_when_history_cannot_fit
     full_call_ids = [call.call_id for message in full_request.messages for call in message.tool_calls]
     assert full_call_ids == ["call-old", "call-new"]
     full_bytes = _request_text_bytes(full_request)
+    original_records = second_state.records
+    original_tool_facts = second_state.tool_facts
     monkeypatch.setattr(provider_validation, "MAX_TOTAL_TEXT_BYTES", full_bytes - 1)
     with pytest.raises(RunError) as error:
         builder.build(second_state, registry)
     assert error.value.code is RunErrorCode.UNSUPPORTED_PAYLOAD
+    unchanged = coordinator.read_run_state(session.session_id, run.run_id)
+    assert unchanged.records == original_records
+    assert unchanged.tool_facts == original_tool_facts

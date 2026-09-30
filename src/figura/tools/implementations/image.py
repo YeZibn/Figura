@@ -164,7 +164,11 @@ def image_tool_definitions(
         ),
         ToolDefinition(
             name="decompose_chart_image",
-            description="将附件图像按模型提供的多边形区域切成独立 Panel PNG。坐标按原图宽高归一化到 0–1000。",
+            description=(
+                "将附件图像按模型提供的多边形区域切成独立 Panel PNG，范围由你根据图像提出。"
+                "坐标按原图宽高归一化到 0–1000；区域外像素透明。系统只做执行所需的结构和资源校验，"
+                "不判断或修正区域的语义边界。"
+            ),
             parameters_schema=_DECOMPOSE_PARAMETERS,
             result_schema=DECOMPOSE_RESULT_SCHEMA,
             replay_effect=ReplayEffect.IDEMPOTENT_LOCAL_WRITE,

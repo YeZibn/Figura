@@ -203,6 +203,33 @@ def test_each_provider_maps_instructions_images_tools_and_thinking(
         assert payload["extra_body"][thinking_key] == {"type": "enabled"}
 
 
+@pytest.mark.parametrize("provider_id", list(ProviderId))
+def test_each_provider_preserves_the_three_ordered_system_prompt_layers(
+    provider_id: ProviderId,
+) -> None:
+    transport = FakeTransport(_response())
+    factory = _factory(transport)
+    request = _request(
+        provider_id,
+        instructions=(
+            InstructionBlock(InstructionRole.SYSTEM, "stable responsibilities"),
+            InstructionBlock(InstructionRole.SYSTEM, "current tools"),
+            InstructionBlock(InstructionRole.SYSTEM, "RunExecutionState resources"),
+        ),
+    )
+
+    factory.create(provider_id, MODEL_IDS[provider_id]).complete(request)
+
+    system_messages = [
+        message for message in transport.calls[0]["messages"] if message["role"] == "system"
+    ]
+    assert [message["content"] for message in system_messages] == [
+        "stable responsibilities",
+        "current tools",
+        "RunExecutionState resources",
+    ]
+
+
 @pytest.mark.parametrize("provider_id", [ProviderId.DEEPSEEK, ProviderId.MIMO])
 def test_thinking_tool_history_replays_private_continuation(provider_id: ProviderId) -> None:
     transport = FakeTransport(_response())

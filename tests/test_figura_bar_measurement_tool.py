@@ -915,8 +915,16 @@ def test_measurement_history_assembles_with_the_retained_registry_version(tmp_pa
     assert request.messages[1].tool_calls[0].name == "measure_bars"
     assert request.messages[2].role.value == "tool"
     assert request.messages[2].tool_call_id == "historical-measurement"
-    assert "当前 Run 可访问资源索引" in request.messages[-1].content
-    assert "measurements" not in request.messages[-1].content
+    inventory = json.loads(request.instructions[2].content.split("\n", 1)[1])
+    assert inventory["run_id"] == next_run.run_id
+    assert any(
+        resource["ref"] == {
+            "kind": "measurement",
+            "run_id": first_run.run_id,
+            "call_id": "historical-measurement",
+        }
+        for resource in inventory["resources"]
+    )
     tool_names = {tool.name for tool in request.tools}
     assert {"extract_text", "measure_bars", "measure_lines", "measure_scatter", "measure_pie"} <= tool_names
     assert "extract_pie_slices" not in tool_names

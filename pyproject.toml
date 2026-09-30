@@ -26,6 +26,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 chartagent = ["prompting/assets/**/*.md"]
+figura = ["agent/prompting/assets/*.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

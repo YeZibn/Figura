@@ -2,13 +2,14 @@ from __future__ import annotations
 
 from tests.figura_sources_support import make_attachment_service, make_panel_service, make_execution_image_reader
 
+import json
 import sqlite3
 from io import BytesIO
 
 import pytest
 from PIL import Image
 
-import figura.agent.request as request_module
+import figura.agent.prompting.observations as observation_module
 from figura.agent.request import AgentRequestBuilder
 from figura.agent.executor import AgentExecutor
 from figura.sources.attachments import FiguraAttachmentService
@@ -29,6 +30,7 @@ from figura.runtime.models import ActionKind, RunCreateRequest, RunStatus, Termi
 from figura.runtime.store import FiguraRunStore
 from figura.runtime.tool_execution import DurableToolExecutor
 from figura.runtime.run_lock import PerRunExecutionLock
+from figura.shared.json_schema import canonical_json_dumps
 from figura.tools import ReplayEffect, ToolDefinition, ToolFailure, ToolRegistry
 from figura.tools.implementations.image import image_tool_definitions
 
@@ -187,6 +189,10 @@ def _agent(store, coordinator, registry, provider_factory, request_builder=None)
     )
 
 
+def _execution_inventory(request) -> dict[str, object]:
+    return json.loads(request.instructions[2].content.split("\n", 1)[1])
+
+
 def _image_runtime(store, coordinator, attachments):
     panels = make_panel_service(store, attachments)
     execution_state = RunExecutionStateService(coordinator, panels)
@@ -287,7 +293,10 @@ def test_agent_does_not_send_attachment_bytes_without_an_explicit_load(tmp_path)
 
     assert state.run.status is RunStatus.COMPLETED
     assert request.messages[0].content.endswith(attachments.list(session.session_id)[0].attachment_id)
-    assert "chart.png" in request.messages[-1].content
+    assert any(
+        resource.get("filename") == "chart.png"
+        for resource in _execution_inventory(request)["resources"]
+    )
     assert all(not isinstance(message.content, tuple) for message in request.messages)
     assert len(state.provider_attempts) == 1
     with sqlite3.connect(store.database_path) as connection:
@@ -319,7 +328,7 @@ def test_loaded_image_failure_stops_before_following_provider_attempt(
         _response(content="完成。"),
     ])
     if failure == "over-limit":
-        monkeypatch.setattr(request_module, "MAX_IMAGE_BYTES", 1)
+        monkeypatch.setattr(observation_module, "MAX_IMAGE_BYTES", 1)
     else:
         original_resolve = FiguraAttachmentService.resolve
 
@@ -370,11 +379,14 @@ def test_agent_runs_ordered_tool_round_then_uses_committed_observation(tmp_path)
     assert handler_calls == ["call-1", "call-2"]
     assert len(factory.client.requests) == 2
     second_request = factory.client.requests[1]
-    assert [message.tool_call_id for message in second_request.messages[-3:-1]] == [
+    tool_messages = [
+        message for message in second_request.messages if message.role is MessageRole.TOOL
+    ]
+    assert [message.tool_call_id for message in tool_messages] == [
         "call-1",
         "call-2",
     ]
-    assert [message.content for message in second_request.messages[-3:-1]] == [
+    assert [message.content for message in tool_messages] == [
         '{"outcome":"succeeded","result":{"value":1}}',
         '{"outcome":"succeeded","result":{"value":2}}',
     ]
@@ -428,7 +440,12 @@ def test_agent_resumes_after_response_or_completed_tool_batch(
     assert completed.run.status is RunStatus.COMPLETED
     assert handler_calls == ["call-resume"]
     assert len(factory.client.requests) == 1
-    assert factory.client.requests[0].messages[-2].tool_call_id == "call-resume"
+    tool_messages = [
+        message
+        for message in factory.client.requests[0].messages
+        if message.role is MessageRole.TOOL
+    ]
+    assert [message.tool_call_id for message in tool_messages] == ["call-resume"]
 
 
 def test_agent_passes_known_tool_failure_as_observation_without_repeating_call(tmp_path) -> None:
@@ -452,7 +469,11 @@ def test_agent_passes_known_tool_failure_as_observation_without_repeating_call(t
 
     assert state.run.status is RunStatus.COMPLETED
     assert handler_calls == ["call-failed"]
-    observation = factory.client.requests[1].messages[-2]
+    observation = next(
+        message
+        for message in factory.client.requests[1].messages
+        if message.role is MessageRole.TOOL
+    )
     assert observation.tool_call_id == "call-failed"
     assert observation.content == (
         '{"error":{"code":"inspection_failed","message":"无法检查该值。",'
@@ -696,11 +717,40 @@ def test_tool_schema_limit_fails_before_claim(tmp_path, monkeypatch) -> None:
     import figura.providers.validation as provider_validation
 
     store, coordinator, session, current = _app(tmp_path)
+    registry = _registry()
+    attachments = make_attachment_service(store)
+    panels = make_panel_service(store, attachments)
+    execution_state = RunExecutionStateService(coordinator, panels)
+    image_reader = make_execution_image_reader(
+        attachments,
+        panels,
+        FiguraChartRenderService(store.data_root),
+    )
+    builder = AgentRequestBuilder(execution_state, image_reader)
+    request = builder.build(
+        coordinator.read_run_state(session.session_id, current.run_id), registry
+    )
+    request_without_schemas = (
+        sum(len(instruction.content.encode("utf-8")) for instruction in request.instructions)
+        + sum(
+            len(message.content.encode("utf-8"))
+            for message in request.messages
+            if isinstance(message.content, str)
+        )
+        + sum(len(tool.description.encode("utf-8")) for tool in request.tools)
+    )
+    schema_bytes = sum(
+        len(canonical_json_dumps(tool.parameters).encode("utf-8"))
+        for tool in request.tools
+    )
     factory = _FakeFactory([_response()])
-    monkeypatch.setattr(request_module, "_SYSTEM_INSTRUCTION", "")
-    monkeypatch.setattr(provider_validation, "MAX_TOTAL_TEXT_BYTES", 64)
+    monkeypatch.setattr(
+        provider_validation,
+        "MAX_TOTAL_TEXT_BYTES",
+        request_without_schemas + schema_bytes - 1,
+    )
 
-    state = _agent(store, coordinator, _registry(), factory).execute(
+    state = _agent(store, coordinator, registry, factory, builder).execute(
         session.session_id, current.run_id
     )
 
@@ -727,7 +777,10 @@ def test_missing_historical_attachment_is_not_read_without_explicit_load(tmp_pat
 
     assert state.run.status is RunStatus.COMPLETED
     assert len(factory.client.requests) == 1
-    assert "chart.png" in factory.client.requests[0].messages[-1].content
+    assert any(
+        resource.get("filename") == "chart.png"
+        for resource in _execution_inventory(factory.client.requests[0])["resources"]
+    )
 
 
 def test_historical_resolved_tool_registry_mismatch_is_kept_as_inert_history(tmp_path) -> None:
