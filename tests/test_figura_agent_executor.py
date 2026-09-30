@@ -12,6 +12,7 @@ import figura.agent.request as request_module
 from figura.agent.request import AgentRequestBuilder
 from figura.agent.executor import AgentExecutor
 from figura.sources.attachments import FiguraAttachmentService
+from figura.sources.chart_renders import FiguraChartRenderService
 from figura.agent.execution_state import RunExecutionStateService
 from figura.providers import (
     MODEL_IDS,
@@ -168,7 +169,9 @@ def _agent(store, coordinator, registry, provider_factory, request_builder=None)
         attachments = make_attachment_service(store)
         panels = make_panel_service(store, attachments)
         execution_state = RunExecutionStateService(coordinator, panels)
-        request_builder = AgentRequestBuilder(attachments, execution_state)
+        request_builder = AgentRequestBuilder(
+            attachments, execution_state, FiguraChartRenderService(store.data_root)
+        )
     tool_executor = DurableToolExecutor(store, registry)
     return AgentExecutor(
         coordinator,
@@ -186,7 +189,9 @@ def _image_runtime(store, coordinator, attachments):
         "registry-v1",
         (*image_tool_definitions(execution_state.for_run, attachments, panels), *_registry().definitions),
     )
-    return registry, AgentRequestBuilder(attachments, execution_state)
+    return registry, AgentRequestBuilder(
+        attachments, execution_state, FiguraChartRenderService(store.data_root)
+    )
 
 
 def _commit_tool_response(coordinator, session_id, run_id, registry, response):

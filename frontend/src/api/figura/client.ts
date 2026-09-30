@@ -155,6 +155,9 @@ export function createFiguraClient(baseUrl = defaultBaseUrl): FiguraClient {
     panelContentUrl(sessionId, panelId) {
       return `${normalizedBaseUrl}/sessions/${encodeURIComponent(sessionId)}/panels/${encodeURIComponent(panelId)}/content`
     },
+    chartRenderContentUrl(sessionId, runId, callId) {
+      return `${normalizedBaseUrl}/sessions/${encodeURIComponent(sessionId)}/runs/${encodeURIComponent(runId)}/chart-renders/${encodeURIComponent(callId)}/content`
+    },
   }
 }
 

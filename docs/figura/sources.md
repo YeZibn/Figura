@@ -1,12 +1,12 @@
-# Sources：附件与 Panel 图像资源
+# Sources：附件、Panel 与生成图像
 
-> [返回总览](../figura-implementation-overview.md)。范围：当前 `src/figura/sources/` 中的附件和 Panel 生命周期、图像文件及授权读取。Sources 是这两类 Session 图像资源的共同 owner；Agent 的 `RunExecutionState` 是从 Runtime 与 Sources 重建的调用期视图，见 [Agent](agent.md#4-运行时状态字段)。Sources 不拥有 OCR 或测量结果；当前工作树中的 Tools 提供独立 OCR 和柱状图、折线图、散点图、饼图观察，并在相应证据门槛满足时输出标定坐标或扇区比例。通用 Evidence 模型和证据生命周期尚未实现，观察工具合同见 [Tools](tools.md#6-图像与测量工具合同)。
+> [返回总览](../figura-implementation-overview.md)。范围：当前 `src/figura/sources/` 中的附件与 Panel 生命周期、图像文件、ChartFigure 渲染 PNG 私有存储及授权读取。Sources 是 Session 附件和 Panel 元数据的共同 owner，也为生成图像提供受控文件存储；Agent 的 `RunExecutionState` 是从 Runtime 与 Sources 重建的调用期视图，见 [Agent](agent.md#4-运行时状态字段)。Sources 不拥有 OCR 或测量结果；当前工作树中的 Tools 提供独立 OCR 和柱状图、折线图、散点图、饼图观察，并在相应证据门槛满足时输出标定坐标或扇区比例。通用 Evidence 模型和证据生命周期尚未实现，观察工具合同见 [Tools](tools.md#6-图像与测量工具合同)。
 
 ## 1. 职责与边界
 
 Sources 管理两种有不同身份和生命周期的图像资源：用户上传的 `AttachmentMetadata`，以及从附件分割出的 `PanelRecord`。`SourcesRepository` 将两类元数据写入同一个 Figura SQLite 数据库；附件与 Panel 服务分别负责内容验证、私有文件操作、图像读取和分割。数据库连接、事务和 schema 由共享 [Storage](../../src/figura/storage/) 使用的基础设施提供。
 
-附件字节位于私有 `attachments/` 文件，Panel 字节位于私有 `panels/` 文件。Panel 的所有图像都是独立 PNG；多边形外区域透明。文件路径、图像字节、图像尺寸和是否已在 Agent 清单中可用都不是 `PanelRecord` 字段。公开 DTO 属于 [Web](web.md#4-web-dto-字段)，Provider 请求期的 `ImageBlock` 属于 [Provider](provider.md#4-完整模型字段)。
+附件字节位于私有 `attachments/` 文件，Panel 字节位于私有 `panels/` 文件，ChartFigure 渲染 PNG 位于私有 `chart-renders/` 文件区。Panel 的所有图像都是独立 PNG；多边形外区域透明。渲染文件由独立 `FiguraChartRenderService` 管理，不对应 SourcesRepository 记录或新的业务模型。文件路径、图像字节、图像尺寸和是否已在 Agent 清单中可用都不是 `PanelRecord` 字段。公开 DTO 属于 [Web](web.md#4-web-dto-字段)，Provider 请求期的 `ImageBlock` 属于 [Provider](provider.md#4-完整模型字段)。
 
 Runtime 创建 Run 时只接受附件 ID，并在 Run 创建事务内检查附件归属；Runtime 不执行附件 CRUD 或文件管理。Panel 在 `SourcesRepository` 中保存后，也不因此自动对 Agent 或 Web 可见：Agent 根据 Run 中已提交成功的 `decompose_chart_image` 结果重建可用 Panel 清单。
 
@@ -17,7 +17,8 @@ Runtime 创建 Run 时只接受附件 ID，并在 Run 创建事务内检查附�
 3. **构建可用资源清单**：Agent 的 `RunExecutionStateService` 读取目标 Run、较早终态 Run 和 Sources 元数据。它从 Run 输入重建当前 Session 已引用附件，并按成功的 Panel 分割 ToolResultFact 过滤 Sources 中保存的 Panel。字段及完整重建规则见 [Agent 运行时状态](agent.md#4-运行时状态字段)。
 4. **显式加载或分割图像**：Tools 中的 `load_image` 与 `decompose_chart_image` 只能使用该 Run 清单授权的附件或已提交 Panel。`FiguraPanelService` 将归一化多边形坐标映射到原图像素，生成带透明 mask 的独立 PNG。矩形也用四点多边形表达；每个 Panel 单独保存。
 5. **提交与恢复**：Panel ID 为 `SHA256("<call-scoped idempotency key>:<zero-based panel index>")`。服务把每个 PNG 写入私有临时目录、flush 并 `fsync`，再用硬链接安装文件；`SourcesRepository` 在 SQLite 写事务中调用文件安装并登记元数据。若数据库登记或提交失败，Panel Service 会补偿删除本次已安装文件。相同幂等身份会校验并复用既有 Panel 记录。只有对应成功 ToolResultFact 经 Runtime 提交后，Agent 才把 Panel 纳入可用清单和网页列表。
-6. **列出、读取与对账**：Gateway 以 Session ID 委托 Sources 列出附件/Panel 或读取图像内容。跨 Session 访问须拒绝；附件删除须确认没有 Run 引用。服务启动时在数据库写事务内移除孤儿 Panel PNG 与遗留临时目录，并逐一读取、解码已登记的 PNG；缺失、损坏、格式不符或超限时启动失败。文件路径与图像字节不进入 DTO、事件或工具结果。
+6. **保存 ChartFigure 渲染图**：`render_chart_figure` 调用 Charts 生成 PNG 后，`FiguraChartRenderService.store(run_id, call_id, content)` 将其写到 `data_root/chart-renders/`。文件名是 canonical JSON `[run_id, call_id]` 的 SHA-256，不接收模型控制的路径；目录为 `0700`、文件为 `0600`。服务先写私有临时文件并 `fsync`，再以硬链接原子安装；相同身份重放时读取并复用既有文件，不替换。存储校验 PNG 格式、可解码性、正尺寸、`MAX_IMAGE_BYTES` 字节上限和 40,000,000 像素上限。渲染元数据仍只在成功 `ToolResultFact` 中；文件在结果成功提交前不进入 Agent 或 Web 投影。
+7. **列出、读取与对账**：Gateway 以 Session ID 委托 Sources 列出附件/Panel 或读取图像内容。跨 Session 访问须拒绝；附件删除须确认没有 Run 引用。服务启动时附件服务按数据库记录对账 trash 和附件文件；Panel 服务移除孤儿 PNG 与遗留临时目录，并逐一读取、解码已登记的 Panel PNG；缺失、损坏、格式不符或超限时启动失败。渲染 PNG 不在启动时创建业务记录或公开索引；Web 必须先找到同 Session 成功提交的渲染事实再读取文件。文件路径与图像字节不进入 DTO、事件或工具结果。
 
 ## 3. 完整模型字段
 
@@ -58,14 +59,15 @@ Session 所拥有的不可变分区记录。SQLite 保存六项元数据；`poin
 | `PanelRecord.name` | `str` | 必传 | 模型给出的显示名；非空白，UTF-8 长度不超过 256 bytes | Tool 参数 → `panels.name` → 安全工具结果、图像清单和 Web DTO |
 | `PanelRecord.points` | `tuple[PanelPoint, ...]` | 必传 | 原图坐标系中的完整顶点顺序；3–64 个点，作为 JSON 数组保存，不简化边界 | Tool 参数 → `panels.points_json` → PNG mask 生成与 Web 多边形投影 |
 
-## 4. 存储、失败与范围
+## 4. 存储失败与访问边界
 
 - Sources 与 Runtime 使用同一个 `SqliteDatabase` 和 schema v6；表及事务初始化由 `storage/` 负责。附件和 Panel 行操作集中在 `SourcesRepository`，不再由 Runtime Store 代管附件 CRUD。
 - 附件内容在校验后安装到私有文件；Panel 内容为每个分区单独生成的 PNG。每个 Panel 最多 40,000,000 个源像素；单张 Panel PNG 不超过 `MAX_IMAGE_BYTES`，一批所有 PNG 合计不超过 `MAX_TOTAL_IMAGE_BYTES`，最多 32 个 Panel。Panel 文件在 SQLite 写事务内安装并登记，数据库失败时通过清理已安装文件补偿；这不是跨文件系统和 SQLite 的原子事务。启动时校验已登记内容并清理孤儿 PNG 和临时目录。
 - Panel 的坐标点数为 3–64，名称上限为 256 UTF-8 bytes。输入顺序、模型给出的边界点和重叠区域都按原提议保留；工具不判定分区语义、准确性、重叠是否合理或图表类型。
 - Panel 记录本身不证明其分割工具调用已成功提交。Agent 以 Runtime 成功 ToolResultFact 与 PanelRecord 的 Session、Run、ID、名称及来源附件字段匹配，决定是否可供当前 Run 使用或在 Web 列表显示。
-- Sources 目前覆盖附件和 Panel 图像资源，不代表通用 Source、Observation、Measurement 或 Evidence 实体已实现。
+- Chart render 文件本身也不证明渲染调用已成功提交。Agent 与 Gateway 只根据同 Session 已接受 Figure 和成功的渲染 ToolResultFact 投影、读取对应文件；摘要与文件哈希或尺寸不符时拒绝使用。
+- Sources 管理附件和 Panel 元数据，并提供附件、Panel、生成 PNG 文件的私有存取；这不代表通用 Source、Observation、Measurement 或 Evidence 实体已实现。
 
 ## 5. 代码与规格依据
 
-代码：[模型](../../src/figura/sources/models.py)、[Sources Repository](../../src/figura/sources/repository.py)、[附件服务](../../src/figura/sources/attachments.py)、[Panel 服务](../../src/figura/sources/panels.py)、[图像处理](../../src/figura/sources/imaging.py)、[私有文件工具](../../src/figura/sources/storage.py)、[SQLite schema](../../src/figura/storage/schema.py)、[Run 附件归属校验](../../src/figura/runtime/persistence/runs.py)、[Agent 清单](../../src/figura/agent/execution_state.py)、[图像工具](../../src/figura/tools/implementations/image.py)。主规格：[图片附件存储](../../openspec/figura/openspec/specs/image-attachment-storage/spec.md)、[Panel 图像观察](../../openspec/figura/openspec/specs/panel-image-observation/spec.md)、[Web Gateway](../../openspec/figura/openspec/specs/figura-web-gateway/spec.md)。
+代码：[模型](../../src/figura/sources/models.py)、[Sources Repository](../../src/figura/sources/repository.py)、[附件服务](../../src/figura/sources/attachments.py)、[Panel 服务](../../src/figura/sources/panels.py)、[图像处理](../../src/figura/sources/imaging.py)、[私有文件工具](../../src/figura/sources/storage.py)、[ChartFigure PNG 存储](../../src/figura/sources/chart_renders.py)、[SQLite schema](../../src/figura/storage/schema.py)、[Run 附件归属校验](../../src/figura/runtime/persistence/runs.py)、[Agent 清单](../../src/figura/agent/execution_state.py)、[图像工具](../../src/figura/tools/implementations/image.py)。主规格：[图片附件存储](../../openspec/figura/openspec/specs/image-attachment-storage/spec.md)、[Panel 图像观察](../../openspec/figura/openspec/specs/panel-image-observation/spec.md)、[Web Gateway](../../openspec/figura/openspec/specs/figura-web-gateway/spec.md)。

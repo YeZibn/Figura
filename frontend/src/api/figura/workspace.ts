@@ -38,6 +38,7 @@ export function createFiguraWorkspaceApi(client: FiguraClient): FiguraWorkspaceA
         return mapRunHistory(await client.getRunHistory(sessionId, runId, afterSequence))
       },
       subscribe: (sessionId, runId, callbacks, afterSequence) => client.subscribeRun(sessionId, runId, callbacks, afterSequence),
+      chartRenderContentUrl: (sessionId, runId, callId) => client.chartRenderContentUrl(sessionId, runId, callId),
     },
   }
 }
@@ -98,10 +99,11 @@ function mapRun(dto: FiguraRunDto): RunSummary {
     terminalCode: dto.terminalCode,
     terminalMessage: dto.terminalMessage,
     executionState: dto.executionState,
+    chartRenders: dto.chartRenders,
   }
 }
 
-function mapRunHandle(dto: Omit<FiguraRunDto, 'executionState'>): RunHandle {
+function mapRunHandle(dto: Omit<FiguraRunDto, 'executionState' | 'chartRenders'>): RunHandle {
   return {
     runId: dto.runId,
     sessionId: dto.sessionId,

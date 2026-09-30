@@ -1,11 +1,7 @@
-"""Figura's versioned chart content contract."""
+"""Single-chart content model, parsing, and validation."""
 
-from .errors import (
-    ChartSpecIssue,
-    ChartSpecParseError,
-    ChartSpecSerializationError,
-)
 from .codec import parse_chart_spec_data, parse_chart_spec_data_json, serialize_chart_spec_data
+from .errors import ChartSpecIssue, ChartSpecParseError, ChartSpecSerializationError
 from .models import (
     Axis,
     Axes,
@@ -29,9 +25,9 @@ __all__ = [
     "ChartSpecParseError",
     "ChartSpecSerializationError",
     "ChartType",
-    "CHART_SPEC_DATA_SCHEMA",
     "CoordinatePoint",
     "DataPoint",
+    "CHART_SPEC_DATA_SCHEMA",
     "parse_chart_spec_data",
     "parse_chart_spec_data_json",
     "serialize_chart_spec_data",

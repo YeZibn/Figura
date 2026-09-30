@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
+from figura.agent.execution_state import RunExecutionState
 from figura.runtime.models import ActionKind, EventKind, RecordKind, Run, Session
 from figura.runtime.records import (
     FinalAnswerFact,
@@ -28,8 +31,15 @@ def session_summary(
     }
 
 
-def session_snapshot(snapshot: SessionSnapshot) -> dict[str, object]:
-    runs = [run_summary(state) for state in snapshot.run_states]
+def session_snapshot(
+    snapshot: SessionSnapshot,
+    chart_renders_by_run: Mapping[str, tuple[dict[str, object], ...]] | None = None,
+) -> dict[str, object]:
+    render_summaries = chart_renders_by_run or {}
+    runs = [
+        run_summary(state, render_summaries.get(state.run.run_id, ()))
+        for state in snapshot.run_states
+    ]
     activity_values = [snapshot.session.updated_at]
     activity_values.extend(item.created_at for item in snapshot.attachments)
     activity_values.extend(state.run.finished_at or state.run.created_at for state in snapshot.run_states)
@@ -99,7 +109,41 @@ def panel(record: PanelRecord) -> dict[str, object]:
     }
 
 
-def run_summary(state: RunState) -> dict[str, object]:
+def chart_render_summaries(
+    execution_state: RunExecutionState,
+) -> dict[str, tuple[dict[str, object], ...]]:
+    figure_titles = {item.figure_ref: item.title for item in execution_state.chart_figures}
+    summaries: dict[str, list[dict[str, object]]] = {}
+    for item in execution_state.chart_renders:
+        if item.outcome.value != "succeeded" or item.result is None:
+            continue
+        figure_title = figure_titles.get(item.figure_ref)
+        if figure_title is None:
+            continue
+        result = item.result
+        summaries.setdefault(item.run_id, []).append(
+            {
+                "callId": item.call_id,
+                "figureRef": {
+                    "runId": item.figure_ref.run_id,
+                    "callId": item.figure_ref.call_id,
+                },
+                "figureTitle": figure_title,
+                "figureDigest": result["figure_digest"],
+                "imageSha256": result["image_sha256"],
+                "mediaType": result["media_type"],
+                "byteCount": result["byte_count"],
+                "width": result["width"],
+                "height": result["height"],
+            }
+        )
+    return {run_id: tuple(items) for run_id, items in summaries.items()}
+
+
+def run_summary(
+    state: RunState,
+    chart_renders: tuple[dict[str, object], ...] = (),
+) -> dict[str, object]:
     run = state.run
     action = state.checkpoint.next_action
     needs_reconciliation = (
@@ -120,6 +164,7 @@ def run_summary(state: RunState) -> dict[str, object]:
         "terminalCode": run.terminal_code,
         "terminalMessage": run.terminal_message,
         "executionState": "needs_reconciliation" if needs_reconciliation else "active",
+        "chartRenders": list(chart_renders),
     }
 
 
@@ -139,13 +184,21 @@ def run_handle(run: Run) -> dict[str, object]:
     }
 
 
-def run_history(state: RunState, after_sequence: int = 0) -> dict[str, object]:
+def run_history(
+    state: RunState,
+    after_sequence: int = 0,
+    chart_renders: tuple[dict[str, object], ...] = (),
+) -> dict[str, object]:
     events = [
         event_projection(state, event)
         for event in state.events
         if event.event_sequence > after_sequence
     ]
-    return {"run": run_summary(state), "events": events, "historyGap": False}
+    return {
+        "run": run_summary(state, chart_renders),
+        "events": events,
+        "historyGap": False,
+    }
 
 
 def event_projection(state: RunState, event: RunStreamEvent) -> dict[str, object]:

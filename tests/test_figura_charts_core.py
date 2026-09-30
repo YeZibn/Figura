@@ -4,7 +4,7 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from figura.chartspec import (
+from figura.charts.chartspec import (
     CHART_SPEC_DATA_SCHEMA,
     Axis,
     Axes,
@@ -18,7 +18,8 @@ from figura.chartspec import (
     parse_chart_spec_data,
     validate_chart_spec_data,
 )
-from figura.chartspec.limits import MAX_CHART_SPEC_DATA_BYTES, MAX_ISSUES
+from figura.charts.chartspec.limits import MAX_CHART_SPEC_DATA_BYTES
+from figura.charts.limits import MAX_ISSUES
 from figura.shared.json_schema import validate_instance, validate_schema_definition
 
 

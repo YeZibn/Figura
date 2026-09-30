@@ -16,16 +16,13 @@ from figura.shared.json_schema import (
     validate_instance,
 )
 
+from ..limits import MAX_TEXT_LENGTH
 from .errors import (
     ChartSpecIssue,
     ChartSpecParseError,
     ChartSpecSerializationError,
 )
-from .limits import (
-    MAX_CHART_SPEC_DATA_BYTES,
-    MAX_FINITE_NUMBER,
-    MAX_TEXT_LENGTH,
-)
+from .limits import MAX_CHART_SPEC_DATA_BYTES, MAX_FINITE_NUMBER
 from .models import (
     Axis,
     Axes,

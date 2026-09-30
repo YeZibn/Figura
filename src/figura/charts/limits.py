@@ -1,0 +1,7 @@
+"""Limits shared by the chart content packages."""
+
+MAX_TEXT_LENGTH = 160
+MAX_ISSUES = 32
+MAX_ISSUE_CODE_LENGTH = 64
+MAX_ISSUE_PATH_BYTES = 256
+MAX_ISSUE_MESSAGE_LENGTH = 240

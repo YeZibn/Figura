@@ -12,6 +12,7 @@ from figura.agent.request import AgentRequestBuilder
 from figura.agent.execution_state import RunExecutionStateService
 from figura.memory import AssistantMessage, MemoryToolCall
 from figura.shared.json_schema import canonical_json_dumps
+from figura.sources.chart_renders import FiguraChartRenderService
 import figura.providers.validation as provider_validation
 from figura.providers import (
     MODEL_IDS,
@@ -127,7 +128,11 @@ def _builder(store, coordinator, attachments=None) -> AgentRequestBuilder:
     selected_attachments = attachments or make_attachment_service(store)
     panels = make_panel_service(store, selected_attachments)
     execution_state = RunExecutionStateService(coordinator, panels)
-    return AgentRequestBuilder(selected_attachments, execution_state)
+    return AgentRequestBuilder(
+        selected_attachments,
+        execution_state,
+        FiguraChartRenderService(store.data_root),
+    )
 
 
 def _image_registry(store, coordinator, attachments):

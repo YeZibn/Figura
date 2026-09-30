@@ -17,6 +17,7 @@ from figura.runtime.records import ToolAttemptStartedFact, ToolResultFact
 from figura.runtime.store import FiguraRunStore
 from figura.runtime.tool_execution import DurableToolExecutor
 from figura.sources.attachments import FiguraAttachmentService
+from figura.sources.chart_renders import FiguraChartRenderService
 from figura.sources.panels import FiguraPanelService
 from figura.sources.repository import SourcesRepository
 from figura.tools import ReplayEffect, ToolContext, ToolInvocation, ToolOutcome, ToolRegistry, ToolRuntime
@@ -93,6 +94,14 @@ def _setup(tmp_path, image_bytes: bytes | None = None):
     registry = ToolRegistry("figura-web-v2", (definition,))
     runtime = ToolRuntime(registry)
     return store, coordinator, session, run, attachments, panels, execution_state, registry, runtime, attachment
+
+
+def _request_builder(store, attachments, execution_state) -> AgentRequestBuilder:
+    return AgentRequestBuilder(
+        attachments,
+        execution_state,
+        FiguraChartRenderService(store.data_root),
+    )
 
 
 def _invoke(
@@ -629,7 +638,7 @@ def test_measurement_feedback_uses_latest_batch_order_and_is_not_repeated(tmp_pa
     )
     _commit_measurements(store, coordinator, session.session_id, run.run_id, registry, calls)
 
-    request = AgentRequestBuilder(attachments, execution_state).build(
+    request = _request_builder(store, attachments, execution_state).build(
         coordinator.read_run_state(session.session_id, run.run_id), registry
     )
 
@@ -658,7 +667,7 @@ def test_measurement_feedback_uses_latest_batch_order_and_is_not_repeated(tmp_pa
         registry,
         (ProviderToolCall("later-load", "load_image", source),),
     )
-    later_request = AgentRequestBuilder(attachments, execution_state).build(
+    later_request = _request_builder(store, attachments, execution_state).build(
         coordinator.read_run_state(session.session_id, run.run_id), registry
     )
     assert "测量结果图像回看" not in " ".join(
@@ -708,7 +717,7 @@ def test_ocr_and_pie_feedback_is_rebuilt_only_for_the_latest_committed_batch(tmp
         ),
     )
 
-    request = AgentRequestBuilder(attachments, execution_state).build(
+    request = _request_builder(store, attachments, execution_state).build(
         coordinator.read_run_state(session.session_id, run.run_id), registry
     )
     blocks = request.messages[-1].content
@@ -745,7 +754,7 @@ def test_ocr_and_pie_feedback_is_rebuilt_only_for_the_latest_committed_batch(tmp
         registry,
         (ProviderToolCall("later-load", "load_image", source),),
     )
-    later = AgentRequestBuilder(attachments, execution_state).build(
+    later = _request_builder(store, attachments, execution_state).build(
         coordinator.read_run_state(session.session_id, run.run_id), registry
     )
     latest_blocks = later.messages[-1].content
@@ -790,7 +799,7 @@ def test_ocr_and_pie_feedback_image_limit_fails_before_next_provider_attempt(tmp
     monkeypatch.setattr(provider_validation, "MAX_IMAGE_COUNT", 1)
 
     with pytest.raises(RunError):
-        AgentRequestBuilder(attachments, execution_state).build(
+        _request_builder(store, attachments, execution_state).build(
             coordinator.read_run_state(session.session_id, run.run_id), registry
         )
 
@@ -824,7 +833,7 @@ def test_ocr_feedback_fails_if_authorized_source_disappears(tmp_path, monkeypatc
     (store.data_root / "attachments" / f"{attachment.attachment_id}.bin").unlink()
 
     with pytest.raises(RunError):
-        AgentRequestBuilder(attachments, execution_state).build(
+        _request_builder(store, attachments, execution_state).build(
             coordinator.read_run_state(session.session_id, run.run_id), registry
         )
 
@@ -877,7 +886,7 @@ def test_measurement_history_assembles_with_the_retained_registry_version(tmp_pa
             measure_pie_definition(execution_state.for_run, attachments, panels),
         ),
     )
-    request = AgentRequestBuilder(attachments, execution_state).build(
+    request = _request_builder(store, attachments, execution_state).build(
         coordinator.read_run_state(session.session_id, next_run.run_id),
         next_registry,
         coordinator.read_prior_run_states(session.session_id, next_run.run_id),
@@ -918,7 +927,7 @@ def test_no_evidence_measurement_still_gets_a_status_overlay(tmp_path) -> None:
         (ProviderToolCall("empty-measurement", "measure_bars", arguments),),
     )
 
-    request = AgentRequestBuilder(attachments, execution_state).build(
+    request = _request_builder(store, attachments, execution_state).build(
         coordinator.read_run_state(session.session_id, run.run_id), registry
     )
     observation = execution_state.for_run(session.session_id, run.run_id).measurements[-1]
@@ -953,7 +962,7 @@ def test_measurement_feedback_fails_if_authorized_source_disappears(tmp_path) ->
     (store.data_root / "attachments" / f"{attachment.attachment_id}.bin").unlink()
 
     with pytest.raises(RunError):
-        AgentRequestBuilder(attachments, execution_state).build(
+        _request_builder(store, attachments, execution_state).build(
             coordinator.read_run_state(session.session_id, run.run_id), registry
         )
     assert coordinator.read_run_state(session.session_id, run.run_id).provider_attempts == prior_attempts
@@ -997,7 +1006,7 @@ def test_measurement_feedback_keeps_multiple_source_images_in_call_order(tmp_pat
     )
     _commit_measurements(store, coordinator, session.session_id, second_run.run_id, registry, calls)
 
-    request = AgentRequestBuilder(attachments, execution_state).build(
+    request = _request_builder(store, attachments, execution_state).build(
         coordinator.read_run_state(session.session_id, second_run.run_id),
         registry,
         coordinator.read_prior_run_states(session.session_id, second_run.run_id),
@@ -1041,7 +1050,7 @@ def test_measurement_overlay_obeys_provider_image_count_limit(tmp_path, monkeypa
     monkeypatch.setattr(provider_validation, "MAX_IMAGE_COUNT", 1)
 
     with pytest.raises(RunError) as error:
-        AgentRequestBuilder(attachments, execution_state).build(
+        _request_builder(store, attachments, execution_state).build(
             coordinator.read_run_state(session.session_id, run.run_id), registry
         )
 

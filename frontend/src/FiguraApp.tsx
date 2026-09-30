@@ -10,6 +10,7 @@ import type { Attachment, ConversationItem, Provider, RunState, Session, Session
 import { AttachmentPanel, ConversationPanel, SessionSidebar } from './components/workspace'
 import { CreateSessionDialog } from './components/dialogs'
 import { PanelGallery } from './components/figura/PanelGallery'
+import { ChartRenderGallery } from './components/figura/ChartRenderGallery'
 import type { PendingAttachment } from './components/types'
 
 const providers: FiguraProviderId[] = ['qwen', 'deepseek', 'mimo']
@@ -455,7 +456,15 @@ export function FiguraApp() {
         error={error}
         onToggleRun={chooseRun}
         expandedRuns={expandedRuns}
-        runPanels={(runId) => <PanelGallery panels={panels.filter((item) => item.runId === runId)} contentUrl={(panelId) => api.panels.contentUrl(activeId, panelId)} />}
+        runPanels={(runId) => <>
+          <PanelGallery panels={panels.filter((item) => item.runId === runId)} contentUrl={(panelId) => api.panels.contentUrl(activeId, panelId)} />
+          <ChartRenderGallery
+            renders={timelines.find((item) => item.summary.runId === runId)?.summary.chartRenders
+              ?? data?.runs.find((item) => item.runId === runId)?.chartRenders
+              ?? []}
+            contentUrl={(render) => api.runs.chartRenderContentUrl(activeId, runId, render.callId)}
+          />
+        </>}
       />
       <AttachmentPanel
         attachments={data?.attachments ?? []}

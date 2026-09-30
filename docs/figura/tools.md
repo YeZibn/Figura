@@ -4,14 +4,14 @@
 
 ## 1. 职责与边界
 
-`ToolRegistry` 保存有序、版本化的 `ToolDefinition`；`ToolRuntime` 解析和验证调用参数，运行同步 handler，验证有界成功结果或返回安全错误。`DurableToolExecutor` 属于 Run 执行边界，负责在调用前后提交事实。当前工作树中的 Figura Gateway Registry 版本为 `figura-web-v4`，按顺序包含 `load_image`、`decompose_chart_image`、`extract_text`、`measure_bars`、`measure_lines`、`measure_scatter` 和 `measure_pie`。OCR 与四种测量工具均可读取 Run 已授权的 Attachment/Panel，并接受可选的多边形观察范围；柱、线、散点共享笛卡尔轴识别，Pie 使用极坐标扇区观察。该版本实现目前存在于未提交工作树。
+`ToolRegistry` 保存有序、版本化的 `ToolDefinition`；`ToolRuntime` 解析和验证调用参数，运行同步 handler，验证有界成功结果或返回安全错误。`DurableToolExecutor` 属于 Run 执行边界，负责在调用前后提交事实。当前工作树 Gateway Registry 版本为 `figura-web-v6`，依次包含 `load_image`、`decompose_chart_image`、`extract_text`、四种测量工具、`assemble_chart_figure` 和 `render_chart_figure`。图像、OCR 和测量工具处理 Session 已授权 Attachment/Panel；画布组装工具接收 Charts 域的完整 ChartFigure 并核对测量引用；渲染工具只接收引用已接受 Figure 的 `(run_id, call_id)`。Registry v6 不保留 v5 unresolved-tool 兼容 executor；切换前，旧 v5 Run 必须到达终态。
 
 ## 2. 内部流转
 
-1. **注册**：Gateway 组装有序 `ToolDefinition`，检查名称唯一、参数与结果 JSON Schema、描述及总大小。当前工具按 `load_image`、`decompose_chart_image`、`extract_text`、`measure_bars`、`measure_lines`、`measure_scatter`、`measure_pie` 顺序注册；Registry 对外提供只读版本、定义顺序和按名查找。
+1. **注册**：Gateway 组装有序 `ToolDefinition`，检查名称唯一、参数与结果 JSON Schema、描述及总大小。当前工具按 `load_image`、`decompose_chart_image`、`extract_text`、`measure_bars`、`measure_lines`、`measure_scatter`、`measure_pie`、`assemble_chart_figure`、`render_chart_figure` 顺序注册；Registry 对外提供只读版本、定义顺序和按名查找。
 2. **模型投影**：Agent 把允许的工具定义映射为 Provider 的 `FunctionTool`；模型只见名称、说明与参数 Schema，不见 handler、结果 Schema 或本地上下文。
 3. **调用**：`ToolInvocation` 的 call ID、名称和 JSON 参数进入 `ToolRuntime`；解析拒绝重复键、无效数值与不符合 Schema 的内容。handler 只收到已验证参数及 `ToolContext`。
-4. **结果与恢复**：成功时结果必须是有界 JSON 对象；失败时返回 `ToolExecutionError`。图像读取、OCR 与四种测量为 `replay_safe`；Panel 分割为 `idempotent_local_write`，同一 call-scoped 幂等键恢复时复用原 Panel ID。观察工具没有外部副作用，恢复重放会重新读取授权图像源并运行对应处理。结果超出既有大小上限时整体拒绝，不静默截断或删减观测。`replay_effect` 决定不确定结果能否安全重放或必须显式协调；ToolRuntime 自身不拥有 Run checkpoint。
+4. **结果与恢复**：成功时结果必须是有界 JSON 对象；失败时返回 `ToolExecutionError`。图像读取、OCR、测量与 `assemble_chart_figure` 为 `replay_safe`；Panel 分割和 `render_chart_figure` 为 `idempotent_local_write`。组装工具不新建外部资源，只验证、摘要并通过既有 Runtime 工具事实保留 Figure；渲染工具把 PNG 安装到 Sources 私有文件区，ToolResultFact 只保存有界摘要。结果超出既有大小上限时整体拒绝，不静默截断或删减观测。`replay_effect` 决定不确定结果能否安全重放或必须显式协调；ToolRuntime 自身不拥有 Run checkpoint。
 
 ## 3. 模型关系与共同规则
 
@@ -362,3 +362,83 @@ OCR 既为笛卡尔/Pie 测量提供轴刻度、标签与关联候选，也由 `
 视觉反馈不是新的工具结果或持久模型。AgentRequestBuilder 只检查当前 Run 最新模型响应对应的完整已提交工具批次：成功 `load_image` 的同一来源去重后还原原图；每个成功 `extract_text` 和四种测量调用各还原其被授权源图并绘制对应文字框或几何、状态、首条警告、工具名和 call ID。混合批次仍按调用顺序；更早批次和旧 Run 的图像不再附加。PNG 在调用期内生成，不写 ToolResultFact、RunExecutionState、Panel 或 Web DTO。
 
 来源 ID 未授权时 handler 在读取图像字节前返回有界工具失败。可读图像但没有候选时以 `no_evidence` 成功返回；不支持或证据不足以 `partial`/`unsupported` 和 warnings 表达。独立 OCR 不可用时返回 `available: false`，不会阻止笛卡尔或 Pie 几何候选；标注源图缺失、图像尺寸与提交结果不符、覆盖图无效或请求图片超限时，Agent 在 Provider attempt claim 前失败。ToolDefinition 与输入/结果 Schema 由各工具适配器及共享 Schema 定义；主规格见 [OCR](../../openspec/figura/openspec/specs/ocr-text-observation/spec.md)、[柱状图](../../openspec/figura/openspec/specs/bar-chart-measurement/spec.md)、[折线图](../../openspec/figura/openspec/specs/line-chart-measurement/spec.md)、[散点图](../../openspec/figura/openspec/specs/scatter-chart-measurement/spec.md)和[饼图](../../openspec/figura/openspec/specs/pie-chart-measurement/spec.md)。
+
+## 7. 图表画布组装工具
+
+`assemble_chart_figure` 的输入是一个完整 ChartFigure JSON 对象，不再增加包装字段。完整图表、布局、子图和 MeasurementRef 字段只在[Charts 专题](charts.md#4-完整模型字段)定义；此处记录工具执行、跨域校验和持久边界。代码见[工具 handler](../../src/figura/tools/implementations/assemble_chart_figure.py)、[Gateway Registry 装配](../../src/figura/bootstrap.py)和[RunExecutionState 投影](../../src/figura/agent/execution_state.py)。ChartFigure 字段合同见[已同步主规格](../../openspec/figura/openspec/specs/chart-figure-assembly/spec.md)；关联 change 已归档至[实施方案](../../openspec/figura/openspec/changes/archive/2026-09-29-add-figura-chart-figure-assembly/design.md)。
+
+### 调用流转
+
+1. ToolRuntime 先以 `CHART_FIGURE_SCHEMA` 拒绝缺失字段、额外字段、类型不符及越界输入；handler 再用 Charts codec 解析 canonical Figure，并运行 `validate_chart_figure` 验证唯一 chart ID、布局和全部嵌套 ChartSpecData。
+2. handler 为本次调用读取新鲜的同 Session `RunExecutionState`。每个 `measurement_refs` 必须精确匹配一个 `measure_bars`、`measure_lines`、`measure_scatter` 或 `measure_pie` 的已提交成功结果；支持先前终态 Run，也支持目标 Run 中已经先提交的结果。不存在、失败、尚未提交、未授权来源或其他 Session 的引用都会使整份 Figure 失败，并返回相应的 JSON Pointer `field_path`。引用为空表示该子图没有选择测量，不从文本或数据值推断引用。
+3. 全部校验通过后，工具返回摘要。任一子图或引用失败时没有部分成功结果；ToolRuntime 将有界错误结果交给 DurableToolExecutor，执行事实仍由 Runtime 提交。
+
+### 成功结果合同
+
+成功结果恰含下列字段；对象不允许额外属性。Charts 与引用数组顺序保留。字段写入者为 handler，权威位置先是调用期 ToolExecutionResult，随后是 Runtime `ToolResultFact.result`；Agent 只将其需要的摘要构造成调用期 Figure 投影。
+
+| 完整字段路径 | 类型、必填与约束 | 含义 |
+|---|---|---|
+| `assemble_chart_figure.result.figure_ref` | object，必填；恰含 `run_id`、`call_id` | 成功组装工具调用的稳定身份；Figure 不另生成 ID |
+| `assemble_chart_figure.result.figure_ref.run_id` | string，必填且非空 | 当前执行 Run ID |
+| `assemble_chart_figure.result.figure_ref.call_id` | string，必填且非空 | 当前模型逻辑工具调用 ID |
+| `assemble_chart_figure.result.figure_digest` | string，必填；64 位小写十六进制 | 完整 ChartFigure 规范 JSON 的 SHA-256 |
+| `assemble_chart_figure.result.title` | string，必填；最多 160 字符 | Figure 标题；输入省略时为空文本 |
+| `assemble_chart_figure.result.charts` | object 数组，必填；1–4 项 | 与 ChartFigure.charts 同序的子图摘要 |
+| `assemble_chart_figure.result.charts[].chart_id` | string，必填；匹配 `[A-Za-z0-9_-]{1,64}` | Figure 内子图身份 |
+| `assemble_chart_figure.result.charts[].chart_type` | string，必填；`bar`、`line`、`pie`、`scatter` 之一 | 来自对应子图 ChartSpecData.metadata |
+| `assemble_chart_figure.result.charts[].title` | string，必填；最多 160 字符，可为空 | 来自对应子图 ChartSpecData.metadata.title |
+
+完整 ChartFigure JSON 保存在成功或失败调用对应的 `ToolCallFact.arguments_json`；只有成功提交的 `ToolResultFact` 会让该 `(run_id, call_id)` 成为已接受 Figure。摘要由 `ToolResultFact.result` 提供给 Agent。没有 Figure 表、新 fact kind、独立 Figure ID 或可变更新；单独的 `render_chart_figure` 按 Figure 引用生成 PNG，完整 PNG 生命周期见下一节。digest 用于后续渲染从历史调用参数恢复并核对内容。选中的测量引用只表达模型选择，不证明子图数据与测量数值完全一致。
+
+## 8. 图表渲染工具
+
+`render_chart_figure` 将同一 Session 已成功组装的 ChartFigure 绘制为一张 PNG。模型输入只包含引用，不传图表数据、尺寸、主题或颜色；工具结果只有有限摘要，没有图像字节、路径或新的 Figure/render ID。处理由 Tool handler 协调：[Charts](charts.md#5-png-绘制边界)负责纯绘制，[Sources](sources.md#4-存储失败与访问边界)负责私有文件存取，Runtime 仍持久化通用工具事实，Agent 重建运行态，Web 负责预览路由。
+
+实现见[render handler](../../src/figura/tools/implementations/render_chart_figure.py)、[Charts renderer](../../src/figura/charts/chartfigure/rendering.py)、[Sources 存储服务](../../src/figura/sources/chart_renders.py)、[Registry 装配](../../src/figura/bootstrap.py)和[Agent 请求组装](../../src/figura/agent/request.py)。合同见[Chart rendering 主规格](../../openspec/figura/openspec/specs/chart-rendering/spec.md)，change 已归档于[实施方案](../../openspec/figura/openspec/changes/archive/2026-09-29-add-figura-chart-rendering/design.md)。
+
+### 输入字段
+
+输入必须是恰含 `figure_ref` 的对象，`figure_ref` 必须恰含以下两个字段；不允许额外字段。工具不能接受模型指定输出文件或渲染选项。
+
+| 完整字段路径 | JSON 类型 | 必填/约束 | 含义与校验 |
+|---|---|---|---|
+| `render_chart_figure.arguments.figure_ref` | object | 必填；无额外属性 | 被渲染的 Figure 工具调用引用 |
+| `render_chart_figure.arguments.figure_ref.run_id` | string | 必填；1–128 字符 | 组装 Figure 的 Run opaque ID |
+| `render_chart_figure.arguments.figure_ref.call_id` | string | 必填；1–256 字符 | 成功 `assemble_chart_figure` 调用的逻辑 ID |
+
+**解析与授权：**handler 从目标 Run 的新鲜 `RunExecutionState.chart_figures` 确认引用属于当前 Session 的已接受 Figure，再读取来源 Run 的已提交成功 `assemble_chart_figure` ToolCallFact/ToolResultFact。它重新解析并校验完整 ChartFigure，核对 canonical digest；未知、失败、未提交、跨 Session、内容损坏或摘要不一致时返回有界失败，不创建可见产物。
+
+### 成功结果字段
+
+返回对象恰含下表字段，Tool Runtime 以结果 JSON Schema 再次校验。写入者为 render handler；调用期间先位于 ToolExecutionResult，成功提交后权威事实是 Run Runtime 的 ToolResultFact.result。PNG 字节不进入该对象或 Run 事实。
+
+| 完整字段路径 | JSON 类型 | 必填/约束 | 含义、写入与读取 |
+|---|---|---|---|
+| `render_chart_figure.result.figure_ref` | object | 必填；恰含 `run_id`、`call_id` | 原样返回被渲染 Figure 引用；Agent 用它匹配接受状态 |
+| `render_chart_figure.result.figure_ref.run_id` | string | 必填；1–128 字符 | 被渲染 Figure 的来源 Run ID |
+| `render_chart_figure.result.figure_ref.call_id` | string | 必填；1–256 字符 | 被渲染 Figure 的 assembly call ID |
+| `render_chart_figure.result.figure_digest` | string | 必填；64 位小写十六进制 | 完整规范 Figure JSON 的 SHA-256；须匹配接受 Figure |
+| `render_chart_figure.result.image_sha256` | string | 必填；64 位小写十六进制 | PNG 内容 SHA-256；Agent 与 Gateway 读取文件时核对 |
+| `render_chart_figure.result.media_type` | string | 必填；固定 `image/png` | 文件媒体类型；Web 返回 `image/png` |
+| `render_chart_figure.result.byte_count` | integer | 必填；1–`MAX_IMAGE_BYTES` | 存储 PNG 的精确字节数，`MAX_IMAGE_BYTES` 为 24 MiB 减 64 字节 |
+| `render_chart_figure.result.width` | integer | 必填；1–1280 | PNG 像素宽度 |
+| `render_chart_figure.result.height` | integer | 必填；1–1962 | PNG 像素高度 |
+
+### 持久化、重放与回看
+
+1. Tool handler 通过 Charts 纯函数生成 PNG；Sources 使用渲染调用 `(run_id, call_id)` 派生文件名，并原子安装、校验并返回已存内容和尺寸。相同调用重放时复用既有文件并从原字节重新得到相同摘要，不创建重复文件。
+2. DurableToolExecutor 随后提交普通 ToolResultFact；工具调用参数保留 Figure 引用，成功结果只保存上表摘要。没有新增 Runtime fact kind、Figure 表、render ID 或渲染元数据表。
+3. `RunExecutionState.chart_renders` 只收录结果已提交且引用已接受 Figure 的成功/失败调用；成功观察中的 `result` 去掉重复的 `figure_ref`，完整状态字段归[Agent](agent.md#4-运行时状态字段)。无结果、无效引用或其他 Session 的文件不能通过运行态/Web 投影读取。
+4. AgentRequestBuilder 对当前 Run 最新工具响应中的成功 render call 再读取 PNG，校验字节数、尺寸、媒体类型及 SHA-256，将图像追加到紧接着的 Provider 请求。后续 Run 不会自动重放旧 PNG 图像；模型可再次调用渲染工具按引用读取生成图。
+
+| 错误码 | 触发边界 | 对外行为 |
+|---|---|---|
+| `figure_reference_not_found` | 引用不是当前 Session 的已接受 Figure | 安全失败，不访问产物 |
+| `figure_unavailable` / `execution_state_unavailable` | Run 事实或状态暂时不可读 | 有界失败；仅明确存储错误可重试 |
+| `figure_integrity_error` | Figure 参数无法解析、校验失败或 digest 不符 | 有界完整性失败，不返回 PNG |
+| `chart_render_failed` | ChartFigure 无法生成合规 PNG | 有界渲染失败 |
+| `chart_render_storage_failed` | Sources 无法写入或校验 PNG | 有界存储失败；仅 `STORAGE_ERROR` 标记可重试 |
+
+`render_chart_figure` 的 `replay_effect` 是 `idempotent_local_write`。文件可以先于 ToolResultFact 安装；在结果未成功提交时它仍是不可从 Agent/Web 读取的孤儿，重放同一调用会验证并复用原文件。工具不会用新内容覆盖损坏或冲突的既有文件。
+将 Registry 从 `figura-web-v5` 提升为 `figura-web-v6` 会使尚无结果的 v5 工具调用不能在 v6 下继续执行。部署切换前应先让 v5 Run 到达终态；该变更不添加 v5 兼容 executor。

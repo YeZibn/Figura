@@ -1,15 +1,11 @@
-"""JSON Schema for the local shape of version 1 ChartSpecData."""
+"""JSON Schema for ChartSpecData."""
 
 from __future__ import annotations
 
 from typing import Any
 
-from .limits import (
-    CHART_SPEC_SCHEMA_VERSION,
-    MAX_DATA_POINTS,
-    MAX_FINITE_NUMBER,
-    MAX_TEXT_LENGTH,
-)
+from ..limits import MAX_TEXT_LENGTH
+from .limits import CHART_SPEC_SCHEMA_VERSION, MAX_DATA_POINTS, MAX_FINITE_NUMBER
 
 
 _SERIES_SCHEMA: dict[str, Any] = {

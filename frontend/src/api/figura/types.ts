@@ -1,4 +1,4 @@
-import type { AgentRunEvent, Attachment, RunHandle, RunHistory, Session, SessionData } from '../../types/protocol'
+import type { AgentRunEvent, Attachment, ChartRenderSummary, RunHandle, RunHistory, Session, SessionData } from '../../types/protocol'
 import type { RunSubscription } from '../client'
 
 export type FiguraProviderId = 'qwen' | 'deepseek' | 'mimo'
@@ -35,6 +35,7 @@ export type FiguraPanelDto = {
   name: string
   points: Array<{ x: number; y: number }>
 }
+export type FiguraChartRenderDto = ChartRenderSummary
 export type FiguraMessageDto = {
   id: string
   runId: string
@@ -56,6 +57,7 @@ export type FiguraRunDto = {
   terminalCode: string | null
   terminalMessage: string | null
   executionState: 'active' | 'needs_reconciliation'
+  chartRenders: FiguraChartRenderDto[]
 }
 export type FiguraSessionDataDto = {
   session: FiguraSessionDto
@@ -75,7 +77,7 @@ export type FiguraRunHistoryDto = {
   events: FiguraEventDto[]
   historyGap: boolean
 }
-export type FiguraRunHandleDto = Omit<FiguraRunDto, 'executionState'>
+export type FiguraRunHandleDto = Omit<FiguraRunDto, 'executionState' | 'chartRenders'>
 
 export type FiguraClient = {
   readonly baseUrl: string
@@ -92,6 +94,7 @@ export type FiguraClient = {
   subscribeRun(sessionId: string, runId: string, callbacks: { onEvent(event: AgentRunEvent): void; onError(error: Error): void; onComplete(): void }, afterSequence?: number): RunSubscription
   attachmentContentUrl(sessionId: string, attachmentId: string): string
   panelContentUrl(sessionId: string, panelId: string): string
+  chartRenderContentUrl(sessionId: string, runId: string, callId: string): string
 }
 
 export type FiguraWorkspaceApi = {
@@ -114,5 +117,6 @@ export type FiguraWorkspaceApi = {
     start(sessionId: string, text: string, attachmentIds: string[], providerId: FiguraProviderId, idempotencyKey: string): Promise<RunHandle>
     history(sessionId: string, runId: string, afterSequence?: number): Promise<RunHistory>
     subscribe(sessionId: string, runId: string, callbacks: { onEvent(event: AgentRunEvent): void; onError(error: Error): void; onComplete(): void }, afterSequence?: number): RunSubscription
+    chartRenderContentUrl(sessionId: string, runId: string, callId: string): string
   }
 }

@@ -3,6 +3,7 @@ from __future__ import annotations
 from tests.figura_sources_support import make_attachment_service, make_panel_service
 
 import json
+import hashlib
 import threading
 from time import monotonic, sleep
 from http.client import HTTPConnection
@@ -12,6 +13,8 @@ from threading import Event
 from PIL import Image
 
 from figura.sources.models import PanelPoint
+from figura.sources.chart_renders import FiguraChartRenderService
+from figura.shared.json_schema import canonical_json_dumps
 from figura.agent.execution_state import RunExecutionStateService
 from figura.bootstrap import recover_running_runs
 from figura.gateway.application import FiguraGatewayApplication
@@ -23,7 +26,9 @@ from figura.runtime.models import RunCreateRequest, RunStatus, TerminalCode
 from figura.runtime.store import FiguraRunStore
 from figura.runtime.tool_execution import DurableToolExecutor
 from figura.tools import ToolRegistry
+from figura.tools.implementations.assemble_chart_figure import assemble_chart_figure_definition
 from figura.tools.implementations.image import image_tool_definitions
+from figura.tools.implementations.render_chart_figure import render_chart_figure_definition
 
 
 ORIGIN = "http://127.0.0.1:1421"
@@ -65,6 +70,7 @@ def _application(tmp_path, executor: PassiveExecutor | None = None):
     providers = _provider_factory()
     coordinator = RunCoordinator(store, providers)
     panels = make_panel_service(store, attachments)
+    chart_renders = FiguraChartRenderService(store.data_root)
     execution_state = RunExecutionStateService(coordinator, panels)
     selected_executor = executor or PassiveExecutor()
     dispatcher = RunDispatcher(selected_executor)  # type: ignore[arg-type]
@@ -73,6 +79,7 @@ def _application(tmp_path, executor: PassiveExecutor | None = None):
         attachments,
         panels,
         execution_state,
+        chart_renders,
         providers,
         dispatcher,
         allowed_origins=(ORIGIN,),
@@ -97,6 +104,72 @@ def _png_bytes() -> bytes:
     output = BytesIO()
     Image.new("RGB", (2, 2), color="blue").save(output, format="PNG")
     return output.getvalue()
+
+
+def _commit_chart_render(app, store, session_id: str, run_id: str):
+    registry = ToolRegistry(
+        "figura-web-v6",
+        (
+            assemble_chart_figure_definition(app.execution_state.for_run),
+            render_chart_figure_definition(
+                app.execution_state.for_run,
+                app.coordinator,
+                app.chart_renders,
+            ),
+        ),
+    )
+    figure = {
+        "schema_version": 1,
+        "title": "Quarterly sales",
+        "layout": {"columns": 1},
+        "charts": [
+            {
+                "chart_id": "sales",
+                "chart_spec": {
+                    "schema_version": 1,
+                    "metadata": {"chart_type": "pie", "title": "Share"},
+                    "axes": None,
+                    "dataset": [
+                        {"category": "North", "value": 70},
+                        {"category": "South", "value": 30},
+                    ],
+                },
+            }
+        ],
+    }
+    state = app.coordinator.read_run_state(session_id, run_id)
+    attempt = app.coordinator.begin_provider_attempt(session_id, run_id, state.checkpoint.revision)
+    claimed = app.coordinator.read_run_state(session_id, run_id)
+    calls = (
+        ProviderToolCall(
+            "gateway-figure",
+            "assemble_chart_figure",
+            json.dumps(figure, ensure_ascii=False, separators=(",", ":")),
+        ),
+        ProviderToolCall(
+            "gateway-render",
+            "render_chart_figure",
+            json.dumps(
+                {"figure_ref": {"run_id": run_id, "call_id": "gateway-figure"}},
+                separators=(",", ":"),
+            ),
+        ),
+    )
+    app.coordinator.commit_model_response(
+        session_id,
+        run_id,
+        claimed.checkpoint.revision,
+        ProviderResponse(
+            ProviderId.QWEN,
+            MODEL_IDS[ProviderId.QWEN],
+            "组合并绘制图表。",
+            calls,
+            FinishReason.TOOL_CALLS,
+        ),
+        provider_attempt_id=attempt.attempt_id,
+        registry_version=registry.version,
+    )
+    return DurableToolExecutor(store, registry).execute_pending(session_id, run_id)
 
 
 def _json(response):
@@ -285,6 +358,78 @@ def test_panel_routes_expose_only_committed_session_owned_pngs(tmp_path):
         )
         assert failed_content.status == 500
         assert str(tmp_path) not in failed_content.body.decode()
+    finally:
+        app.close()
+
+
+def test_chart_render_summaries_and_session_scoped_png_route(tmp_path):
+    app, store, coordinator, _attachments, _ = _application(tmp_path)
+    try:
+        session = coordinator.create_session("图表预览")
+        other_session = coordinator.create_session("另一个 Session")
+        run = _create_run(coordinator, session.session_id, key="chart-render-gateway")
+        _commit_chart_render(app, store, session.session_id, run.run_id)
+
+        snapshot = _json(app.handle("GET", f"/api/v1/sessions/{session.session_id}", {}))
+        history = _json(
+            app.handle(
+                "GET",
+                f"/api/v1/sessions/{session.session_id}/runs/{run.run_id}/history",
+                {},
+            )
+        )
+        summary = snapshot["runs"][0]["chartRenders"][0]
+        assert set(summary) == {
+            "callId",
+            "figureRef",
+            "figureTitle",
+            "figureDigest",
+            "imageSha256",
+            "mediaType",
+            "byteCount",
+            "width",
+            "height",
+        }
+        assert summary["callId"] == "gateway-render"
+        assert summary["figureRef"] == {"runId": run.run_id, "callId": "gateway-figure"}
+        assert summary["figureTitle"] == "Quarterly sales"
+        assert history["run"]["chartRenders"] == [summary]
+
+        content_path = (
+            f"/api/v1/sessions/{session.session_id}/runs/{run.run_id}/"
+            "chart-renders/gateway-render/content"
+        )
+        content = app.handle("GET", content_path, {})
+        assert content.status == 200
+        assert content.headers["Content-Type"] == "image/png"
+        assert content.headers["Cache-Control"] == "no-store"
+        assert content.headers["X-Content-Type-Options"] == "nosniff"
+        assert content.headers["Content-Length"] == str(summary["byteCount"])
+        assert Image.open(BytesIO(content.body)).format == "PNG"
+        assert app.handle(
+            "GET",
+            content_path.replace(session.session_id, other_session.session_id),
+            {},
+        ).status == 404
+        assert app.handle(
+            "GET",
+            content_path.replace("gateway-render", "not-committed"),
+            {},
+        ).status == 404
+
+        app.chart_renders.store(run.run_id, "orphan-render", _png_bytes())
+        assert app.handle(
+            "GET",
+            content_path.replace("gateway-render", "orphan-render"),
+            {},
+        ).status == 404
+
+        identity = canonical_json_dumps([run.run_id, "gateway-render"]).encode("utf-8")
+        render_path = store.data_root / "chart-renders" / f"{hashlib.sha256(identity).hexdigest()}.png"
+        render_path.write_bytes(b"corrupted")
+        corrupted = app.handle("GET", content_path, {})
+        assert corrupted.status == 500
+        assert str(store.data_root) not in corrupted.body.decode()
     finally:
         app.close()
 

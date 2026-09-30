@@ -1,10 +1,10 @@
-"""Bounded errors shared by the Figura ChartSpec content model."""
+"""Bounded ChartSpec parsing and validation errors."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .limits import (
+from ..limits import (
     MAX_ISSUE_CODE_LENGTH,
     MAX_ISSUE_MESSAGE_LENGTH,
     MAX_ISSUE_PATH_BYTES,
@@ -54,4 +54,3 @@ class ChartSpecSerializationError(ValueError):
             raise TypeError("issue must be a ChartSpecIssue")
         self.issue = issue
         super().__init__(issue.message)
-

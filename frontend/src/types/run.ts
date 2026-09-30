@@ -6,6 +6,18 @@ export type RunState = 'idle' | 'connecting' | 'running' | 'reconnecting' | 'can
 export type RecoveryStatus = 'available' | 'blocked' | 'unavailable'
 export type ContinuationKind = 'resume' | 'retry'
 
+export type ChartRenderSummary = {
+  callId: string
+  figureRef: { runId: string; callId: string }
+  figureTitle: string
+  figureDigest: string
+  imageSha256: string
+  mediaType: 'image/png'
+  byteCount: number
+  width: number
+  height: number
+}
+
 export type RunRecovery = {
   status: RecoveryStatus
   cursorId?: string | null
@@ -50,6 +62,7 @@ export type RunSummary = {
   continuationKind?: ContinuationKind | null
   recovery?: RunRecovery | null
   executionState?: 'active' | 'needs_reconciliation'
+  chartRenders?: ChartRenderSummary[]
 }
 
 export type RunHandle = {

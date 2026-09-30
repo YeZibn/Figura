@@ -1,10 +1,10 @@
 # Web：Local Gateway 与 React Figura
 
-> [返回系统总览](../figura-implementation-overview.md)。范围：当前 `src/figura/gateway/`、`src/figura/bootstrap.py`、`frontend/src/api/figura/` 与 `frontend/src/FiguraApp.tsx` 实现；附件和 Panel 源模型归[Sources](sources.md)，Agent 派生清单归[Agent](agent.md)，本篇拥有 Web DTO 与公开路由合同。主规格见 [Gateway](../../openspec/figura/openspec/specs/figura-web-gateway/spec.md) 和 [React Client](../../openspec/figura/openspec/specs/figura-web-client/spec.md)。`connect-figura-web-frontend`、`add-figura-panel-image-tools`、`add-figura-cartesian-chart-measurements`、`add-figura-scoped-chart-observation` 与模块结构调整 change 均已归档。
+> [返回系统总览](../figura-implementation-overview.md)。范围：当前 `src/figura/gateway/`、`src/figura/bootstrap.py`、`frontend/src/api/figura/` 与 `frontend/src/FiguraApp.tsx` 实现；附件和 Panel 源模型归[Sources](sources.md)，Agent 派生清单归[Agent](agent.md)，本篇拥有 Web DTO 与公开路由合同。主规格见 [Gateway](../../openspec/figura/openspec/specs/figura-web-gateway/spec.md) 和 [React Client](../../openspec/figura/openspec/specs/figura-web-client/spec.md)。`connect-figura-web-frontend`、`add-figura-panel-image-tools`、`add-figura-cartesian-chart-measurements`、`add-figura-scoped-chart-observation`、`add-figura-chart-rendering` 与模块结构调整 change 均已归档。
 
 ## 1. 职责与边界
 
-Local Gateway 是 Python 进程内的 HTTP/SSE 边界，不是第二套 Session 或 Run 存储。`bootstrap.py` 负责组装并注入 Runtime、Sources、Agent、Provider 与 Tools；`gateway/application.py` 负责 HTTP 请求处理和安全投影。它把 JSON/图片请求交给 Runtime、Sources 与 ProviderFactory，再把有限的 Session、Run、事件、附件和已提交 Panel DTO 返回给浏览器。Run 创建持久化后由有界 Dispatcher 异步提交给既有 Agent；Gateway handler 不直接请求模型。当前工作树的 `figura-web-v4` Registry 还提供 `extract_text` 和四种测量工具；这些能力通过 Run 工具事实进入 Agent，不增加独立测量 HTTP 路由、前端测量 API 或图表生成预览接口，且当前实现尚未提交。
+Local Gateway 是 Python 进程内的 HTTP/SSE 边界，不是第二套 Session 或 Run 存储。`bootstrap.py` 负责组装并注入 Runtime、Sources、Agent、Provider 与 Tools；`gateway/application.py` 负责 HTTP 请求处理和安全投影。它把 JSON/图片请求交给 Runtime、Sources 与 ProviderFactory，再把有限的 Session、Run、事件、附件、已提交 Panel 和 ChartFigure 渲染摘要 DTO 返回给浏览器。Run 创建持久化后由有界 Dispatcher 异步提交给既有 Agent；Gateway handler 不直接请求模型。当前工作树 Gateway Registry 为 `figura-web-v6`，已支持 `render_chart_figure`；PNG 预览通过独立 Session-scoped 内容路由获取，测量与渲染仍没有独立前端操作 API。
 
 React Figura mode 通过 `FiguraClient` 负责 HTTP/SSE，再由 `FiguraWorkspaceApi` 映射到现有工作区协议和共享组件。React 组件不直接访问 Gateway；ChartAgent 与 Mock client 模式仍由其原有客户端提供。此边界目前是本地网页接入，没有 Tauri shell 接入。
 
@@ -15,14 +15,14 @@ flowchart LR
     Gateway -->|Session / Run 读取与创建| Runtime[RunCoordinator / Store]
     Gateway -->|附件操作与图像内容| Sources[Sources services]
     Gateway -->|已提交 Panel 列表| ImageState[Agent RunExecutionState]
-    Gateway -->|Panel PNG 内容| Sources
-    ImageState -->|Panel metadata 与校验| Sources
+    Gateway -->|Panel / ChartFigure PNG 内容| Sources
+    ImageState -->|Panel / ChartFigure 渲染事实与校验| Sources
     Gateway -->|配置可用性检查| Provider[ProviderFactory]
     Gateway -->|持久 Run 的异步提交| Dispatcher[有界 RunDispatcher]
     Dispatcher -->|execute(session_id, run_id)| Agent[AgentExecutor]
     Agent --> Runtime
     Sources -->|Attachment / Panel metadata| RuntimeDB[(共享 Figura SQLite)]
-    Sources -->|私有附件与独立 Panel 图像| Files[(私有文件)]
+    Sources -->|私有附件、独立 Panel 与 ChartFigure PNG| Files[(私有文件)]
     Runtime -->|Session / Run / 执行事实| RuntimeDB
     Runtime -->|Session snapshot / RunState / events| Gateway
     Provider -->|ProviderAvailability| Gateway
@@ -37,13 +37,13 @@ Gateway 只绑定 loopback，并验证浏览器 Origin 白名单。启动时进�
 3. **上传、管理及读取分区图像**：浏览器向 Session attachment endpoint 上传原始字节并通过 query 传文件名；Gateway 委托 Sources 做媒体内容验证、大小限制、文件名净化和私有存储。浏览器只能在所属 Session 中列出、预览或删除；已被 Run 引用的附件不能删除。Run 输入保留有序附件 ID，图片字节不进入 Runtime 输入或 Web DTO。Panel 使用独立 Session-scoped list/content 路由；Agent 的 RunExecutionState 根据已提交成功分割结果筛选列表，Sources 提供 metadata 和 PNG 内容；图像读取返回 `image/png` 且不缓存。
 4. **创建 Run**：浏览器提交 `text`、有序 `attachmentIds`、allowlist `providerId` 和 `Idempotency-Key`。浏览器不提交 model ID。Gateway 从 Provider allowlist 解析固定 model，Runtime 原子写入 Run、RunInput、初始 Checkpoint、幂等映射和创建事件后，Gateway 将其交给有界 Dispatcher 并返回 `202` Run handle。一个 Session 同时最多一个 running Run；同 key 同 payload 重放返回原 Run，key 冲突或 Session 已有不同 running Run 时返回安全错误。若本地 Dispatcher 暂时满，Run 可能已持久化而请求返回有界 `503`；使用原幂等键重试会复用该 Run 并尝试调度。
 5. **执行与恢复**：Dispatcher 当前默认最多 3 个并发 worker、另有 8 个排队槽。Agent 从 Runtime checkpoint 执行，不确定的 Provider attempt 不自动重发，未解决的工具 attempt 不自动 replay。Gateway 启动时按 Session ID 和 Run ordinal 列出所有持久 running Run，再走相同 Dispatcher/Agent 路径；投影只有在 Run 仍 running 且下一动作要求 tool-attempt reconciliation 时才显示 `needs_reconciliation`。
-6. **读取历史、Panel 和事件**：Session detail 从一个 Runtime SQLite 读快照生成消息、附件和 Run 投影；前端另调 Panel list route，按 `runId` 将 Panels 放到对应 Run 下，浏览器通过 Session-scoped content URL 懒加载 PNG。Run history 按 `afterSequence` 返回更大的事件序号；SSE 先重放游标后的持久事件，再跟随后续事件，并以 `runId:sequence` 作为事件 ID。终态事件送达后关闭流。前端 RunController 负责历史补读、游标合并和终态收敛；终态后重新加载 Session detail 与 Panel list。
+6. **读取历史、图片产物和事件**：Session detail 从一个 Runtime SQLite 读快照生成消息、附件和 Run 投影；前端另调 Panel list route，按 `runId` 将 Panels 放到对应 Run 下，浏览器通过 Session-scoped content URL 懒加载 Panel PNG。Run DTO/history 的 `chartRenders` 只含成功提交的渲染元数据；Gallery 将预览按渲染所在 Run 分组，并通过 Session/Run/render-call-scoped 内容 URL 懒加载 PNG。Gateway 核对接受 Figure、ToolResultFact 和文件摘要/尺寸后才返回 `image/png`。Run history 按 `afterSequence` 返回更大的事件序号；SSE 先重放游标后的持久事件，再跟随后续事件，并以 `runId:sequence` 作为事件 ID。终态事件送达后关闭流。前端 RunController 负责历史补读、游标合并和终态收敛；终态后重新加载 Session detail 与 Panel list。
 
 Session Web message projection 与 Agent 的 [Session Memory](memory.md) 分离：前者仅显示每个 Run 的持久用户输入和已接受最终答案；后者还会把模型响应中的工具调用、工具结果投影成完整 Provider 对话，二者均从 Runtime 权威事实读取，但消费者和公开范围不同。
 
 ## 3. HTTP 与前端接口
 
-所有 HTTP 路由位于 `/api/v1`。成功 JSON 响应使用 `application/json`；本地服务设置 `Cache-Control: no-store` 与 `X-Content-Type-Options: nosniff`。附件内容响应使用由内容检查确认的媒体类型并禁止缓存。请求体有界，Gateway 错误用 `{ "error": { "code": string, "message": string } }` 返回安全说明。
+所有 HTTP 路由位于 `/api/v1`。成功 JSON 响应使用 `application/json`；本地服务设置 `Cache-Control: no-store` 与 `X-Content-Type-Options: nosniff`。附件内容响应使用由内容检查确认的媒体类型并禁止缓存；ChartFigure PNG 内容响应使用固定 `image/png` 并禁止缓存。请求体有界，Gateway 错误用 `{ "error": { "code": string, "message": string } }` 返回安全说明。
 
 | 操作 | 请求合同 | 成功返回 | 行为边界 |
 |---|---|---|---|
@@ -58,12 +58,13 @@ Session Web message projection 与 Agent 的 [Session Memory](memory.md) 分离�
 | `GET /sessions/{sessionId}/attachments/{attachmentId}/content` | Session 与 attachment opaque ID | 原始已验证图片字节 | 跨 Session 访问不泄露附件是否存在 |
 | `DELETE /sessions/{sessionId}/attachments/{attachmentId}` | Session 与 attachment opaque ID | `204` | 被 Run 引用时拒绝删除 |
 | `POST /sessions/{sessionId}/runs` | JSON 恰含 `text: string`、`attachmentIds: string[]`、`providerId: FiguraProviderId`；必需 `Idempotency-Key` header | `202 { run: FiguraRunHandleDto }` | Gateway 固定 model ID；Runtime 先持久化，Dispatcher 后执行 |
+| `GET /sessions/{sessionId}/runs/{runId}/chart-renders/{callId}/content` | Session、渲染所在 Run 与 `render_chart_figure` call ID | 原始 PNG 字节 | 只允许读取成功提交的同 Session 渲染；校验 PNG 哈希、字节数、尺寸和媒体类型，返回 `image/png`、`no-store` |
 | `GET /sessions/{sessionId}/runs/{runId}/history?afterSequence=N` | 可选非负整数 `afterSequence`，默认 `0` | `FiguraRunHistoryDto` | 只返回同 Session Run 的安全事件 |
 | `GET /sessions/{sessionId}/runs/{runId}/events?afterSequence=N` | 可选非负整数游标，默认 `0` | `text/event-stream` | 按持久事件序号补发和跟随；终态后关闭 |
 
-Gateway 拒绝不在明确白名单中的浏览器 Origin；Origin guard 对无 Origin 的 GET/HEAD 放行，其他无 Origin 请求不作为浏览器写操作放行。当前 API 不提供 Session 删除、Run retry/resume/interruption、评测工作区、测量或生成图表预览接口；Panel 预览使用上表的只读资源接口。
+Gateway 拒绝不在明确白名单中的浏览器 Origin；Origin guard 对无 Origin 的 GET/HEAD 放行，其他无 Origin 请求不作为浏览器写操作放行。当前 API 不提供 Session 删除、Run retry/resume/interruption、评测工作区、测量或图表渲染操作接口；Panel 与 ChartFigure PNG 预览使用只读资源路由。
 
-前端接口是 TypeScript 调用合同而非持久模型：`FiguraClient` 封装 HTTP/SSE 与 DTO，`FiguraWorkspaceApi` 将结果映射到兼容工作区协议，组件只调用后者。完整方法形状如下；其中 `Session`、`SessionData`、`Attachment`、`RunHandle`、`RunHistory`、`AgentRunEvent` 和 `RunSubscription` 继续使用现有前端协议类型。
+前端接口是 TypeScript 调用合同而非持久模型：`FiguraClient` 封装 HTTP/SSE 与 DTO，`FiguraWorkspaceApi` 将结果映射到兼容工作区协议，组件只调用后者。完整方法形状如下；其中 `Session`、`SessionData`、`Attachment`、`RunHandle`、`RunHistory`、`AgentRunEvent` 和 `RunSubscription` 继续使用现有前端协议类型；ChartRenderSummary 是 Figura Run 投影中的只读摘要。
 
 | 接口成员 | TypeScript 合同 | 职责 |
 |---|---|---|
@@ -80,14 +81,15 @@ Gateway 拒绝不在明确白名单中的浏览器 Origin；Origin guard 对无 
 | `FiguraClient.getRunHistory(sessionId: string, runId: string, afterSequence?: number)` | `Promise<FiguraRunHistoryDto>` | 从事件 cursor 读取持久历史 |
 | `FiguraClient.subscribeRun(sessionId: string, runId: string, callbacks: { onEvent(event: AgentRunEvent): void; onError(error: Error): void; onComplete(): void }, afterSequence?: number)` | `RunSubscription` | 返回可关闭的 SSE 订阅 |
 | `FiguraClient.attachmentContentUrl(sessionId: string, attachmentId: string)` | `string` | 生成 Session-scoped image content URL，不取代 Gateway ownership check |
+| `FiguraClient.chartRenderContentUrl(sessionId: string, runId: string, callId: string)` | `string` | 生成按 Session、渲染 Run 与调用 ID 定位的 PNG 内容 URL；Gateway 仍核对成功事实和摘要 |
 | `FiguraClient.panelContentUrl(sessionId: string, panelId: string)` | `string` | 生成 Session-scoped Panel PNG URL，读取时由 Gateway 校验 Session 归属 |
 | `FiguraWorkspaceApi.health.get()` | `Promise<FiguraHealth>` | 向应用提供 health |
 | `FiguraWorkspaceApi.sessions.list()` / `get(sessionId: string)` / `create(name: string)` | `Promise<Session[]>` / `Promise<SessionData>` / `Promise<Session>` | 对应列表、详情与创建，并映射兼容 Session 类型 |
 | `FiguraWorkspaceApi.attachments.list(sessionId: string)` / `upload(sessionId: string, file: File)` / `remove(sessionId: string, attachmentId: string)` | `Promise<Attachment[]>` / `Promise<Attachment>` / `Promise<void>` | 对应图片列表、上传、删除并映射 preview URL |
 | `FiguraWorkspaceApi.panels.list(sessionId: string)` / `contentUrl(sessionId: string, panelId: string)` | `Promise<FiguraPanelDto[]>` / `string` | 获取 Panel DTO 并构造延迟读取用的 PNG URL；组件通过 Figura workspace callback 展示 |
-| `FiguraWorkspaceApi.runs.start(sessionId: string, text: string, attachmentIds: string[], providerId: FiguraProviderId, idempotencyKey: string)` / `history(sessionId: string, runId: string, afterSequence?: number)` / `subscribe(sessionId: string, runId: string, callbacks, afterSequence?: number)` | `Promise<RunHandle>` / `Promise<RunHistory>` / `RunSubscription` | 对应 Run 提交、事件历史和 SSE 订阅；subscribe callbacks 与 `FiguraClient.subscribeRun` 相同 |
+| `FiguraWorkspaceApi.runs.start(...)` / `history(...)` / `subscribe(...)` / `chartRenderContentUrl(sessionId: string, runId: string, callId: string)` | `Promise<RunHandle>` / `Promise<RunHistory>` / `RunSubscription` / `string` | 对应 Run 提交、事件历史、SSE 订阅与 ChartFigure PNG 内容 URL；URL 不代替 Gateway 授权和摘要校验 |
 
-实现见 [`client.ts`](../../frontend/src/api/figura/client.ts)、[`workspace.ts`](../../frontend/src/api/figura/workspace.ts) 与 [`types.ts`](../../frontend/src/api/figura/types.ts)。
+实现见 [`client.ts`](../../frontend/src/api/figura/client.ts)、[`workspace.ts`](../../frontend/src/api/figura/workspace.ts) 与 [`types.ts`](../../frontend/src/api/figura/types.ts)。 Gallery 位于 [`ChartRenderGallery.tsx`](../../frontend/src/components/figura/ChartRenderGallery.tsx)，由 [`FiguraApp.tsx`](../../frontend/src/FiguraApp.tsx) 按 Run 挂载。
 
 ### GatewayResponse
 
@@ -191,7 +193,7 @@ Session 详情的用户可见对话投影，不是 Agent Session Memory。由 `w
 
 ### `FiguraRunDto` 与 `FiguraRunHandleDto`
 
-`FiguraRunDto` 是 Session/history 的安全 Run projection；其运行字段来源为 Runtime `Run`，`executionState` 根据 Run status 和 Checkpoint 下一动作计算。写入者为 `web_projection.run_summary`；读者为 workspace timeline 和 run controller。`FiguraRunHandleDto` 是 start 返回的同一投影但省略 `executionState`，有效字段完整列于下表所引用的前 11 行。
+`FiguraRunDto` 是 Session/history 的安全 Run projection；其运行字段来源为 Runtime `Run`，`executionState` 根据 Run status 和 Checkpoint 下一动作计算，`chartRenders` 则来自 Agent 对已提交渲染事实的安全投影。写入者为 `web_projection.run_summary`；读者为 workspace timeline 和 run controller。`FiguraRunHandleDto` 是 start 返回的基础运行投影，省略 `executionState` 和 `chartRenders`；其字段见本表中这两项之外的字段行。
 
 | 完整字段路径 | JSON 类型 | 必填/默认 | 含义与约束 | 写入者 → 权威来源 → 读取/公开规则 |
 |---|---|---|---|---|
@@ -207,8 +209,27 @@ Session 详情的用户可见对话投影，不是 Agent Session Memory。由 `w
 | `FiguraRunDto.terminalCode` | `string \| null` | 必填，可空 | 持久安全终态原因码；活动 Run 为空 | run projection → `Run.terminal_code` → UI 安全状态；不含异常堆栈 |
 | `FiguraRunDto.terminalMessage` | `string \| null` | 必填，可空 | 可安全显示的终态说明 | run projection → `Run.terminal_message` → UI；无终态时为空 |
 | `FiguraRunDto.executionState` | `'active' \| 'needs_reconciliation'` | 必填 | `needs_reconciliation` 当且仅当 Run 仍 running 且 checkpoint action 是 `TOOL_ATTEMPT`；否则为 `active` | `run_summary` → Run + ExecutionCheckpoint → UI reconciliation 状态；纯派生，不写回 Runtime |
+| `FiguraRunDto.chartRenders` | `ChartRenderSummary[]` | 必填 | 当前 Run 成功提交的渲染摘要；无成功渲染时为空数组 | `run_summary` → `RunExecutionState.chart_renders` 和已接受 Figure → React Gallery；PNG 字节另走受授权路由 |
 
-`FiguraRunHandleDto = Omit<FiguraRunDto, 'executionState'>` 的完整字段为 `runId`、`sessionId`、`ordinal`、`status`、`provider`、`model`、`createdAt`、`startedAt`、`finishedAt`、`terminalCode`、`terminalMessage`；每字段类型、来源与公开规则与 `FiguraRunDto` 相同。Handle 由 `web_projection.run_handle` 从 `Run` 生成。
+`FiguraRunHandleDto = Omit<FiguraRunDto, 'executionState' | 'chartRenders'>` 的完整字段为 `runId`、`sessionId`、`ordinal`、`status`、`provider`、`model`、`createdAt`、`startedAt`、`finishedAt`、`terminalCode`、`terminalMessage`；每字段类型、来源与公开规则与 `FiguraRunDto` 相同。Handle 由 `web_projection.run_handle` 从 `Run` 生成。
+
+### `ChartRenderSummary`
+
+`FiguraRunDto.chartRenders` 和 `FiguraRunHistoryDto.run.chartRenders` 中的已成功渲染摘要，由 `web_projection.chart_render_summaries` 依据 `RunExecutionState.chart_renders` 与已接受 Figure 摘要构造。数组按渲染发生顺序排列，归属于发起渲染工具调用的 Run；图片字节不在 DTO 中，前端需要时使用 `FiguraClient.chartRenderContentUrl` 懒加载。失败渲染不出现在 Web DTO。
+
+| 完整字段路径 | JSON 类型 | 必填/默认 | 含义与约束 | 写入者 → 权威来源 → 读取/公开规则 |
+|---|---|---|---|---|
+| `ChartRenderSummary.callId` | `string` | 必填 | 发起 `render_chart_figure` 的 call ID，也是渲染文件内容路径键 | `chart_render_summaries` → `ChartRenderObservation.call_id` → Gallery key 与受授权 PNG URL |
+| `ChartRenderSummary.figureRef` | object | 必填；恰含 `runId`、`callId` | 已接受 Figure 的来源引用 | `chart_render_summaries` → `ChartRenderObservation.figure_ref` → 展示/一致性检查；不直接授权内容读取 |
+| `ChartRenderSummary.figureRef.runId` | `string` | 必填 | Figure assembly 来源 Run ID | `ChartFigureReference.run_id` → Gallery 元信息 |
+| `ChartRenderSummary.figureRef.callId` | `string` | 必填 | Figure assembly 调用 ID | `ChartFigureReference.call_id` → Gallery 元信息 |
+| `ChartRenderSummary.figureTitle` | `string` | 必填 | 被渲染 Figure 标题，可为空 | `chart_render_summaries` → 同 Session 已接受 `ChartFigureSummary.title` → figcaption 与图片 alt |
+| `ChartRenderSummary.figureDigest` | `string` | 必填；64 位小写十六进制 | 被渲染 Figure 的 canonical digest | 成功 ToolResultFact.result → `ChartRenderObservation.result` → 安全 Run DTO |
+| `ChartRenderSummary.imageSha256` | `string` | 必填；64 位小写十六进制 | PNG 内容 SHA-256，Gateway 读取文件时校验 | 成功 ToolResultFact.result → `ChartRenderObservation.result` → Web 内容路由完整性核验 |
+| `ChartRenderSummary.mediaType` | `'image/png'` | 必填；固定值 | 媒体类型 | 成功 ToolResultFact.result → `ChartRenderObservation.result` → 图片路由 Content-Type |
+| `ChartRenderSummary.byteCount` | `number` | 必填；1–`MAX_IMAGE_BYTES` | PNG 精确字节数 | 成功 ToolResultFact.result → `ChartRenderObservation.result` → 读取时与文件长度比较 |
+| `ChartRenderSummary.width` | `number` | 必填；1–1280 | PNG 像素宽度 | 成功 ToolResultFact.result → `ChartRenderObservation.result` → 读取时与图片解码尺寸比较 |
+| `ChartRenderSummary.height` | `number` | 必填；1–1962 | PNG 像素高度 | 成功 ToolResultFact.result → `ChartRenderObservation.result` → 读取时与图片解码尺寸比较 |
 
 ### `FiguraEventDto` 与 `FiguraRunHistoryDto`
 

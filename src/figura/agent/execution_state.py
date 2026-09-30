@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal
 
+from figura.charts.chartfigure.limits import MAX_CHART_FIGURE_ITEMS
+from figura.charts.chartspec import ChartType
 from figura.runtime.coordinator import RunCoordinator
 from figura.runtime.errors import RunError, RunErrorCode
 from figura.runtime.models import ActionKind, RecordKind, RunStatus, ToolFactKind
@@ -20,6 +23,7 @@ from figura.runtime.records import (
 )
 from figura.tools import ToolOutcome
 from figura.tools.contracts import ToolExecutionError, freeze_json_value
+from figura.shared.image_limits import MAX_IMAGE_BYTES
 
 from figura.sources.models import PanelRecord
 from figura.sources.panels import FiguraPanelService
@@ -56,11 +60,53 @@ class MeasurementObservation:
 
 
 @dataclass(frozen=True)
+class ChartFigureReference:
+    run_id: str
+    call_id: str
+
+
+@dataclass(frozen=True)
+class ChartSummary:
+    chart_id: str
+    chart_type: ChartType
+    title: str
+
+
+@dataclass(frozen=True)
+class ChartFigureSummary:
+    figure_ref: ChartFigureReference
+    figure_digest: str
+    title: str
+    charts: tuple[ChartSummary, ...]
+
+
+@dataclass(frozen=True)
+class ChartRenderObservation:
+    run_id: str
+    call_id: str
+    attempt_id: str
+    figure_ref: ChartFigureReference
+    outcome: ToolOutcome
+    result: Mapping[str, object] | None = None
+    error: ToolExecutionError | None = None
+
+    def __post_init__(self) -> None:
+        if self.outcome is ToolOutcome.SUCCEEDED:
+            if not isinstance(self.result, Mapping) or self.error is not None:
+                raise ValueError("successful render must contain only a result")
+            object.__setattr__(self, "result", freeze_json_value(self.result))
+        elif self.result is not None or not isinstance(self.error, ToolExecutionError):
+            raise ValueError("failed render must contain only a structured error")
+
+
+@dataclass(frozen=True)
 class RunExecutionState:
     run_id: str
     available_attachments: tuple[AvailableAttachment, ...]
     panels: tuple[PanelRecord, ...]
     measurements: tuple[MeasurementObservation, ...]
+    chart_figures: tuple[ChartFigureSummary, ...]
+    chart_renders: tuple[ChartRenderObservation, ...]
 
 
 class RunExecutionStateService:
@@ -122,11 +168,24 @@ class RunExecutionStateService:
             frozenset(seen),
             frozenset(record.panel_id for record in committed_panels),
         )
+        chart_figures = _committed_chart_figures(
+            snapshot,
+            current.run.session_id,
+            current.run.ordinal,
+        )
+        chart_renders = _committed_chart_renders(
+            snapshot,
+            current.run.session_id,
+            current.run.ordinal,
+            {item.figure_ref: item.figure_digest for item in chart_figures},
+        )
         return RunExecutionState(
             current.run.run_id,
             tuple(available),
             committed_panels,
             measurements,
+            chart_figures,
+            chart_renders,
         )
 
     def list_session_panels(self, session_id: str) -> tuple[PanelRecord, ...]:
@@ -278,6 +337,269 @@ def _committed_measurements(
 
     ordered.sort(key=lambda item: (item[0], item[1], item[2]))
     return tuple(item[3] for item in ordered)
+
+
+def _committed_chart_figures(
+    snapshot: SessionSnapshot,
+    session_id: str,
+    target_ordinal: int,
+) -> tuple[ChartFigureSummary, ...]:
+    ordered: list[tuple[int, int, int, ChartFigureSummary]] = []
+    for state in snapshot.run_states:
+        if state.run.session_id != session_id or state.run.ordinal > target_ordinal:
+            continue
+        calls = {
+            fact.tool_sequence: fact.payload
+            for fact in state.tool_facts
+            if fact.fact_kind is ToolFactKind.TOOL_CALL and isinstance(fact.payload, ToolCallFact)
+        }
+        results = {
+            fact.payload.tool_call_sequence: fact.payload
+            for fact in state.tool_facts
+            if fact.fact_kind is ToolFactKind.TOOL_RESULT and isinstance(fact.payload, ToolResultFact)
+        }
+        attempts: dict[int, list[ToolAttemptStartedFact]] = {}
+        for fact in state.tool_facts:
+            if (
+                fact.fact_kind is ToolFactKind.TOOL_ATTEMPT_STARTED
+                and isinstance(fact.payload, ToolAttemptStartedFact)
+            ):
+                attempts.setdefault(fact.payload.tool_call_sequence, []).append(fact.payload)
+
+        for sequence, call in calls.items():
+            if call.tool_name != "assemble_chart_figure":
+                continue
+            result = results.get(sequence)
+            if result is None:
+                continue
+            if result.tool_name != call.tool_name or result.call_id != call.call_id:
+                raise RunError(RunErrorCode.INTEGRITY_ERROR)
+            if not any(
+                attempt.attempt_id == result.attempt_id and attempt.call_id == call.call_id
+                for attempt in attempts.get(sequence, ())
+            ):
+                raise RunError(RunErrorCode.INTEGRITY_ERROR)
+            if result.outcome is not ToolOutcome.SUCCEEDED:
+                continue
+            summary = _chart_figure_summary(result.result, state.run.run_id, call.call_id)
+            ordered.append((state.run.ordinal, sequence, call.position, summary))
+
+    ordered.sort(key=lambda item: (item[0], item[1], item[2]))
+    return tuple(item[3] for item in ordered)
+
+
+def _chart_figure_summary(
+    result: Mapping[str, object] | None,
+    run_id: str,
+    call_id: str,
+) -> ChartFigureSummary:
+    if not isinstance(result, Mapping) or set(result) != {
+        "figure_ref",
+        "figure_digest",
+        "title",
+        "charts",
+    }:
+        raise RunError(RunErrorCode.INTEGRITY_ERROR)
+    reference = result["figure_ref"]
+    digest = result["figure_digest"]
+    title = result["title"]
+    raw_charts = result["charts"]
+    if (
+        not isinstance(reference, Mapping)
+        or set(reference) != {"run_id", "call_id"}
+        or reference.get("run_id") != run_id
+        or reference.get("call_id") != call_id
+        or not isinstance(digest, str)
+        or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+        or not isinstance(title, str)
+        or len(title) > 160
+        or not isinstance(raw_charts, (tuple, list))
+        or not 1 <= len(raw_charts) <= MAX_CHART_FIGURE_ITEMS
+    ):
+        raise RunError(RunErrorCode.INTEGRITY_ERROR)
+
+    charts: list[ChartSummary] = []
+    seen_ids: set[str] = set()
+    for item in raw_charts:
+        if not isinstance(item, Mapping) or set(item) != {"chart_id", "chart_type", "title"}:
+            raise RunError(RunErrorCode.INTEGRITY_ERROR)
+        chart_id, raw_chart_type, chart_title = (
+            item.get("chart_id"),
+            item.get("chart_type"),
+            item.get("title"),
+        )
+        if (
+            not isinstance(chart_id, str)
+            or re.fullmatch(r"[A-Za-z0-9_-]{1,64}", chart_id) is None
+            or chart_id in seen_ids
+            or not isinstance(raw_chart_type, str)
+            or not isinstance(chart_title, str)
+            or len(chart_title) > 160
+        ):
+            raise RunError(RunErrorCode.INTEGRITY_ERROR)
+        try:
+            chart_type = ChartType(raw_chart_type)
+        except ValueError:
+            raise RunError(RunErrorCode.INTEGRITY_ERROR) from None
+        seen_ids.add(chart_id)
+        charts.append(ChartSummary(chart_id, chart_type, chart_title))
+
+    return ChartFigureSummary(
+        ChartFigureReference(run_id, call_id),
+        digest,
+        title,
+        tuple(charts),
+    )
+
+
+def _committed_chart_renders(
+    snapshot: SessionSnapshot,
+    session_id: str,
+    target_ordinal: int,
+    accepted_figure_digests: Mapping[ChartFigureReference, str],
+) -> tuple[ChartRenderObservation, ...]:
+    ordered: list[tuple[int, int, int, ChartRenderObservation]] = []
+    for state in snapshot.run_states:
+        if state.run.session_id != session_id or state.run.ordinal > target_ordinal:
+            continue
+        calls = {
+            fact.tool_sequence: fact.payload
+            for fact in state.tool_facts
+            if fact.fact_kind is ToolFactKind.TOOL_CALL and isinstance(fact.payload, ToolCallFact)
+        }
+        results = {
+            fact.payload.tool_call_sequence: fact.payload
+            for fact in state.tool_facts
+            if fact.fact_kind is ToolFactKind.TOOL_RESULT and isinstance(fact.payload, ToolResultFact)
+        }
+        attempts: dict[int, list[ToolAttemptStartedFact]] = {}
+        for fact in state.tool_facts:
+            if (
+                fact.fact_kind is ToolFactKind.TOOL_ATTEMPT_STARTED
+                and isinstance(fact.payload, ToolAttemptStartedFact)
+            ):
+                attempts.setdefault(fact.payload.tool_call_sequence, []).append(fact.payload)
+
+        for sequence, call in calls.items():
+            if call.tool_name != "render_chart_figure":
+                continue
+            result = results.get(sequence)
+            if result is None:
+                continue
+            if result.tool_name != call.tool_name or result.call_id != call.call_id:
+                raise RunError(RunErrorCode.INTEGRITY_ERROR)
+            if not any(
+                attempt.attempt_id == result.attempt_id and attempt.call_id == call.call_id
+                for attempt in attempts.get(sequence, ())
+            ):
+                raise RunError(RunErrorCode.INTEGRITY_ERROR)
+
+            figure_ref = _render_figure_reference(call.arguments_json)
+            if figure_ref is None or figure_ref not in accepted_figure_digests:
+                continue
+
+            if result.outcome is ToolOutcome.SUCCEEDED:
+                parsed_result = _chart_render_result(result.result)
+                if (
+                    parsed_result is None
+                    or parsed_result[0] != figure_ref
+                    or parsed_result[1]["figure_digest"] != accepted_figure_digests[figure_ref]
+                    or result.error is not None
+                ):
+                    continue
+                observation = ChartRenderObservation(
+                    run_id=state.run.run_id,
+                    call_id=call.call_id,
+                    attempt_id=result.attempt_id,
+                    figure_ref=figure_ref,
+                    outcome=result.outcome,
+                    result=parsed_result[1],
+                )
+            else:
+                if result.result is not None or not isinstance(result.error, ToolExecutionError):
+                    continue
+                observation = ChartRenderObservation(
+                    run_id=state.run.run_id,
+                    call_id=call.call_id,
+                    attempt_id=result.attempt_id,
+                    figure_ref=figure_ref,
+                    outcome=result.outcome,
+                    error=result.error,
+                )
+            ordered.append((state.run.ordinal, sequence, call.position, observation))
+
+    ordered.sort(key=lambda item: (item[0], item[1], item[2]))
+    return tuple(item[3] for item in ordered)
+
+
+def _render_figure_reference(arguments_json: str) -> ChartFigureReference | None:
+    def reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        result: dict[str, object] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate render argument")
+            result[key] = value
+        return result
+
+    try:
+        arguments = json.loads(arguments_json, object_pairs_hook=reject_duplicate_keys)
+    except (TypeError, ValueError, RecursionError, OverflowError):
+        return None
+    if not isinstance(arguments, dict) or set(arguments) != {"figure_ref"}:
+        return None
+    reference = arguments["figure_ref"]
+    if (
+        not isinstance(reference, dict)
+        or set(reference) != {"run_id", "call_id"}
+        or not isinstance(reference.get("run_id"), str)
+        or not reference["run_id"]
+        or not isinstance(reference.get("call_id"), str)
+        or not reference["call_id"]
+    ):
+        return None
+    return ChartFigureReference(reference["run_id"], reference["call_id"])
+
+
+def _chart_render_result(
+    result: Mapping[str, object] | None,
+) -> tuple[ChartFigureReference, Mapping[str, object]] | None:
+    if not isinstance(result, Mapping) or set(result) != {
+        "figure_ref",
+        "figure_digest",
+        "image_sha256",
+        "media_type",
+        "byte_count",
+        "width",
+        "height",
+    }:
+        return None
+    raw_reference = result.get("figure_ref")
+    figure_digest = result.get("figure_digest")
+    image_sha256 = result.get("image_sha256")
+    byte_count = result.get("byte_count")
+    width = result.get("width")
+    height = result.get("height")
+    if (
+        not isinstance(raw_reference, Mapping)
+        or set(raw_reference) != {"run_id", "call_id"}
+        or not isinstance(raw_reference.get("run_id"), str)
+        or not isinstance(raw_reference.get("call_id"), str)
+        or not isinstance(figure_digest, str)
+        or re.fullmatch(r"[0-9a-f]{64}", figure_digest) is None
+        or not isinstance(image_sha256, str)
+        or re.fullmatch(r"[0-9a-f]{64}", image_sha256) is None
+        or result.get("media_type") != "image/png"
+        or type(byte_count) is not int
+        or not 1 <= byte_count <= MAX_IMAGE_BYTES
+        or type(width) is not int
+        or type(height) is not int
+        or width <= 0
+        or height <= 0
+    ):
+        return None
+    reference = ChartFigureReference(raw_reference["run_id"], raw_reference["call_id"])
+    projected = {key: value for key, value in result.items() if key != "figure_ref"}
+    return reference, projected
 
 
 def _measurement_source(arguments_json: str) -> tuple[Literal["attachment", "panel"], str] | None:

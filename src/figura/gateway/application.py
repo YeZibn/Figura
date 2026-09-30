@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from dataclasses import dataclass
 from typing import Mapping
 from urllib.parse import parse_qs, urlsplit
 
 from figura.sources.attachments import FiguraAttachmentService
+from figura.sources.chart_renders import FiguraChartRenderService
 from figura.sources.panels import FiguraPanelService
 from figura.agent.execution_state import RunExecutionStateService
 from figura.providers import MODEL_IDS, ProviderFactory, ProviderId
@@ -16,7 +18,14 @@ from figura.runtime.errors import RunError, RunErrorCode
 from figura.runtime.models import RunCreateRequest, RunStatus
 
 from .dispatcher import DispatcherFull, RunDispatcher
-from .web_projection import attachment, panel, run_handle, run_history, session_snapshot
+from .web_projection import (
+    attachment,
+    chart_render_summaries,
+    panel,
+    run_handle,
+    run_history,
+    session_snapshot,
+)
 
 
 _API_PREFIX = "/api/v1"
@@ -37,6 +46,7 @@ class FiguraGatewayApplication:
         attachments: FiguraAttachmentService,
         panels: FiguraPanelService,
         execution_state: RunExecutionStateService,
+        chart_renders: FiguraChartRenderService,
         providers: ProviderFactory,
         dispatcher: RunDispatcher,
         *,
@@ -46,6 +56,7 @@ class FiguraGatewayApplication:
         self.attachments = attachments
         self.panels = panels
         self.execution_state = execution_state
+        self.chart_renders = chart_renders
         self.providers = providers
         self.dispatcher = dispatcher
         self.allowed_origins = frozenset(allowed_origins)
@@ -117,7 +128,11 @@ class FiguraGatewayApplication:
             session_id = parts[1]
             if len(parts) == 2 and method == "GET":
                 snapshot = self.coordinator.read_session_snapshot(session_id)
-                return self._json(200, session_snapshot(snapshot), headers)
+                return self._json(
+                    200,
+                    session_snapshot(snapshot, self._session_chart_renders(snapshot)),
+                    headers,
+                )
             if len(parts) == 3 and parts[2] == "attachments":
                 if method == "GET":
                     return self._json(
@@ -213,7 +228,58 @@ class FiguraGatewayApplication:
             if len(parts) == 5 and parts[2] == "runs" and parts[4] == "history" and method == "GET":
                 after_sequence = _read_cursor(query)
                 state = self.coordinator.read_run_state(session_id, parts[3])
-                return self._json(200, run_history(state, after_sequence), headers)
+                execution = self.execution_state.build(
+                    state,
+                    self.coordinator.read_prior_run_states(session_id, parts[3]),
+                )
+                chart_renders = chart_render_summaries(execution).get(parts[3], ())
+                return self._json(200, run_history(state, after_sequence, chart_renders), headers)
+            if (
+                len(parts) == 7
+                and parts[2] == "runs"
+                and parts[4] == "chart-renders"
+                and parts[6] == "content"
+                and method == "GET"
+            ):
+                render_run_id, render_call_id = parts[3], parts[5]
+                self.coordinator.read_run_state(session_id, render_run_id)
+                execution = self.execution_state.for_run(session_id, render_run_id)
+                observation = next(
+                    (
+                        item
+                        for item in execution.chart_renders
+                        if item.run_id == render_run_id and item.call_id == render_call_id
+                    ),
+                    None,
+                )
+                if observation is None or observation.result is None:
+                    raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
+                try:
+                    image_bytes, width, height = self.chart_renders.resolve(
+                        render_run_id, render_call_id
+                    )
+                except RunError:
+                    raise RunError(RunErrorCode.INTEGRITY_ERROR) from None
+                result = observation.result
+                if (
+                    hashlib.sha256(image_bytes).hexdigest() != result.get("image_sha256")
+                    or len(image_bytes) != result.get("byte_count")
+                    or width != result.get("width")
+                    or height != result.get("height")
+                    or result.get("media_type") != "image/png"
+                ):
+                    raise RunError(RunErrorCode.INTEGRITY_ERROR)
+                return GatewayResponse(
+                    200,
+                    self._cors_headers(headers)
+                    | {
+                        "Content-Type": "image/png",
+                        "Content-Length": str(len(image_bytes)),
+                        "Cache-Control": "no-store",
+                        "X-Content-Type-Options": "nosniff",
+                    },
+                    image_bytes,
+                )
             if len(parts) == 5 and parts[2] == "runs" and parts[4] == "events" and method == "GET":
                 return self._error(426, "stream_required", "请使用事件流连接读取 Run 事件。", headers)
             return self._error(404, "not_found", "未找到请求的 Figura 资源。", headers)
@@ -249,6 +315,15 @@ class FiguraGatewayApplication:
             "service": "figura",
             "providers": provider_statuses,
         }
+
+    def _session_chart_renders(self, snapshot) -> dict[str, tuple[dict[str, object], ...]]:
+        if not snapshot.run_states:
+            return {}
+        execution = self.execution_state.build(
+            snapshot.run_states[-1],
+            snapshot.run_states[:-1],
+        )
+        return chart_render_summaries(execution)
 
     def _json(
         self,

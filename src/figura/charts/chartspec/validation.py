@@ -5,15 +5,14 @@ from __future__ import annotations
 import math
 from collections.abc import Callable, Sequence
 
-from .errors import ChartSpecIssue
-from .limits import (
-    MAX_DATA_POINTS,
-    MAX_FINITE_NUMBER,
+from ..limits import (
     MAX_ISSUES,
     MAX_ISSUE_MESSAGE_LENGTH,
     MAX_ISSUE_PATH_BYTES,
     MAX_TEXT_LENGTH,
 )
+from .errors import ChartSpecIssue
+from .limits import MAX_DATA_POINTS, MAX_FINITE_NUMBER
 from .models import (
     Axis,
     Axes,

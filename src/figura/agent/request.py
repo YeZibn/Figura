@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from collections.abc import Mapping
 from pathlib import Path
 
 from figura.sources.attachments import FiguraAttachmentService
+from figura.sources.chart_renders import FiguraChartRenderService
 from figura.memory import (
     AssistantMessage,
     MemoryMessage,
@@ -54,19 +56,23 @@ _MEASUREMENT_TOOLS = frozenset({"measure_bars", "measure_lines", "measure_scatte
 class AgentRequestBuilder:
     """Build one validated model request from Session history and the current Run."""
 
-    __slots__ = ("_attachments", "_execution_state")
+    __slots__ = ("_attachments", "_execution_state", "_chart_renders")
 
     def __init__(
         self,
         attachments: FiguraAttachmentService,
         execution_state: RunExecutionStateService,
+        chart_renders: FiguraChartRenderService,
     ) -> None:
         if not isinstance(attachments, FiguraAttachmentService):
             raise TypeError("attachments must be a FiguraAttachmentService")
         if not isinstance(execution_state, RunExecutionStateService):
             raise TypeError("execution_state must be a RunExecutionStateService")
+        if not isinstance(chart_renders, FiguraChartRenderService):
+            raise TypeError("chart_renders must be a FiguraChartRenderService")
         object.__setattr__(self, "_attachments", attachments)
         object.__setattr__(self, "_execution_state", execution_state)
+        object.__setattr__(self, "_chart_renders", chart_renders)
 
     def __setattr__(self, name: str, value: object) -> None:
         raise AttributeError("AgentRequestBuilder is immutable")
@@ -238,6 +244,11 @@ class AgentRequestBuilder:
             for item in execution_state.measurements
             if item.run_id == state.run.run_id
         }
+        render_observations = {
+            item.call_id: item
+            for item in execution_state.chart_renders
+            if item.run_id == state.run.run_id
+        }
         loaded_sources: set[tuple[str, str]] = set()
         for sequence, call in calls:
             result = results.get(sequence)
@@ -286,6 +297,44 @@ class AgentRequestBuilder:
                 blocks.extend((
                     TextBlock(f"OCR 结果图像回看：extract_text；调用 ID：{call.call_id}。"),
                     ImageBlock("image/png", annotated_bytes),
+                ))
+                continue
+            if call.tool_name == "render_chart_figure":
+                observation = render_observations.get(call.call_id)
+                figure_ref = _tool_figure_reference(call.arguments_json)
+                result_ref = result.result.get("figure_ref")
+                if (
+                    observation is None
+                    or observation.outcome is not ToolOutcome.SUCCEEDED
+                    or observation.result is None
+                    or observation.figure_ref.run_id != figure_ref[0]
+                    or observation.figure_ref.call_id != figure_ref[1]
+                    or not isinstance(result_ref, Mapping)
+                    or result_ref != {"run_id": figure_ref[0], "call_id": figure_ref[1]}
+                    or dict(observation.result)
+                    != {key: value for key, value in result.result.items() if key != "figure_ref"}
+                ):
+                    raise RunError(RunErrorCode.INTEGRITY_ERROR)
+                try:
+                    image_bytes, width, height = self._chart_renders.resolve(
+                        state.run.run_id, call.call_id
+                    )
+                except RunError:
+                    raise RunError(RunErrorCode.INTEGRITY_ERROR) from None
+                if (
+                    hashlib.sha256(image_bytes).hexdigest() != result.result.get("image_sha256")
+                    or len(image_bytes) != result.result.get("byte_count")
+                    or width != result.result.get("width")
+                    or height != result.result.get("height")
+                    or result.result.get("media_type") != "image/png"
+                ):
+                    raise RunError(RunErrorCode.INTEGRITY_ERROR)
+                blocks.extend((
+                    TextBlock(
+                        f"Figure 图像回看：render_chart_figure；运行 ID：{state.run.run_id}；"
+                        f"调用 ID：{call.call_id}。"
+                    ),
+                    ImageBlock("image/png", image_bytes),
                 ))
                 continue
             if call.tool_name not in _MEASUREMENT_TOOLS:
@@ -396,6 +445,33 @@ def _tool_source_identity(arguments_json: str) -> tuple[str, str]:
     return kind, source_id
 
 
+def _tool_figure_reference(arguments_json: str) -> tuple[str, str]:
+    def reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        result: dict[str, object] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate tool argument")
+            result[key] = value
+        return result
+
+    try:
+        arguments = json.loads(arguments_json, object_pairs_hook=reject_duplicate_keys)
+    except (TypeError, ValueError, RecursionError, OverflowError):
+        raise RunError(RunErrorCode.INTEGRITY_ERROR) from None
+    if (
+        not isinstance(arguments, dict)
+        or set(arguments) != {"figure_ref"}
+        or not isinstance(arguments["figure_ref"], dict)
+        or set(arguments["figure_ref"]) != {"run_id", "call_id"}
+        or not isinstance(arguments["figure_ref"].get("run_id"), str)
+        or not arguments["figure_ref"]["run_id"]
+        or not isinstance(arguments["figure_ref"].get("call_id"), str)
+        or not arguments["figure_ref"]["call_id"]
+    ):
+        raise RunError(RunErrorCode.INTEGRITY_ERROR)
+    return arguments["figure_ref"]["run_id"], arguments["figure_ref"]["call_id"]
+
+
 def _image_inventory(state: RunExecutionState) -> str:
     attachments = "\n".join(
         f"- 附件 {item.attachment_id}：{item.filename}"
@@ -405,10 +481,21 @@ def _image_inventory(state: RunExecutionState) -> str:
         f"- Panel {item.panel_id}：{item.name}（源附件 {item.source_attachment_id}）"
         for item in state.panels
     ) or "- 无已提交 Panel"
+    figures = "\n".join(
+        "- Figure ref "
+        f"{json.dumps({'run_id': item.figure_ref.run_id, 'call_id': item.figure_ref.call_id}, ensure_ascii=False)}；"
+        f"digest {item.figure_digest}；标题 {json.dumps(item.title, ensure_ascii=False)}\n"
+        + "\n".join(
+            f"  - chart_id={chart.chart_id}；类型={chart.chart_type.value}；标题={json.dumps(chart.title, ensure_ascii=False)}"
+            for chart in item.charts
+        )
+        for item in state.chart_figures
+    ) or "- 无已接受 Figure"
     return (
         "当前 Session 图像清单（这里只是名称和 ID，尚未提供图像内容）。\n"
         f"可用附件：\n{attachments}\n"
         f"已提交 Panel：\n{panels}\n"
+        f"已接受 Figure：\n{figures}\n"
         "需要查看原图时使用 load_image；extract_text、measure_bars、measure_lines、measure_scatter、measure_pie 可直接选择来源观察，无需先加载图像。"
-        "矩形也用四点多边形提交给 decompose_chart_image。"
+        "矩形也用四点多边形提交给 decompose_chart_image。完整 Figure 内容保存在对应 Figure ref 的工具调用历史中。"
     )
