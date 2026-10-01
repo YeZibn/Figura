@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 
 from figura.providers.models import ProviderContinuation
 from figura.storage.database import SqliteDatabase
@@ -65,6 +66,44 @@ class FiguraRunStore:
 
     def get_session(self, session_id: str) -> Session:
         return self._sessions.get_session(session_id)
+
+    def session_exists(self, session_id: str) -> bool:
+        return self._sessions.session_exists(session_id)
+
+    def session_deletion_resources(
+        self, connection: sqlite3.Connection, session_id: str
+    ) -> tuple[tuple[str, str], ...]:
+        """Read render-file identities while the caller holds the write lock."""
+        self._sessions.assert_deletable(connection, session_id)
+        return self._runs.session_render_calls(connection, session_id)
+
+    def list_chart_render_calls(self) -> tuple[tuple[str, str], ...]:
+        with self._database.read() as connection:
+            return self._runs.all_chart_render_calls(connection)
+
+    def begin_session_deletion(
+        self, connection: sqlite3.Connection, session_id: str
+    ) -> None:
+        """Authorize a Session purge after checking it under the caller's write lock."""
+        self._sessions.assert_deletable(connection, session_id)
+        self._sessions.begin_deletion(connection, session_id)
+
+    def delete_session_run_facts(
+        self, connection: sqlite3.Connection, session_id: str
+    ) -> None:
+        self._sessions.assert_deletable(connection, session_id)
+        self._runs.delete_session_facts(connection, session_id)
+
+    def delete_session_runs(
+        self, connection: sqlite3.Connection, session_id: str
+    ) -> None:
+        self._sessions.assert_deletable(connection, session_id)
+        self._runs.delete_session_rows(connection, session_id)
+
+    def complete_session_deletion(
+        self, connection: sqlite3.Connection, session_id: str
+    ) -> None:
+        self._sessions.complete_deletion(connection, session_id)
 
     def read_session_snapshot(self, session_id: str) -> SessionSnapshot:
         return self._snapshots.read_session_snapshot(session_id)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 
@@ -12,3 +13,11 @@ def ensure_private_directory(path: Path, name: str) -> None:
     if not path.is_dir():
         raise OSError(f"{name} path is not a directory")
     path.chmod(0o700)
+
+
+def sync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)

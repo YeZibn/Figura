@@ -18,6 +18,7 @@ from figura.runtime.errors import RunError, RunErrorCode
 from figura.runtime.models import RunCreateRequest, RunStatus
 
 from .dispatcher import DispatcherFull, RunDispatcher
+from .session_deletion import FiguraSessionDeletion
 from .web_projection import (
     attachment,
     chart_render_summaries,
@@ -50,6 +51,7 @@ class FiguraGatewayApplication:
         execution_images: RunExecutionImageReader,
         providers: ProviderFactory,
         dispatcher: RunDispatcher,
+        session_deletion: FiguraSessionDeletion,
         *,
         allowed_origins: tuple[str, ...],
     ) -> None:
@@ -60,6 +62,7 @@ class FiguraGatewayApplication:
         self.execution_images = execution_images
         self.providers = providers
         self.dispatcher = dispatcher
+        self.session_deletion = session_deletion
         self.allowed_origins = frozenset(allowed_origins)
 
     def close(self) -> None:
@@ -127,6 +130,9 @@ class FiguraGatewayApplication:
             if parts is None or len(parts) < 2 or parts[0] != "sessions":
                 return self._error(404, "not_found", "未找到请求的 Figura 资源。", headers)
             session_id = parts[1]
+            if len(parts) == 2 and method == "DELETE":
+                self.session_deletion.delete(session_id)
+                return self._json(204, None, headers)
             if len(parts) == 2 and method == "GET":
                 snapshot = self.coordinator.read_session_snapshot(session_id)
                 return self._json(
@@ -462,6 +468,7 @@ def _map_run_error(error: RunError) -> tuple[int, str, str]:
         return 404, "not_found", error.safe_message
     if error.code in {
         RunErrorCode.IDEMPOTENCY_CONFLICT,
+        RunErrorCode.SESSION_HAS_RUNNING_RUN,
         RunErrorCode.INVALID_TRANSITION,
         RunErrorCode.STALE_CHECKPOINT,
     }:

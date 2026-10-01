@@ -17,7 +17,7 @@ from .attachments import FiguraAttachmentService
 from .models import PanelPoint, PanelRecord
 from .imaging import crop_panel, read_panel_image
 from .repository import SourcesRepository
-from .storage import ensure_private_directory
+from .storage import ensure_private_directory, sync_directory
 
 
 _MAX_PANEL_COUNT = 32
@@ -43,8 +43,6 @@ class FiguraPanelService:
         try:
             ensure_private_directory(self._root, "Panel storage")
             self._repository.reconcile_panel_files(self._reconcile_files)
-            for record in self._repository.list_all_panels():
-                self._read_file(record.panel_id)
         except RunError:
             raise
         except OSError:
@@ -158,6 +156,55 @@ class FiguraPanelService:
             panel_id = path.name.removesuffix(".png")
             if path.name.endswith(".png") and _is_panel_id(panel_id) and panel_id not in panel_ids:
                 path.unlink()
+
+    def stage_session_deletion(
+        self, session_trash: Path, panel_ids: tuple[str, ...]
+    ) -> None:
+        stage = session_trash / "panels"
+        ensure_private_directory(stage, "Session Panel staging")
+        moved = False
+        for panel_id in panel_ids:
+            source = self._final_path(panel_id)
+            target = stage / source.name
+            if source.exists() or source.is_symlink():
+                if target.exists() or target.is_symlink():
+                    raise OSError("duplicate staged Panel")
+                os.replace(source, target)
+                moved = True
+        if moved:
+            sync_directory(self._root)
+            sync_directory(stage)
+
+    def restore_session_deletion(self, session_trash: Path) -> None:
+        stage = session_trash / "panels"
+        if not stage.exists() and not stage.is_symlink():
+            return
+        if stage.is_symlink() or not stage.is_dir():
+            raise OSError("invalid Panel staging path")
+        moved = False
+        for staged in stage.iterdir():
+            if not staged.name.endswith(".png"):
+                raise OSError("invalid staged Panel")
+            target = self._final_path(staged.name[:-4])
+            if target.exists() or target.is_symlink():
+                raise OSError("Panel restore collision")
+            os.replace(staged, target)
+            moved = True
+        stage.rmdir()
+        if moved:
+            sync_directory(self._root)
+            sync_directory(session_trash)
+
+    def discard_session_deletion(self, session_trash: Path) -> None:
+        stage = session_trash / "panels"
+        if stage.is_symlink():
+            raise OSError("invalid Panel staging path")
+        if stage.exists():
+            shutil.rmtree(stage)
+
+    def validate_files(self) -> None:
+        for record in self._repository.list_all_panels():
+            self._read_file(record.panel_id)
 
     def _final_path(self, panel_id: str) -> Path:
         if not _is_panel_id(panel_id):

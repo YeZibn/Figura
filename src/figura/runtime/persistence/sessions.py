@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 import uuid
 
 from ..record_validation import _utf8_length
@@ -81,3 +82,38 @@ class SessionRepository:
         if row is None:
             raise RunError(RunErrorCode.SESSION_NOT_FOUND)
         return _session_from_row(row)
+
+    def session_exists(self, session_id: str) -> bool:
+        _validate_id(session_id)
+        with self._database.read() as connection:
+            return connection.execute(
+                "SELECT 1 FROM sessions WHERE session_id = ?", (session_id,)
+            ).fetchone() is not None
+
+    def assert_deletable(self, connection: sqlite3.Connection, session_id: str) -> None:
+        _validate_id(session_id)
+        if connection.execute(
+            "SELECT 1 FROM sessions WHERE session_id = ?", (session_id,)
+        ).fetchone() is None:
+            raise RunError(RunErrorCode.SESSION_NOT_FOUND)
+        if connection.execute(
+            "SELECT 1 FROM runs WHERE session_id = ? AND status = 'running' LIMIT 1",
+            (session_id,),
+        ).fetchone() is not None:
+            raise RunError(RunErrorCode.SESSION_HAS_RUNNING_RUN)
+
+    def begin_deletion(self, connection: sqlite3.Connection, session_id: str) -> None:
+        connection.execute(
+            "INSERT INTO session_deletion_scopes(session_id, created_at) VALUES (?, ?)",
+            (session_id, _utc_now()),
+        )
+
+    def complete_deletion(self, connection: sqlite3.Connection, session_id: str) -> None:
+        connection.execute(
+            "DELETE FROM session_deletion_scopes WHERE session_id = ?", (session_id,)
+        )
+        cursor = connection.execute(
+            "DELETE FROM sessions WHERE session_id = ?", (session_id,)
+        )
+        if cursor.rowcount != 1:
+            raise RunError(RunErrorCode.SESSION_NOT_FOUND)

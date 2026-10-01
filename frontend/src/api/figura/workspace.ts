@@ -16,6 +16,7 @@ export function createFiguraWorkspaceApi(client: FiguraClient): FiguraWorkspaceA
       async create(name) {
         return mapSession(await client.createSession(name))
       },
+      remove: (sessionId) => client.deleteSession(sessionId),
     },
     attachments: {
       async list(sessionId) {

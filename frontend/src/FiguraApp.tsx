@@ -8,7 +8,7 @@ import { createRunController, type RunController } from './domain/run/controller
 import { mergeEvents, type RunTimeline } from './domain/run/timeline'
 import type { Attachment, ConversationItem, Provider, RunState, Session, SessionData } from './types/protocol'
 import { AttachmentPanel, ConversationPanel, SessionSidebar } from './components/workspace'
-import { CreateSessionDialog } from './components/dialogs'
+import { ConfirmDeleteDialog, CreateSessionDialog, type ConfirmAction } from './components/dialogs'
 import { PanelGallery } from './components/figura/PanelGallery'
 import { ChartRenderGallery } from './components/figura/ChartRenderGallery'
 import { InteractivePreview } from './components/preview'
@@ -52,6 +52,9 @@ export function FiguraApp() {
   const [error, setError] = useState<string | null>(null)
   const [attachmentError, setAttachmentError] = useState<string | null>(null)
   const [creatingSession, setCreatingSession] = useState(false)
+  const [confirmAction, setConfirmAction] = useState<ConfirmAction | null>(null)
+  const [deletingSession, setDeletingSession] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
   const [newSessionName, setNewSessionName] = useState('')
   const [expandedRuns, setExpandedRuns] = useState<Set<string>>(new Set())
   const [activePreview, setActivePreview] = useState<PreviewDescriptor | null>(null)
@@ -272,6 +275,36 @@ export function FiguraApp() {
     setCreatingSession(true)
   }
 
+  const requestDeleteSession = (sessionId: string) => {
+    const session = sessions.find((item) => item.id === sessionId)
+    if (!session) return
+    setDeleteError(null)
+    setConfirmAction({ kind: 'session', session })
+  }
+
+  const confirmDeleteSession = async () => {
+    if (!confirmAction || confirmAction.kind !== 'session' || deletingSession) return
+    const deletedSession = confirmAction.session
+    const deletedIndex = sessions.findIndex((item) => item.id === deletedSession.id)
+    setDeletingSession(true)
+    setDeleteError(null)
+    try {
+      await api.sessions.remove(deletedSession.id)
+      const remaining = sessions.filter((item) => item.id !== deletedSession.id)
+      setSessions(remaining)
+      setConfirmAction(null)
+      if (activeIdRef.current === deletedSession.id) {
+        const nextSession = remaining[deletedIndex] || remaining[deletedIndex - 1]
+        setData(null)
+        selectSession(nextSession?.id ?? '')
+      }
+    } catch (reason) {
+      setDeleteError(toUserMessage(reason))
+    } finally {
+      setDeletingSession(false)
+    }
+  }
+
   const confirmCreateSession = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     const name = newSessionName.trim()
@@ -307,6 +340,10 @@ export function FiguraApp() {
       setPending((items) => items.filter((item) => item.key !== target.key))
       setAttachmentError(null)
     } catch (reason) {
+      if (activeIdRef.current !== sessionId) {
+        URL.revokeObjectURL(target.previewUrl)
+        return
+      }
       setPending((items) => items.map((item) => item.key === target.key ? { ...item, status: 'error', error: toUserMessage(reason) } : item))
       setAttachmentError(toUserMessage(reason))
     }
@@ -452,11 +489,11 @@ export function FiguraApp() {
         activeId={activeId}
         onSelect={selectSession}
         onCreate={openCreateSession}
+        onDelete={requestDeleteSession}
         mode="figura"
         runtimeStatus={null}
         health={null}
         showEvaluations={false}
-        showSessionDeletion={false}
       />
       <ConversationPanel
         data={data}
@@ -520,6 +557,18 @@ export function FiguraApp() {
       onNameChange={setNewSessionName}
       onCancel={() => setCreatingSession(false)}
       onSubmit={(event) => void confirmCreateSession(event)}
+    />}
+    {confirmAction?.kind === 'session' && <ConfirmDeleteDialog
+      action={confirmAction}
+      deleting={deletingSession}
+      error={deleteError}
+      figuraSession
+      onCancel={() => {
+        if (deletingSession) return
+        setConfirmAction(null)
+        setDeleteError(null)
+      }}
+      onConfirm={() => void confirmDeleteSession()}
     />}
     {activePreview && <InteractivePreview
       preview={activePreview}

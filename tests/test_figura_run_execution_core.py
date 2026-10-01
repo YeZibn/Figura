@@ -225,7 +225,7 @@ def test_v4_migration_adds_attachment_table_without_changing_run_state(tmp_path)
     after = migrated_store.read_run_state(session.session_id, run.run_id)
 
     with sqlite3.connect(store.database_path) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 7
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 8
         assert connection.execute("PRAGMA quick_check").fetchone()[0] == "ok"
         assert connection.execute(
             "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'attachments'"
@@ -260,7 +260,7 @@ def test_v5_migration_preserves_attachments_and_adds_panels(tmp_path) -> None:
     after = migrated_store.read_run_state(session.session_id, run.run_id)
 
     with sqlite3.connect(store.database_path) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 7
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 8
         assert connection.execute("PRAGMA quick_check").fetchone()[0] == "ok"
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
         assert connection.execute(
@@ -269,6 +269,47 @@ def test_v5_migration_preserves_attachments_and_adds_panels(tmp_path) -> None:
         assert connection.execute(
             "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'panels'"
         ).fetchone() == ("panels",)
+
+    assert after == before
+
+
+def test_v7_migration_adds_scoped_deletion_without_changing_run_facts(tmp_path) -> None:
+    store, coordinator = _app(tmp_path)
+    session = coordinator.create_session("保留记录")
+    run = coordinator.create_run(_request(session.session_id))
+    before = coordinator.read_run_state(session.session_id, run.run_id)
+
+    with sqlite3.connect(store.database_path) as connection:
+        for trigger_name in (
+            "immutable_run_event_delete",
+            "immutable_run_record_delete",
+            "immutable_run_tool_fact_delete",
+            "immutable_run_provider_continuation_delete",
+            "immutable_run_provider_attempt_delete",
+            "immutable_panel_delete",
+        ):
+            connection.execute(f"DROP TRIGGER {trigger_name}")
+        connection.execute("DROP TABLE session_deletion_scopes")
+        connection.execute("PRAGMA user_version = 7")
+
+    migrated_store = FiguraRunStore(tmp_path)
+    after = migrated_store.read_run_state(session.session_id, run.run_id)
+
+    with sqlite3.connect(store.database_path) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 8
+        assert connection.execute(
+            "SELECT session_id FROM session_deletion_scopes"
+        ).fetchall() == []
+        with pytest.raises(sqlite3.IntegrityError, match="immutable execution record"):
+            connection.execute(
+                "UPDATE run_execution_records SET payload_json = payload_json WHERE record_id = ?",
+                (before.records[0].record_id,),
+            )
+        with pytest.raises(sqlite3.IntegrityError, match="immutable execution record"):
+            connection.execute(
+                "DELETE FROM run_execution_records WHERE record_id = ?",
+                (before.records[0].record_id,),
+            )
 
     assert after == before
 

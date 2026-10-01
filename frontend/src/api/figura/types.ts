@@ -132,6 +132,7 @@ export type FiguraClient = {
   listSessions(): Promise<FiguraSessionDto[]>
   getSession(sessionId: string): Promise<FiguraSessionDataDto>
   createSession(name: string): Promise<FiguraSessionDto>
+  deleteSession(sessionId: string): Promise<void>
   listAttachments(sessionId: string): Promise<FiguraAttachmentDto[]>
   listPanels(sessionId: string): Promise<FiguraPanelDto[]>
   uploadAttachment(sessionId: string, file: File): Promise<FiguraAttachmentDto>
@@ -153,6 +154,7 @@ export type FiguraWorkspaceApi = {
     list(): Promise<Session[]>
     get(sessionId: string): Promise<SessionData>
     create(name: string): Promise<Session>
+    remove(sessionId: string): Promise<void>
   }
   attachments: {
     list(sessionId: string): Promise<Attachment[]>

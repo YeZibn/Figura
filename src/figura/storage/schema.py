@@ -6,7 +6,7 @@ import sqlite3
 
 from figura.runtime.errors import RunError, RunErrorCode
 
-_SCHEMA_VERSION = 7
+_SCHEMA_VERSION = 8
 
 
 def _run_stream_events_table(table_name: str) -> str:
@@ -27,6 +27,53 @@ _RUN_STREAM_EVENT_TRIGGERS = (
         BEGIN SELECT RAISE(ABORT, 'immutable stream event'); END""",
     """CREATE TRIGGER immutable_run_event_delete BEFORE DELETE ON run_stream_events
         BEGIN SELECT RAISE(ABORT, 'immutable stream event'); END""",
+)
+
+
+_SESSION_DELETION_TRIGGERS = (
+    """CREATE TRIGGER immutable_run_event_delete BEFORE DELETE ON run_stream_events
+        WHEN NOT EXISTS (
+            SELECT 1 FROM runs
+            JOIN session_deletion_scopes USING (session_id)
+            WHERE runs.run_id = OLD.run_id
+        )
+        BEGIN SELECT RAISE(ABORT, 'immutable stream event'); END""",
+    """CREATE TRIGGER immutable_run_record_delete BEFORE DELETE ON run_execution_records
+        WHEN NOT EXISTS (
+            SELECT 1 FROM runs
+            JOIN session_deletion_scopes USING (session_id)
+            WHERE runs.run_id = OLD.run_id
+        )
+        BEGIN SELECT RAISE(ABORT, 'immutable execution record'); END""",
+    """CREATE TRIGGER immutable_run_tool_fact_delete BEFORE DELETE ON run_tool_execution_facts
+        WHEN NOT EXISTS (
+            SELECT 1 FROM runs
+            JOIN session_deletion_scopes USING (session_id)
+            WHERE runs.run_id = OLD.run_id
+        )
+        BEGIN SELECT RAISE(ABORT, 'immutable tool execution fact'); END""",
+    """CREATE TRIGGER immutable_run_provider_continuation_delete
+        BEFORE DELETE ON run_provider_continuations
+        WHEN NOT EXISTS (
+            SELECT 1 FROM runs
+            JOIN session_deletion_scopes USING (session_id)
+            WHERE runs.run_id = OLD.run_id
+        )
+        BEGIN SELECT RAISE(ABORT, 'immutable provider continuation'); END""",
+    """CREATE TRIGGER immutable_run_provider_attempt_delete
+        BEFORE DELETE ON run_provider_attempts
+        WHEN NOT EXISTS (
+            SELECT 1 FROM runs
+            JOIN session_deletion_scopes USING (session_id)
+            WHERE runs.run_id = OLD.run_id
+        )
+        BEGIN SELECT RAISE(ABORT, 'immutable provider attempt'); END""",
+    """CREATE TRIGGER immutable_panel_delete BEFORE DELETE ON panels
+        WHEN NOT EXISTS (
+            SELECT 1 FROM session_deletion_scopes
+            WHERE session_id = OLD.session_id
+        )
+        BEGIN SELECT RAISE(ABORT, 'immutable panel'); END""",
 )
 
 _CORE_SCHEMA = (
@@ -257,6 +304,27 @@ def _migrate_run_stream_events(connection: sqlite3.Connection) -> None:
     for statement in _RUN_STREAM_EVENT_TRIGGERS:
         connection.execute(statement)
 
+
+def _migrate_session_deletion(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        """CREATE TABLE IF NOT EXISTS session_deletion_scopes (
+            session_id TEXT PRIMARY KEY REFERENCES sessions(session_id) ON DELETE RESTRICT,
+            created_at TEXT NOT NULL
+        )"""
+    )
+    for trigger_name in (
+        "immutable_run_event_delete",
+        "immutable_run_record_delete",
+        "immutable_run_tool_fact_delete",
+        "immutable_run_provider_continuation_delete",
+        "immutable_run_provider_attempt_delete",
+        "immutable_panel_delete",
+    ):
+        connection.execute(f"DROP TRIGGER IF EXISTS {trigger_name}")
+    for statement in _SESSION_DELETION_TRIGGERS:
+        connection.execute(statement)
+
+
 def initialize_schema(connection: sqlite3.Connection) -> None:
     """Initialize or migrate the database while holding its writer lock."""
     connection.execute("PRAGMA journal_mode = WAL")
@@ -293,7 +361,7 @@ def initialize_schema(connection: sqlite3.Connection) -> None:
         elif version == 3:
             for statement in _PROVIDER_ATTEMPT_SCHEMA:
                 connection.execute(statement)
-        elif version in {4, 5, 6}:
+        elif version in {4, 5, 6, 7}:
             pass
         else:
             raise RunError(RunErrorCode.UNSUPPORTED_VERSION)
@@ -307,6 +375,7 @@ def initialize_schema(connection: sqlite3.Connection) -> None:
                 connection.execute(statement)
         if version > 0:
             _migrate_run_stream_events(connection)
+        _migrate_session_deletion(connection)
         _validate_migration(connection)
         connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
         connection.commit()

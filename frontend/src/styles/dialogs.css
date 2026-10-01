@@ -30,6 +30,13 @@
   line-height: 1.6;
 }
 
+.dialog-error {
+  margin: 12px 0 0;
+  color: var(--danger);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
 .session-dialog label {
   display: block;
   margin-bottom: 7px;

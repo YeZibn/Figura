@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import os
+import shutil
 import tempfile
 import unicodedata
 import uuid
@@ -16,7 +17,7 @@ from figura.runtime.errors import RunError, RunErrorCode
 from figura.sources.imaging import verify_attachment_image
 from figura.sources.models import AttachmentMetadata
 from figura.sources.repository import SourcesRepository
-from figura.sources.storage import ensure_private_directory
+from figura.sources.storage import ensure_private_directory, sync_directory
 from figura.storage.database import _utc_now
 
 
@@ -141,6 +142,51 @@ class FiguraAttachmentService:
                 trash_path.unlink()
         except OSError:
             raise RunError(RunErrorCode.STORAGE_ERROR) from None
+
+    def stage_session_deletion(
+        self, session_trash: Path, attachment_ids: tuple[str, ...]
+    ) -> None:
+        stage = session_trash / "attachments"
+        ensure_private_directory(stage, "Session attachment staging")
+        moved = False
+        for attachment_id in attachment_ids:
+            source = self._final_path(attachment_id)
+            target = stage / source.name
+            if source.exists() or source.is_symlink():
+                if target.exists() or target.is_symlink():
+                    raise OSError("duplicate staged attachment")
+                os.replace(source, target)
+                moved = True
+        if moved:
+            sync_directory(self._root)
+            sync_directory(stage)
+
+    def restore_session_deletion(self, session_trash: Path) -> None:
+        stage = session_trash / "attachments"
+        if not stage.exists() and not stage.is_symlink():
+            return
+        if stage.is_symlink() or not stage.is_dir():
+            raise OSError("invalid attachment staging path")
+        moved = False
+        for staged in stage.iterdir():
+            if not staged.name.endswith(".bin"):
+                raise OSError("invalid staged attachment")
+            target = self._final_path(staged.name[:-4])
+            if target.exists() or target.is_symlink():
+                raise OSError("attachment restore collision")
+            os.replace(staged, target)
+            moved = True
+        stage.rmdir()
+        if moved:
+            sync_directory(self._root)
+            sync_directory(session_trash)
+
+    def discard_session_deletion(self, session_trash: Path) -> None:
+        stage = session_trash / "attachments"
+        if stage.is_symlink():
+            raise OSError("invalid attachment staging path")
+        if stage.exists():
+            shutil.rmtree(stage)
 
     def _reconcile_files(self, attachment_ids: frozenset[str]) -> None:
         for tombstone in self._trash.iterdir():

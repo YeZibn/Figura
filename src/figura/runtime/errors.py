@@ -9,6 +9,7 @@ class RunErrorCode(str, Enum):
     INVALID_REQUEST = "invalid_request"
     SESSION_NOT_FOUND = "session_not_found"
     RUN_NOT_FOUND = "run_not_found"
+    SESSION_HAS_RUNNING_RUN = "session_has_running_run"
     PROVIDER_UNAVAILABLE = "provider_unavailable"
     IDEMPOTENCY_CONFLICT = "idempotency_conflict"
     STALE_CHECKPOINT = "stale_checkpoint"
@@ -23,6 +24,7 @@ _SAFE_MESSAGES = {
     RunErrorCode.INVALID_REQUEST: "Run 请求无效。",
     RunErrorCode.SESSION_NOT_FOUND: "未找到可用的 Session。",
     RunErrorCode.RUN_NOT_FOUND: "未找到可用的 Run。",
+    RunErrorCode.SESSION_HAS_RUNNING_RUN: "会话中仍有运行中的 Run，暂时无法删除。",
     RunErrorCode.PROVIDER_UNAVAILABLE: "所选模型服务当前不可用。",
     RunErrorCode.IDEMPOTENCY_CONFLICT: "幂等键已用于不同的 Run 请求。",
     RunErrorCode.STALE_CHECKPOINT: "Run 执行进度已变化，请重新读取。",
@@ -41,4 +43,3 @@ class RunError(Exception):
         self.code = code
         self.safe_message = _SAFE_MESSAGES[code]
         super().__init__(self.safe_message)
-

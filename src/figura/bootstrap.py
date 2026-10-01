@@ -11,6 +11,7 @@ from figura.sources.panels import FiguraPanelService
 from figura.sources.repository import SourcesRepository
 from figura.gateway.application import FiguraGatewayApplication
 from figura.gateway.dispatcher import RunDispatcher
+from figura.gateway.session_deletion import FiguraSessionDeletion
 from figura.agent.execution_images import RunExecutionImageReader
 from figura.agent.execution_state import RunExecutionStateService
 from figura.providers import ProviderFactory
@@ -49,6 +50,13 @@ def create_application(
     coordinator = RunCoordinator(store, factory)
     panel_service = FiguraPanelService(sources, store.data_root, attachment_service)
     chart_renders = FiguraChartRenderService(store.data_root)
+    session_deletion = FiguraSessionDeletion(
+        store,
+        sources,
+        attachment_service,
+        panel_service,
+        chart_renders,
+    )
     execution_state = RunExecutionStateService(coordinator, panel_service)
     execution_images = RunExecutionImageReader(attachment_service, panel_service, chart_renders)
     registry = ToolRegistry(
@@ -83,6 +91,7 @@ def create_application(
         execution_images,
         factory,
         dispatcher,
+        session_deletion,
         allowed_origins=allowed_origins,
     )
 

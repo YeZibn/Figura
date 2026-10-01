@@ -82,6 +82,9 @@ export function createFiguraClient(baseUrl = defaultBaseUrl): FiguraClient {
       })
       return payload.session
     },
+    async deleteSession(sessionId) {
+      await request<void>(`/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' })
+    },
     async listAttachments(sessionId) {
       const payload = await request<{ attachments: FiguraAttachmentDto[] }>(`/sessions/${encodeURIComponent(sessionId)}/attachments`)
       return payload.attachments

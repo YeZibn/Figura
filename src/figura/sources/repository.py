@@ -140,6 +140,31 @@ class SourcesRepository:
             rows = connection.execute("SELECT * FROM panels ORDER BY rowid").fetchall()
         return tuple(_panel_from_row(row) for row in rows)
 
+    def session_deletion_resources(
+        self, connection: sqlite3.Connection, session_id: str
+    ) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        _validate_id(session_id)
+        attachment_rows = connection.execute(
+            "SELECT attachment_id FROM attachments WHERE session_id = ? "
+            "ORDER BY attachment_id",
+            (session_id,),
+        ).fetchall()
+        panel_rows = connection.execute(
+            "SELECT panel_id FROM panels WHERE session_id = ? ORDER BY panel_id",
+            (session_id,),
+        ).fetchall()
+        return (
+            tuple(row["attachment_id"] for row in attachment_rows),
+            tuple(row["panel_id"] for row in panel_rows),
+        )
+
+    def delete_session_rows(
+        self, connection: sqlite3.Connection, session_id: str
+    ) -> None:
+        _validate_id(session_id)
+        connection.execute("DELETE FROM panels WHERE session_id = ?", (session_id,))
+        connection.execute("DELETE FROM attachments WHERE session_id = ?", (session_id,))
+
     def get_panel(self, session_id: str, panel_id: str) -> PanelRecord:
         _validate_id(session_id)
         _validate_id(panel_id)

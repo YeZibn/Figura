@@ -8,6 +8,7 @@ from tests.figura_sources_support import (
 
 import json
 import hashlib
+import sqlite3
 import threading
 from time import monotonic, sleep
 from http.client import HTTPConnection
@@ -24,11 +25,13 @@ from figura.bootstrap import recover_running_runs
 from figura.gateway.application import FiguraGatewayApplication
 from figura.gateway.dispatcher import RunDispatcher
 from figura.gateway.server import FiguraHTTPServer
+from figura.gateway.session_deletion import FiguraSessionDeletion
 from figura.providers import FinishReason, MODEL_IDS, ProviderFactory, ProviderId, ProviderResponse, ProviderToolCall
 from figura.runtime.coordinator import RunCoordinator
 from figura.runtime.models import RunCreateRequest, RunStatus, TerminalCode
 from figura.runtime.store import FiguraRunStore
 from figura.runtime.tool_execution import DurableToolExecutor
+from figura.sources.repository import SourcesRepository
 from figura.tools import ReplayEffect, ToolExecutionResult, ToolOutcome, ToolRegistry
 from figura.tools.contracts import ToolExecutionError
 from figura.tools.implementations.assemble_chart_figure import assemble_chart_figure_definition
@@ -76,6 +79,13 @@ def _application(tmp_path, executor: PassiveExecutor | None = None):
     coordinator = RunCoordinator(store, providers)
     panels = make_panel_service(store, attachments)
     chart_renders = FiguraChartRenderService(store.data_root)
+    session_deletion = FiguraSessionDeletion(
+        store,
+        SourcesRepository(store.database),
+        attachments,
+        panels,
+        chart_renders,
+    )
     execution_state = RunExecutionStateService(coordinator, panels)
     selected_executor = executor or PassiveExecutor()
     dispatcher = RunDispatcher(selected_executor)  # type: ignore[arg-type]
@@ -87,6 +97,7 @@ def _application(tmp_path, executor: PassiveExecutor | None = None):
         make_execution_image_reader(attachments, panels, chart_renders),
         providers,
         dispatcher,
+        session_deletion,
         allowed_origins=(ORIGIN,),
     )
     return app, store, coordinator, attachments, selected_executor
@@ -103,6 +114,29 @@ def _create_run(coordinator, session_id: str, *, key: str = "gateway-test", atta
             idempotency_key=key,
         )
     )
+
+
+def _finish_run(coordinator, session_id: str, run_id: str) -> None:
+    state = coordinator.read_run_state(session_id, run_id)
+    attempt = coordinator.begin_provider_attempt(
+        session_id, run_id, state.checkpoint.revision
+    )
+    claimed = coordinator.read_run_state(session_id, run_id)
+    coordinator.commit_model_response(
+        session_id,
+        run_id,
+        claimed.checkpoint.revision,
+        ProviderResponse(
+            ProviderId.QWEN,
+            MODEL_IDS[ProviderId.QWEN],
+            "分析已完成。",
+            (),
+            FinishReason.STOP,
+        ),
+        provider_attempt_id=attempt.attempt_id,
+    )
+    finished = coordinator.read_run_state(session_id, run_id)
+    coordinator.complete_run(session_id, run_id, finished.checkpoint.revision)
 
 
 def _commit_tool_calls(coordinator, session_id: str, run_id: str, calls, *, registry_version="timeline-v1"):
@@ -945,3 +979,226 @@ def test_session_scoped_run_history_does_not_leak_across_sessions(tmp_path):
         assert "分析图表中的趋势" not in response.body.decode()
     finally:
         app.close()
+
+
+def test_session_delete_removes_owned_runtime_sources_and_render_data(tmp_path):
+    app, store, coordinator, attachments, _ = _application(tmp_path)
+    try:
+        selected = coordinator.create_session("要删除的会话")
+        remaining = coordinator.create_session("保留的会话")
+        image = attachments.upload(selected.session_id, "source.png", _png_bytes())
+        panel_run = _create_run(
+            coordinator,
+            selected.session_id,
+            key="session-delete-panel",
+            attachment_ids=(image.attachment_id,),
+        )
+        panel = app.panels.decompose(
+            selected.session_id,
+            panel_run.run_id,
+            image.attachment_id,
+            (("独立 Panel", (PanelPoint(0, 0), PanelPoint(1000, 0), PanelPoint(1000, 1000), PanelPoint(0, 1000))),),
+            "p" * 64,
+        )[0]
+        _finish_run(coordinator, selected.session_id, panel_run.run_id)
+
+        render_run = _create_run(coordinator, selected.session_id, key="session-delete-render")
+        _commit_chart_render(app, store, selected.session_id, render_run.run_id)
+        _finish_run(coordinator, selected.session_id, render_run.run_id)
+        FiguraChartRenderService(store.data_root).resolve(render_run.run_id, "gateway-render")
+
+        other_image = attachments.upload(remaining.session_id, "keep.png", _png_bytes())
+        other_run = _create_run(coordinator, remaining.session_id, key="session-delete-keep")
+
+        response = app.handle(
+            "DELETE",
+            f"/api/v1/sessions/{selected.session_id}",
+            {"origin": ORIGIN},
+        )
+
+        assert response.status == 204
+        assert response.body == b""
+        assert app.handle("GET", f"/api/v1/sessions/{selected.session_id}", {}).status == 404
+        assert app.handle(
+            "GET", f"/api/v1/sessions/{selected.session_id}/attachments", {}
+        ).status == 404
+        assert app.handle(
+            "GET",
+            f"/api/v1/sessions/{selected.session_id}/attachments/{image.attachment_id}/content",
+            {},
+        ).status == 404
+        assert app.handle(
+            "GET", f"/api/v1/sessions/{selected.session_id}/panels", {}
+        ).status == 404
+        assert app.handle(
+            "GET",
+            f"/api/v1/sessions/{selected.session_id}/panels/{panel.panel_id}/content",
+            {},
+        ).status == 404
+        assert app.handle(
+            "GET",
+            f"/api/v1/sessions/{selected.session_id}/runs/{render_run.run_id}/history",
+            {},
+        ).status == 404
+        assert app.handle(
+            "GET",
+            f"/api/v1/sessions/{selected.session_id}/runs/{render_run.run_id}/timeline",
+            {},
+        ).status == 404
+        assert app.handle(
+            "GET",
+            f"/api/v1/sessions/{selected.session_id}/runs/{render_run.run_id}/chart-renders/gateway-render/content",
+            {},
+        ).status == 404
+        assert not (store.data_root / "attachments" / f"{image.attachment_id}.bin").exists()
+        assert not (store.data_root / "panels" / f"{panel.panel_id}.png").exists()
+        identity = canonical_json_dumps([render_run.run_id, "gateway-render"]).encode("utf-8")
+        render_name = hashlib.sha256(identity).hexdigest() + ".png"
+        assert not (store.data_root / "chart-renders" / render_name).exists()
+
+        assert attachments.resolve(remaining.session_id, other_image.attachment_id).image_bytes == _png_bytes()
+        assert coordinator.read_run_state(remaining.session_id, other_run.run_id).run.status is RunStatus.RUNNING
+        with sqlite3.connect(store.database_path) as connection:
+            assert connection.execute(
+                "SELECT COUNT(*) FROM session_deletion_scopes"
+            ).fetchone()[0] == 0
+            assert connection.execute(
+                "SELECT COUNT(*) FROM sessions WHERE session_id = ?",
+                (remaining.session_id,),
+            ).fetchone()[0] == 1
+    finally:
+        app.close()
+
+
+def test_session_delete_rejects_running_run_and_unknown_session(tmp_path):
+    app, _, coordinator, _, _ = _application(tmp_path)
+    try:
+        session = coordinator.create_session("运行中")
+        run = _create_run(coordinator, session.session_id, key="session-delete-running")
+
+        active = app.handle(
+            "DELETE",
+            f"/api/v1/sessions/{session.session_id}",
+            {"origin": ORIGIN},
+        )
+        unknown = app.handle(
+            "DELETE",
+            f"/api/v1/sessions/{'a' * 32}",
+            {"origin": ORIGIN},
+        )
+
+        assert active.status == 409
+        assert _json(active)["error"]["code"] == "session_has_running_run"
+        assert unknown.status == 404
+        assert app.handle("GET", f"/api/v1/sessions/{session.session_id}", {}).status == 200
+        assert coordinator.read_run_state(session.session_id, run.run_id).run.status is RunStatus.RUNNING
+        assert app.handle(
+            "DELETE", f"/api/v1/sessions/{session.session_id}", {"origin": "http://evil.test"}
+        ).status == 403
+    finally:
+        app.close()
+
+
+def test_session_delete_rolls_back_and_restores_partially_staged_files(tmp_path, monkeypatch):
+    app, store, coordinator, attachments, _ = _application(tmp_path)
+    try:
+        session = coordinator.create_session("删除失败恢复")
+        image = attachments.upload(session.session_id, "source.png", _png_bytes())
+        run = _create_run(
+            coordinator,
+            session.session_id,
+            key="session-delete-rollback",
+            attachment_ids=(image.attachment_id,),
+        )
+        panel = app.panels.decompose(
+            session.session_id,
+            run.run_id,
+            image.attachment_id,
+            (("Panel", (PanelPoint(0, 0), PanelPoint(1000, 0), PanelPoint(1000, 1000), PanelPoint(0, 1000))),),
+            "r" * 64,
+        )[0]
+        _finish_run(coordinator, session.session_id, run.run_id)
+        with sqlite3.connect(store.database_path) as connection:
+            connection.execute(
+                "CREATE TRIGGER reject_session_run_delete BEFORE DELETE ON runs "
+                "BEGIN SELECT RAISE(ABORT, 'injected failure'); END"
+            )
+
+        response = app.handle(
+            "DELETE", f"/api/v1/sessions/{session.session_id}", {"origin": ORIGIN}
+        )
+
+        assert response.status == 500
+        assert app.handle("GET", f"/api/v1/sessions/{session.session_id}", {}).status == 200
+        assert attachments.resolve(session.session_id, image.attachment_id).image_bytes == _png_bytes()
+        assert app.panels.resolve(session.session_id, panel.panel_id)[0] == panel
+        assert not (store.data_root / "session-trash" / session.session_id).exists()
+
+        with sqlite3.connect(store.database_path) as connection:
+            connection.execute("DROP TRIGGER reject_session_run_delete")
+
+        def fail_panel_staging(_panel_service, _session_trash, _panel_ids):
+            raise OSError("injected partial staging failure")
+
+        monkeypatch.setattr(type(app.panels), "stage_session_deletion", fail_panel_staging)
+        partial = app.handle(
+            "DELETE", f"/api/v1/sessions/{session.session_id}", {"origin": ORIGIN}
+        )
+        assert partial.status == 500
+        assert app.handle("GET", f"/api/v1/sessions/{session.session_id}", {}).status == 200
+        assert attachments.resolve(session.session_id, image.attachment_id).image_bytes == _png_bytes()
+        assert app.panels.resolve(session.session_id, panel.panel_id)[0] == panel
+        assert not (store.data_root / "session-trash" / session.session_id).exists()
+    finally:
+        app.close()
+
+
+def test_startup_restores_staged_files_when_session_row_remains(tmp_path):
+    app, store, coordinator, attachments, _ = _application(tmp_path)
+    session = coordinator.create_session("启动时恢复")
+    image = attachments.upload(session.session_id, "source.png", _png_bytes())
+    run = _create_run(coordinator, session.session_id, key="session-trash-recovery")
+    panel = app.panels.decompose(
+        session.session_id,
+        run.run_id,
+        image.attachment_id,
+        (("Panel", (PanelPoint(0, 0), PanelPoint(1000, 0), PanelPoint(1000, 1000), PanelPoint(0, 1000))),),
+        "s" * 64,
+    )[0]
+    session_trash = store.data_root / "session-trash" / session.session_id
+    try:
+        attachments.stage_session_deletion(session_trash, (image.attachment_id,))
+        app.panels.stage_session_deletion(session_trash, (panel.panel_id,))
+    finally:
+        app.close()
+
+    reopened, _, _, reopened_attachments, _ = _application(tmp_path)
+    try:
+        assert reopened_attachments.resolve(session.session_id, image.attachment_id).image_bytes == _png_bytes()
+        assert reopened.panels.resolve(session.session_id, panel.panel_id)[0] == panel
+        assert not session_trash.exists()
+    finally:
+        reopened.close()
+
+
+def test_startup_discards_staged_files_after_committed_deletion(tmp_path):
+    app, store, coordinator, attachments, _ = _application(tmp_path)
+    session = coordinator.create_session("提交后清理")
+    image = attachments.upload(session.session_id, "source.png", _png_bytes())
+    session_trash = store.data_root / "session-trash" / session.session_id
+    app.session_deletion._discard = lambda _path: None
+    try:
+        response = app.handle(
+            "DELETE", f"/api/v1/sessions/{session.session_id}", {"origin": ORIGIN}
+        )
+        assert response.status == 204
+        assert session_trash.exists()
+        assert not (store.data_root / "attachments" / f"{image.attachment_id}.bin").exists()
+    finally:
+        app.close()
+
+    reopened, _, _, _, _ = _application(tmp_path)
+    try:
+        assert not session_trash.exists()
+    finally:
+        reopened.close()

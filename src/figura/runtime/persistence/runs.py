@@ -282,7 +282,60 @@ class RunRepository:
             ).fetchall()
         return tuple(_run_from_row(row) for row in rows)
 
+    def session_render_calls(
+        self, connection: sqlite3.Connection, session_id: str
+    ) -> tuple[tuple[str, str], ...]:
+        return self._chart_render_calls(connection, session_id)
 
+    def all_chart_render_calls(
+        self, connection: sqlite3.Connection
+    ) -> tuple[tuple[str, str], ...]:
+        return self._chart_render_calls(connection)
+
+    @staticmethod
+    def _chart_render_calls(
+        connection: sqlite3.Connection, session_id: str | None = None
+    ) -> tuple[tuple[str, str], ...]:
+        session_filter = "WHERE facts.fact_kind = 'tool_call' "
+        parameters: tuple[object, ...] = ()
+        if session_id is not None:
+            session_filter += "AND runs.session_id = ? "
+            parameters = (session_id,)
+        rows = connection.execute(
+            "SELECT facts.run_id, json_extract(facts.payload_json, '$.call_id') AS call_id "
+            "FROM run_tool_execution_facts AS facts "
+            "JOIN runs ON runs.run_id = facts.run_id "
+            f"{session_filter}"
+            "AND json_extract(facts.payload_json, '$.tool_name') = 'render_chart_figure' "
+            "ORDER BY facts.run_id, facts.tool_sequence",
+            parameters,
+        ).fetchall()
+        return tuple((row["run_id"], row["call_id"]) for row in rows)
+
+    def delete_session_facts(
+        self, connection: sqlite3.Connection, session_id: str
+    ) -> None:
+        connection.execute(
+            "DELETE FROM run_idempotency WHERE session_id = ?", (session_id,)
+        )
+        for table in (
+            "run_provider_continuations",
+            "run_provider_attempts",
+            "run_execution_checkpoints",
+            "run_stream_events",
+            "run_tool_execution_facts",
+            "run_execution_records",
+        ):
+            connection.execute(
+                f"DELETE FROM {table} WHERE run_id IN "
+                "(SELECT run_id FROM runs WHERE session_id = ?)",
+                (session_id,),
+            )
+
+    def delete_session_rows(
+        self, connection: sqlite3.Connection, session_id: str
+    ) -> None:
+        connection.execute("DELETE FROM runs WHERE session_id = ?", (session_id,))
 
     def _scoped_run(self, connection: sqlite3.Connection, session_id: str, run_id: str) -> Run:
         _validate_id(session_id)
