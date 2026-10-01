@@ -62,6 +62,11 @@ class RunDispatcher:
             raise DispatcherFull from None
         return True
 
+    def owns(self, run_id: str) -> bool:
+        """Return whether this Gateway currently owns the Run's executor task."""
+        with self._lock:
+            return run_id in self._scheduled
+
     def _execute(self, run: Run) -> None:
         try:
             self._executor.execute(run.session_id, run.run_id)

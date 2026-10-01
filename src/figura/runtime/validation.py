@@ -347,13 +347,22 @@ def _validate_state(state: RunState) -> None:
     created_payload = events[0].payload
     if created_payload != {"session_id": run.session_id, "ordinal": run.ordinal}:
         raise RunError(RunErrorCode.INTEGRITY_ERROR)
-    if run.status is RunStatus.RUNNING:
-        if len(events) != 1:
+    terminal_event = events[-1] if run.status is not RunStatus.RUNNING else None
+    progress_events = events[1:-1] if terminal_event is not None else events[1:]
+    previous_revision = 0
+    for event in progress_events:
+        revision = event.payload.get("checkpoint_revision")
+        if (
+            event.event_kind is not EventKind.RUN_PROGRESS
+            or set(event.payload) != {"checkpoint_revision"}
+            or type(revision) is not int
+            or revision <= previous_revision
+            or revision > checkpoint.revision
+        ):
             raise RunError(RunErrorCode.INTEGRITY_ERROR)
-    elif len(events) != 2:
-        raise RunError(RunErrorCode.INTEGRITY_ERROR)
-    else:
-        terminal_event = events[1]
+        previous_revision = revision
+
+    if terminal_event is not None:
         if run.status is RunStatus.COMPLETED:
             if terminal_event.event_kind is not EventKind.RUN_COMPLETED or terminal_event.payload != {"final_artifact_refs": ()}:
                 raise RunError(RunErrorCode.INTEGRITY_ERROR)
@@ -361,4 +370,3 @@ def _validate_state(state: RunState) -> None:
             expected_kind = EventKind.RUN_INTERRUPTED if run.status is RunStatus.INTERRUPTED else EventKind.RUN_FAILED
             if terminal_event.event_kind is not expected_kind or terminal_event.payload != {"terminal_code": run.terminal_code}:
                 raise RunError(RunErrorCode.INTEGRITY_ERROR)
-

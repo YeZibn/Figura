@@ -10,6 +10,8 @@ import type {
   FiguraRunHistoryDto,
   FiguraSessionDataDto,
   FiguraSessionDto,
+  FiguraToolCallDetailDto,
+  FiguraToolTimelineSnapshotDto,
 } from './types'
 
 export class FiguraClientError extends Error {
@@ -113,6 +115,16 @@ export function createFiguraClient(baseUrl = defaultBaseUrl): FiguraClient {
         `/sessions/${encodeURIComponent(sessionId)}/runs/${encodeURIComponent(runId)}/history?afterSequence=${Math.max(0, afterSequence)}`,
       )
     },
+    async getRunTimeline(sessionId, runId) {
+      return request<FiguraToolTimelineSnapshotDto>(
+        '/sessions/' + encodeURIComponent(sessionId) + '/runs/' + encodeURIComponent(runId) + '/timeline',
+      )
+    },
+    async getRunTimelineCall(sessionId, runId, callId) {
+      return request<FiguraToolCallDetailDto>(
+        '/sessions/' + encodeURIComponent(sessionId) + '/runs/' + encodeURIComponent(runId) + '/timeline/' + encodeURIComponent(callId),
+      )
+    },
     subscribeRun(sessionId, runId, callbacks, afterSequence = 0) {
       const source = new EventSource(
         `${normalizedBaseUrl}/sessions/${encodeURIComponent(sessionId)}/runs/${encodeURIComponent(runId)}/events?afterSequence=${Math.max(0, afterSequence)}`,
@@ -129,7 +141,7 @@ export function createFiguraClient(baseUrl = defaultBaseUrl): FiguraClient {
             timestamp: event.timestamp,
             payload: event.payload,
           })
-          if (event.kind !== 'run_created') {
+          if (['run_completed', 'run_failed', 'run_interrupted'].includes(event.kind)) {
             closed = true
             source.close()
             callbacks.onComplete()
@@ -140,7 +152,7 @@ export function createFiguraClient(baseUrl = defaultBaseUrl): FiguraClient {
           callbacks.onError(new FiguraClientError('invalid_gateway_event', 'Figura Gateway 返回了无效运行事件。', 502))
         }
       }
-      ;['run_created', 'run_completed', 'run_failed', 'run_interrupted'].forEach((kind) => source.addEventListener(kind, receive))
+      ;['run_created', 'run_progress', 'run_completed', 'run_failed', 'run_interrupted'].forEach((kind) => source.addEventListener(kind, receive))
       source.onerror = () => {
         if (closed) return
         closed = true
@@ -157,6 +169,9 @@ export function createFiguraClient(baseUrl = defaultBaseUrl): FiguraClient {
     },
     chartRenderContentUrl(sessionId, runId, callId) {
       return `${normalizedBaseUrl}/sessions/${encodeURIComponent(sessionId)}/runs/${encodeURIComponent(runId)}/chart-renders/${encodeURIComponent(callId)}/content`
+    },
+    timelineObservationUrl(sessionId, runId, callId) {
+      return `${normalizedBaseUrl}/sessions/${encodeURIComponent(sessionId)}/runs/${encodeURIComponent(runId)}/timeline/${encodeURIComponent(callId)}/observation`
     },
   }
 }

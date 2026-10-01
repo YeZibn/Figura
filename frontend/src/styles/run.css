@@ -136,6 +136,18 @@
 .user-timeline-raw pre { max-height: 260px; margin: 4px 0 0; overflow: auto; }
 .user-timeline-tool > summary { padding-right: 2px; }
 .user-timeline-tool .user-timeline-detail { padding-left: 16px; }
+.figura-tool-timeline { gap: 1px; }
+.figura-tool-detail { gap: 8px; }
+.figura-tool-detail > div > strong { color: var(--ink); }
+.figura-tool-loading { display: flex; align-items: center; gap: 6px; color: var(--muted); }
+.figura-tool-attempts { display: grid; gap: 4px; }
+.figura-tool-attempts > strong { color: var(--ink); }
+.figura-tool-attempts > small { color: var(--subtle); }
+.figura-tool-preview { display: grid; gap: 5px; max-width: 240px; }
+.figura-tool-preview > strong { display: flex; align-items: center; gap: 5px; color: var(--muted); }
+.figura-tool-preview img { display: block; max-width: 220px; max-height: 150px; border: 1px solid var(--line-soft); border-radius: 6px; object-fit: contain; background: #fff; }
+.figura-tool-minimal { color: var(--subtle); }
+.user-timeline-needs_reconciliation .user-timeline-marker { border-color: var(--warning); }
 .trace-detail-heading,
 .trace-detail-resource-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .detail-copy-button { flex: none; padding: 3px 6px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel-strong); color: var(--brand); font-size: 9px; cursor: pointer; }

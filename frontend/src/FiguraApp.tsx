@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { createFiguraClient } from './api/figura/client'
 import { createFiguraWorkspaceApi } from './api/figura/workspace'
-import type { FiguraHealth, FiguraPanelDto, FiguraProviderId } from './api/figura/types'
+import type { FiguraHealth, FiguraPanelDto, FiguraProviderId, FiguraToolTimelineSnapshotDto } from './api/figura/types'
 import { validateImageFile } from './attachments'
 import { toUserMessage } from './domain/errors'
 import { createRunController, type RunController } from './domain/run/controller'
@@ -11,7 +11,8 @@ import { AttachmentPanel, ConversationPanel, SessionSidebar } from './components
 import { CreateSessionDialog } from './components/dialogs'
 import { PanelGallery } from './components/figura/PanelGallery'
 import { ChartRenderGallery } from './components/figura/ChartRenderGallery'
-import type { PendingAttachment } from './components/types'
+import { InteractivePreview } from './components/preview'
+import type { PendingAttachment, PreviewDescriptor } from './components/types'
 
 const providers: FiguraProviderId[] = ['qwen', 'deepseek', 'mimo']
 const providerLabels: Record<FiguraProviderId, string> = {
@@ -39,6 +40,7 @@ export function FiguraApp() {
   const [data, setData] = useState<SessionData | null>(null)
   const [panels, setPanels] = useState<FiguraPanelDto[]>([])
   const [timelines, setTimelines] = useState<RunTimeline[]>([])
+  const [toolTimelines, setToolTimelines] = useState<Record<string, FiguraToolTimelineSnapshotDto>>({})
   const [pendingUser, setPendingUser] = useState<ConversationItem | null>(null)
   const [pending, setPending] = useState<PendingAttachment[]>([])
   const [selectedIds, setSelectedIds] = useState<string[]>([])
@@ -52,6 +54,7 @@ export function FiguraApp() {
   const [creatingSession, setCreatingSession] = useState(false)
   const [newSessionName, setNewSessionName] = useState('')
   const [expandedRuns, setExpandedRuns] = useState<Set<string>>(new Set())
+  const [activePreview, setActivePreview] = useState<PreviewDescriptor | null>(null)
   const activeIdRef = useRef(activeId)
   const activeRunRef = useRef<{ sessionId: string; runId: string; lastSequence: number } | null>(null)
   const controllerRef = useRef<RunController | null>(null)
@@ -105,6 +108,13 @@ export function FiguraApp() {
             events: mergeEvents(item.events, [event]),
             summary: { ...item.summary, eventCount: Math.max(item.summary.eventCount, event.sequence), updatedAt: event.timestamp },
           } : item))
+          if (event.kind === 'run_progress') {
+            void api.runs.timeline(sessionId, runId).then((snapshot) => {
+              if (activeIdRef.current === sessionId) {
+                setToolTimelines((current) => ({ ...current, [runId]: snapshot }))
+              }
+            }).catch(() => undefined)
+          }
         },
         onHistory(history) {
           setTimelines((items) => items.map((item) => item.summary.runId === runId ? {
@@ -124,6 +134,11 @@ export function FiguraApp() {
           setLoading(false)
           setActiveRunId('')
           activeRunRef.current = null
+          void api.runs.timeline(sessionId, runId).then((snapshot) => {
+            if (activeIdRef.current === sessionId) {
+              setToolTimelines((current) => ({ ...current, [runId]: snapshot }))
+            }
+          }).catch(() => undefined)
           try {
             const [updated, nextSessions, nextPanels] = await Promise.all([
               api.sessions.get(sessionId),
@@ -158,6 +173,7 @@ export function FiguraApp() {
       setData(null)
       setPanels([])
       setTimelines([])
+      setToolTimelines({})
       setLoadingSession(false)
       return
     }
@@ -165,6 +181,8 @@ export function FiguraApp() {
     setData(null)
     setPanels([])
     setTimelines([])
+    setToolTimelines({})
+    setActivePreview(null)
     setLoadingSession(true)
     void Promise.all([api.sessions.get(activeId), api.panels.list(activeId)]).then(async ([value, sessionPanels]) => {
       if (!current || activeIdRef.current !== activeId) return
@@ -181,6 +199,7 @@ export function FiguraApp() {
       }))
       if (!current || activeIdRef.current !== activeId) return
       setTimelines(histories)
+      setToolTimelines({})
       const running = histories.find((item) => item.summary.status === 'running')
       if (!running) {
         activeRunRef.current = null
@@ -237,6 +256,8 @@ export function FiguraApp() {
     setPanels([])
     setPendingUser(null)
     setTimelines([])
+    setToolTimelines({})
+    setActivePreview(null)
     setExpandedRuns(new Set())
     setRunState('idle')
     setLoading(false)
@@ -385,6 +406,9 @@ export function FiguraApp() {
         ...items,
         { summary, events: [], historyGap: false },
       ])
+      setToolTimelines((current) => current[handle.runId]
+        ? current
+        : { ...current, [handle.runId]: { runId: handle.runId, steps: [] } })
       setRunState('running')
       setLoading(true)
       window.localStorage.setItem(`figura.provider.${sessionId}`, provider)
@@ -456,6 +480,17 @@ export function FiguraApp() {
         error={error}
         onToggleRun={chooseRun}
         expandedRuns={expandedRuns}
+        onPreview={setActivePreview}
+        figuraToolTimelines={toolTimelines}
+        loadFiguraTimeline={(runId) => api.runs.timeline(activeId, runId)}
+        onFiguraTimelineLoaded={(snapshot) => {
+          setToolTimelines((current) => ({ ...current, [snapshot.runId]: snapshot }))
+        }}
+        loadFiguraToolDetail={(runId, callId) => api.runs.timelineCall(activeId, runId, callId)}
+        figuraSourceContentUrl={(source) => source.kind === 'attachment'
+          ? client.attachmentContentUrl(activeId, source.id)
+          : client.panelContentUrl(activeId, source.id)}
+        figuraObservationContentUrl={(runId, callId) => api.runs.timelineObservationUrl(activeId, runId, callId)}
         runPanels={(runId) => <>
           <PanelGallery panels={panels.filter((item) => item.runId === runId)} contentUrl={(panelId) => api.panels.contentUrl(activeId, panelId)} />
           <ChartRenderGallery
@@ -485,6 +520,11 @@ export function FiguraApp() {
       onNameChange={setNewSessionName}
       onCancel={() => setCreatingSession(false)}
       onSubmit={(event) => void confirmCreateSession(event)}
+    />}
+    {activePreview && <InteractivePreview
+      preview={activePreview}
+      loader={null}
+      onClose={() => setActivePreview(null)}
     />}
   </>
 }

@@ -44,6 +44,7 @@ class ToolFactKind(str, Enum):
 
 class EventKind(str, Enum):
     RUN_CREATED = "run_created"
+    RUN_PROGRESS = "run_progress"
     RUN_COMPLETED = "run_completed"
     RUN_FAILED = "run_failed"
     RUN_INTERRUPTED = "run_interrupted"

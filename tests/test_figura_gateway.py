@@ -29,7 +29,8 @@ from figura.runtime.coordinator import RunCoordinator
 from figura.runtime.models import RunCreateRequest, RunStatus, TerminalCode
 from figura.runtime.store import FiguraRunStore
 from figura.runtime.tool_execution import DurableToolExecutor
-from figura.tools import ToolRegistry
+from figura.tools import ReplayEffect, ToolExecutionResult, ToolOutcome, ToolRegistry
+from figura.tools.contracts import ToolExecutionError
 from figura.tools.implementations.assemble_chart_figure import assemble_chart_figure_definition
 from figura.tools.implementations.image import image_tool_definitions
 from figura.tools.implementations.render_chart_figure import render_chart_figure_definition
@@ -101,6 +102,46 @@ def _create_run(coordinator, session_id: str, *, key: str = "gateway-test", atta
             model_id=MODEL_IDS[ProviderId.QWEN],
             idempotency_key=key,
         )
+    )
+
+
+def _commit_tool_calls(coordinator, session_id: str, run_id: str, calls, *, registry_version="timeline-v1"):
+    state = coordinator.read_run_state(session_id, run_id)
+    provider_attempt = coordinator.begin_provider_attempt(
+        session_id, run_id, state.checkpoint.revision
+    )
+    claimed = coordinator.read_run_state(session_id, run_id)
+    coordinator.commit_model_response(
+        session_id,
+        run_id,
+        claimed.checkpoint.revision,
+        ProviderResponse(
+            ProviderId.QWEN,
+            MODEL_IDS[ProviderId.QWEN],
+            "处理图像。",
+            tuple(calls),
+            FinishReason.TOOL_CALLS,
+        ),
+        provider_attempt_id=provider_attempt.attempt_id,
+        registry_version=registry_version,
+    )
+
+
+def _begin_tool_attempt(store, coordinator, session_id, run_id, call_id, *, registry_version="timeline-v1"):
+    state = coordinator.read_run_state(session_id, run_id)
+    call_fact = next(
+        fact
+        for fact in state.tool_facts
+        if getattr(fact.payload, "call_id", None) == call_id
+        and fact.fact_kind.value == "tool_call"
+    )
+    return store.begin_tool_attempt(
+        session_id=session_id,
+        run_id=run_id,
+        expected_revision=state.checkpoint.revision,
+        tool_call_sequence=call_fact.tool_sequence,
+        registry_version=registry_version,
+        replay_effect=ReplayEffect.REPLAY_SAFE,
     )
 
 
@@ -601,6 +642,288 @@ def test_history_and_sse_replay_safe_lifecycle_events(tmp_path):
         assert f"id: {run.run_id}:2" in body
         assert "run_failed" in body
         assert "分析图表中的趋势" not in body
+    finally:
+        server.shutdown()
+        server.server_close()
+        app.close()
+
+
+def test_timeline_status_uses_run_facts_and_dispatcher_ownership(tmp_path):
+    started, release = Event(), Event()
+    executor = PassiveExecutor(started, release)
+    app, store, coordinator, _, _ = _application(tmp_path, executor)
+    try:
+        session = coordinator.create_session("运行时间线")
+        run = _create_run(coordinator, session.session_id, key="timeline-status")
+        _commit_tool_calls(
+            coordinator,
+            session.session_id,
+            run.run_id,
+            (
+                ProviderToolCall("call-measure", "measure_bars", '{"source_kind":"attachment","source_id":"secret-source","private":"PRIVATE_ARGUMENT"}'),
+                ProviderToolCall("call-unknown", "unregistered_tool", '{"prompt":"PRIVATE_UNKNOWN_ARGUMENT"}'),
+            ),
+        )
+        _begin_tool_attempt(store, coordinator, session.session_id, run.run_id, "call-measure")
+
+        url = f"/api/v1/sessions/{session.session_id}/runs/{run.run_id}/timeline"
+        unresolved = _json(app.handle("GET", url, {}))
+        assert [step["status"] for step in unresolved["steps"]] == [
+            "needs_reconciliation",
+            "pending",
+        ]
+        assert "PRIVATE_ARGUMENT" not in json.dumps(unresolved)
+        assert "PRIVATE_UNKNOWN_ARGUMENT" not in json.dumps(unresolved)
+
+        app.dispatcher.ensure_scheduled(run)
+        assert started.wait(timeout=1)
+        owned = _json(app.handle("GET", url, {}))
+        assert [step["status"] for step in owned["steps"]] == ["running", "pending"]
+
+        unknown = app.handle(
+            "GET",
+            f"/api/v1/sessions/{session.session_id}/runs/{run.run_id}/timeline/call-unknown",
+            {},
+        )
+        detail = _json(unknown)
+        assert set(detail) == {
+            "runId",
+            "callId",
+            "toolName",
+            "status",
+            "createdAt",
+            "updatedAt",
+        }
+        assert "PRIVATE_UNKNOWN_ARGUMENT" not in unknown.body.decode()
+
+        current = coordinator.read_run_state(session.session_id, run.run_id)
+        coordinator.fail_run(
+            session.session_id,
+            run.run_id,
+            current.checkpoint.revision,
+            terminal_code=TerminalCode.EXECUTION_FAILED,
+        )
+        terminal = _json(app.handle("GET", url, {}))
+        assert [step["status"] for step in terminal["steps"]] == ["unknown", "not_started"]
+    finally:
+        release.set()
+        app.close()
+
+
+def test_timeline_ocr_detail_and_observation_are_session_scoped(tmp_path):
+    app, store, coordinator, attachments, _ = _application(tmp_path)
+    try:
+        session = coordinator.create_session("OCR 时间线")
+        other = coordinator.create_session("其他会话")
+        attachment = attachments.upload(session.session_id, "sales chart.png", _png_bytes())
+        run = _create_run(
+            coordinator,
+            session.session_id,
+            key="timeline-ocr",
+            attachment_ids=(attachment.attachment_id,),
+        )
+        arguments = json.dumps(
+            {
+                "source_kind": "attachment",
+                "source_id": attachment.attachment_id,
+                "private": "PRIVATE_ARGUMENT",
+            },
+            separators=(",", ":"),
+        )
+        _commit_tool_calls(
+            coordinator,
+            session.session_id,
+            run.run_id,
+            (ProviderToolCall("call-ocr", "extract_text", arguments),),
+        )
+        started = _begin_tool_attempt(
+            store, coordinator, session.session_id, run.run_id, "call-ocr"
+        )
+        result = {
+            "source_kind": "attachment",
+            "source_id": attachment.attachment_id,
+            "image_size": {"width": 2, "height": 2},
+            "coordinate_system": "attachment_px",
+            "available": True,
+            "truncated": False,
+            "snippets": [
+                {
+                    "snippet_id": "snippet-1",
+                    "text": "CONFIDENTIAL OCR TEXT",
+                    "bbox_px": [0, 0, 2, 2],
+                    "confidence": 0.9,
+                }
+            ],
+        }
+        current = coordinator.read_run_state(session.session_id, run.run_id)
+        store.commit_tool_result(
+            session_id=session.session_id,
+            run_id=run.run_id,
+            expected_revision=current.checkpoint.revision,
+            attempt_id=started.payload.attempt_id,
+            result=ToolExecutionResult(
+                "call-ocr",
+                "extract_text",
+                ToolOutcome.SUCCEEDED,
+                result=result,
+            ),
+        )
+
+        detail_response = app.handle(
+            "GET",
+            f"/api/v1/sessions/{session.session_id}/runs/{run.run_id}/timeline/call-ocr",
+            {},
+        )
+        detail = _json(detail_response)
+        assert detail["status"] == "completed"
+        assert detail["observationAvailable"] is True
+        assert detail["source"] == {
+            "kind": "attachment",
+            "id": attachment.attachment_id,
+            "name": "sales chart.png",
+        }
+        assert detail["resultSummary"] == "结果可用 · 1 条文字记录"
+        assert detail["attempts"][0]["status"] == "completed"
+        assert "PRIVATE_ARGUMENT" not in detail_response.body.decode()
+        assert "CONFIDENTIAL OCR TEXT" not in detail_response.body.decode()
+
+        preview = app.handle(
+            "GET",
+            f"/api/v1/sessions/{session.session_id}/runs/{run.run_id}/timeline/call-ocr/observation",
+            {},
+        )
+        assert preview.status == 200
+        assert preview.headers["Content-Type"] == "image/png"
+        assert preview.headers["Cache-Control"] == "no-store"
+        assert Image.open(BytesIO(preview.body)).format == "PNG"
+        assert app.handle(
+            "GET",
+            f"/api/v1/sessions/{other.session_id}/runs/{run.run_id}/timeline",
+            {},
+        ).status == 404
+        assert app.handle(
+            "GET",
+            f"/api/v1/sessions/{session.session_id}/runs/{run.run_id}/timeline/missing",
+            {},
+        ).status == 404
+        assert app.handle(
+            "GET",
+            f"/api/v1/sessions/{session.session_id}/runs/{run.run_id}/timeline/call-ocr/observation",
+            {"origin": ORIGIN},
+        ).status == 200
+        assert app.handle(
+            "GET",
+            f"/api/v1/sessions/{other.session_id}/runs/{run.run_id}/timeline/call-ocr/observation",
+            {},
+        ).status == 404
+
+        terminal_state = coordinator.read_run_state(session.session_id, run.run_id)
+        coordinator.fail_run(
+            session.session_id,
+            run.run_id,
+            terminal_state.checkpoint.revision,
+            terminal_code=TerminalCode.EXECUTION_FAILED,
+        )
+        failed_run = _create_run(
+            coordinator,
+            session.session_id,
+            key="timeline-ocr-failed",
+            attachment_ids=(attachment.attachment_id,),
+        )
+        _commit_tool_calls(
+            coordinator,
+            session.session_id,
+            failed_run.run_id,
+            (
+                ProviderToolCall(
+                    "call-ocr-failed",
+                    "extract_text",
+                    json.dumps(
+                        {"source_kind": "attachment", "source_id": attachment.attachment_id},
+                        separators=(",", ":"),
+                    ),
+                ),
+            ),
+        )
+        failed_attempt = _begin_tool_attempt(
+            store, coordinator, session.session_id, failed_run.run_id, "call-ocr-failed"
+        )
+        failed_state = coordinator.read_run_state(session.session_id, failed_run.run_id)
+        store.commit_tool_result(
+            session_id=session.session_id,
+            run_id=failed_run.run_id,
+            expected_revision=failed_state.checkpoint.revision,
+            attempt_id=failed_attempt.payload.attempt_id,
+            result=ToolExecutionResult(
+                "call-ocr-failed",
+                "extract_text",
+                ToolOutcome.FAILED,
+                error=ToolExecutionError(
+                    "image_unavailable",
+                    "/private/tmp/SECRET_PATH: PRIVATE_ERROR",
+                    False,
+                ),
+            ),
+        )
+        failed_detail = app.handle(
+            "GET",
+            f"/api/v1/sessions/{session.session_id}/runs/{failed_run.run_id}/timeline/call-ocr-failed",
+            {},
+        )
+        failed_projection = _json(failed_detail)
+        assert failed_projection["status"] == "failed"
+        assert failed_projection["errorSummary"] == "图像暂时无法读取"
+        assert "/private/tmp/SECRET_PATH" not in failed_detail.body.decode()
+        assert "PRIVATE_ERROR" not in failed_detail.body.decode()
+    finally:
+        app.close()
+
+
+def test_progress_history_and_sse_expose_only_checkpoint_revision(tmp_path):
+    app, _, coordinator, _, _ = _application(tmp_path)
+    server = FiguraHTTPServer(("127.0.0.1", 0), app)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    try:
+        session = coordinator.create_session()
+        run = _create_run(coordinator, session.session_id, key="timeline-progress")
+        _commit_tool_calls(
+            coordinator,
+            session.session_id,
+            run.run_id,
+            (ProviderToolCall("call-safe", "load_image", '{"source_kind":"attachment","source_id":"opaque","private":"PRIVATE_ARGUMENT"}'),),
+        )
+        current = coordinator.read_run_state(session.session_id, run.run_id)
+        coordinator.fail_run(
+            session.session_id,
+            run.run_id,
+            current.checkpoint.revision,
+            terminal_code=TerminalCode.EXECUTION_FAILED,
+        )
+        history = app.handle(
+            "GET",
+            f"/api/v1/sessions/{session.session_id}/runs/{run.run_id}/history",
+            {},
+        )
+        events = _json(history)["events"]
+        progress = next(event for event in events if event["kind"] == "run_progress")
+        assert progress["payload"] == {"checkpointRevision": 3}
+        assert "PRIVATE_ARGUMENT" not in history.body.decode()
+
+        thread.start()
+        connection = HTTPConnection("127.0.0.1", server.server_port, timeout=3)
+        connection.request(
+            "GET",
+            f"/api/v1/sessions/{session.session_id}/runs/{run.run_id}/events?afterSequence=0",
+            headers={"Origin": ORIGIN},
+        )
+        response = connection.getresponse()
+        body = response.read().decode("utf-8")
+        connection.close()
+        assert response.status == 200
+        assert f"id: {run.run_id}:{progress['sequence']}" in body
+        assert "event: run_progress" in body
+        assert '"payload":{"checkpointRevision":3}' in body
+        assert "PRIVATE_ARGUMENT" not in body
     finally:
         server.shutdown()
         server.server_close()

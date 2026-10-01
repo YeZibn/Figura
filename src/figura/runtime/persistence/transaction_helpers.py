@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import sqlite3
 
+from ..codecs.events import encode_event_payload
 from ..codecs.tools import encode_tool_fact
-from ..models import ToolFactKind
+from ..models import EventKind, ToolFactKind
 from ..records import ToolAttemptStartedFact, ToolCallFact, ToolExecutionFact, ToolResultFact
 
 
@@ -40,3 +41,20 @@ def _next_event_sequence(connection: sqlite3.Connection, run_id: str) -> int:
         (run_id,),
     ).fetchone()
     return int(row[0])
+
+
+def _append_run_event(
+    connection: sqlite3.Connection,
+    *,
+    run_id: str,
+    kind: EventKind,
+    payload: dict[str, object],
+    created_at: str,
+) -> None:
+    event_sequence = _next_event_sequence(connection, run_id)
+    payload_json = encode_event_payload(kind, payload)
+    connection.execute(
+        "INSERT INTO run_stream_events(run_id, event_sequence, event_kind, payload_json, created_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (run_id, event_sequence, kind.value, payload_json, created_at),
+    )

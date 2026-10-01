@@ -48,7 +48,7 @@ from ..records import (
 from ..validation import _validate_id
 from .mappers import _encode_action
 from .runs import RunRepository
-from .transaction_helpers import _next_event_sequence
+from .transaction_helpers import _append_run_event, _next_event_sequence
 
 
 class ProviderRepository:
@@ -286,6 +286,14 @@ class ProviderRepository:
             )
             if cursor.rowcount != 1:
                 raise RunError(RunErrorCode.STALE_CHECKPOINT)
+            if tool_calls:
+                _append_run_event(
+                    connection,
+                    run_id=run_id,
+                    kind=EventKind.RUN_PROGRESS,
+                    payload={"checkpoint_revision": expected_revision + 1},
+                    created_at=now,
+                )
         return ExecutionRecord(record_id, run_id, sequence, RecordKind.MODEL_RESPONSE, payload, now)
 
     def fail_provider_attempt(

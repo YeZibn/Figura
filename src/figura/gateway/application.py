@@ -26,6 +26,7 @@ from .web_projection import (
     run_history,
     session_snapshot,
 )
+from .timeline_projection import observation_ref, run_timeline, tool_call_detail
 
 
 _API_PREFIX = "/api/v1"
@@ -234,6 +235,64 @@ class FiguraGatewayApplication:
                 )
                 chart_renders = chart_render_summaries(execution).get(parts[3], ())
                 return self._json(200, run_history(state, after_sequence, chart_renders), headers)
+            if (
+                len(parts) == 5
+                and parts[2] == "runs"
+                and parts[4] == "timeline"
+                and method == "GET"
+            ):
+                state = self.coordinator.read_run_state(session_id, parts[3])
+                return self._json(
+                    200,
+                    run_timeline(state, self.dispatcher.owns(parts[3])),
+                    headers,
+                )
+            if (
+                len(parts) == 6
+                and parts[2] == "runs"
+                and parts[4] == "timeline"
+                and method == "GET"
+            ):
+                state = self.coordinator.read_run_state(session_id, parts[3])
+                execution = self.execution_state.for_run(session_id, parts[3])
+                return self._json(
+                    200,
+                    tool_call_detail(
+                        state,
+                        parts[5],
+                        execution,
+                        self.dispatcher.owns(parts[3]),
+                    ),
+                    headers,
+                )
+            if (
+                len(parts) == 7
+                and parts[2] == "runs"
+                and parts[4] == "timeline"
+                and parts[6] == "observation"
+                and method == "GET"
+            ):
+                observation_run_id, call_id = parts[3], parts[5]
+                state = self.coordinator.read_run_state(session_id, observation_run_id)
+                execution = self.execution_state.for_run(session_id, observation_run_id)
+                ref = observation_ref(state, call_id, execution)
+                try:
+                    image_bytes, _width, _height = self.execution_images.read(
+                        session_id, execution, ref
+                    )
+                except RunError:
+                    raise RunError(RunErrorCode.INTEGRITY_ERROR) from None
+                return GatewayResponse(
+                    200,
+                    self._cors_headers(headers)
+                    | {
+                        "Content-Type": "image/png",
+                        "Content-Length": str(len(image_bytes)),
+                        "Cache-Control": "no-store",
+                        "X-Content-Type-Options": "nosniff",
+                    },
+                    image_bytes,
+                )
             if (
                 len(parts) == 7
                 and parts[2] == "runs"

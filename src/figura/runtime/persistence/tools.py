@@ -16,6 +16,7 @@ from ..errors import (
 )
 from ..models import (
     ActionKind,
+    EventKind,
     NextAction,
     RunStatus,
     ToolFactKind,
@@ -33,7 +34,7 @@ from .mappers import (
     _tool_fact_from_row,
 )
 from .runs import RunRepository
-from .transaction_helpers import _insert_tool_fact
+from .transaction_helpers import _append_run_event, _insert_tool_fact
 
 
 class ToolRepository:
@@ -134,6 +135,13 @@ class ToolRepository:
             )
             if cursor.rowcount != 1:
                 raise RunError(RunErrorCode.STALE_CHECKPOINT)
+            _append_run_event(
+                connection,
+                run_id=run_id,
+                kind=EventKind.RUN_PROGRESS,
+                payload={"checkpoint_revision": expected_revision + 1},
+                created_at=now,
+            )
         return fact
 
     def begin_tool_replay_attempt(
@@ -254,6 +262,13 @@ class ToolRepository:
             )
             if cursor.rowcount != 1:
                 raise RunError(RunErrorCode.STALE_CHECKPOINT)
+            _append_run_event(
+                connection,
+                run_id=run_id,
+                kind=EventKind.RUN_PROGRESS,
+                payload={"checkpoint_revision": expected_revision + 1},
+                created_at=now,
+            )
         return fact
 
     def commit_tool_result(
@@ -376,4 +391,11 @@ class ToolRepository:
             )
             if cursor.rowcount != 1:
                 raise RunError(RunErrorCode.STALE_CHECKPOINT)
+            _append_run_event(
+                connection,
+                run_id=run_id,
+                kind=EventKind.RUN_PROGRESS,
+                payload={"checkpoint_revision": expected_revision + 1},
+                created_at=now,
+            )
         return fact

@@ -42,6 +42,7 @@ from figura.runtime.codecs.records import (
     decode_payload,
     encode_payload,
 )
+from figura.runtime.codecs.events import decode_event_payload, encode_event_payload
 
 
 def _factory(environ: dict[str, str] | None = None) -> ProviderFactory:
@@ -110,6 +111,21 @@ def _png_bytes() -> bytes:
     content = io.BytesIO()
     Image.new("RGB", (2, 2), color="blue").save(content, format="PNG")
     return content.getvalue()
+
+
+def test_run_progress_event_payload_is_bounded_to_checkpoint_revision() -> None:
+    payload = {"checkpoint_revision": 4}
+    encoded = encode_event_payload(EventKind.RUN_PROGRESS, payload)
+
+    assert decode_event_payload(EventKind.RUN_PROGRESS, encoded) == payload
+    for invalid in (
+        {},
+        {"checkpoint_revision": 0},
+        {"checkpoint_revision": True},
+        {"checkpoint_revision": 1, "tool_name": "secret"},
+    ):
+        with pytest.raises(RunError):
+            encode_event_payload(EventKind.RUN_PROGRESS, invalid)
 
 
 def _response(
@@ -209,11 +225,47 @@ def test_v4_migration_adds_attachment_table_without_changing_run_state(tmp_path)
     after = migrated_store.read_run_state(session.session_id, run.run_id)
 
     with sqlite3.connect(store.database_path) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 6
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 7
         assert connection.execute("PRAGMA quick_check").fetchone()[0] == "ok"
         assert connection.execute(
             "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'attachments'"
         ).fetchone() == ("attachments",)
+        assert connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'panels'"
+        ).fetchone() == ("panels",)
+
+    assert after == before
+
+
+def test_v5_migration_preserves_attachments_and_adds_panels(tmp_path) -> None:
+    store, app = _app(tmp_path)
+    session = app.create_session()
+    run = app.create_run(_request(session.session_id))
+    before = app.read_run_state(session.session_id, run.run_id)
+    attachment_id = "a" * 32
+
+    with sqlite3.connect(store.database_path) as connection:
+        connection.execute(
+            "INSERT INTO attachments(attachment_id, session_id, filename, media_type, byte_count, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (attachment_id, session.session_id, "source.png", "image/png", 1, run.created_at),
+        )
+        connection.execute("DROP INDEX panels_by_session")
+        connection.execute("DROP TRIGGER immutable_panel_update")
+        connection.execute("DROP TRIGGER immutable_panel_delete")
+        connection.execute("DROP TABLE panels")
+        connection.execute("PRAGMA user_version = 5")
+
+    migrated_store = FiguraRunStore(tmp_path)
+    after = migrated_store.read_run_state(session.session_id, run.run_id)
+
+    with sqlite3.connect(store.database_path) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 7
+        assert connection.execute("PRAGMA quick_check").fetchone()[0] == "ok"
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+        assert connection.execute(
+            "SELECT attachment_id, session_id, filename FROM attachments"
+        ).fetchone() == (attachment_id, session.session_id, "source.png")
         assert connection.execute(
             "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'panels'"
         ).fetchone() == ("panels",)

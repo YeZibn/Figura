@@ -219,6 +219,8 @@ def event_projection(state: RunState, event: RunStreamEvent) -> dict[str, object
     payload: dict[str, object]
     if event.event_kind is EventKind.RUN_CREATED:
         payload = {"ordinal": state.run.ordinal}
+    elif event.event_kind is EventKind.RUN_PROGRESS:
+        payload = {"checkpointRevision": event.payload["checkpoint_revision"]}
     elif event.event_kind is EventKind.RUN_COMPLETED:
         payload = {}
     else:

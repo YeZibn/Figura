@@ -15,6 +15,7 @@ MAX_EVENT_JSON_BYTES = 16 * 1024
 def encode_event_payload(kind: EventKind, payload: dict[str, object]) -> str:
     expected = {
         EventKind.RUN_CREATED: {"session_id", "ordinal"},
+        EventKind.RUN_PROGRESS: {"checkpoint_revision"},
         EventKind.RUN_COMPLETED: {"final_artifact_refs"},
         EventKind.RUN_FAILED: {"terminal_code"},
         EventKind.RUN_INTERRUPTED: {"terminal_code"},
@@ -27,6 +28,11 @@ def encode_event_payload(kind: EventKind, payload: dict[str, object]) -> str:
         if type(ordinal) is not int or ordinal < 1:
             raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
         safe = {"session_id": _bounded_string(payload["session_id"], 128), "ordinal": ordinal}
+    elif kind is EventKind.RUN_PROGRESS:
+        revision = payload["checkpoint_revision"]
+        if type(revision) is not int or revision < 1:
+            raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
+        safe = {"checkpoint_revision": revision}
     elif kind is EventKind.RUN_COMPLETED:
         refs = payload["final_artifact_refs"]
         if not isinstance(refs, (list, tuple)) or len(refs) != 0:
@@ -44,6 +50,7 @@ def decode_event_payload(kind: EventKind, raw: str) -> dict[str, object]:
         raise RunError(RunErrorCode.INTEGRITY_ERROR)
     expected = {
         EventKind.RUN_CREATED: {"session_id", "ordinal"},
+        EventKind.RUN_PROGRESS: {"checkpoint_revision"},
         EventKind.RUN_COMPLETED: {"final_artifact_refs"},
         EventKind.RUN_FAILED: {"terminal_code"},
         EventKind.RUN_INTERRUPTED: {"terminal_code"},
@@ -54,4 +61,3 @@ def decode_event_payload(kind: EventKind, raw: str) -> dict[str, object]:
     if kind is EventKind.RUN_COMPLETED:
         normalized["final_artifact_refs"] = tuple(normalized["final_artifact_refs"])
     return normalized
-

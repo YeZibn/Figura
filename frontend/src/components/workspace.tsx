@@ -7,10 +7,12 @@ import { usePreviewResource } from '../previewResources'
 import type { GatewayRuntimeStatus } from '../runtime'
 import type { PreviewResourceLoader } from '../previewResources'
 import type { Attachment, ConversationItem, EvaluationSummary, GatewayHealth, Provider, RunState, RunSummary, Session, SessionData } from '../types/protocol'
+import type { FiguraToolCallDetailDto, FiguraToolTimelineSnapshotDto } from '../api/figura/types'
 import type { PreviewOpener, PendingAttachment } from './types'
 import { PreviewImage, GeneratedChartView } from './preview'
 import { SafeMarkdown } from './common'
 import { RunTimeline } from './run'
+import { ToolTimeline } from './figura/ToolTimeline'
 
 export function SessionSidebar(props: { sessions: Session[]; activeId: string; onSelect: (id: string) => void; onCreate: () => void; onDelete?: (id: string) => void; workspace?: 'sessions' | 'evaluations'; onWorkspaceChange?: (workspace: 'sessions' | 'evaluations') => void; evaluations?: EvaluationSummary[]; activeEvaluationId?: string; onSelectEvaluation?: (id: string) => void; mode: 'mock' | 'gateway' | 'figura'; runtimeStatus: GatewayRuntimeStatus | null; health: GatewayHealth | null; showEvaluations?: boolean; showSessionDeletion?: boolean }) {
   const statusUnavailable = props.runtimeStatus?.state === 'unavailable' || props.runtimeStatus?.agentState === 'unavailable' || props.health?.agent?.status === 'unavailable'
@@ -50,6 +52,13 @@ export function RunBlock(props: {
   onRetry?: () => void
   onResume?: () => void
   runPanels?: (runId: string) => ReactNode
+  figuraMode: boolean
+  figuraSnapshot?: FiguraToolTimelineSnapshotDto
+  loadFiguraSnapshot?: () => Promise<FiguraToolTimelineSnapshotDto>
+  onFiguraSnapshotLoaded?: (snapshot: FiguraToolTimelineSnapshotDto) => void
+  loadFiguraDetail?: (callId: string) => Promise<FiguraToolCallDetailDto>
+  figuraSourceContentUrl?: (source: NonNullable<FiguraToolCallDetailDto['source']>) => string
+  figuraObservationContentUrl?: (callId: string) => string
 }) {
   const { timeline, user, assistant } = props
   const answer = assistant?.kind === 'assistant' ? assistant.text : timeline.summary.answer || ''
@@ -57,7 +66,20 @@ export function RunBlock(props: {
   const artifacts = generatedArtifacts(timeline.events)
   return <section className={'run-block run-' + timeline.summary.status}>
     {user && <Message item={user} expanded={props.expandedMessage === user.id} onToggle={props.onToggleMessage} previewLoader={props.previewLoader} onPreview={props.onPreview} />}
-    <RunTimeline timeline={timeline} expanded={props.expanded} onToggle={props.onToggleRun} previewLoader={props.previewLoader} onPreview={props.onPreview} onInterrupt={props.onInterrupt} onRetry={props.onRetry} onResume={props.onResume} />
+    {props.figuraMode
+      ? <ToolTimeline
+        summary={timeline.summary}
+        snapshot={props.figuraSnapshot}
+        expanded={props.expanded}
+        onToggle={props.onToggleRun}
+        loadSnapshot={props.loadFiguraSnapshot || (async () => { throw new Error('timeline snapshot unavailable') })}
+        onSnapshotLoaded={props.onFiguraSnapshotLoaded || (() => undefined)}
+        loadDetail={props.loadFiguraDetail || (async () => { throw new Error('timeline detail unavailable') })}
+        sourceContentUrl={props.figuraSourceContentUrl || (() => '')}
+        observationContentUrl={props.figuraObservationContentUrl || (() => '')}
+        onPreview={props.onPreview}
+      />
+      : <RunTimeline timeline={timeline} expanded={props.expanded} onToggle={props.onToggleRun} previewLoader={props.previewLoader} onPreview={props.onPreview} onInterrupt={props.onInterrupt} onRetry={props.onRetry} onResume={props.onResume} />}
     {(answer || artifacts.length > 0) && <section className="run-result" aria-label="最终结果">
       <div className="run-result-heading"><Sparkles size={14} /><strong>最终结果</strong><span>{answer ? answerTimestamp : '图表输出'}</span></div>
       {answer && <Message item={{ id: `${timeline.summary.runId}:assistant`, kind: 'assistant', text: answer, timestamp: answerTimestamp }} expanded={props.expandedMessage === `${timeline.summary.runId}:assistant`} onToggle={props.onToggleMessage} previewLoader={props.previewLoader} onPreview={props.onPreview} />}
@@ -69,7 +91,43 @@ export function RunBlock(props: {
 
 export type ConversationProviderOption = { id: string; label: string; status: 'ready' | 'unavailable' | 'unknown' }
 
-export function ConversationPanel(props: { data: SessionData | null; timelines: RunTimelineModel[]; pendingUser: ConversationItem | null; runState: RunState; selectedAttachmentIds: string[]; activeSourceIds: string[]; provider: Provider; providerValue?: string; providerOptions?: ConversationProviderOption[]; health: GatewayHealth | null; mode: 'mock' | 'gateway' | 'figura'; onProviderChange: (provider: Provider) => void; onProviderValueChange?: (provider: string) => void; onSubmit: (text: string, attachmentIds: string[], retryOf?: string, resumeOf?: string) => Promise<boolean>; onInterrupt?: (runId: string) => void; onRetry?: (runId: string) => void; onResume?: (runId: string) => void; runPanels?: (runId: string) => ReactNode; hideRunActions?: boolean; submissionBlocked?: boolean; loading: boolean; loadingSession: boolean; error: string | null; onToggleRun: (runId: string, status: RunSummary['status']) => void; expandedRuns: Set<string>; previewLoader?: PreviewResourceLoader | null; onPreview?: PreviewOpener }) {
+export type ConversationPanelProps = {
+  data: SessionData | null
+  timelines: RunTimelineModel[]
+  pendingUser: ConversationItem | null
+  runState: RunState
+  selectedAttachmentIds: string[]
+  activeSourceIds: string[]
+  provider: Provider
+  providerValue?: string
+  providerOptions?: ConversationProviderOption[]
+  health: GatewayHealth | null
+  mode: 'mock' | 'gateway' | 'figura'
+  onProviderChange: (provider: Provider) => void
+  onProviderValueChange?: (provider: string) => void
+  onSubmit: (text: string, attachmentIds: string[], retryOf?: string, resumeOf?: string) => Promise<boolean>
+  onInterrupt?: (runId: string) => void
+  onRetry?: (runId: string) => void
+  onResume?: (runId: string) => void
+  runPanels?: (runId: string) => ReactNode
+  hideRunActions?: boolean
+  submissionBlocked?: boolean
+  loading: boolean
+  loadingSession: boolean
+  error: string | null
+  onToggleRun: (runId: string, status: RunSummary['status']) => void
+  expandedRuns: Set<string>
+  previewLoader?: PreviewResourceLoader | null
+  onPreview?: PreviewOpener
+  figuraToolTimelines?: Record<string, FiguraToolTimelineSnapshotDto>
+  loadFiguraTimeline?: (runId: string) => Promise<FiguraToolTimelineSnapshotDto>
+  onFiguraTimelineLoaded?: (snapshot: FiguraToolTimelineSnapshotDto) => void
+  loadFiguraToolDetail?: (runId: string, callId: string) => Promise<FiguraToolCallDetailDto>
+  figuraSourceContentUrl?: (source: NonNullable<FiguraToolCallDetailDto['source']>) => string
+  figuraObservationContentUrl?: (runId: string, callId: string) => string
+}
+
+export function ConversationPanel(props: ConversationPanelProps) {
   const [text, setText] = useState('')
   const [expanded, setExpanded] = useState<string | null>(null)
   const previewLoader = props.previewLoader || null
@@ -98,7 +156,7 @@ export function ConversationPanel(props: { data: SessionData | null; timelines: 
   })
   const orphanMessages = messages.filter((item) => !linkedMessageIds.has(item.id))
   const toggleMessage = (id: string) => setExpanded((current) => current === id ? null : id)
-  return <main className="conversation panel"><header className="conversation-header"><div className="conversation-title"><span className="eyebrow">当前会话</span><h1>{props.data?.session.name ?? (props.loadingSession ? '正在加载会话' : '暂无活动会话')}</h1>{props.data && <span className="conversation-meta">{props.data.session.runCount} 次运行 · 执行记录保存在本机</span>}</div><div className="conversation-header-actions"><label className="provider-selector"><span>下一次运行</span><select aria-label="选择下一次运行的模型来源" value={providerValue} onChange={(event) => props.onProviderValueChange ? props.onProviderValueChange(event.target.value) : props.onProviderChange(event.target.value as Provider)} disabled={props.loadingSession || props.submissionBlocked}>{providerOptions.map((option) => <option key={option.id} value={option.id} disabled={option.status === 'unavailable'}>{option.label}{option.status === 'unavailable' ? '（不可用）' : option.status === 'unknown' ? '（检查中）' : ''}</option>)}</select></label><span className={'run-chip ' + props.runState}><span className="status-dot" />{runStateLabel(props.runState)} · {props.data?.session.runCount ?? 0} 次运行</span></div></header><div className="message-scroll">{props.loadingSession ? <div className="loading-state"><span className="spinner" />正在加载会话...</div> : props.error && !props.data && messages.length === 0 ? <div className="error-state"><div className="empty-icon"><MessageSquare size={22} /></div><h2>无法连接本地服务</h2><p>{props.error}</p></div> : !props.data && messages.length === 0 ? <div className="empty-conversation"><div className="empty-icon"><MessageSquare size={22} /></div><h2>创建第一个会话</h2><p>请从左侧新建会话，开始使用 Figura。</p></div> : messages.length === 0 && props.timelines.length === 0 ? <div className="empty-conversation"><div className="empty-icon"><MessageSquare size={22} /></div><p>提出问题或添加图片，开始使用 Figura。</p></div> : <>{runBlocks.map(({ timeline, user, assistant }) => <RunBlock key={timeline.summary.runId} timeline={timeline} user={user} assistant={assistant} expanded={props.expandedRuns.has(timeline.summary.runId) || timeline.summary.status === 'running'} onToggleRun={() => props.onToggleRun(timeline.summary.runId, timeline.summary.status)} expandedMessage={expanded} onToggleMessage={toggleMessage} previewLoader={previewLoader} onPreview={props.onPreview} onInterrupt={props.hideRunActions ? undefined : () => props.onInterrupt?.(timeline.summary.runId)} onRetry={props.hideRunActions ? undefined : () => props.onRetry?.(timeline.summary.runId)} onResume={props.hideRunActions ? undefined : () => props.onResume?.(timeline.summary.runId)} runPanels={props.runPanels} />)}{orphanMessages.map((item) => <Message key={item.id} item={item} expanded={expanded === item.id} onToggle={toggleMessage} previewLoader={previewLoader} onPreview={props.onPreview} />)}</>}{props.loading && <div className="typing"><span /><span /><span /> Figura Agent 正在思考</div>}{props.error && <div className="error-banner" role="alert">{props.error}</div>}</div><div className="composer"><div className="composer-label"><Sparkles size={13} /><span>向 Figura Agent 提问</span></div><textarea value={text} onChange={(event) => setText(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void send() } }} disabled={submitBlocked || props.loadingSession} placeholder="例如：比较这张图中各系列的变化趋势..." rows={1} /><div className="composer-actions"><span className="composer-hint">Enter 发送 · Shift + Enter 换行</span><button className="send-button" onClick={() => void send()} disabled={!text.trim() || submitBlocked || props.loadingSession} title="发送消息" aria-label="发送消息"><Send size={16} /> </button></div></div></main>
+  return <main className="conversation panel"><header className="conversation-header"><div className="conversation-title"><span className="eyebrow">当前会话</span><h1>{props.data?.session.name ?? (props.loadingSession ? '正在加载会话' : '暂无活动会话')}</h1>{props.data && <span className="conversation-meta">{props.data.session.runCount} 次运行 · 执行记录保存在本机</span>}</div><div className="conversation-header-actions"><label className="provider-selector"><span>下一次运行</span><select aria-label="选择下一次运行的模型来源" value={providerValue} onChange={(event) => props.onProviderValueChange ? props.onProviderValueChange(event.target.value) : props.onProviderChange(event.target.value as Provider)} disabled={props.loadingSession || props.submissionBlocked}>{providerOptions.map((option) => <option key={option.id} value={option.id} disabled={option.status === 'unavailable'}>{option.label}{option.status === 'unavailable' ? '（不可用）' : option.status === 'unknown' ? '（检查中）' : ''}</option>)}</select></label><span className={'run-chip ' + props.runState}><span className="status-dot" />{runStateLabel(props.runState)} · {props.data?.session.runCount ?? 0} 次运行</span></div></header><div className="message-scroll">{props.loadingSession ? <div className="loading-state"><span className="spinner" />正在加载会话...</div> : props.error && !props.data && messages.length === 0 ? <div className="error-state"><div className="empty-icon"><MessageSquare size={22} /></div><h2>无法连接本地服务</h2><p>{props.error}</p></div> : !props.data && messages.length === 0 ? <div className="empty-conversation"><div className="empty-icon"><MessageSquare size={22} /></div><h2>创建第一个会话</h2><p>请从左侧新建会话，开始使用 Figura。</p></div> : messages.length === 0 && props.timelines.length === 0 ? <div className="empty-conversation"><div className="empty-icon"><MessageSquare size={22} /></div><p>提出问题或添加图片，开始使用 Figura。</p></div> : <>{runBlocks.map(({ timeline, user, assistant }) => <RunBlock key={timeline.summary.runId} timeline={timeline} user={user} assistant={assistant} expanded={props.expandedRuns.has(timeline.summary.runId) || timeline.summary.status === 'running'} onToggleRun={() => props.onToggleRun(timeline.summary.runId, timeline.summary.status)} expandedMessage={expanded} onToggleMessage={toggleMessage} previewLoader={previewLoader} onPreview={props.onPreview} onInterrupt={props.hideRunActions ? undefined : () => props.onInterrupt?.(timeline.summary.runId)} onRetry={props.hideRunActions ? undefined : () => props.onRetry?.(timeline.summary.runId)} onResume={props.hideRunActions ? undefined : () => props.onResume?.(timeline.summary.runId)} runPanels={props.runPanels} figuraMode={props.mode === 'figura'} figuraSnapshot={props.figuraToolTimelines?.[timeline.summary.runId]} loadFiguraSnapshot={props.loadFiguraTimeline ? () => props.loadFiguraTimeline!(timeline.summary.runId) : undefined} onFiguraSnapshotLoaded={props.onFiguraTimelineLoaded} loadFiguraDetail={props.loadFiguraToolDetail ? (callId) => props.loadFiguraToolDetail!(timeline.summary.runId, callId) : undefined} figuraSourceContentUrl={props.figuraSourceContentUrl} figuraObservationContentUrl={props.figuraObservationContentUrl ? (callId) => props.figuraObservationContentUrl!(timeline.summary.runId, callId) : undefined} />)}{orphanMessages.map((item) => <Message key={item.id} item={item} expanded={expanded === item.id} onToggle={toggleMessage} previewLoader={previewLoader} onPreview={props.onPreview} />)}</>}{props.loading && <div className="typing"><span /><span /><span /> Figura Agent 正在思考</div>}{props.error && <div className="error-banner" role="alert">{props.error}</div>}</div><div className="composer"><div className="composer-label"><Sparkles size={13} /><span>向 Figura Agent 提问</span></div><textarea value={text} onChange={(event) => setText(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void send() } }} disabled={submitBlocked || props.loadingSession} placeholder="例如：比较这张图中各系列的变化趋势..." rows={1} /><div className="composer-actions"><span className="composer-hint">Enter 发送 · Shift + Enter 换行</span><button className="send-button" onClick={() => void send()} disabled={!text.trim() || submitBlocked || props.loadingSession} title="发送消息" aria-label="发送消息"><Send size={16} /> </button></div></div></main>
 }
 
 function AttachmentPreview({ attachment, loader, onPreview }: { attachment: Attachment; loader: PreviewResourceLoader | null; onPreview?: PreviewOpener }) {

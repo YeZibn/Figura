@@ -77,6 +77,53 @@ export type FiguraRunHistoryDto = {
   events: FiguraEventDto[]
   historyGap: boolean
 }
+export type FiguraToolTimelineStatus =
+  | 'pending'
+  | 'running'
+  | 'needs_reconciliation'
+  | 'unknown'
+  | 'completed'
+  | 'failed'
+  | 'not_started'
+export type FiguraToolTimelineStepDto = {
+  callId: string
+  toolSequence: number
+  toolName: string
+  createdAt: string
+  updatedAt: string
+  status: FiguraToolTimelineStatus
+  summary: string
+}
+export type FiguraToolTimelineSnapshotDto = {
+  runId: string
+  steps: FiguraToolTimelineStepDto[]
+}
+export type FiguraToolTimelineSourceDto = {
+  kind: 'attachment' | 'panel'
+  id: string
+  name: string
+}
+export type FiguraToolAttemptDto = {
+  attemptNumber: number
+  startedAt: string
+  finishedAt: string | null
+  status: 'running' | 'completed' | 'failed' | 'unknown'
+  errorSummary: string | null
+}
+export type FiguraToolCallDetailDto = {
+  runId: string
+  callId: string
+  toolName: string
+  status: FiguraToolTimelineStatus
+  createdAt: string
+  updatedAt: string
+  argumentSummary?: string
+  resultSummary?: string
+  attempts?: FiguraToolAttemptDto[]
+  errorSummary?: string | null
+  source?: FiguraToolTimelineSourceDto | null
+  observationAvailable?: boolean
+}
 export type FiguraRunHandleDto = Omit<FiguraRunDto, 'executionState' | 'chartRenders'>
 
 export type FiguraClient = {
@@ -91,10 +138,13 @@ export type FiguraClient = {
   deleteAttachment(sessionId: string, attachmentId: string): Promise<void>
   startRun(sessionId: string, text: string, attachmentIds: string[], providerId: FiguraProviderId, idempotencyKey: string): Promise<FiguraRunHandleDto>
   getRunHistory(sessionId: string, runId: string, afterSequence?: number): Promise<FiguraRunHistoryDto>
+  getRunTimeline(sessionId: string, runId: string): Promise<FiguraToolTimelineSnapshotDto>
+  getRunTimelineCall(sessionId: string, runId: string, callId: string): Promise<FiguraToolCallDetailDto>
   subscribeRun(sessionId: string, runId: string, callbacks: { onEvent(event: AgentRunEvent): void; onError(error: Error): void; onComplete(): void }, afterSequence?: number): RunSubscription
   attachmentContentUrl(sessionId: string, attachmentId: string): string
   panelContentUrl(sessionId: string, panelId: string): string
   chartRenderContentUrl(sessionId: string, runId: string, callId: string): string
+  timelineObservationUrl(sessionId: string, runId: string, callId: string): string
 }
 
 export type FiguraWorkspaceApi = {
@@ -116,7 +166,10 @@ export type FiguraWorkspaceApi = {
   runs: {
     start(sessionId: string, text: string, attachmentIds: string[], providerId: FiguraProviderId, idempotencyKey: string): Promise<RunHandle>
     history(sessionId: string, runId: string, afterSequence?: number): Promise<RunHistory>
+    timeline(sessionId: string, runId: string): Promise<FiguraToolTimelineSnapshotDto>
+    timelineCall(sessionId: string, runId: string, callId: string): Promise<FiguraToolCallDetailDto>
     subscribe(sessionId: string, runId: string, callbacks: { onEvent(event: AgentRunEvent): void; onError(error: Error): void; onComplete(): void }, afterSequence?: number): RunSubscription
     chartRenderContentUrl(sessionId: string, runId: string, callId: string): string
+    timelineObservationUrl(sessionId: string, runId: string, callId: string): string
   }
 }

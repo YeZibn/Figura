@@ -6,7 +6,28 @@ import sqlite3
 
 from figura.runtime.errors import RunError, RunErrorCode
 
-_SCHEMA_VERSION = 6
+_SCHEMA_VERSION = 7
+
+
+def _run_stream_events_table(table_name: str) -> str:
+    return f"""CREATE TABLE {table_name} (
+        run_id TEXT NOT NULL REFERENCES runs(run_id) ON DELETE RESTRICT,
+        event_sequence INTEGER NOT NULL CHECK (event_sequence > 0),
+        event_kind TEXT NOT NULL CHECK (event_kind IN (
+            'run_created', 'run_progress', 'run_completed', 'run_failed', 'run_interrupted'
+        )),
+        payload_json TEXT NOT NULL CHECK (json_valid(payload_json) AND length(CAST(payload_json AS BLOB)) <= 16384),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY(run_id, event_sequence)
+    )"""
+
+
+_RUN_STREAM_EVENT_TRIGGERS = (
+    """CREATE TRIGGER immutable_run_event_update BEFORE UPDATE ON run_stream_events
+        BEGIN SELECT RAISE(ABORT, 'immutable stream event'); END""",
+    """CREATE TRIGGER immutable_run_event_delete BEFORE DELETE ON run_stream_events
+        BEGIN SELECT RAISE(ABORT, 'immutable stream event'); END""",
+)
 
 _CORE_SCHEMA = (
     """CREATE TABLE sessions (
@@ -63,22 +84,12 @@ _CORE_SCHEMA = (
         schema_version INTEGER NOT NULL CHECK (schema_version > 0),
         updated_at TEXT NOT NULL
     )""",
-    """CREATE TABLE run_stream_events (
-        run_id TEXT NOT NULL REFERENCES runs(run_id) ON DELETE RESTRICT,
-        event_sequence INTEGER NOT NULL CHECK (event_sequence > 0),
-        event_kind TEXT NOT NULL CHECK (event_kind IN ('run_created', 'run_completed', 'run_failed', 'run_interrupted')),
-        payload_json TEXT NOT NULL CHECK (json_valid(payload_json) AND length(CAST(payload_json AS BLOB)) <= 16384),
-        created_at TEXT NOT NULL,
-        PRIMARY KEY(run_id, event_sequence)
-    )""",
+    _run_stream_events_table("run_stream_events"),
     """CREATE TRIGGER immutable_run_record_update BEFORE UPDATE ON run_execution_records
         BEGIN SELECT RAISE(ABORT, 'immutable execution record'); END""",
     """CREATE TRIGGER immutable_run_record_delete BEFORE DELETE ON run_execution_records
         BEGIN SELECT RAISE(ABORT, 'immutable execution record'); END""",
-    """CREATE TRIGGER immutable_run_event_update BEFORE UPDATE ON run_stream_events
-        BEGIN SELECT RAISE(ABORT, 'immutable stream event'); END""",
-    """CREATE TRIGGER immutable_run_event_delete BEFORE DELETE ON run_stream_events
-        BEGIN SELECT RAISE(ABORT, 'immutable stream event'); END""",
+    *_RUN_STREAM_EVENT_TRIGGERS,
 )
 
 _TOOL_SCHEMA = (
@@ -232,6 +243,20 @@ def _validate_migration(connection: sqlite3.Connection) -> None:
     if foreign_key_violations or quick_check is None or quick_check[0] != "ok":
         raise RunError(RunErrorCode.INTEGRITY_ERROR)
 
+
+def _migrate_run_stream_events(connection: sqlite3.Connection) -> None:
+    connection.execute("DROP TRIGGER IF EXISTS immutable_run_event_update")
+    connection.execute("DROP TRIGGER IF EXISTS immutable_run_event_delete")
+    connection.execute(_run_stream_events_table("run_stream_events_v7"))
+    connection.execute(
+        "INSERT INTO run_stream_events_v7(run_id, event_sequence, event_kind, payload_json, created_at) "
+        "SELECT run_id, event_sequence, event_kind, payload_json, created_at FROM run_stream_events"
+    )
+    connection.execute("DROP TABLE run_stream_events")
+    connection.execute("ALTER TABLE run_stream_events_v7 RENAME TO run_stream_events")
+    for statement in _RUN_STREAM_EVENT_TRIGGERS:
+        connection.execute(statement)
+
 def initialize_schema(connection: sqlite3.Connection) -> None:
     """Initialize or migrate the database while holding its writer lock."""
     connection.execute("PRAGMA journal_mode = WAL")
@@ -268,17 +293,20 @@ def initialize_schema(connection: sqlite3.Connection) -> None:
         elif version == 3:
             for statement in _PROVIDER_ATTEMPT_SCHEMA:
                 connection.execute(statement)
-        elif version == 4:
-            pass
-        elif version == 5:
+        elif version in {4, 5, 6}:
             pass
         else:
             raise RunError(RunErrorCode.UNSUPPORTED_VERSION)
-        if version > 0:
+        if 0 < version < 5:
             for statement in _ATTACHMENT_SCHEMA:
                 connection.execute(statement)
             for statement in _PANEL_SCHEMA:
                 connection.execute(statement)
+        elif version == 5:
+            for statement in _PANEL_SCHEMA:
+                connection.execute(statement)
+        if version > 0:
+            _migrate_run_stream_events(connection)
         _validate_migration(connection)
         connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
         connection.commit()

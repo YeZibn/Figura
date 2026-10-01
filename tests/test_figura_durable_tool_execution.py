@@ -104,6 +104,47 @@ def _app(tmp_path):
     return store, coordinator, session, run
 
 
+def _block_run_progress_events(store: FiguraRunStore) -> None:
+    with sqlite3.connect(store.database_path) as connection:
+        connection.execute(
+            "CREATE TRIGGER reject_run_progress_event "
+            "BEFORE INSERT ON run_stream_events "
+            "WHEN NEW.event_kind = 'run_progress' "
+            "BEGIN SELECT RAISE(ABORT, 'progress event rejected'); END"
+        )
+
+
+def _downgrade_run_event_table_to_v6(store: FiguraRunStore) -> None:
+    with sqlite3.connect(store.database_path) as connection:
+        connection.execute("DROP TRIGGER immutable_run_event_update")
+        connection.execute("DROP TRIGGER immutable_run_event_delete")
+        connection.execute(
+            "CREATE TABLE run_stream_events_v6 ("
+            "run_id TEXT NOT NULL REFERENCES runs(run_id) ON DELETE RESTRICT, "
+            "event_sequence INTEGER NOT NULL CHECK (event_sequence > 0), "
+            "event_kind TEXT NOT NULL CHECK (event_kind IN "
+            "('run_created', 'run_completed', 'run_failed', 'run_interrupted')), "
+            "payload_json TEXT NOT NULL CHECK "
+            "(json_valid(payload_json) AND length(CAST(payload_json AS BLOB)) <= 16384), "
+            "created_at TEXT NOT NULL, PRIMARY KEY(run_id, event_sequence))"
+        )
+        connection.execute(
+            "INSERT INTO run_stream_events_v6 "
+            "SELECT run_id, event_sequence, event_kind, payload_json, created_at FROM run_stream_events"
+        )
+        connection.execute("DROP TABLE run_stream_events")
+        connection.execute("ALTER TABLE run_stream_events_v6 RENAME TO run_stream_events")
+        connection.execute(
+            "CREATE TRIGGER immutable_run_event_update BEFORE UPDATE ON run_stream_events "
+            "BEGIN SELECT RAISE(ABORT, 'immutable stream event'); END"
+        )
+        connection.execute(
+            "CREATE TRIGGER immutable_run_event_delete BEFORE DELETE ON run_stream_events "
+            "BEGIN SELECT RAISE(ABORT, 'immutable stream event'); END"
+        )
+        connection.execute("PRAGMA user_version = 6")
+
+
 def _commit_response(
     coordinator: RunCoordinator,
     session_id: str,
@@ -292,6 +333,10 @@ def _create_v2_database(data_root):
         )
         connection.execute("DROP TABLE run_provider_continuations")
         connection.execute("DROP TABLE run_provider_attempts")
+        connection.execute("DROP TRIGGER immutable_panel_update")
+        connection.execute("DROP TRIGGER immutable_panel_delete")
+        connection.execute("DROP INDEX panels_by_session")
+        connection.execute("DROP TABLE panels")
         connection.execute("DROP INDEX attachments_by_session_created")
         connection.execute("DROP TABLE attachments")
         connection.execute("PRAGMA user_version = 2")
@@ -329,7 +374,7 @@ def _snapshot_run_rows(connection: sqlite3.Connection, *, session_id: str, run_i
     }
 
 
-def test_fresh_store_creates_schema_v5_attachment_and_execution_tables(tmp_path) -> None:
+def test_fresh_store_creates_schema_v7_attachment_and_execution_tables(tmp_path) -> None:
     store = FiguraRunStore(tmp_path)
 
     with sqlite3.connect(store.database_path) as connection:
@@ -356,7 +401,7 @@ def test_fresh_store_creates_schema_v5_attachment_and_execution_tables(tmp_path)
             for row in connection.execute("PRAGMA table_info(attachments)")
         }
 
-    assert version == 5
+    assert version == 7
     assert quick_check == "ok"
     assert "run_provider_continuations" in tables
     assert "run_provider_attempts" in tables
@@ -387,6 +432,42 @@ def test_fresh_store_creates_schema_v5_attachment_and_execution_tables(tmp_path)
         "provider_attempt_has_one_terminal_transition",
         "immutable_run_provider_attempt_delete",
     } <= triggers
+
+
+def test_v6_migration_preserves_events_and_accepts_run_progress(tmp_path) -> None:
+    store, coordinator, session, run = _app(tmp_path)
+    before = coordinator.read_run_state(session.session_id, run.run_id)
+    _downgrade_run_event_table_to_v6(store)
+
+    upgraded_store = FiguraRunStore(tmp_path)
+    migrated = upgraded_store.read_run_state(session.session_id, run.run_id)
+    with sqlite3.connect(store.database_path) as connection:
+        version = connection.execute("PRAGMA user_version").fetchone()[0]
+        event_schema = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'run_stream_events'"
+        ).fetchone()[0]
+        quick_check = connection.execute("PRAGMA quick_check").fetchone()[0]
+        foreign_key_violations = connection.execute("PRAGMA foreign_key_check").fetchall()
+
+    assert migrated.events == before.events
+    assert version == 7
+    assert "run_progress" in event_schema
+    assert quick_check == "ok"
+    assert foreign_key_violations == []
+
+    _commit_response(
+        coordinator,
+        session.session_id,
+        run.run_id,
+        1,
+        _tool_response(ProviderToolCall("call-1", "inspect", '{"value":1}')),
+        registry_version="registry-v1",
+    )
+    progressed = upgraded_store.read_run_state(session.session_id, run.run_id)
+    assert [event.event_kind for event in progressed.events] == [
+        EventKind.RUN_CREATED,
+        EventKind.RUN_PROGRESS,
+    ]
 
 
 def test_tool_call_fact_codec_preserves_bounded_provider_arguments() -> None:
@@ -425,7 +506,9 @@ def test_tool_call_response_commits_core_record_and_ordered_tool_facts_atomicall
     assert [fact.payload.call_id for fact in state.tool_facts] == ["call-1", "call-2"]
     assert all(fact.payload.response_record_id == record.record_id for fact in state.tool_facts)
     assert state.run.status is RunStatus.RUNNING
-    assert len(state.events) == 1
+    assert [event.event_kind for event in state.events] == [EventKind.RUN_CREATED, EventKind.RUN_PROGRESS]
+    assert state.events[-1].payload == {"checkpoint_revision": 3}
+    assert set(state.events[-1].payload) == {"checkpoint_revision"}
     assert store.database_path.exists()
 
 
@@ -458,6 +541,8 @@ def test_attempt_start_precedes_handler_and_success_result_advances_to_model(tmp
         tool_call_sequence=1,
         attempt_id="attempt-1",
     )
+    assert started_state.events[-1].event_kind is EventKind.RUN_PROGRESS
+    assert started_state.events[-1].payload == {"checkpoint_revision": 4}
 
     result = store.commit_tool_result(
         session_id=session.session_id,
@@ -478,6 +563,87 @@ def test_attempt_start_precedes_handler_and_success_result_advances_to_model(tmp
     assert state.checkpoint.last_committed_tool_sequence == 3
     assert state.checkpoint.next_action == NextAction(ActionKind.MODEL)
     assert state.tool_facts[-1].payload.result == {"value": 1}
+    assert [event.event_kind for event in state.events] == [
+        EventKind.RUN_CREATED,
+        EventKind.RUN_PROGRESS,
+        EventKind.RUN_PROGRESS,
+        EventKind.RUN_PROGRESS,
+    ]
+    assert [event.payload for event in state.events[1:]] == [
+        {"checkpoint_revision": 3},
+        {"checkpoint_revision": 4},
+        {"checkpoint_revision": 5},
+    ]
+
+
+@pytest.mark.parametrize("transition", ["model_response", "attempt_start", "result"])
+def test_progress_event_failure_rolls_back_its_tool_transition(tmp_path, transition: str) -> None:
+    store, coordinator, session, run = _app(tmp_path)
+    if transition != "model_response":
+        _commit_response(
+            coordinator,
+            session.session_id,
+            run.run_id,
+            1,
+            _tool_response(ProviderToolCall("call-1", "inspect", '{"value":1}')),
+            registry_version="registry-v1",
+        )
+    if transition == "result":
+        store.begin_tool_attempt(
+            session_id=session.session_id,
+            run_id=run.run_id,
+            expected_revision=3,
+            tool_call_sequence=1,
+            registry_version="registry-v1",
+            replay_effect=ReplayEffect.REPLAY_SAFE,
+            attempt_id="attempt-1",
+        )
+    _block_run_progress_events(store)
+
+    with pytest.raises(RunError):
+        if transition == "model_response":
+            _commit_response(
+                coordinator,
+                session.session_id,
+                run.run_id,
+                1,
+                _tool_response(ProviderToolCall("call-1", "inspect", '{"value":1}')),
+                registry_version="registry-v1",
+            )
+        elif transition == "attempt_start":
+            store.begin_tool_attempt(
+                session_id=session.session_id,
+                run_id=run.run_id,
+                expected_revision=3,
+                tool_call_sequence=1,
+                registry_version="registry-v1",
+                replay_effect=ReplayEffect.REPLAY_SAFE,
+                attempt_id="attempt-1",
+            )
+        else:
+            store.commit_tool_result(
+                session_id=session.session_id,
+                run_id=run.run_id,
+                expected_revision=4,
+                attempt_id="attempt-1",
+                result=ToolExecutionResult(
+                    call_id="call-1",
+                    tool_name="inspect",
+                    outcome=ToolOutcome.SUCCEEDED,
+                    result={"value": 1},
+                ),
+            )
+
+    state = coordinator.read_run_state(session.session_id, run.run_id)
+    expected = {
+        "model_response": (2, 1, 0, [EventKind.RUN_CREATED]),
+        "attempt_start": (3, 2, 1, [EventKind.RUN_CREATED, EventKind.RUN_PROGRESS]),
+        "result": (4, 2, 2, [EventKind.RUN_CREATED, EventKind.RUN_PROGRESS, EventKind.RUN_PROGRESS]),
+    }[transition]
+    assert state.checkpoint.revision == expected[0]
+    assert len(state.records) == expected[1]
+    assert len(state.tool_facts) == expected[2]
+    assert [event.event_kind for event in state.events] == expected[3]
 
 
 def test_tool_batch_results_advance_serially_and_persist_known_failures(tmp_path) -> None:
@@ -733,7 +899,7 @@ def test_v1_migration_preserves_run_records_checkpoint_events_and_idempotency(tm
             )
         }
 
-    assert version == 5
+    assert version == 7
     assert quick_check == "ok"
     assert foreign_key_violations == []
     assert idempotency == ("legacy-session", "a" * 64, "b" * 64, "legacy-run")
@@ -788,7 +954,7 @@ def test_v2_migration_preserves_existing_run_facts_checkpoint_events_and_idempot
         foreign_key_violations = connection.execute("PRAGMA foreign_key_check").fetchall()
 
     state = store.read_run_state(session.session_id, run.run_id)
-    assert version == 5
+    assert version == 7
     assert quick_check == "ok"
     assert foreign_key_violations == []
     assert after == before
@@ -846,7 +1012,7 @@ def test_v2_migration_failure_rolls_back_new_schema_and_can_retry(tmp_path) -> N
     store = FiguraRunStore(tmp_path)
     assert store.read_run_state(session.session_id, run.run_id).run.run_id == run.run_id
     with sqlite3.connect(database_path) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 5
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 7
 
 
 def test_v1_migration_rolls_back_schema_version_and_added_column_on_failure(tmp_path) -> None:
@@ -1515,7 +1681,7 @@ def test_completion_rejects_corrupt_final_action_with_pending_or_unknown_tool_wo
         ).fetchone()[0]
     assert status == "running"
     assert record_count == 2
-    assert event_count == 1
+    assert event_count == (3 if started else 2)
 
 
 def test_duplicate_tool_result_commit_cannot_duplicate_a_committed_result(tmp_path) -> None:
@@ -1595,6 +1761,7 @@ def test_recovery_replays_replay_safe_attempt_after_acquiring_run_lock(tmp_path)
     assert [item.attempt_number for item in starts] == [1, 2]
     assert [item.replay_effect for item in starts] == [ReplayEffect.REPLAY_SAFE] * 2
     assert state.checkpoint.next_action == NextAction(ActionKind.MODEL)
+    assert [event.payload["checkpoint_revision"] for event in state.events[1:]] == [3, 4, 5, 6]
 
 
 def test_idempotent_local_write_replay_reuses_stable_key_and_original_result(tmp_path) -> None:
