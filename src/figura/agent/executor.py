@@ -100,6 +100,11 @@ class AgentExecutor:
             return self._fail_run(state)
 
         try:
+            try:
+                prepared = client.prepare(request)
+            except Exception:
+                return self._fail_run(state)
+
             with self._lock.acquire(run_id):
                 current = self._coordinator.read_run_state(session_id, run_id)
                 if (
@@ -114,7 +119,7 @@ class AgentExecutor:
                 )
                 claimed = self._coordinator.read_run_state(session_id, run_id)
                 try:
-                    response = client.complete(request)
+                    response = client.dispatch(prepared)
                 except ProviderCallError as error:
                     self._coordinator.fail_provider_attempt(
                         session_id,

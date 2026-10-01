@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import pickle
 from types import SimpleNamespace
 
 import httpx
@@ -97,6 +98,10 @@ def _factory(transport: FakeTransport, environ: dict[str, str] | None = None) ->
     )
 
 
+def _invoke(client, request):
+    return client.dispatch(client.prepare(request))
+
+
 def _request(
     provider_id: ProviderId,
     *,
@@ -179,7 +184,7 @@ def test_each_provider_maps_instructions_images_tools_and_thinking(
         tools=_TOOLS,
     )
 
-    factory.create(provider_id, MODEL_IDS[provider_id]).complete(request)
+    _invoke(factory.create(provider_id, MODEL_IDS[provider_id]), request)
 
     payload = transport.calls[0]
     assert payload["model"] == MODEL_IDS[provider_id]
@@ -218,7 +223,7 @@ def test_each_provider_preserves_the_three_ordered_system_prompt_layers(
         ),
     )
 
-    factory.create(provider_id, MODEL_IDS[provider_id]).complete(request)
+    _invoke(factory.create(provider_id, MODEL_IDS[provider_id]), request)
 
     system_messages = [
         message for message in transport.calls[0]["messages"] if message["role"] == "system"
@@ -250,7 +255,7 @@ def test_thinking_tool_history_replays_private_continuation(provider_id: Provide
         tools=_TOOLS,
     )
 
-    factory.create(provider_id, MODEL_IDS[provider_id]).complete(request)
+    _invoke(factory.create(provider_id, MODEL_IDS[provider_id]), request)
 
     assert transport.calls[0]["messages"][1]["reasoning_content"] == "private plan"
     assert "private plan" not in repr(request.messages[1])
@@ -277,10 +282,39 @@ def test_missing_required_thinking_continuation_is_rejected_before_transport(
     )
 
     with pytest.raises(ProviderInputError) as error:
-        factory.create(provider_id, MODEL_IDS[provider_id]).complete(request)
+        _invoke(factory.create(provider_id, MODEL_IDS[provider_id]), request)
 
     assert error.value.failure.failure_code is ProviderFailureCode.INVALID_REQUEST
     assert not transport.calls
+
+
+def test_provider_preparation_is_private_and_dispatches_its_payload_once() -> None:
+    transport = FakeTransport(_response())
+    client = _factory(transport).create(ProviderId.QWEN, MODEL_IDS[ProviderId.QWEN])
+    continuation = ProviderContinuation(ProviderId.QWEN, 1, "private payload")
+    request = _request(
+        ProviderId.QWEN,
+        messages=(
+            ProviderMessage(MessageRole.USER, "Continue."),
+            ProviderMessage(
+                MessageRole.ASSISTANT,
+                "Previous answer.",
+                continuation=continuation,
+            ),
+        ),
+    )
+
+    prepared = client.prepare(request)
+
+    assert transport.calls == []
+    assert "private payload" not in repr(prepared)
+    with pytest.raises(TypeError):
+        pickle.dumps(prepared)
+
+    client.dispatch(prepared)
+
+    assert len(transport.calls) == 1
+    assert transport.calls[0]["messages"][1]["reasoning_content"] == "private payload"
 
 
 def test_unsupported_schema_and_qwen_strict_mode_are_rejected_before_transport() -> None:
@@ -300,12 +334,14 @@ def test_unsupported_schema_and_qwen_strict_mode_are_rejected_before_transport()
     )
 
     with pytest.raises(ProviderInputError) as invalid_error:
-        factory.create(ProviderId.DEEPSEEK, MODEL_IDS[ProviderId.DEEPSEEK]).complete(
-            _request(ProviderId.DEEPSEEK, tools=(invalid_schema,))
+        _invoke(
+            factory.create(ProviderId.DEEPSEEK, MODEL_IDS[ProviderId.DEEPSEEK]),
+            _request(ProviderId.DEEPSEEK, tools=(invalid_schema,)),
         )
     with pytest.raises(ProviderInputError) as strict_error:
-        factory.create(ProviderId.QWEN, MODEL_IDS[ProviderId.QWEN]).complete(
-            _request(ProviderId.QWEN, tools=(strict_schema,))
+        _invoke(
+            factory.create(ProviderId.QWEN, MODEL_IDS[ProviderId.QWEN]),
+            _request(ProviderId.QWEN, tools=(strict_schema,)),
         )
 
     assert invalid_error.value.failure.failure_code is ProviderFailureCode.UNSUPPORTED_CAPABILITY
@@ -320,8 +356,9 @@ def test_deepseek_strict_requires_beta_endpoint_and_all_functions_strict() -> No
     regular_factory = _factory(transport)
 
     with pytest.raises(ProviderInputError) as regular_endpoint_error:
-        regular_factory.create(ProviderId.DEEPSEEK, MODEL_IDS[ProviderId.DEEPSEEK]).complete(
-            _request(ProviderId.DEEPSEEK, tools=(strict_tool,))
+        _invoke(
+            regular_factory.create(ProviderId.DEEPSEEK, MODEL_IDS[ProviderId.DEEPSEEK]),
+            _request(ProviderId.DEEPSEEK, tools=(strict_tool,)),
         )
     assert regular_endpoint_error.value.failure.failure_code is ProviderFailureCode.UNSUPPORTED_CAPABILITY
 
@@ -330,13 +367,15 @@ def test_deepseek_strict_requires_beta_endpoint_and_all_functions_strict() -> No
         {**_environment(), "FIGURA_DEEPSEEK_BASE_URL": "https://api.deepseek.com/beta"},
     )
     with pytest.raises(ProviderInputError) as mixed_error:
-        beta_factory.create(ProviderId.DEEPSEEK, MODEL_IDS[ProviderId.DEEPSEEK]).complete(
-            _request(ProviderId.DEEPSEEK, tools=(strict_tool, _TOOLS[0]))
+        _invoke(
+            beta_factory.create(ProviderId.DEEPSEEK, MODEL_IDS[ProviderId.DEEPSEEK]),
+            _request(ProviderId.DEEPSEEK, tools=(strict_tool, _TOOLS[0])),
         )
     assert mixed_error.value.failure.failure_code is ProviderFailureCode.UNSUPPORTED_CAPABILITY
 
-    beta_factory.create(ProviderId.DEEPSEEK, MODEL_IDS[ProviderId.DEEPSEEK]).complete(
-        _request(ProviderId.DEEPSEEK, tools=(strict_tool,))
+    _invoke(
+        beta_factory.create(ProviderId.DEEPSEEK, MODEL_IDS[ProviderId.DEEPSEEK]),
+        _request(ProviderId.DEEPSEEK, tools=(strict_tool,)),
     )
     assert len(transport.calls) == 1
 
@@ -366,13 +405,15 @@ def test_mimo_strict_requires_closed_objects_and_all_declared_properties_require
     )
 
     with pytest.raises(ProviderInputError) as strict_error:
-        factory.create(ProviderId.MIMO, MODEL_IDS[ProviderId.MIMO]).complete(
-            _request(ProviderId.MIMO, tools=(invalid,))
+        _invoke(
+            factory.create(ProviderId.MIMO, MODEL_IDS[ProviderId.MIMO]),
+            _request(ProviderId.MIMO, tools=(invalid,)),
         )
     assert strict_error.value.failure.failure_code is ProviderFailureCode.UNSUPPORTED_CAPABILITY
 
-    factory.create(ProviderId.MIMO, MODEL_IDS[ProviderId.MIMO]).complete(
-        _request(ProviderId.MIMO, tools=(valid,))
+    _invoke(
+        factory.create(ProviderId.MIMO, MODEL_IDS[ProviderId.MIMO]),
+        _request(ProviderId.MIMO, tools=(valid,)),
     )
     assert len(transport.calls) == 1
 
@@ -389,8 +430,9 @@ def test_nonstreaming_response_normalizes_order_usage_and_hides_continuation() -
             finish_reason="tool_calls",
         )
     )
-    result = _factory(transport).create(ProviderId.QWEN, MODEL_IDS[ProviderId.QWEN]).complete(
-        _request(ProviderId.QWEN)
+    result = _invoke(
+        _factory(transport).create(ProviderId.QWEN, MODEL_IDS[ProviderId.QWEN]),
+        _request(ProviderId.QWEN),
     )
 
     assert result.assistant_content == "visible"
@@ -454,8 +496,9 @@ def test_streaming_response_normalizes_text_and_interleaved_tool_calls() -> None
         ),
     )
     transport = FakeTransport(events)
-    result = _factory(transport).create(ProviderId.MIMO, MODEL_IDS[ProviderId.MIMO]).complete(
-        _request(ProviderId.MIMO, stream=True)
+    result = _invoke(
+        _factory(transport).create(ProviderId.MIMO, MODEL_IDS[ProviderId.MIMO]),
+        _request(ProviderId.MIMO, stream=True),
     )
 
     assert result.assistant_content == "answer"
@@ -472,8 +515,9 @@ def test_failure_classification_is_safe_and_does_not_retry_unknown_outcome() -> 
     factory = _factory(transport)
 
     with pytest.raises(ProviderCallError) as error:
-        factory.create(ProviderId.DEEPSEEK, MODEL_IDS[ProviderId.DEEPSEEK]).complete(
-            _request(ProviderId.DEEPSEEK)
+        _invoke(
+            factory.create(ProviderId.DEEPSEEK, MODEL_IDS[ProviderId.DEEPSEEK]),
+            _request(ProviderId.DEEPSEEK),
         )
 
     assert error.value.failure.failure_code is ProviderFailureCode.TRANSPORT_ERROR
@@ -488,9 +532,12 @@ def test_http_rejection_is_classified_without_provider_body() -> None:
     transport = FakeTransport(error=APIStatusError("raw secret body", response=response, body={"key": "secret"}))
 
     with pytest.raises(ProviderCallError) as error:
-        _factory(transport).create(
-            ProviderId.DEEPSEEK, MODEL_IDS[ProviderId.DEEPSEEK]
-        ).complete(_request(ProviderId.DEEPSEEK))
+        _invoke(
+            _factory(transport).create(
+                ProviderId.DEEPSEEK, MODEL_IDS[ProviderId.DEEPSEEK]
+            ),
+            _request(ProviderId.DEEPSEEK),
+        )
 
     assert error.value.failure.failure_code is ProviderFailureCode.PROVIDER_REJECTED
     assert error.value.failure.outcome_known
@@ -514,7 +561,7 @@ def test_mimo_custom_token_plan_url_and_key_are_used_as_a_profile_pair() -> None
     )
 
     client = factory.create(ProviderId.MIMO, MODEL_IDS[ProviderId.MIMO])
-    client.complete(_request(ProviderId.MIMO))
+    _invoke(client, _request(ProviderId.MIMO))
 
     profile = captured_profiles[0]
     assert profile.base_url == "https://token-plan.example.test/openai/v1"

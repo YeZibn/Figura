@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
+from typing import Any
 
 from openai import APIConnectionError, APIStatusError, APITimeoutError, OpenAIError
 
@@ -34,6 +36,16 @@ _POLICIES: dict[ProviderId, type[ProviderPolicy]] = {
 }
 
 
+@dataclass(frozen=True, repr=False)
+class _PreparedProviderCall:
+    owner: object = field(repr=False)
+    request: ProviderRequest = field(repr=False)
+    payload: Mapping[str, Any] = field(repr=False)
+
+    def __reduce__(self) -> object:
+        raise TypeError("Prepared provider calls cannot be serialized")
+
+
 class ProviderClient:
     """One explicitly selected provider/model pair."""
 
@@ -48,15 +60,32 @@ class ProviderClient:
         self._profile = profile
         self._policy = policy
         self._transport = transport
+        self._preparation_token = object()
 
-    def complete(self, request: ProviderRequest) -> ProviderResponse:
-        """Make one call. Failures with unknown remote outcomes are never resent."""
+    def prepare(self, request: ProviderRequest) -> _PreparedProviderCall:
+        """Validate and build one provider payload without contacting the service."""
         validate_request(request, self.provider_id)
         if request.model_id != self.model_id:
-            raise fail(ProviderFailureCode.UNSUPPORTED_MODEL, "请求模型与已创建的模型客户端不匹配。")
+            raise fail(
+                ProviderFailureCode.UNSUPPORTED_MODEL,
+                "请求模型与已创建的模型客户端不匹配。",
+            )
         payload = self._policy.build_payload(request)
+        return _PreparedProviderCall(self._preparation_token, request, payload)
+
+    def dispatch(self, prepared: _PreparedProviderCall) -> ProviderResponse:
+        """Send the exact locally prepared payload once."""
+        if (
+            not isinstance(prepared, _PreparedProviderCall)
+            or prepared.owner is not self._preparation_token
+        ):
+            raise fail(
+                ProviderFailureCode.INVALID_REQUEST,
+                "预处理模型请求与当前客户端不匹配。",
+            )
+        request = prepared.request
         try:
-            raw_response = self._transport.create(**payload)
+            raw_response = self._transport.create(**prepared.payload)
             if request.options.stream:
                 return self._policy.normalize_stream(raw_response, request)
             return self._policy.normalize(raw_response, request)

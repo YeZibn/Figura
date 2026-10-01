@@ -29,6 +29,7 @@ from figura.providers import (
     MessageRole,
     ProviderFactory,
     ProviderId,
+    ProviderInputError,
     ProviderResponse,
     ProviderToolCall,
     TextBlock,
@@ -109,6 +110,17 @@ def _request_builder(store, attachments, execution_state):
             FiguraChartRenderService(store.data_root),
         ),
     )
+
+
+def _prepare_provider_request(request) -> None:
+    factory = ProviderFactory.from_env(
+        {
+            "FIGURA_QWEN_API_KEY": "qwen-secret",
+            "FIGURA_QWEN_BASE_URL": "https://qwen.example.test/v1",
+        },
+        transport_factory=lambda _profile: None,
+    )
+    factory.create(request.provider_id, request.model_id).prepare(request)
 
 
 def _render_entries(state: RunExecutionState):
@@ -653,8 +665,7 @@ def test_render_feedback_provider_image_limit_fails_before_provider_attempt(
     monkeypatch.setattr(provider_validation, limit_name, limit_value)
 
     builder = _request_builder(store, attachments, execution_state)
-    with pytest.raises(RunError) as error:
-        builder.build(state, registry)
-
-    assert error.value.code is RunErrorCode.UNSUPPORTED_PAYLOAD
+    request = builder.build(state, registry)
+    with pytest.raises(ProviderInputError):
+        _prepare_provider_request(request)
     assert coordinator.read_run_state(session.session_id, run.run_id).provider_attempts == prior_attempts

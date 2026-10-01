@@ -778,7 +778,8 @@ def test_reopened_continuation_can_be_replayed_and_survives_terminal_run(tmp_pat
         ),
         options=ProviderOptions(max_completion_tokens=64),
     )
-    replay_factory.create(ProviderId.QWEN, MODEL_IDS[ProviderId.QWEN]).complete(replay_request)
+    replay_client = replay_factory.create(ProviderId.QWEN, MODEL_IDS[ProviderId.QWEN])
+    replay_client.dispatch(replay_client.prepare(replay_request))
 
     assert captured_requests[0]["messages"][1]["reasoning_content"] == payload
     after_replay = reopened.read_run_state(session.session_id, run.run_id)

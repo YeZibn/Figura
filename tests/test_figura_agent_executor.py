@@ -5,6 +5,7 @@ from tests.figura_sources_support import make_attachment_service, make_panel_ser
 import json
 import sqlite3
 from io import BytesIO
+from types import SimpleNamespace
 
 import pytest
 from PIL import Image
@@ -19,12 +20,14 @@ from figura.providers import (
     MODEL_IDS,
     FinishReason,
     MessageRole,
+    ProviderContinuation,
     ProviderFactory,
     ProviderId,
     ProviderResponse,
     ProviderToolCall,
 )
 from figura.providers.errors import ProviderCallError, ProviderFailure, ProviderFailureCode
+from figura.providers.validation import validate_request
 from figura.runtime.coordinator import RunCoordinator
 from figura.runtime.models import ActionKind, RunCreateRequest, RunStatus, TerminalCode, ToolFactKind
 from figura.runtime.store import FiguraRunStore
@@ -130,23 +133,69 @@ def _response(
     content: str = "分析完成",
     calls: tuple[ProviderToolCall, ...] = (),
     reason: FinishReason = FinishReason.STOP,
+    continuation: ProviderContinuation | None = None,
+    provider_id: ProviderId = ProviderId.QWEN,
 ) -> ProviderResponse:
     return ProviderResponse(
-        provider_id=ProviderId.QWEN,
-        model_id=MODEL_IDS[ProviderId.QWEN],
+        provider_id=provider_id,
+        model_id=MODEL_IDS[provider_id],
         assistant_content=content,
         tool_calls=calls,
         finish_reason=reason,
+        continuation=continuation,
     )
+
+
+class _PayloadTransport:
+    def __init__(self):
+        self.calls = []
+        self.before_create = None
+
+    def create(self, **payload):
+        if self.before_create is not None:
+            self.before_create()
+        self.calls.append(payload)
+        message = SimpleNamespace(
+            content="分析完成",
+            reasoning_content=None,
+            tool_calls=None,
+        )
+        return SimpleNamespace(
+            id="deepseek-response",
+            choices=(
+                SimpleNamespace(
+                    index=0,
+                    message=message,
+                    finish_reason="stop",
+                ),
+            ),
+            usage=None,
+        )
 
 
 class _FakeClient:
     def __init__(self, outcomes):
         self.outcomes = list(outcomes)
+        self.provider_id = None
+        self.model_id = None
+        self.prepared_requests = []
         self.requests = []
+        self.after_prepare = None
+        self.before_dispatch = None
 
-    def complete(self, request):
+    def prepare(self, request):
+        self.prepared_requests.append(request)
+        validate_request(request, self.provider_id)
+        if request.model_id != self.model_id:
+            raise ValueError("model mismatch")
+        if self.after_prepare is not None:
+            self.after_prepare()
+        return request
+
+    def dispatch(self, request):
         self.requests.append(request)
+        if self.before_dispatch is not None:
+            self.before_dispatch()
         outcome = self.outcomes.pop(0)
         if isinstance(outcome, Exception):
             raise outcome
@@ -163,6 +212,8 @@ class _FakeFactory:
 
     def create(self, provider_id, model_id):
         self.selections.append((provider_id, model_id))
+        self.client.provider_id = ProviderId(provider_id)
+        self.client.model_id = model_id
         return self.client
 
 
@@ -254,10 +305,54 @@ def _complete_text_run(coordinator, session_id, run_id, *, registry=None):
     coordinator.complete_run(session_id, run_id, committed.checkpoint.revision)
 
 
+def _complete_provider_text_run(
+    coordinator,
+    session_id: str,
+    run_id: str,
+    provider_id: ProviderId,
+    continuation: ProviderContinuation | None = None,
+) -> None:
+    state = coordinator.read_run_state(session_id, run_id)
+    attempt = coordinator.begin_provider_attempt(
+        session_id, run_id, state.checkpoint.revision
+    )
+    claimed = coordinator.read_run_state(session_id, run_id)
+    coordinator.commit_model_response(
+        session_id,
+        run_id,
+        claimed.checkpoint.revision,
+        _response(
+            content="上一轮的完整回答。",
+            continuation=continuation,
+            provider_id=provider_id,
+        ),
+        provider_attempt_id=attempt.attempt_id,
+    )
+    completed = coordinator.read_run_state(session_id, run_id)
+    coordinator.complete_run(session_id, run_id, completed.checkpoint.revision)
+
+
+def _multi_provider_runtime(tmp_path, transport):
+    store = FiguraRunStore(tmp_path)
+    factory = ProviderFactory.from_env(
+        {
+            "FIGURA_QWEN_API_KEY": "qwen-secret",
+            "FIGURA_QWEN_BASE_URL": "https://qwen.example.test/v1",
+            "FIGURA_DEEPSEEK_API_KEY": "deepseek-secret",
+            "FIGURA_DEEPSEEK_BASE_URL": "https://deepseek.example.test/v1",
+            "FIGURA_DEEPSEEK_THINKING_MODE": "true",
+            "FIGURA_DEEPSEEK_REASONING_EFFORT": "high",
+        },
+        transport_factory=lambda _profile: transport,
+    )
+    coordinator = RunCoordinator(store, factory)
+    session = coordinator.create_session()
+    return store, coordinator, session, factory
+
+
 def _assert_request_rejected_before_claim(state, factory):
     assert state.run.status is RunStatus.FAILED
     assert state.provider_attempts == ()
-    assert factory.selections == []
     assert factory.client.requests == []
 
 
@@ -278,6 +373,44 @@ def test_agent_completes_a_text_only_run_and_terminal_runs_are_no_ops(tmp_path) 
     assert len(factory.client.requests) == calls_before == 1
     assert unchanged == completed
     assert factory.selections == [(ProviderId.QWEN.value, MODEL_IDS[ProviderId.QWEN])]
+
+
+def test_provider_attempt_is_committed_before_dispatch(tmp_path) -> None:
+    store, coordinator, session, run = _app(tmp_path)
+    factory = _FakeFactory([_response()])
+    dispatched_states = []
+    factory.client.before_dispatch = lambda: dispatched_states.append(
+        coordinator.read_run_state(session.session_id, run.run_id)
+    )
+
+    completed = _agent(store, coordinator, _registry(), factory).execute(
+        session.session_id, run.run_id
+    )
+
+    assert completed.run.status is RunStatus.COMPLETED
+    assert len(dispatched_states) == 1
+    dispatch_state = dispatched_states[0]
+    assert dispatch_state.checkpoint.next_action.action_kind is ActionKind.PROVIDER_ATTEMPT
+    assert dispatch_state.provider_attempts[0].status.value == "started"
+
+
+def test_prepared_call_is_discarded_when_run_changes_before_claim(tmp_path) -> None:
+    store, coordinator, session, run = _app(tmp_path)
+    factory = _FakeFactory([_response()])
+    factory.client.after_prepare = lambda: coordinator.fail_run(
+        session.session_id,
+        run.run_id,
+        1,
+        TerminalCode.EXECUTION_FAILED,
+    )
+
+    state = _agent(store, coordinator, _registry(), factory).execute(
+        session.session_id, run.run_id
+    )
+
+    assert state.run.status is RunStatus.FAILED
+    assert state.provider_attempts == ()
+    assert factory.client.requests == []
 
 
 def test_agent_does_not_send_attachment_bytes_without_an_explicit_load(tmp_path) -> None:
@@ -626,7 +759,9 @@ def test_agent_does_not_dispatch_when_run_lock_is_held(tmp_path) -> None:
         state = agent.execute(session.session_id, run.run_id)
 
     assert state == state_before
+    assert len(factory.client.prepared_requests) == 1
     assert factory.client.requests == []
+    assert len(factory.selections) == 1
 
 
 def test_agent_stops_at_tool_budget_without_running_thirty_third_call(tmp_path) -> None:
@@ -652,7 +787,7 @@ def test_agent_stops_at_tool_budget_without_running_thirty_third_call(tmp_path) 
     assert state.checkpoint.next_action.action_kind is ActionKind.TOOL_EXECUTION
 
 
-def test_request_that_cannot_fit_fails_before_client_creation_or_attempt_claim(
+def test_request_that_cannot_fit_fails_during_preparation_before_attempt_claim(
     tmp_path, monkeypatch
 ) -> None:
     import figura.providers.validation as provider_validation
@@ -668,7 +803,8 @@ def test_request_that_cannot_fit_fails_before_client_creation_or_attempt_claim(
     assert state.run.status is RunStatus.FAILED
     assert state.run.terminal_code == TerminalCode.EXECUTION_FAILED.value
     assert state.provider_attempts == ()
-    assert factory.selections == []
+    assert len(factory.selections) == 1
+    assert len(factory.client.prepared_requests) == 1
     assert factory.client.requests == []
 
 
@@ -686,6 +822,134 @@ def test_complete_session_history_message_limit_fails_before_claim(tmp_path, mon
     )
 
     _assert_request_rejected_before_claim(state, factory)
+
+
+def test_deepseek_replays_prior_run_continuation_before_dispatch(tmp_path) -> None:
+    transport = _PayloadTransport()
+    store, coordinator, session, factory = _multi_provider_runtime(tmp_path, transport)
+    prior_run = coordinator.create_run(
+        RunCreateRequest(
+            session_id=session.session_id,
+            text="第一轮请求。",
+            provider_id=ProviderId.DEEPSEEK.value,
+            model_id=MODEL_IDS[ProviderId.DEEPSEEK],
+            idempotency_key="deepseek-prior-run",
+        )
+    )
+    continuation = ProviderContinuation(
+        ProviderId.DEEPSEEK, 1, "private DeepSeek continuation"
+    )
+    _complete_provider_text_run(
+        coordinator,
+        session.session_id,
+        prior_run.run_id,
+        ProviderId.DEEPSEEK,
+        continuation,
+    )
+    target_run = coordinator.create_run(
+        RunCreateRequest(
+            session_id=session.session_id,
+            text="第二轮请求。",
+            provider_id=ProviderId.DEEPSEEK.value,
+            model_id=MODEL_IDS[ProviderId.DEEPSEEK],
+            idempotency_key="deepseek-target-run",
+        )
+    )
+    dispatch_states = []
+    transport.before_create = lambda: dispatch_states.append(
+        coordinator.read_run_state(session.session_id, target_run.run_id)
+    )
+
+    state = _agent(store, coordinator, _registry(), factory).execute(
+        session.session_id, target_run.run_id
+    )
+
+    assert state.run.status is RunStatus.COMPLETED
+    assistant_messages = [
+        message for message in transport.calls[0]["messages"]
+        if message["role"] == "assistant"
+    ]
+    assert len(assistant_messages) == 1
+    assert assistant_messages[0]["reasoning_content"] == continuation.reasoning_content
+    assert len(dispatch_states) == 1
+    assert dispatch_states[0].provider_attempts[0].status.value == "started"
+    assert state.provider_attempts[0].status.value == "response_committed"
+
+
+def test_cross_provider_history_fails_preparation_without_claim_or_dispatch(tmp_path) -> None:
+    transport = _PayloadTransport()
+    store, coordinator, session, factory = _multi_provider_runtime(tmp_path, transport)
+    prior_run = coordinator.create_run(
+        RunCreateRequest(
+            session_id=session.session_id,
+            text="Qwen 第一轮请求。",
+            provider_id=ProviderId.QWEN.value,
+            model_id=MODEL_IDS[ProviderId.QWEN],
+            idempotency_key="qwen-prior-run",
+        )
+    )
+    _complete_provider_text_run(
+        coordinator,
+        session.session_id,
+        prior_run.run_id,
+        ProviderId.QWEN,
+        ProviderContinuation(ProviderId.QWEN, 1, "private Qwen continuation"),
+    )
+    target_run = coordinator.create_run(
+        RunCreateRequest(
+            session_id=session.session_id,
+            text="改用 DeepSeek 继续。",
+            provider_id=ProviderId.DEEPSEEK.value,
+            model_id=MODEL_IDS[ProviderId.DEEPSEEK],
+            idempotency_key="deepseek-cross-provider-run",
+        )
+    )
+
+    state = _agent(store, coordinator, _registry(), factory).execute(
+        session.session_id, target_run.run_id
+    )
+
+    assert state.run.status is RunStatus.FAILED
+    assert state.run.terminal_code == TerminalCode.EXECUTION_FAILED.value
+    assert state.provider_attempts == ()
+    assert transport.calls == []
+
+
+def test_missing_deepseek_history_continuation_fails_before_claim(tmp_path) -> None:
+    transport = _PayloadTransport()
+    store, coordinator, session, factory = _multi_provider_runtime(tmp_path, transport)
+    prior_run = coordinator.create_run(
+        RunCreateRequest(
+            session_id=session.session_id,
+            text="DeepSeek 第一轮请求。",
+            provider_id=ProviderId.DEEPSEEK.value,
+            model_id=MODEL_IDS[ProviderId.DEEPSEEK],
+            idempotency_key="deepseek-prior-without-continuation",
+        )
+    )
+    _complete_provider_text_run(
+        coordinator,
+        session.session_id,
+        prior_run.run_id,
+        ProviderId.DEEPSEEK,
+    )
+    target_run = coordinator.create_run(
+        RunCreateRequest(
+            session_id=session.session_id,
+            text="继续分析。",
+            provider_id=ProviderId.DEEPSEEK.value,
+            model_id=MODEL_IDS[ProviderId.DEEPSEEK],
+            idempotency_key="deepseek-target-without-continuation",
+        )
+    )
+
+    state = _agent(store, coordinator, _registry(), factory).execute(
+        session.session_id, target_run.run_id
+    )
+
+    assert state.run.status is RunStatus.FAILED
+    assert state.provider_attempts == ()
+    assert transport.calls == []
 
 
 def test_complete_session_history_does_not_attach_unloaded_images(tmp_path, monkeypatch) -> None:

@@ -3,12 +3,13 @@ from __future__ import annotations
 from tests.figura_sources_support import make_attachment_service, make_panel_service, make_execution_image_reader
 
 import json
+from dataclasses import replace
 from io import BytesIO
 
 import pytest
 from PIL import Image
 
-from figura.agent.request import AgentRequestBuilder
+from figura.agent.request import AgentRequestBuilder, _continuations_by_response
 from figura.agent.execution_state import RunExecutionStateService
 from figura.memory import AssistantMessage, MemoryToolCall
 from figura.shared.json_schema import canonical_json_dumps
@@ -26,6 +27,7 @@ from figura.providers import (
     ProviderToolCall,
     TextBlock,
 )
+from figura.providers.errors import ProviderInputError
 from figura.runtime.coordinator import RunCoordinator
 from figura.runtime.errors import RunError, RunErrorCode
 from figura.runtime.models import RunCreateRequest
@@ -72,6 +74,8 @@ def _app(tmp_path):
         {
             "FIGURA_QWEN_API_KEY": "qwen-secret",
             "FIGURA_QWEN_BASE_URL": "https://qwen.example.test/v1",
+            "FIGURA_DEEPSEEK_API_KEY": "deepseek-secret",
+            "FIGURA_DEEPSEEK_BASE_URL": "https://deepseek.example.test/v1",
         },
         transport_factory=lambda _profile: None,
     )
@@ -187,6 +191,37 @@ def _commit_tool_round(
     )
     executor = DurableToolExecutor(store, registry)
     return executor.execute_pending(session.session_id, run.run_id)
+
+
+def _commit_text_response(
+    coordinator,
+    session_id: str,
+    run_id: str,
+    *,
+    content: str,
+    continuation: ProviderContinuation | None = None,
+    provider_id: ProviderId = ProviderId.QWEN,
+):
+    state = coordinator.read_run_state(session_id, run_id)
+    attempt = coordinator.begin_provider_attempt(
+        session_id, run_id, state.checkpoint.revision
+    )
+    claimed = coordinator.read_run_state(session_id, run_id)
+    coordinator.commit_model_response(
+        session_id,
+        run_id,
+        claimed.checkpoint.revision,
+        ProviderResponse(
+            provider_id,
+            MODEL_IDS[provider_id],
+            content,
+            (),
+            FinishReason.STOP,
+            continuation=continuation,
+        ),
+        provider_attempt_id=attempt.attempt_id,
+    )
+    return coordinator.read_run_state(session_id, run_id)
 
 
 def _commit_tool_calls(store, coordinator, session, run, registry, calls):
@@ -420,29 +455,31 @@ def test_request_rebuilds_tool_round_in_order_and_attaches_continuation(tmp_path
     )
 
 
-def test_request_includes_complete_prior_run_history_without_prior_continuation(tmp_path) -> None:
+def test_request_replays_continuations_from_multiple_prior_runs_by_source_identity(tmp_path) -> None:
     _store, coordinator, session, first_run = _app(tmp_path)
-    continuation = ProviderContinuation(ProviderId.QWEN, 1, "private old continuation")
-    state = coordinator.read_run_state(session.session_id, first_run.run_id)
-    attempt = coordinator.begin_provider_attempt(
-        session.session_id, first_run.run_id, state.checkpoint.revision
+    registry = _registry()
+    first_tool_continuation = ProviderContinuation(
+        ProviderId.QWEN, 1, "private first tool continuation"
     )
-    claimed = coordinator.read_run_state(session.session_id, first_run.run_id)
-    coordinator.commit_model_response(
+    _commit_tool_round(
+        _store,
+        coordinator,
+        session,
+        first_run,
+        registry,
+        call_id="first-run-tool",
+        continuation=first_tool_continuation,
+    )
+    first_final_continuation = ProviderContinuation(
+        ProviderId.QWEN, 1, "private first final continuation"
+    )
+    first_state = _commit_text_response(
+        coordinator,
         session.session_id,
         first_run.run_id,
-        claimed.checkpoint.revision,
-        ProviderResponse(
-            ProviderId.QWEN,
-            MODEL_IDS[ProviderId.QWEN],
-            "第一轮的完整回答。",
-            (),
-            FinishReason.STOP,
-            continuation=continuation,
-        ),
-        provider_attempt_id=attempt.attempt_id,
+        content="第一轮的最终回答。",
+        continuation=first_final_continuation,
     )
-    first_state = coordinator.read_run_state(session.session_id, first_run.run_id)
     coordinator.complete_run(
         session.session_id, first_run.run_id, first_state.checkpoint.revision
     )
@@ -455,23 +492,108 @@ def test_request_includes_complete_prior_run_history_without_prior_continuation(
             idempotency_key="agent-request-second-run",
         )
     )
+    second_continuation = ProviderContinuation(
+        ProviderId.QWEN, 1, "private second run continuation"
+    )
+    second_state = _commit_text_response(
+        coordinator,
+        session.session_id,
+        second_run.run_id,
+        content="第二轮的最终回答。",
+        continuation=second_continuation,
+    )
+    coordinator.complete_run(
+        session.session_id, second_run.run_id, second_state.checkpoint.revision
+    )
+    target_run = coordinator.create_run(
+        RunCreateRequest(
+            session_id=session.session_id,
+            text="第三轮输入。",
+            provider_id=ProviderId.QWEN.value,
+            model_id=MODEL_IDS[ProviderId.QWEN],
+            idempotency_key="agent-request-third-run",
+        )
+    )
 
-    request = _builder(_store, coordinator).build(
-        coordinator.read_run_state(session.session_id, second_run.run_id),
-        _registry(),
-        coordinator.read_prior_run_states(session.session_id, second_run.run_id),
+    builder = _builder(_store, coordinator)
+    request = builder.build(
+        coordinator.read_run_state(session.session_id, target_run.run_id),
+        registry,
+        coordinator.read_prior_run_states(session.session_id, target_run.run_id),
     )
 
     assert [message.role for message in request.messages] == [
         MessageRole.USER,
         MessageRole.ASSISTANT,
+        MessageRole.TOOL,
+        MessageRole.ASSISTANT,
+        MessageRole.USER,
+        MessageRole.ASSISTANT,
         MessageRole.USER,
     ]
     assert request.messages[0].content == "请分析以下图表数据。"
-    assert request.messages[1].content == "第一轮的完整回答。"
-    assert request.messages[1].continuation is None
-    assert request.messages[2].content == "第二轮输入。"
+    assert request.messages[1].continuation == first_tool_continuation
+    assert request.messages[2].tool_call_id == "first-run-tool"
+    assert request.messages[3].continuation == first_final_continuation
+    assert request.messages[4].content == "第二轮输入。"
+    assert request.messages[5].continuation == second_continuation
+    assert request.messages[6].content == "第三轮输入。"
     assert _execution_inventory(request)["resources"] == []
+
+    target_state = _commit_text_response(
+        coordinator,
+        session.session_id,
+        target_run.run_id,
+        content="第三轮的最终回答。",
+        continuation=ProviderContinuation(
+            ProviderId.QWEN, 1, "private third run continuation"
+        ),
+    )
+    coordinator.complete_run(
+        session.session_id, target_run.run_id, target_state.checkpoint.revision
+    )
+
+    duplicated_state = replace(
+        first_state,
+        provider_continuations=(
+            *first_state.provider_continuations,
+            first_state.provider_continuations[0],
+        ),
+    )
+    with pytest.raises(RunError) as duplicate_error:
+        _continuations_by_response((duplicated_state,))
+    assert duplicate_error.value.code is RunErrorCode.INTEGRITY_ERROR
+
+    mismatched_fact = replace(
+        first_state.provider_continuations[0], run_id="incorrect-source-run"
+    )
+    inconsistent_state = replace(
+        first_state, provider_continuations=(mismatched_fact,)
+    )
+    with pytest.raises(RunError) as source_error:
+        _continuations_by_response((inconsistent_state,))
+    assert source_error.value.code is RunErrorCode.INTEGRITY_ERROR
+
+    cross_provider_run = coordinator.create_run(
+        RunCreateRequest(
+            session_id=session.session_id,
+            text="改用 DeepSeek 继续。",
+            provider_id=ProviderId.DEEPSEEK.value,
+            model_id=MODEL_IDS[ProviderId.DEEPSEEK],
+            idempotency_key="agent-request-cross-provider-run",
+        )
+    )
+    cross_provider_request = builder.build(
+        coordinator.read_run_state(session.session_id, cross_provider_run.run_id),
+        registry,
+        coordinator.read_prior_run_states(session.session_id, cross_provider_run.run_id),
+    )
+    assert cross_provider_request.provider_id is ProviderId.DEEPSEEK
+    assert all(
+        message.continuation is None
+        for message in cross_provider_request.messages
+        if message.role is MessageRole.ASSISTANT
+    )
 
 
 def test_request_keeps_fully_resolved_history_from_a_prior_registry_version(tmp_path) -> None:
@@ -514,7 +636,7 @@ def test_request_fails_closed_for_unresolved_call_from_an_older_registry_version
     with pytest.raises(RunError) as error:
         builder._provider_messages(
             (unresolved,),
-            current_run=coordinator.read_run_state(session.session_id, run.run_id).run,
+            selected_provider=ProviderId.QWEN,
             continuations={},
             registry=_registry(version="figura-web-v4"),
         )
@@ -556,9 +678,17 @@ def test_request_preserves_all_complete_rounds_and_fails_when_history_cannot_fit
     original_records = second_state.records
     original_tool_facts = second_state.tool_facts
     monkeypatch.setattr(provider_validation, "MAX_TOTAL_TEXT_BYTES", full_bytes - 1)
-    with pytest.raises(RunError) as error:
-        builder.build(second_state, registry)
-    assert error.value.code is RunErrorCode.UNSUPPORTED_PAYLOAD
+    request = builder.build(second_state, registry)
+    provider_factory = ProviderFactory.from_env(
+        {
+            "FIGURA_QWEN_API_KEY": "qwen-secret",
+            "FIGURA_QWEN_BASE_URL": "https://qwen.example.test/v1",
+        },
+        transport_factory=lambda _profile: None,
+    )
+    client = provider_factory.create(ProviderId.QWEN, MODEL_IDS[ProviderId.QWEN])
+    with pytest.raises(ProviderInputError):
+        client.prepare(request)
     unchanged = coordinator.read_run_state(session.session_id, run.run_id)
     assert unchanged.records == original_records
     assert unchanged.tool_facts == original_tool_facts

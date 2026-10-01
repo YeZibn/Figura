@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-
 from figura.agent.execution_images import RunExecutionImageReader
 from figura.agent.execution_state import RunExecutionStateService
 from figura.agent.prompting.execution import build_execution_instruction
@@ -27,14 +25,9 @@ from figura.providers import (
     ProviderRequest,
     ProviderToolCall,
 )
-from figura.providers.errors import ProviderCallError
-from figura.providers.validation import validate_request
 from figura.runtime.errors import RunError, RunErrorCode
-from figura.runtime.models import ActionKind, Run, RunStatus
-from figura.runtime.records import (
-    ProviderContinuationFact,
-    RunState,
-)
+from figura.runtime.models import ActionKind, RunStatus
+from figura.runtime.records import RunState
 from figura.tools import ToolRegistry, project_provider_tools
 
 
@@ -84,10 +77,8 @@ class AgentRequestBuilder:
         execution_state = self._execution_state.build(state, prior_run_states)
         messages = self._provider_messages(
             (*history.messages, *project_run_messages(state)),
-            current_run=state.run,
-            continuations=_continuations_by_response(
-                state.provider_continuations, state.run.run_id
-            ),
+            selected_provider=provider_id,
+            continuations=_continuations_by_response((*prior_run_states, state)),
             registry=registry,
         )
         messages = (
@@ -114,18 +105,14 @@ class AgentRequestBuilder:
             ),
             tools=tools,
         )
-        try:
-            validate_request(request, provider_id)
-        except ProviderCallError:
-            raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD) from None
         return request
 
     def _provider_messages(
         self,
         messages: tuple[MemoryMessage, ...],
         *,
-        current_run: Run,
-        continuations: dict[str, ProviderContinuationFact],
+        selected_provider: ProviderId,
+        continuations: dict[tuple[str, str], ProviderContinuation],
         registry: ToolRegistry,
     ) -> tuple[ProviderMessage, ...]:
         projected: list[ProviderMessage] = []
@@ -157,18 +144,11 @@ class AgentRequestBuilder:
                     for call in message.tool_calls
                 ):
                     raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
-                continuation = None
-                if message.run_id == current_run.run_id:
-                    continuation_fact = continuations.get(message.source_record_id)
-                    if continuation_fact is not None:
-                        try:
-                            continuation = ProviderContinuation(
-                                provider_id=ProviderId(continuation_fact.provider_id),
-                                format_version=continuation_fact.format_version,
-                                reasoning_content=continuation_fact.reasoning_content,
-                            )
-                        except (TypeError, ValueError):
-                            raise RunError(RunErrorCode.INTEGRITY_ERROR) from None
+                continuation = continuations.get(
+                    (message.run_id, message.source_record_id)
+                )
+                if continuation is not None and continuation.provider_id is not selected_provider:
+                    continuation = None
                 projected.append(
                     ProviderMessage(
                         role=MessageRole.ASSISTANT,
@@ -198,14 +178,24 @@ class AgentRequestBuilder:
 
 
 def _continuations_by_response(
-    facts: tuple[ProviderContinuationFact, ...],
-    run_id: str,
-) -> dict[str, ProviderContinuationFact]:
-    result: dict[str, ProviderContinuationFact] = {}
-    for fact in facts:
-        if fact.run_id != run_id or fact.response_record_id in result:
+    states: tuple[RunState, ...],
+) -> dict[tuple[str, str], ProviderContinuation]:
+    result: dict[tuple[str, str], ProviderContinuation] = {}
+    for state in states:
+        if not isinstance(state, RunState):
             raise RunError(RunErrorCode.INTEGRITY_ERROR)
-        result[fact.response_record_id] = fact
+        for fact in state.provider_continuations:
+            key = (fact.run_id, fact.response_record_id)
+            if fact.run_id != state.run.run_id or key in result:
+                raise RunError(RunErrorCode.INTEGRITY_ERROR)
+            try:
+                result[key] = ProviderContinuation(
+                    provider_id=ProviderId(fact.provider_id),
+                    format_version=fact.format_version,
+                    reasoning_content=fact.reasoning_content,
+                )
+            except (TypeError, ValueError):
+                raise RunError(RunErrorCode.INTEGRITY_ERROR) from None
     return result
 
 

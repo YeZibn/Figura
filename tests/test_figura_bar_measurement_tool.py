@@ -10,7 +10,16 @@ from PIL import Image, ImageDraw
 from figura.agent.execution_resources import MeasurementContent, RunExecutionState, ToolResourceRef
 from figura.agent.execution_state import RunExecutionStateService
 from figura.agent.request import AgentRequestBuilder
-from figura.providers import FinishReason, ImageBlock, MODEL_IDS, ProviderFactory, ProviderId, ProviderResponse, ProviderToolCall
+from figura.providers import (
+    FinishReason,
+    ImageBlock,
+    MODEL_IDS,
+    ProviderFactory,
+    ProviderId,
+    ProviderInputError,
+    ProviderResponse,
+    ProviderToolCall,
+)
 from figura.runtime.coordinator import RunCoordinator
 from figura.runtime.errors import RunError, RunErrorCode
 from figura.runtime.models import RunCreateRequest, ToolFactKind
@@ -116,6 +125,17 @@ def _request_builder(store, attachments, panels, execution_state) -> AgentReques
             FiguraChartRenderService(store.data_root),
         ),
     )
+
+
+def _prepare_provider_request(request) -> None:
+    factory = ProviderFactory.from_env(
+        {
+            "FIGURA_QWEN_API_KEY": "qwen-secret",
+            "FIGURA_QWEN_BASE_URL": "https://qwen.example.test/v1",
+        },
+        transport_factory=lambda _profile: None,
+    )
+    factory.create(request.provider_id, request.model_id).prepare(request)
 
 
 def _invoke(
@@ -817,10 +837,11 @@ def test_ocr_and_pie_feedback_image_limit_fails_before_next_provider_attempt(tmp
     prior_attempts = coordinator.read_run_state(session.session_id, run.run_id).provider_attempts
     monkeypatch.setattr(provider_validation, "MAX_IMAGE_COUNT", 1)
 
-    with pytest.raises(RunError):
-        _request_builder(store, attachments, panels, execution_state).build(
-            coordinator.read_run_state(session.session_id, run.run_id), registry
-        )
+    request = _request_builder(store, attachments, panels, execution_state).build(
+        coordinator.read_run_state(session.session_id, run.run_id), registry
+    )
+    with pytest.raises(ProviderInputError):
+        _prepare_provider_request(request)
 
     assert coordinator.read_run_state(session.session_id, run.run_id).provider_attempts == prior_attempts
 
@@ -1076,9 +1097,8 @@ def test_measurement_overlay_obeys_provider_image_count_limit(tmp_path, monkeypa
     )
     monkeypatch.setattr(provider_validation, "MAX_IMAGE_COUNT", 1)
 
-    with pytest.raises(RunError) as error:
-        _request_builder(store, attachments, panels, execution_state).build(
-            coordinator.read_run_state(session.session_id, run.run_id), registry
-        )
-
-    assert error.value.code is RunErrorCode.UNSUPPORTED_PAYLOAD
+    request = _request_builder(store, attachments, panels, execution_state).build(
+        coordinator.read_run_state(session.session_id, run.run_id), registry
+    )
+    with pytest.raises(ProviderInputError):
+        _prepare_provider_request(request)
