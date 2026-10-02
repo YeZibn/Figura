@@ -1,6 +1,6 @@
 # Provider：模型请求与响应边界
 
-> [返回总览](../figura-implementation-overview.md)。本篇拥有模型服务的调用期合同、配置、适配与规范化失败；持久 `ProviderAttempt` 和 `ProviderContinuationFact` 由[Run Runtime](runtime.md#4-完整模型字段)定义。
+> 更新日期：2026-10-02。[返回总览](../figura-implementation-overview.md)。本篇拥有模型服务的调用期合同、配置、适配与规范化失败；持久 `ProviderAttempt` 和 `ProviderContinuationFact` 由[Run Runtime](runtime.md#4-完整模型字段)定义。
 
 ## 1. 职责与边界
 
@@ -9,9 +9,16 @@
 ## 2. 内部流转
 
 1. **可用性与选择**：`ProviderSettings` 为三个 allowlist provider 各保存一份 profile；Factory 对 provider/model、配置及能力进行检查，并可返回安全的 `ProviderAvailability`。Web Gateway 的 health 路由消费该值，只返回 provider ID、固定 model ID、配置是否可用和有界 reason code，不发起 Provider 网络请求；HTTP 字段定义见[Web 边界](web.md#4-web-dto-字段)。
-2. **请求**：Agent 提交 `ProviderRequest`，包含指令、按角色排列的消息、可选工具投影和选项。消息内容可为字符串或有序 TextBlock/ImageBlock。图片字节只在调用期；超界请求在远端调用前被拒绝。
-3. **响应**：adapter 将模型内容、工具调用、finish reason、usage 与可选 continuation 归一化。公开响应投影省略私有 continuation；Runtime 将其与已提交响应绑定为私有持久事实。
-4. **失败**：配置、输入、远端与传输失败映射到有界 `ProviderFailure`；`outcome_known` 供 Runtime/Agent 区分确定失败与结果未知。Provider 不能自行重发已被 Runtime claim 的请求。
+2. **本地准备**：Agent 组装 `ProviderRequest` 并创建固定 provider/model 的 client，然后调用 `prepare(request)`。该方法先校验消息、工具、图像和字节限制，再核对模型并执行 adapter 的 `build_payload`；DeepSeek thinking 工具历史的 continuation 要求也在此阶段检查。成功返回私有 `_PreparedProviderCall`，不发送网络请求，也不 claim attempt。图片字节、原生 payload 与续接内容仅留在调用期内存。
+3. **领取并发送**：Agent 在锁内复查 checkpoint 并提交 ProviderAttempt claim，随后调用同一个 client 的 `dispatch(prepared)`。客户端校验 prepared 的来源 token，然后发送已经准备好的 payload 一次；不重新构造请求。其他 client 创建的 prepared 会被拒绝。Prepared 不可序列化、不持久化、不进入日志或公开 DTO。
+4. **响应**：adapter 将模型内容、工具调用、finish reason、usage 与可选 continuation 归一化。公开响应投影省略私有 continuation；Runtime 将其与已提交响应绑定为私有持久事实。Agent 后续可按精确来源响应重建兼容续接，详见[Memory 消费边界](memory.md#3-内部流转与失败边界)。
+5. **失败与释放**：配置、输入、远端与传输失败映射到有界 `ProviderFailure`；`outcome_known` 供 Runtime/Agent 区分确定失败与结果未知。本地 prepare 失败不产生 attempt；已领取后的明确/未知失败由 Runtime 提交。client 在调用结束或失败后关闭 transport；Provider 不自行重发已启动请求。
+
+### DeepSeek 续接值的三个状态
+
+adapter 区分服务端实际返回字段与 SDK 默认属性：未返回 `reasoning_content` 时 `ProviderResponse.continuation=None`；实际返回空字符串或显式 null 时创建 continuation，并原样保留 `""` 或 `None`。非字符串且非 null 的值拒绝。流式字符串按顺序拼接，null 片段不贡献文本；仅 null 保持 null，没有实际字段仍保持缺失。Qwen/MiMo 继续仅保留非空续接文本。
+
+当前 DeepSeek adapter 在 thinking 模式且请求含工具定义时，检查请求中的每条 assistant 消息都具有兼容 continuation，包括没有 tool calls 的 assistant；空字符串与 null 是已存在的值，不能被当成缺失，payload 也不把 null 改写为空字符串。公共消息编码器对任何已附加 continuation 原样发送 `reasoning_content`；关闭 thinking 只免除上述强制存在校验。匹配规则是 provider 相同且格式版本为 1，不要求源 Run 与目标 Run 相同；数据仍留在源 Run 私有表中。
 
 ## 3. 模型关系与共同规则
 
@@ -62,8 +69,18 @@ Provider 私有续接数据。 **写入者：**ProviderClient / adapter。**权�
 | 完整字段路径 | 类型 | 构造默认 | 含义与约束 | 写入 → 权威 → 读取/公开 |
 |---|---|---|---|---|
 | ProviderContinuation.provider_id | ProviderId | 必传 | 规范化 provider 身份 | ProviderClient / adapter → 调用期；提交后转 ProviderContinuationFact → AgentRequestBuilder；私有字段不公开 |
-| ProviderContinuation.format_version | int | 必传 | Provider 私有续接格式版本 | ProviderClient / adapter → 调用期；提交后转 ProviderContinuationFact → AgentRequestBuilder；私有字段不公开 |
-| ProviderContinuation.reasoning_content | str | 必传 | Provider 私有推理续接文本；不进入公开投影 | ProviderClient / adapter → 调用期；提交后转 ProviderContinuationFact → AgentRequestBuilder；私有字段不公开 |
+| ProviderContinuation.format_version | int | 必传 | Provider 私有续接格式版本，当前必须为 1 | ProviderClient / adapter → 调用期；提交后转 ProviderContinuationFact → AgentRequestBuilder；私有字段不公开 |
+| ProviderContinuation.reasoning_content | str \| None | 必传，无默认 | 私有续接原值；DeepSeek 允许非空、空字符串或显式 null，其他 Provider 要求非空文本；对象不存在才代表字段缺失 | adapter / Agent 按源响应重建 → 调用期；提交后转 ProviderContinuationFact → adapter；不公开、不裁剪或跨响应替换 |
+
+### `_PreparedProviderCall`
+
+ProviderClient 私有的冻结调用封套，`repr=False` 且禁止序列化；不是新增业务实体。由 `prepare` 构造、同 client 的 `dispatch` 消费，不进入 Runtime、API 或通用 Memory。每次模型动作重新准备，不能从 checkpoint 恢复这个对象。[定义](../../src/figura/providers/client.py)。
+
+| 完整字段路径 | 类型 | 构造默认 | 含义与约束 | 写入 → 权威 → 读取/公开 |
+|---|---|---|---|---|
+| `_PreparedProviderCall.owner` | `object` | 必传；`repr=False` | 当前 client 的进程内身份 token；dispatch 必须按对象身份匹配 | ProviderClient.prepare → 私有内存 → 同 client.dispatch；不公开、不持久化或修订 |
+| `_PreparedProviderCall.request` | `ProviderRequest` | 必传；`repr=False` | 已通过校验的规范请求，供响应归一化使用 | ProviderClient.prepare → 私有内存 → dispatch/adapter；字段合同见本页，不另存副本 |
+| `_PreparedProviderCall.payload` | `Mapping[str, Any]` | 必传；`repr=False` | adapter 已准备的原生请求参数，可含图像和私有续接；作为本次 transport.create 的参数 | adapter.build_payload / prepare → 私有内存 → dispatch/transport；无公开或独立修订入口 |
 
 ### ProviderMessage
 
@@ -178,7 +195,7 @@ Provider 私有续接数据。 **写入者：**ProviderClient / adapter。**权�
 
 | 完整字段路径 | 类型 | 构造默认 | 含义与约束 | 写入 → 权威 → 读取/公开 |
 |---|---|---|---|---|
-| ProviderFailure.failure_code | ProviderFailureCode | 必传 | 安全失败码；成功或未定时为空 | ProviderClient / adapter → 调用期；安全 code 可入 Attempt → Agent；不包含原始 SDK payload |
+| ProviderFailure.failure_code | ProviderFailureCode | 必传 | 失败时的安全枚举码，不可为空；Attempt 的可空 failure_code 是另一字段 | ProviderClient / adapter → 调用期；安全 code 可入 Attempt → Agent；不包含原始 SDK payload |
 | ProviderFailure.outcome_known | bool | 必传 | 是否能确定远端请求结果 | ProviderClient / adapter → 调用期；安全 code 可入 Attempt → Agent；不包含原始 SDK payload |
 | ProviderFailure.transient | bool | 必传 | 该失败是否可视为临时 | ProviderClient / adapter → 调用期；安全 code 可入 Attempt → Agent；不包含原始 SDK payload |
 | ProviderFailure.safe_message | str | 必传 | 可安全展示的有界失败说明 | ProviderClient / adapter → 调用期；安全 code 可入 Attempt → Agent；不包含原始 SDK payload |

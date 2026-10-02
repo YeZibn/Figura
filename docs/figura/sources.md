@@ -1,6 +1,6 @@
 # Sources：附件、Panel 与生成图像
 
-> [返回总览](../figura-implementation-overview.md)。范围：当前 `src/figura/sources/` 中的附件与 Panel 生命周期、图像文件、ChartFigure 渲染 PNG 私有存储及授权读取。Sources 是 Session 附件和 Panel 元数据的共同 owner，也为生成图像提供受控文件存储；Agent 的 `RunExecutionState.resources` 是从 Runtime 与 Sources 重建的调用期类型化目录，完整字段归 [Agent](agent.md#4-runexecutionstate-资源合同与完整字段)。Agent 的 `RunExecutionImageReader` 经目录授权后调用 Sources 服务读取源图或私有 render PNG。Sources 不拥有 OCR 或测量结果；当前工作树中的 Tools 提供独立 OCR 和柱状图、折线图、散点图、饼图观察，并在相应证据门槛满足时输出标定坐标或扇区比例。通用 Evidence 模型和证据生命周期尚未实现，观察工具合同见 [Tools](tools.md#6-图像与测量工具合同)。
+> 更新日期：2026-10-02。[返回总览](../figura-implementation-overview.md)。范围：当前 `src/figura/sources/` 中的附件与 Panel 生命周期、图像文件、ChartFigure 渲染 PNG 私有存储及授权读取。Sources 是 Session 附件和 Panel 元数据的共同 owner，也为生成图像提供受控文件存储；Agent 的 `RunExecutionState.resources` 是从 Runtime 与 Sources 重建的调用期类型化目录，完整字段归 [Agent](agent.md#4-runexecutionstate-资源合同与完整字段)。Agent 的 `RunExecutionImageReader` 经目录授权后调用 Sources 服务读取源图或私有 render PNG。Sources 不拥有 OCR 或测量结果；当前工作树中的 Tools 提供独立 OCR 和柱状图、折线图、散点图、饼图观察，并在相应证据门槛满足时输出标定坐标或扇区比例。通用 Evidence 模型和证据生命周期尚未实现，观察工具合同见 [Tools](tools.md#6-图像与测量工具合同)。
 
 ## 1. 职责与边界
 
@@ -18,7 +18,8 @@ Runtime 创建 Run 时只接受附件 ID，并在 Run 创建事务内检查附�
 4. **授权读取或分割图像**：Tools 中的 `load_image` 与测量/OCR handler 先从目标目录获取类型化来源引用，再通过 Agent `RunExecutionImageReader` 调用 Sources 验证归属并读取字节。`decompose_chart_image` 在附件读权限通过后由 `FiguraPanelService` 将归一化多边形映射到像素，生成带透明 mask 的独立 PNG。矩形也用四点多边形表达；每个 Panel 单独保存。
 5. **提交与恢复**：Panel ID 为 `SHA256("<call-scoped idempotency key>:<zero-based panel index>")`。服务把每个 PNG 写入私有临时目录、flush 并 `fsync`，再用硬链接安装文件；`SourcesRepository` 在 SQLite 写事务中调用文件安装并登记元数据。若数据库登记或提交失败，Panel Service 会补偿删除本次已安装文件。相同幂等身份会校验并复用既有 Panel 记录。只有对应成功 ToolResultFact 经 Runtime 提交后，Agent 才把 Panel 纳入可用清单和网页列表。
 6. **保存 ChartFigure 渲染图**：`render_chart_figure` 调用 Charts 生成 PNG 后，`FiguraChartRenderService.store(run_id, call_id, content)` 将其写到 `data_root/chart-renders/`。文件名是 canonical JSON `[run_id, call_id]` 的 SHA-256，不接收模型控制的路径；目录为 `0700`、文件为 `0600`。服务先写私有临时文件并 `fsync`，再以硬链接原子安装；相同身份重放时读取并复用既有文件，不替换。存储校验 PNG 格式、可解码性、正尺寸、`MAX_IMAGE_BYTES` 字节上限和 40,000,000 像素上限。渲染元数据仍只在成功 `ToolResultFact` 中；文件在结果成功提交前不进入 Agent 或 Web 投影。
-7. **列出、读取与对账**：Gateway 以 Session ID 委托 Sources 列出附件/Panel 或读取图像内容。跨 Session 访问须拒绝；附件删除须确认没有 Run 引用。服务启动时附件服务按数据库记录对账 trash 和附件文件；Panel 服务移除孤儿 PNG 与遗留临时目录，并逐一读取、解码已登记的 Panel PNG；缺失、损坏、格式不符或超限时启动失败。渲染 PNG 不在启动时创建业务记录或公开索引；Web 必须先找到同 Session 成功提交的渲染事实再读取文件。文件路径与图像字节不进入 DTO、事件或工具结果。
+7. **列出、读取与对账**：Gateway 以 Session ID 委托 Sources 列出附件/Panel 或读取图像内容。跨 Session 访问须拒绝；单个附件删除须确认没有 Run 引用。附件服务先对账单附件 trash 和附件文件，Panel 服务先清理孤儿 PNG/临时目录；随后 Gateway 删除协调器处理 `session-trash`，再清理无持久 render 调用对应的 PNG/临时目录，最后逐一验证已登记 Panel PNG。Panel 的完整性校验在会话暂存恢复之后执行，避免将删除回滚中暂存的文件误判为缺失。渲染对账保留所有耐久 render 调用对应的文件，包括结果尚未提交者，供显式幂等恢复；公开读取仍要求成功 ToolResultFact。文件路径与字节不进入 DTO、事件或工具结果。
+8. **删除整个 Session**：Gateway 删除协调器在共享 SQLite 写事务中取得 Sources 附件/Panel 身份和 Runtime 的 render 调用身份，再调用三个 Sources 文件服务的 `stage_session_deletion`，把已存在文件移入私有 `session-trash/<session_id>/` 的附件、Panel、render 子目录并同步目录。SourcesRepository 在同一事务删除 Panel/附件行；Session 提交删除后丢弃暂存树，回滚则恢复原路径。Session 删除是单附件“被引用禁止删除”的受控整体删除例外，不能用于删掉单个已使用来源。恢复、重启和清理失败语义见[Web 删除协调](web.md#会话删除与恢复)。
 
 ## 3. 完整模型字段
 
@@ -61,12 +62,13 @@ Session 所拥有的不可变分区记录。SQLite 保存六项元数据；`poin
 
 ## 4. 存储失败与访问边界
 
-- Sources 与 Runtime 使用同一个 `SqliteDatabase` 和 schema v7；表及事务初始化由 `storage/` 负责。v1–v6 到 v7 的迁移规则见 [Runtime schema v7 迁移说明](runtime.md#schema-v7-migration)。附件和 Panel 行操作集中在 `SourcesRepository`，不再由 Runtime Store 代管附件 CRUD。
+- Sources 与 Runtime 使用同一个 `SqliteDatabase` 和 schema v9；表及事务初始化由 `storage/` 负责。迁移及 Session 删除授权触发器见 [Runtime schema 迁移说明](runtime.md#schema-migration)。附件和 Panel 行操作集中在 `SourcesRepository`，不再由 Runtime Store 代管附件 CRUD；整会话删除在共享连接内协作完成。
 - 附件内容在校验后安装到私有文件；Panel 内容为每个分区单独生成的 PNG。每个 Panel 最多 40,000,000 个源像素；单张 Panel PNG 不超过 `MAX_IMAGE_BYTES`，一批所有 PNG 合计不超过 `MAX_TOTAL_IMAGE_BYTES`，最多 32 个 Panel。Panel 文件在 SQLite 写事务内安装并登记，数据库失败时通过清理已安装文件补偿；这不是跨文件系统和 SQLite 的原子事务。启动时校验已登记内容并清理孤儿 PNG 和临时目录。
 - Panel 的坐标点数为 3–64，名称上限为 256 UTF-8 bytes。输入顺序、模型给出的边界点和重叠区域都按原提议保留；工具不判定分区语义、准确性、重叠是否合理或图表类型。
 - Panel 记录本身不证明其分割工具调用已成功提交。Agent 以 Runtime 成功 ToolResultFact 与 PanelRecord 的 Session、Run、ID、名称及来源附件字段匹配，决定是否可供当前 Run 使用或在 Web 列表显示。
 - Chart render 文件本身也不证明渲染调用已成功提交。Agent 与 Gateway 只根据同 Session 已接受 Figure 和成功的渲染 ToolResultFact 投影、读取对应文件；摘要与文件哈希或尺寸不符时拒绝使用。
 - Sources 管理附件和 Panel 元数据，并提供附件、Panel、生成 PNG 文件的私有存取；这不代表通用 Source、Observation、Measurement 或 Evidence 实体已实现。
+- Session 删除的文件 staging 与 SQLite 提交不是跨系统原子事务：重启时以 Session 是否仍存在决定恢复或销毁暂存文件。恢复碰撞、非法暂存项或符号链接不能被静默接受；其他 Session 的文件不在删除集合内。
 
 ## 5. 代码与规格依据
 

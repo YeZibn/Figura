@@ -1,250 +1,319 @@
 # Figura
 
-Figura is a local chart analysis workspace with a freely planned, tool-capable Agent mode. The current Python implementation keeps the `chartagent` module name for compatibility. Use the Conda environment named `agent` for all project commands:
+**用自然语言读懂图表，并把图像或结构化数据重新组织成图表。**
+
+Figura 是一个本地图表分析工作区。用户在浏览器中创建会话、上传图片并描述目标，Agent 按需调用图像、OCR、测量和绘图工具，返回中文分析或可预览、下载的 PNG 图表。工具调用过程按每次运行展示，后续对话可以继续使用同一会话中的已有资源。
+
+本文介绍当前 `src/figura/` 实现。仓库同时保留旧 `src/chartagent/`，两套运行入口、配置和数据目录相互独立。
+
+## 当前可以做什么
+
+| 能力 | 当前行为 |
+| --- | --- |
+| 图表阅读 | 按需加载原图，结合视觉理解、OCR 和测量回答标题、单位、类别、趋势与数值问题 |
+| 多图分析 | 根据模型提出的多边形区域，把仪表盘或拼图拆成命名 Panel，分别观察与测量 |
+| 图表测量 | 支持柱状图、折线图、散点图和饼图；OCR 与测量可限定在临时多边形范围内 |
+| 图表生成 | 从用户提供的数据或图像分析结果组装 `ChartFigure`，支持单图和多图画布，生成 PNG |
+| 会话工作区 | 创建、切换和删除会话，上传及预览附件，查看分区图像、分析回答与生成图，下载 PNG |
+| 过程查看 | 按 Run 展示工具时间线，按需展开参数与结果摘要，并查看成功 OCR／测量的观察图 |
+| 持久化与恢复 | SQLite 保存输入、模型与工具执行事实、checkpoint 和事件；后续 Run 重建同会话对话，Gateway 重启后按执行状态恢复 |
+| 模型接入 | 在网页中选择已配置的 Qwen、DeepSeek 或 MiMo；模型 ID 由后端固定 |
+
+测量工具返回的是候选观察。轴标定不足时会保留像素信息与警告，不能把这些结果直接当作精确数据。当前生成图经过结构和语义校验并可由 Agent 回看；独立的生成图验证、发布和新 Figura 评测链尚未实现。
+
+## 快速开始
+
+### 1. 准备运行环境
+
+从仓库根目录执行以下命令。Python 命令统一使用名为 `agent` 的 Conda 环境；已有该环境时跳过创建步骤。
 
 ```bash
-conda run -n agent python -m pytest -q
-conda run -n agent python -m chartagent --agent
+conda create -n agent python=3.11 -y
+conda run -n agent python -m pip install -e '.[dev]'
+npm --prefix frontend install
 ```
 
-## Desktop client
+后端声明支持 Python 3.10 及以上。前端启动脚本使用 `import.meta.dirname`，可使用 Node.js 22 及以上版本。当前 Run 执行锁依赖 `fcntl`，后端应在 macOS 或 Linux 上运行。
 
-The desktop client is a Tauri 2 shell around a React + TypeScript + Vite workspace. During UI development, start the browser client from the frontend directory:
+主要依赖包括 React、TypeScript、Vite、OpenAI Python SDK、RapidOCR、Pillow、NumPy 和 Matplotlib，完整清单见 [pyproject.toml](pyproject.toml) 与 [frontend/package.json](frontend/package.json)。
+
+### 2. 配置模型
+
+如果还没有 `.env`，复制配置模板：
 
 ```bash
-cd frontend
-npm install
-npm run dev
+cp .env.example .env
 ```
 
-The Vite app is available at http://127.0.0.1:1420/. To run the Tauri development window after installing the Rust toolchain, use `npm run tauri:dev` from `frontend/`. The desktop client uses mock data by default and does not silently fall back to mock data when Gateway mode is explicitly enabled.
+至少配置一个 Figura Provider。例如，使用 DeepSeek 时填写：
 
-### Local Python Gateway
-
-The second desktop milestone adds a loopback Python Gateway for named sessions
-and completed text runs. Start the Gateway and the Gateway-mode browser client
-together from `frontend/`:
-
-```bash
-npm run dev:gateway
+```dotenv
+FIGURA_DEEPSEEK_API_KEY=your_api_key
+FIGURA_DEEPSEEK_BASE_URL=https://api.deepseek.com
+FIGURA_DEEPSEEK_TIMEOUT_SECONDS=60
+FIGURA_DEEPSEEK_THINKING_MODE=true
 ```
 
-The launcher uses `conda run -n agent python -m chartagent.gateway`, waits for
-`/api/v1/health`, starts Vite in explicit Gateway mode, and stops both process
-groups it created when you press Ctrl-C before the launcher exits. A frontend
-bind failure also cleans up the Gateway created for that attempt without
-terminating an unrelated listener. Plain `npm run dev` remains the offline
-mock/frontend-only workflow. From the repository root, the equivalent
-one-line command is `npm --prefix frontend run dev:gateway`.
+Figura 只读取 `FIGURA_*` 模型配置。模板中的 `OPENAI_*`、`QWEN_*`、`DEEPSEEK_*` 和 `CHARTAGENT_*` 属于旧 ChartAgent，不会配置新 Figura。
 
-### Figura browser workspace
+| Provider | 当前固定模型 ID | 必填配置 | Endpoint 配置 |
+| --- | --- | --- | --- |
+| Qwen | `qwen3.8-flash` | `FIGURA_QWEN_API_KEY`、`FIGURA_QWEN_BASE_URL` | 无默认地址；填写与 API key 所属区域及工作空间匹配的 OpenAI 兼容地址 |
+| DeepSeek | `deepseek-flash` | `FIGURA_DEEPSEEK_API_KEY` | `FIGURA_DEEPSEEK_BASE_URL`，默认 `https://api.deepseek.com` |
+| MiMo | `mimo-v2.6-flash` | `FIGURA_MIMO_API_KEY` | `FIGURA_MIMO_BASE_URL`，默认 `https://api.xiaomimimo.com/v1`；使用其他套餐时同时配置匹配的地址和 key |
 
-Figura's implemented runtime has a separate local browser path. Start it from
-the repository root with:
+各 Provider 可设置 `FIGURA_<PROVIDER>_TIMEOUT_SECONDS` 和 `FIGURA_<PROVIDER>_THINKING_MODE`，默认分别为 `60` 和 `true`。Qwen、DeepSeek 还可配置 `REASONING_EFFORT`，具体取值见 [.env.example](.env.example)。网页按本地配置显示可用 Provider；这个检查不会验证远端连通性、额度或请求是否能成功。
+
+### 3. 启动 Figura
 
 ```bash
 npm --prefix frontend run dev:figura
 ```
 
-The launcher starts `python -m figura.gateway` in the `agent` Conda environment
-and Vite on loopback. Its default ports are `8766` for Figura Gateway and
-`1421` for Vite; ChartAgent continues to use its existing `8765`/`1420` path.
-The Figura process loads the repository `.env` with inherited process values
-taking precedence and stores its SQLite data and uploaded images in the ignored
-`.figura/` directory by default. Set `FIGURA_DATA_DIR` to choose another local
-data directory or `FIGURA_GATEWAY_PORT` to change the Gateway port. `VITE_DEV_PORT`
-changes the Vite port; the launcher adds that exact frontend Origin to the local
-Gateway allowlist.
+打开 [Figura 浏览器工作区](http://127.0.0.1:1421/)。默认地址为：
 
-Configure one or more of `FIGURA_QWEN_API_KEY`, `FIGURA_DEEPSEEK_API_KEY`, and
-`FIGURA_MIMO_API_KEY` in `.env`. Model IDs are fixed by the Figura runtime:
-`qwen3.8-flash`, `deepseek-flash`, and `mimo-v2.6-flash`. Vite receives the
-Figura mode, local Gateway URL, and local bind settings; Provider keys and
-endpoints stay in the Python process. This workflow connects the browser client directly to the
-Figura Gateway and does not start Tauri.
+| 服务 | 地址 |
+| --- | --- |
+| React / Vite | `http://127.0.0.1:1421` |
+| Figura Gateway | `http://127.0.0.1:8766` |
+| 健康检查 | `http://127.0.0.1:8766/api/v1/health` |
 
-To verify the complete npm signal and port-release lifecycle, run
-`npm run smoke:launcher` from `frontend/`. This uses isolated ports and does
-not replace the regular static `npm run smoke` checks.
+启动器先等待 Gateway 就绪，再启动 Vite。按 **Ctrl-C** 会停止它创建的进程组；不要在相同端口启动多个实例。这个入口运行浏览器工作区，无需 Rust 或 Tauri。
 
-The service listens on `127.0.0.1` and exposes versioned routes under `/api/v1`.
-The desktop panel can select PNG, JPEG, GIF, and WebP images, preview them,
-upload them to the active session, delete registered attachments, and select
-valid IDs for the next message. The Gateway keeps uploaded bytes in a
-persistent application-owned directory and SQLite stores only safe attachment
-metadata and references. By default, attachments are stored in the canonical
-data root's `attachments/` directory; without a data-root override this is
-the project-local `.chartagent/attachments/`. `CHARTAGENT_ATTACHMENT_DIR` can
-override the location. A valid source remains
-available after a Gateway restart. If a source is missing or its hash changes,
-the workspace marks it unavailable and offers re-upload recovery. Registration
-does not send image bytes to the model. The Agent decides whether to call
-`load_image` when visual inspection is useful.
+Gateway 加载仓库根目录的 `.env`，已有进程环境变量优先。修改 Provider 配置后，重启启动器。
 
-The Gateway provides these attachment and lifecycle routes in addition to the
-session read/write operations:
+## 使用方式
+
+1. 创建会话，选择一个可用 Provider。
+2. 分析图片时上传附件，并选中要用于本次消息的图片；直接绘图时可在消息中提供数据。
+3. 用自然语言说明希望得到的结果。Agent 会按任务选择工具，不要求每次都执行 OCR、分图或测量。
+4. 查看回答和 Run 工具时间线。成功分割的 Panel、观察图与生成图可按需预览，生成图可下载为 PNG。
+5. 在同一会话继续提问，引用先前图像或已生成图表。每个会话同时最多运行一个 Run。
+
+可尝试以下请求：
 
 ```text
-DELETE /api/v1/sessions/{session_id}
-DELETE /api/v1/sessions/{session_id}/attachments/{attachment_id}
-GET    /api/v1/sessions/{session_id}/attachments/{attachment_id}/content
+这张图展示了什么？说明横纵轴、单位和主要趋势，不确定的数值请标出来。
+
+把这张仪表盘中的图表分开，分别说明结论，再比较它们的共同趋势。
+
+尽量读取柱状图各类别的数值；如果无法可靠标定坐标轴，请说明限制。
+
+根据以下数据生成柱状图：一月 12，二月 18，三月 15。标题为“季度销量”。
+
+把刚才的数据同时画成柱状图和折线图，放在同一张画布中。
 ```
 
-Session deletion is permanent and removes its runs, records, attachment
-metadata, and managed source files. The Gateway rejects deletion while the
-session has an active Agent run. The desktop client asks for confirmation before
-deleting a session or attachment and selects a neighboring session after
-successful deletion.
+支持上传 PNG、JPEG、GIF 和 WebP。上传时图片先保存到本地；Agent 调用 `load_image` 等需要图像回看的工具后，相关图片才会进入所选 Provider 的模型请求。运行、附件和图表文件保存在本机，模型推理仍需要访问配置的远端服务。
 
-When running the Tauri client in Gateway mode, use the dedicated alias. Tauri
-owns the local Gateway child process and waits for `/api/v1/health` before
-exposing the workspace:
+已被 Run 引用的附件不能单独删除。会话删除需要网页确认，且会话必须没有运行中的 Run；删除会同时清理该会话的执行事实、附件、Panel 和渲染文件。
+
+## 工作原理
+
+Figura 将模型决策、工具执行、持久化和浏览器展示分别交给明确的组件。
+
+```mermaid
+flowchart LR
+    UI[浏览器工作区] -->|HTTP / SSE| Gateway[本地 Gateway]
+    Gateway --> Runtime[Runtime: Session / Run / Checkpoint]
+    Gateway --> Sources[Sources: 附件 / Panel / PNG]
+    Gateway -->|异步调度| Agent[Agent: 模型与工具循环]
+    Runtime -->|已提交事实| Agent
+    Sources -->|资源与图像| Agent
+    Agent --> Memory[Memory: 会话消息投影]
+    Memory --> Agent
+    Agent <--> Provider[Provider: Qwen / DeepSeek / MiMo]
+    Agent --> Tools[Tools: 图像 / OCR / 测量 / 绘图]
+    Tools --> Charts[Charts: 校验与 PNG 绘制]
+    Tools --> Sources
+    Agent -->|提交结果与进度| Runtime
+    Runtime --> DB[(SQLite)]
+    Sources --> DB
+    Sources --> Files[(本地私有图片文件)]
+```
+
+- **Session 与 Run**：Session 是会话和资源归属边界，一次用户提交创建一个 Run。Run 输入、执行事实与 checkpoint 持久化；HTTP 重复提交通过幂等键复用原 Run。
+- **Agent 与提示**：Agent 运行模型—工具循环。每次模型请求提供稳定行为规则、当前工具目录和 Run 资源索引三个 SYSTEM 指令块，再组装完整会话消息及最近工具批次需要回看的图像。
+- **Memory 与资源目录**：后续 Run 从同会话较早终态 Run 的事实重建 user、assistant 和 tool 消息。资源目录统一索引附件、Panel、OCR、测量、ChartFigure 和 ChartRender，由已提交事实重建，不另存一份结果库。
+- **工具与图表**：工具按版本化 Schema 校验输入和结果。`ChartSpecData` 描述单图，`ChartFigure` 描述多图画布；组装成功后，渲染工具使用已提交 Figure 生成 PNG。
+- **网页与事件**：SSE 通知生命周期和进度变化，前端重新读取安全摘要。工具详情、观察图和 PNG 按需加载；事件流不复制完整工具 payload。
+
+### 当前工具
+
+Gateway 当前注册的工具版本为 `figura-web-v6`。
+
+| 工具 | 用途 |
+| --- | --- |
+| `load_image` | 加载被授权的附件或 Panel，供模型在下一轮观察 |
+| `decompose_chart_image` | 按模型提出的规范化多边形分割附件，保存命名 Panel |
+| `extract_text` | 独立 OCR，返回文字、位置与置信度 |
+| `measure_bars` | 观察柱体、类别、基线与可标定的数值 |
+| `measure_lines` | 观察折线系列、采样点及坐标标定信息 |
+| `measure_scatter` | 观察散点位置与可标定的坐标 |
+| `measure_pie` | 观察饼图扇区、角度与符合条件的比例 |
+| `assemble_chart_figure` | 解析和校验画布及各图的 ChartSpec，可引用同会话成功测量调用 |
+| `render_chart_figure` | 渲染已提交的 ChartFigure，保存并返回 PNG 元数据 |
+
+测量引用只证明对应成功工具调用存在，不能证明画布中填写的数据与测量值一致。工具完整输入输出和恢复策略见 [Tools 文档](docs/figura/tools.md)。
+
+### 恢复边界
+
+Gateway 启动时发现持久化的 running Run，会交给相同 Agent 执行路径处理。已提交结果可以复用；未完成工具调用按其声明的可重放或幂等策略处理。
+
+如果模型请求已经记录为 started，但没有提交确定结果，恢复会以 `provider_outcome_unknown` 结束该 Run，不会猜测请求是否送达并再次发送。需要对账的工具 attempt 也不会盲目重放。因此，“可恢复”不保证每次异常都能继续完成任务。终态 Run 不会被重新打开，后续提问会创建新 Run。
+
+当前网页没有显式中断、重试或手动恢复 Run 的操作。会话历史按完整消息重建，尚无自动摘要或裁剪；超过 Provider 请求限制时会明确失败。
+
+## 配置与本地数据
+
+| 配置项 | 默认值 | 作用 |
+| --- | --- | --- |
+| `FIGURA_DATA_DIR` | 仓库根目录下 `.figura/` | SQLite 与私有图片的统一根目录；相对路径从仓库根目录解析 |
+| `FIGURA_GATEWAY_PORT` | `8766` | Gateway 端口 |
+| `VITE_DEV_PORT` | `1421`（Figura 启动器） | Vite 端口 |
+| `VITE_DEV_HOST` | `127.0.0.1`（Figura 启动器） | 前端 loopback 地址 |
+| `FIGURA_WEB_ORIGINS` | 端口 `1421` 的本地 HTTP Origins | Gateway 浏览器来源白名单；启动器自动补入当前前端端口的 loopback Origins |
+| `FIGURA_CONDA_ENV` | `agent` | 启动器使用的 Conda 环境 |
+| `FIGURA_CONDA_EXECUTABLE` | `conda` | 启动器使用的 Conda 可执行程序 |
+
+启动器端口等选项从启动进程环境读取，可这样覆盖：
 
 ```bash
-npm run tauri:dev:gateway
+FIGURA_GATEWAY_PORT=8876 VITE_DEV_PORT=1521 npm --prefix frontend run dev:figura
 ```
 
-The alias sets `CHARTAGENT_MODE=gateway` and `VITE_CHARTAGENT_MODE=gateway`.
-The development launcher uses `conda run -n agent python -m chartagent.gateway`
-without hard-coding a machine-specific Python path. Do not run both launchers
-against the same port. A pre-existing compatible
-Gateway can be used with `CHARTAGENT_GATEWAY_EXTERNAL=1`; the Tauri client will
-not terminate that process. For a packaged or custom runtime, set
-`CHARTAGENT_GATEWAY_EXECUTABLE` and provide a JSON string array in
-`CHARTAGENT_GATEWAY_ARGS`.
-
-The Gateway keeps the synchronous `POST /api/v1/sessions/{id}/messages`
-operation for compatibility. The desktop live-run path uses:
+默认数据布局如下，目录按需创建：
 
 ```text
-POST /api/v1/sessions/{session_id}/runs
-GET  /api/v1/sessions/{session_id}/runs/{run_id}/events
-GET  /api/v1/sessions/{session_id}/runs/{run_id}/observations/{observation_id}
-GET  /api/v1/sessions/{session_id}/runs/{run_id}/artifacts/{artifact_id}
+.figura/
+├── figura.sqlite3     # Session、Run、执行事实、checkpoint 与来源元数据
+├── attachments/      # 上传图片
+├── panels/           # 分割后的独立 PNG
+├── chart-renders/    # 生成图表 PNG
+└── .run-locks/       # Run 独占执行锁
 ```
 
-The event stream is bounded SSE and includes model turns, tool calls, tool
-results, visual-observation metadata, generated-chart metadata, final answers,
-interruptions, and failures. Temporary visual evidence is available through
-short-lived opaque observation IDs. User-facing charts created by `render_chart`
-use a separate `artifact_<id>` reference and the `/artifacts/` route, so their
-PNG bytes are persisted for the configured run-retention period and remain
-scoped to the owning session. Event JSON and durable session memory never
-contain image bytes, credentials, provider raw responses, or unbounded trace
-content.
+Runtime 与 Sources 共用一份 SQLite。图片字节保存在私有文件中，OCR／测量观察图按需重建；图表的完整结构和结果借用通用工具事实保存。Provider continuation 作为私有执行数据保存，公开 DTO 不返回它，也不返回 API key、原始 endpoint、本机文件路径或原始 Provider 响应。
 
-Run creation is asynchronous and accepts an optional `Idempotency-Key` header.
-The key is bound to the normalized session, prompt, attachment IDs, and
-effective provider; repeating the equivalent request returns the original run,
-while reusing the key for different input returns `idempotency_conflict`.
-Requests without a key remain supported but do not receive duplicate-submission
-protection. A retry is a new run and must use a new key; its request body may
-include `retryOf` pointing to a terminal run.
+`.env` 和 `.figura/` 已被 Git 忽略。备份或迁移数据时停止服务，并保留整个数据目录，使数据库引用与图片文件一起迁移。新 Figura 不会自动读取或合并旧 `.chartagent/` 数据。
 
-The client restores bounded execution history separately from model conversation
-records and reconnects an active SSE stream from the last applied sequence. The
-`after` query parameter and `Last-Event-ID` header use the same per-run cursor.
-If the retained history no longer covers the requested cursor, the stream emits
-`history_gap`; the summary remains authoritative. A user interruption is an
-explicit `POST /sessions/{session_id}/runs/{run_id}/interrupt` operation and is
-reported as terminal `interrupted` with a bounded reason such as
-`user_cancelled`. It is distinct from a transport disconnect.
+## 开发与验证
 
-Gateway runs are not resumable across a Gateway process restart: previously
-active runs are terminalized as `interrupted` with `gateway_restarted`, and the
-terminal summary/event can be replayed after reconnect. The client renders run
-states, retry actions, and generated charts with preview, metadata, download, or
-an explicit unavailable state. Final answers are rendered as safe Markdown; the
-original bounded source remains available in the answer panel.
-
-Additional run-history routes are:
-
-```text
-GET    /api/v1/sessions/{session_id}/runs
-GET    /api/v1/sessions/{session_id}/runs/{run_id}
-GET    /api/v1/sessions/{session_id}/runs/{run_id}/events?after={sequence}
-```
-
-## Agent sessions
-
-Without `--session`, Agent history and attachment references are process-local.
-Named sessions are opt-in. All durable local data uses one canonical root with
-the following precedence:
-
-```text
-explicit --data-dir
-    > CHARTAGENT_DATA_DIR
-    > project-root/.chartagent
-```
-
-The default layout is `.chartagent/sessions.db`, `.chartagent/attachments/`,
-`.chartagent/run-artifacts/`, and `.chartagent/diagnostics/`. Relative data
-paths are resolved from the repository root rather than the process current
-directory. The same `--data-dir` option is available on the Gateway; the
-environment variable is also accepted by the frontend launchers.
-
-If an old `~/.chartagent` store is detected while the project-local default is
-being selected, Figura does not merge or dual-write it silently. Choose a
-store explicitly with `CHARTAGENT_DATA_DIR` or `--data-dir`, or move the data
-while the application is stopped.
+### 常用命令
 
 ```bash
-conda run -n agent python -m chartagent --agent --new-session demo
-conda run -n agent python -m chartagent --agent --session demo
-conda run -n agent python -m chartagent --agent --list-sessions
-conda run -n agent python -m chartagent --agent --delete-session demo
-# Optional explicit root:
-conda run -n agent python -m chartagent --agent --data-dir .chartagent --session demo
+# 完整 Python 测试，包含 Figura 与旧 ChartAgent
+conda run -n agent python -m pytest -q
+
+# 聚焦当前 Figura 的运行、Agent 与网页边界
+conda run -n agent python -m pytest -q tests/test_figura_run_execution_core.py tests/test_figura_agent_executor.py tests/test_figura_gateway.py
+
+# 前端类型检查与生产构建
+npm --prefix frontend run build
+
+# 前端及启动器静态 smoke 检查
+npm --prefix frontend run smoke
+
+# 启动器信号处理与端口释放检查，使用隔离端口
+npm --prefix frontend run smoke:launcher
+
+# 提交前检查
+git diff --check
 ```
 
-`--delete-session` asks for confirmation and removes only local session state. It never deletes source image files. `--new-session` refuses to overwrite an existing session.
+前端改动需运行 build 和 smoke；启动器改动还需运行 smoke:launcher。Python 行为改动先运行对应测试文件，再运行完整测试。OCR 相关命令始终使用 `agent` 环境。
 
-## Images and tools
-
-In the Agent REPL, enter an image as `@/path/to/chart.png` or `@"/path with spaces/chart.png"`. The CLI registers the file and sends the model an opaque `att_...` ID plus safe metadata. It does not eagerly send image bytes. The model can call `load_image(attachment_id)` whenever visual inspection is useful, and can pass the same ID to `extract_text`, `measure_bars`, `extract_line_series`, or `extract_scatter_points`. Cartesian observation tools keep source-image geometry and return calibrated values only when axis evidence is sufficient; otherwise they preserve pixel evidence and warnings. OCR-backed tests and commands use the Conda `agent` environment, which provides RapidOCR. Every load validates ownership, file availability, size, media type, and content hash.
-
-Tool-generated overlays are returned as in-memory visual observations for the next model turn. Their bytes, source-image bytes, provider reasoning, raw responses, credentials, and trace events are not persisted in session memory.
-
-For images containing several cards or charts, the Agent first uses
-multimodal vision to propose named semantic regions, then calls the
-attachment-authorized `decompose_chart_image` tool once. The tool does not use
-OCR to discover dashboard topology: it validates the VLM `bbox_norm` proposals,
-returns stable panel IDs, named crops, source-coordinate analysis scopes,
-managed resource references, and warnings. `auto` is the default and uses
-deterministic VLM rectangular bounds with bounded padding; it never loads SAM
-merely because a checkpoint exists in the environment. Use
-`segmentation_mode: "sam"` for an explicit SAM experiment. The optional SAM
-adapter accepts `FIGURA_SAM_CHECKPOINT`, with optional `FIGURA_SAM_MODEL_TYPE`
-(default `vit_b`) and `FIGURA_SAM_DEVICE` (default `cpu`). Model weights are not
-downloaded automatically. If the package, checkpoint, or runtime is
-unavailable, the tool keeps the validated VLM scope and marks the affected
-boundary evidence as partial instead of failing the whole image. The tool bounds proposals at 32
-panels and crops at 12 resources; generated-image byte/count and observation
-retention limits are enforced by the managed resource boundary. When routing a
-panel to a bar, line, pie, or scatter sensor, keep the source `attachment_id`
-and pass its `panel_id`; the Agent injects the matching analysis scope and
-source transform. Each sensor still detects its own inner measurement frame,
-axes, baseline, center, or calibration, so it does not silently treat the
-whole card as a plot or rescan an unrelated dashboard panel. Spatial
-decomposition evidence remains separate from chart measurement and value
-extraction.
-
-Run this workflow in the canonical Conda environment so RapidOCR and any
-optional vision dependencies resolve consistently:
+单独启动 Figura Gateway：
 
 ```bash
-conda run -n agent python -m pytest -q tests/test_dashboard_decomposition.py
+conda run -n agent python -m figura.gateway
 ```
 
-To redraw structured data, the Agent can pass an existing or newly assembled
-`ChartSpec` to the optional `render_chart` tool. The tool validates the shared
-specification and supports `bar`, `line`, `pie`, and `scatter` charts with
-bounded PNG output. A successful call returns structured metadata plus visual
-evidence for the next model turn; the Gateway separately stores the generated
-PNG as a `generated_chart` artifact for the desktop preview and download. A
-rendering or artifact-limit failure remains a structured tool error and does
-not prevent a text answer.
+主要 HTTP 路由位于 `/api/v1`，下表省略该前缀：
 
-## Trace mode
+| 路由 | 用途 |
+| --- | --- |
+| `GET /health` | 本地配置与服务健康信息 |
+| `GET /sessions`、`POST /sessions` | 列出或创建会话 |
+| `GET /sessions/{sessionId}`、`DELETE /sessions/{sessionId}` | 会话快照或没有活动 Run 的会话删除 |
+| `GET /sessions/{sessionId}/attachments`、`POST /sessions/{sessionId}/attachments?filename=...` | 附件列表或原始图片字节上传 |
+| `GET /sessions/{sessionId}/panels`、`GET /sessions/{sessionId}/panels/{panelId}/content` | 分区列表或 PNG 读取 |
+| `POST /sessions/{sessionId}/runs` | 创建 Run，必需 `Idempotency-Key`，请求包含 `text`、`attachmentIds`、`providerId` |
+| `GET /sessions/{sessionId}/runs/{runId}/history`、`GET /sessions/{sessionId}/runs/{runId}/events` | 历史读取或 SSE，使用 `afterSequence` 游标 |
+| `GET /sessions/{sessionId}/runs/{runId}/timeline` | 工具步骤摘要 |
+| `GET /sessions/{sessionId}/runs/{runId}/timeline/{callId}`、`GET /sessions/{sessionId}/runs/{runId}/timeline/{callId}/observation` | 安全详情或 OCR／测量观察图 |
+| `GET /sessions/{sessionId}/runs/{runId}/chart-renders/{callId}/content` | 成功渲染的图表 PNG |
 
-Use `--trace` with `--agent` to inspect model turns, tool calls, results, visual observations, and the final answer. Add `--trace-reasoning` only when the provider supplies reasoning and it is appropriate to display it. Trace output is diagnostic output; it is not stored in named sessions.
+Gateway 绑定 `127.0.0.1`，写请求校验明确的本地 Origin。所有资源读取都检查 Session 归属；工具执行由 Agent 驱动，没有独立网页测量或绘图操作 API。完整 HTTP 与 DTO 合同见 [Gateway 代码](src/figura/gateway/application.py)、[主规格](openspec/figura/openspec/specs/figura-web-gateway/spec.md) 和 [Web 文档](docs/figura/web.md)。
+
+### 目录导航
+
+```text
+src/figura/
+├── agent/        # ReAct 编排、请求组装、提示资产与资源目录
+├── runtime/      # Session / Run、持久事实、checkpoint 与工具执行
+├── providers/    # Provider 配置、适配器与归一化合同
+├── tools/        # 工具注册、Schema、handler 与测量传感器
+├── sources/      # 附件、Panel、渲染图像与私有文件
+├── charts/       # ChartSpec / ChartFigure、校验与绘制
+├── memory/       # 从 Run 事实重建会话消息
+├── gateway/      # HTTP / SSE、安全投影与异步调度
+├── storage/      # 共享 SQLite、事务与 schema
+└── shared/       # JSON Schema 与图像限制
+
+frontend/src/     # React 工作区、API 适配器、纯领域逻辑与共享组件
+frontend/scripts/ # 开发启动器与 smoke 检查
+tests/            # Python 测试与图表 fixtures
+docs/figura/      # 当前 Figura 的领域文档
+openspec/figura/openspec/ # 当前 Figura 主规格与变更归档
+```
+
+### 旧 ChartAgent 入口
+
+以下命令保留用于旧系统开发与兼容性对照：
+
+| 命令 | 运行内容 |
+| --- | --- |
+| `npm --prefix frontend run dev` | 默认旧工作区的 Mock／离线前端，端口 `1420` |
+| `npm --prefix frontend run dev:gateway` | 旧 ChartAgent Gateway 与 Vite，默认端口 `8765`／`1420` |
+| `conda run -n agent python -m chartagent --agent` | 旧 Agent CLI |
+| `npm --prefix frontend run tauri:dev:gateway` | 旧 ChartAgent Tauri 开发入口，需要 Rust 工具链 |
+
+当前新 Figura 以 `dev:figura` 浏览器入口运行，尚未接入 Tauri。旧系统的 review gate、发布与 evaluation 能力不能视作新 Figura 已实现功能。
+
+## 常见问题
+
+**Provider 不可用或创建 Run 失败**
+
+确认填写的是 `FIGURA_*` 配置；Qwen 需要显式填写 BASE_URL。修改后重启服务。health 只做本地配置检查，远端认证、网络或模型请求失败仍会在运行时出现。
+
+**提示 `No module named 'rapidocr'`**
+
+先核对运行环境：
+
+```bash
+conda run -n agent python -c "import rapidocr"
+```
+
+若该环境确实未安装依赖，重新运行前述 `pip install -e '.[dev]'`。不要先切换到系统 Python。
+
+**端口被占用**
+
+停止先前启动器，或通过进程环境设置不同的 `FIGURA_GATEWAY_PORT` 和 `VITE_DEV_PORT`。普通 `npm run dev` 与 `dev:figura` 使用不同默认端口和不同应用模式。
+
+**重启后 Run 失败，或工具显示需要对账**
+
+先查看 Run 状态和安全错误摘要。已启动但结果未知的模型请求不会自动重发，需要对账的工具也不会被盲目执行；在终态后可提交新的消息。不要把 SSE 断开等同于任务已经停止。
+
+**生成图中文字显示为方框**
+
+渲染器使用本机字体，候选包括 PingFang SC、Arial Unicode MS 和 Noto Sans CJK SC。运行机器需要具有可用中文字体，尤其是在 Linux 环境中。
+
+## 进一步阅读
+
+- [系统总览](docs/figura-implementation-overview.md)：大组件关系、数据流与实现边界。
+- [Agent](docs/figura/agent.md) · [Runtime](docs/figura/runtime.md) · [Memory](docs/figura/memory.md)：编排、恢复与对话投影。
+- [Tools](docs/figura/tools.md) · [Sources](docs/figura/sources.md) · [Charts](docs/figura/charts.md)：观察工具、来源管理与图表合同。
+- [Provider](docs/figura/provider.md) · [Web](docs/figura/web.md) · [Validation](docs/figura/validation.md)：模型、网页和共享校验边界；细节以当前代码与主规格为准。
+- [Figura 主规格](openspec/figura/openspec/specs/) · [变更归档](openspec/figura/openspec/changes/archive/)：当前行为合同与已完成变更。
+- [架构设计草案](docs/figura-architecture-design.md)：长期设计方向，其中尚未实现的能力以系统总览和当前代码为准。

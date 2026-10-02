@@ -1,6 +1,6 @@
 # Validation：共享 JSON Schema 合同
 
-> [返回总览](../figura-implementation-overview.md)。`figura.shared.json_schema` 与 `figura.shared.image_limits` 是多个能力复用的基础合同；它们不属于 Agent、Provider 或 Tool 的业务事实。
+> 核对日期：2026-10-02。[返回总览](../figura-implementation-overview.md)。`figura.shared.json_schema` 与 `figura.shared.image_limits` 是多个能力复用的基础合同；它们不属于 Agent、Provider 或 Tool 的业务事实。
 
 ## 1. 职责与边界
 

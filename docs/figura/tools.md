@@ -1,6 +1,6 @@
 # Tool：能力定义与调用边界
 
-> [返回总览](../figura-implementation-overview.md)。本篇拥有工具定义、注册、调用及结果合同；`ToolCallFact`、`ToolAttemptStartedFact`、`ToolResultFact` 是[Run Runtime](runtime.md#4-完整模型字段)所拥有的持久事实。
+> 更新日期：2026-10-02。[返回总览](../figura-implementation-overview.md)。本篇拥有工具定义、注册、调用及结果合同；`ToolCallFact`、`ToolAttemptStartedFact`、`ToolResultFact` 是[Run Runtime](runtime.md#4-完整模型字段)所拥有的持久事实。
 
 ## 1. 职责与边界
 
@@ -155,7 +155,7 @@ OCR 既为笛卡尔/Pie 测量提供轴刻度、标签与关联候选，也由 `
 |---|---|---|---|
 | SOURCE_PARAMETERS.source_kind | string，枚举 attachment、panel | 选择来源服务 | Provider 模型 → ToolCallFact / ToolInvocation → 来源解析器 |
 | SOURCE_PARAMETERS.source_id | string，长度 1–128 | 选定来源的不透明 ID，必须命中 RunExecutionState 授权清单 | Provider 模型 → ToolCallFact / ToolInvocation → 来源解析器；未授权时不读字节 |
-| SOURCE_PARAMETERS.observation_scope | 对象，可选；仅允许 include、exclude | 对图像指定本次调用期观察范围；省略时观察完整来源 | Provider 模型 → ToolCallFact.arguments_json / ToolInvocation → handler 校验 → 像素 mask；不写入 RunExecutionState |
+| SOURCE_PARAMETERS.observation_scope | 对象，可选；仅允许 include、exclude | 对图像指定本次调用期观察范围；省略时观察完整来源 | Provider 模型 → ToolCallFact.arguments_json / ToolInvocation → handler 校验 → 像素 mask；成功提交后由 Agent 资源目录的 OCR/MeasurementContent 重建保留范围，无独立 scope 存储 |
 | OBSERVATION_SCOPE.include | Polygon 数组，可选；若存在为 1–4 个 Polygon | 多个包含区域的并集；未提供 include 时默认包含全图 | Provider 模型 → ToolCallFact.arguments_json → 范围解析器 |
 | OBSERVATION_SCOPE.exclude | Polygon 数组，可选；若存在为 1–4 个 Polygon | 多个排除区域的并集；与 include 重叠时排除优先 | Provider 模型 → ToolCallFact.arguments_json → 范围解析器 |
 | OBSERVATION_SCOPE.include[] / OBSERVATION_SCOPE.exclude[] | `ScopePoint[]`；每个 Polygon 含 3–32 个点 | 一个闭合观察多边形；坐标按所选来源图像宽高归一化到 0–1000 | Provider 模型 → ToolCallFact.arguments_json → 原尺寸 mask 构造器 |
@@ -369,13 +369,13 @@ OCR 既为笛卡尔/Pie 测量提供轴刻度、标签与关联候选，也由 `
 
 ### 调用流转
 
-1. ToolRuntime 先以 `CHART_FIGURE_SCHEMA` 拒绝缺失字段、额外字段、类型不符及越界输入；handler 再用 Charts codec 解析 canonical Figure，并运行 `validate_chart_figure` 验证唯一 chart ID、布局和全部嵌套 ChartSpecData。
+1. ToolRuntime 先以 `CHART_FIGURE_SCHEMA` 校验 shape、类型、必填项及额外字段；handler 再用 Charts codec 严格解析并运行 `validate_chart_figure` 验证唯一 chart ID、布局和全部嵌套 ChartSpecData。当前 Schema 描述明确 line/scatter 使用 x/y 坐标点、bar/pie 使用 category/value，pie.axes 为 null，分类 line 的 x 使用类别索引；缺少子图 metadata.chart_type 等必需字段不会自动猜测或补全。无效输入先于测量引用解析被拒绝。
 2. handler 为本次调用读取新鲜的同 Session `RunExecutionState`，并按 `ToolResourceRef("measurement", run_id, call_id)` 精确查询。每个 `measurement_refs` 必须命中已提交成功的 MeasurementContent；支持先前终态 Run，也支持目标 Run 中已经先提交的结果。不存在、失败、尚未提交、未授权来源或其他 Session 的引用都会使整份 Figure 失败，并返回相应的 JSON Pointer `field_path`。引用为空表示该子图没有选择测量，不从文本或数据值推断引用。
 3. 全部校验通过后，工具返回摘要。任一子图或引用失败时没有部分成功结果；ToolRuntime 将有界错误结果交给 DurableToolExecutor，执行事实仍由 Runtime 提交。
 
 ### 成功结果合同
 
-成功结果恰含下列字段；对象不允许额外属性。Charts 与引用数组顺序保留。字段写入者为 handler，权威位置先是调用期 ToolExecutionResult，随后是 Runtime `ToolResultFact.result`；Agent 只将其需要的摘要构造成调用期 Figure 投影。
+成功结果恰含下列字段；对象不允许额外属性。Charts 与引用数组顺序保留。字段写入者为 handler，权威位置先是调用期 ToolExecutionResult，随后是 Runtime `ToolResultFact.result`；Agent 从成功配对调用重建完整 Figure 和 digest；SYSTEM 资源提示只呈现摘要。
 
 | 完整字段路径 | 类型、必填与约束 | 含义 |
 |---|---|---|
@@ -442,3 +442,5 @@ OCR 既为笛卡尔/Pie 测量提供轴刻度、标签与关联候选，也由 `
 
 `render_chart_figure` 的 `replay_effect` 是 `idempotent_local_write`。文件可以先于 ToolResultFact 安装；在结果未成功提交时它仍是不可从 Agent/Web 读取的孤儿，重放同一调用会验证并复用原文件。工具不会用新内容覆盖损坏或冲突的既有文件。
 将 Registry 从 `figura-web-v5` 提升为 `figura-web-v6` 会使尚无结果的 v5 工具调用不能在 v6 下继续执行。部署切换前应先让 v5 Run 到达终态；该变更不添加 v5 兼容 executor。
+
+绘图的文字布局与百分比规则见[Charts 绘制边界](charts.md#5-png-绘制边界)；模型不新增样式字段。会话删除会清除其私有 Panel/render 文件，详见[Sources](sources.md#2-内部流转与不变量)。已配对完整结果的旧 Registry 调用可以惰性历史进入后续请求，不能因此在新 Registry 下重新执行；未完成调用继续拒绝。旧测量/组装/渲染主规格对 RunExecutionState 分散字段的残留见[总览差异](../figura-implementation-overview.md#规格与实现的已知差异)。

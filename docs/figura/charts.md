@@ -1,6 +1,6 @@
 # Charts：单图与画布内容模型
 
-> [返回总览](../figura-implementation-overview.md)。范围：`src/figura/charts/` 负责 `ChartSpecData` 单图值、`ChartFigure` 多图画布值及纯 PNG 绘制。ChartSpec Core、`add-figura-chart-figure-assembly` 与 `add-figura-chart-rendering` 均已归档并同步主规格；相关代码仍在当前工作树。Charts 只负责从已校验 Figure 生成图像字节，不管理文件存储、运行事实或网页预览。
+> 更新日期：2026-10-02。[返回总览](../figura-implementation-overview.md)。范围：`src/figura/charts/` 负责 `ChartSpecData` 单图值、`ChartFigure` 多图画布值及纯 PNG 绘制。相关实现和后续生成布局修正均已归档；主规格的资源旧字段差异见[总览](../figura-implementation-overview.md#规格与实现的已知差异)。Charts 只负责从已校验 Figure 生成图像字节，不管理文件存储、运行事实或网页预览。
 
 ## 1. 职责与边界
 
@@ -19,9 +19,9 @@ src/figura/charts/
 
 1. **输入**：`parse_chart_spec_data_json` 拒绝重复 JSON key；`parse_chart_spec_data` 严格解析形状、类型、必填字段和未知字段，返回完整 `ChartSpecData` 或有界 `ChartSpecParseError`。解析不会自动修复缺失数据。
 2. **语义校验**：`validate_chart_spec_data` 按图型检查点形状、类别/系列完整性、顺序、范围和有限数值，返回有序且最多 32 条 `ChartSpecIssue`。它不读取 Run、附件或 Evidence。
-3. **规范序列化**：按版本一合同输出确定性 JSON，保持 dataset 和 categories 顺序；序列化上限 256 KiB。未来工具参数仍受工具运行时更小的参数上限约束。
+3. **规范序列化**：按版本一合同输出确定性 JSON，保持 dataset 和 categories 顺序；序列化上限 256 KiB。已接入的 Figure 工具参数仍受工具运行时更小的参数上限约束。
 4. **组装画布**：`parse_chart_figure` 拒绝重复 JSON key、未知字段、非有限数值、布尔数值和超过 64 KiB 的完整 Figure；遗漏 `title` 与 `measurement_refs` 分别规范为 `""` 与空数组。`validate_chart_figure` 检查图表数、唯一 chart_id、列数、引用形状及每个嵌套 ChartSpecData 的语义，返回有界字段路径问题。
-5. **验证引用与留存**：`assemble_chart_figure` 先完成 Charts 校验，再读取当前 Run 的新鲜 `RunExecutionState`，确认每个 `MeasurementRef` 对应同 Session 中已提交成功的测量资源。任一引用不满足就整体失败；成功结果返回 `(run_id, call_id)`、规范 JSON 的 SHA-256、标题和有序子图摘要。Runtime 的既有工具事实保存完整输入与成功结果；Agent 重建的 `chart_figure` 资源保留完整值和 digest，提示清单只包含精简索引，完整结果仍可从普通工具调用历史读取。
+5. **验证引用与留存**：`assemble_chart_figure` 先完成 Charts 校验，再读取当前 Run 的新鲜 `RunExecutionState`，确认每个 `MeasurementRef` 对应同 Session 中已提交成功的测量资源。任一引用不满足就整体失败；成功结果返回 `(run_id, call_id)`、规范 JSON 的 SHA-256、标题和有序子图摘要。Runtime 的既有工具事实保存完整输入与成功结果；Agent 重建的 `chart_figure` 资源保留完整值和 digest，提示清单只包含精简索引，完整 Figure 输入可从普通工具调用历史读取；工具结果是摘要。
 6. **绘制画布**：`render_chart_figure_image` 接收已接受的 `ChartFigure` 值并再次运行纯语义校验，按 `layout.columns` 与子图顺序绘制 bar、line、scatter 或 pie，返回 `(png_bytes, width, height)`。绘制函数不解析工具引用、不读附件或文件，也不自行保存产物；`render_chart_figure` 的调用、持久化和 Agent 回看由[Tools](tools.md#8-图表渲染工具)、[Sources](sources.md#4-存储失败与访问边界)和[Agent](agent.md#4-runexecutionstate-资源合同与完整字段)分别负责。
 
 ```mermaid
@@ -177,6 +177,10 @@ Figure 解析或语义校验产生的安全有界问题；错误不包含提交�
 `render_chart_figure_image(value: ChartFigure) -> tuple[bytes, int, int]` 是 Charts 域内的纯绘制函数；它先运行 `validate_chart_figure`，无效 Figure 抛出 `ValueError`，有效时返回 PNG 字节、像素宽和高。它不接收调用方的尺寸、主题或调色参数，不读 Runtime、Sources 或文件，也不写入渲染产物。模型可见的引用校验与结果字段属于 [render_chart_figure 工具](tools.md#8-图表渲染工具)；保存 PNG 属于 [Sources](sources.md#4-存储失败与访问边界)。
 
 绘制按 `FigureLayout.columns` 和 `ChartFigure.charts` 顺序排列 1–4 张子图；支持 bar、line、scatter 与 pie。每格固定为 6.4 × 4.8 英寸、100 DPI；Figure 标题存在时顶部再加 0.42 英寸。最大输出为 1280 × 1962 像素，编码 PNG 不超过共享 `MAX_IMAGE_BYTES`（24 MiB 减 64 字节）。每格使用固定白底、服务器字体回退和十色调色板：bar 按类别与 series 分组，line 显示点标记，scatter 显示散点，pie 从 90° 顺时针绘制。图表标题、轴标签与范围、来源文字和备注分别取自 ChartSpecData；调用者不能覆盖这些绘图策略。输出大小或尺寸不满足限制时绘制失败，不返回部分产物。
+
+当前绘制按文字实际像素宽度换行，为总标题、各子图标题、来源/备注及绘图区分别预留空间。绘图区在文字布局之后创建，并最多三次按 tight bounding box 缩调；可用文字区域或绘图区过小、文字超出画布、坐标标签越界或饼图标签重叠时返回有界失败，不保存被裁切的成功图片。标题及说明使用普通文本模式，不将 `$` 等内容当数学表达式；没有新增模型控制的样式/尺寸字段。
+
+饼图按每个值除以该图总量显示一位小数百分比；零值省略百分比标注。舍入后的标签合计不强制等于 100%，原 dataset 数值不改写。line 的类别轴按索引位置映射类别；这些表达合同也已写入 ChartSpec Schema 描述，帮助模型生成正确参数。
 
 该函数仅做图形转换，不验证底层数据是否符合图像来源，也不执行生成图审核。工具调用身份、PNG 文件生命周期、运行态投影和网页预览在各自 owner 专题中描述；总流程见[系统总览](../figura-implementation-overview.md#3-跨组件内容流)。
 
