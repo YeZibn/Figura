@@ -230,6 +230,12 @@
 .figura-render-card figcaption { display: grid; gap: 3px; padding: 7px 8px; }
 .figura-render-card figcaption strong { overflow: hidden; color: #40514d; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .figura-render-card figcaption small { overflow: hidden; color: var(--subtle); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.figura-render-caption { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.figura-render-caption > div { display: grid; min-width: 0; gap: 3px; }
+.figura-render-download { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 4px; padding: 5px 7px; border: 1px solid var(--line); border-radius: 5px; background: #fff; color: var(--brand); font-size: 9px; cursor: pointer; }
+.figura-render-download:hover:not(:disabled) { border-color: #9fc2bc; background: var(--brand-wash); }
+.figura-render-download:disabled { opacity: .65; cursor: wait; }
+.figura-render-download-error { color: var(--danger) !important; white-space: normal !important; }
 
 .run-result-heading {
   display: flex;

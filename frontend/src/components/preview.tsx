@@ -93,14 +93,14 @@ export function InteractivePreview({ preview, loader, onClose }: { preview: Prev
   </div>
 }
 
-export function PreviewImage({ loader, resource, fallbackUrl, alt, className, onError, onPreview, sourceLabel = '图片', title, statusLabel }: { loader: PreviewResourceLoader | null; resource?: PreviewResource; fallbackUrl?: string; alt: string; className?: string; onError?: () => void; onPreview?: PreviewOpener; sourceLabel?: string; title?: string; statusLabel?: string }) {
+export function PreviewImage({ loader, resource, fallbackUrl, alt, className, loading, decoding, onError, onPreview, sourceLabel = '图片', title, statusLabel }: { loader: PreviewResourceLoader | null; resource?: PreviewResource; fallbackUrl?: string; alt: string; className?: string; loading?: 'eager' | 'lazy'; decoding?: 'async' | 'sync' | 'auto'; onError?: () => void; onPreview?: PreviewOpener; sourceLabel?: string; title?: string; statusLabel?: string }) {
   const preview = usePreviewResource(loader, resource, fallbackUrl)
   const triggerRef = useRef<HTMLButtonElement>(null)
   const [imageError, setImageError] = useState(false)
   useEffect(() => setImageError(false), [preview.url])
   if (preview.status === 'loading') return <div className="preview-placeholder loading-preview"><LoaderCircle className="spin-icon" size={18} />正在加载预览</div>
   if (preview.status === 'available' && preview.url && !imageError) {
-    const image = <img className={className} src={preview.url} alt={alt} onError={() => { setImageError(true); onError?.() }} />
+    const image = <img className={className} src={preview.url} alt={alt} loading={loading} decoding={decoding} onError={() => { setImageError(true); onError?.() }} />
     if (!onPreview) return image
     return <button ref={triggerRef} type="button" className="preview-trigger" onClick={() => onPreview({ resource, fallbackUrl, alt, title: title || alt, sourceLabel, statusLabel, triggerRef })} aria-label={`查看${title || alt}大图`} title={`查看${title || alt}大图`}>{image}</button>
   }

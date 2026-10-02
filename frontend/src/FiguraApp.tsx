@@ -535,6 +535,8 @@ export function FiguraApp() {
               ?? data?.runs.find((item) => item.runId === runId)?.chartRenders
               ?? []}
             contentUrl={(render) => api.runs.chartRenderContentUrl(activeId, runId, render.callId)}
+            downloadContent={(render) => api.runs.chartRenderContent(activeId, runId, render.callId)}
+            onPreview={setActivePreview}
           />
         </>}
       />

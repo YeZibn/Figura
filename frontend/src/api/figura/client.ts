@@ -62,6 +62,54 @@ export function createFiguraClient(baseUrl = defaultBaseUrl): FiguraClient {
     return payload as T
   }
 
+  async function getChartRenderContent(sessionId: string, runId: string, callId: string): Promise<Blob> {
+    let response: Response
+    try {
+      response = await fetch(buildChartRenderContentUrl(sessionId, runId, callId), { cache: 'no-store' })
+    } catch {
+      throw new FiguraClientError('gateway_unavailable', '无法连接到本地 Figura Gateway。', 0)
+    }
+    if (!response.ok) {
+      let payload: unknown
+      try {
+        payload = await response.json()
+      } catch {
+        payload = undefined
+      }
+      const error = (payload as ErrorEnvelope | undefined)?.error
+      const code = typeof error?.code === 'string' && /^[a-z0-9_]{1,64}$/.test(error.code)
+        ? error.code
+        : 'gateway_error'
+      const message = typeof error?.message === 'string' && error.message.trim()
+        ? error.message.slice(0, 160)
+        : 'Figura Gateway 请求失败。'
+      throw new FiguraClientError(
+        code,
+        message,
+        response.status,
+      )
+    }
+
+    const contentType = (response.headers.get('Content-Type') || '').split(';', 1)[0].trim().toLowerCase()
+    if (contentType !== 'image/png') {
+      throw new FiguraClientError('invalid_chart_render_response', 'Figura Gateway 返回了无效的图表文件。', response.status)
+    }
+    try {
+      const blob = await response.blob()
+      if (blob.size === 0) {
+        throw new FiguraClientError('invalid_chart_render_response', 'Figura Gateway 返回了空的图表文件。', response.status)
+      }
+      return blob
+    } catch (error) {
+      if (error instanceof FiguraClientError) throw error
+      throw new FiguraClientError('invalid_chart_render_response', 'Figura Gateway 返回了无效的图表文件。', response.status)
+    }
+  }
+
+  function buildChartRenderContentUrl(sessionId: string, runId: string, callId: string): string {
+    return `${normalizedBaseUrl}/sessions/${encodeURIComponent(sessionId)}/runs/${encodeURIComponent(runId)}/chart-renders/${encodeURIComponent(callId)}/content`
+  }
+
   return {
     baseUrl: normalizedBaseUrl,
     async getHealth() {
@@ -128,6 +176,7 @@ export function createFiguraClient(baseUrl = defaultBaseUrl): FiguraClient {
         '/sessions/' + encodeURIComponent(sessionId) + '/runs/' + encodeURIComponent(runId) + '/timeline/' + encodeURIComponent(callId),
       )
     },
+    getChartRenderContent,
     subscribeRun(sessionId, runId, callbacks, afterSequence = 0) {
       const source = new EventSource(
         `${normalizedBaseUrl}/sessions/${encodeURIComponent(sessionId)}/runs/${encodeURIComponent(runId)}/events?afterSequence=${Math.max(0, afterSequence)}`,
@@ -171,7 +220,7 @@ export function createFiguraClient(baseUrl = defaultBaseUrl): FiguraClient {
       return `${normalizedBaseUrl}/sessions/${encodeURIComponent(sessionId)}/panels/${encodeURIComponent(panelId)}/content`
     },
     chartRenderContentUrl(sessionId, runId, callId) {
-      return `${normalizedBaseUrl}/sessions/${encodeURIComponent(sessionId)}/runs/${encodeURIComponent(runId)}/chart-renders/${encodeURIComponent(callId)}/content`
+      return buildChartRenderContentUrl(sessionId, runId, callId)
     },
     timelineObservationUrl(sessionId, runId, callId) {
       return `${normalizedBaseUrl}/sessions/${encodeURIComponent(sessionId)}/runs/${encodeURIComponent(runId)}/timeline/${encodeURIComponent(callId)}/observation`

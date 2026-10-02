@@ -141,6 +141,7 @@ export type FiguraClient = {
   getRunHistory(sessionId: string, runId: string, afterSequence?: number): Promise<FiguraRunHistoryDto>
   getRunTimeline(sessionId: string, runId: string): Promise<FiguraToolTimelineSnapshotDto>
   getRunTimelineCall(sessionId: string, runId: string, callId: string): Promise<FiguraToolCallDetailDto>
+  getChartRenderContent(sessionId: string, runId: string, callId: string): Promise<Blob>
   subscribeRun(sessionId: string, runId: string, callbacks: { onEvent(event: AgentRunEvent): void; onError(error: Error): void; onComplete(): void }, afterSequence?: number): RunSubscription
   attachmentContentUrl(sessionId: string, attachmentId: string): string
   panelContentUrl(sessionId: string, panelId: string): string
@@ -170,6 +171,7 @@ export type FiguraWorkspaceApi = {
     history(sessionId: string, runId: string, afterSequence?: number): Promise<RunHistory>
     timeline(sessionId: string, runId: string): Promise<FiguraToolTimelineSnapshotDto>
     timelineCall(sessionId: string, runId: string, callId: string): Promise<FiguraToolCallDetailDto>
+    chartRenderContent(sessionId: string, runId: string, callId: string): Promise<Blob>
     subscribe(sessionId: string, runId: string, callbacks: { onEvent(event: AgentRunEvent): void; onError(error: Error): void; onComplete(): void }, afterSequence?: number): RunSubscription
     chartRenderContentUrl(sessionId: string, runId: string, callId: string): string
     timelineObservationUrl(sessionId: string, runId: string, callId: string): string

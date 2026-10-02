@@ -40,6 +40,7 @@ export function createFiguraWorkspaceApi(client: FiguraClient): FiguraWorkspaceA
       },
       timeline: (sessionId, runId) => client.getRunTimeline(sessionId, runId),
       timelineCall: (sessionId, runId, callId) => client.getRunTimelineCall(sessionId, runId, callId),
+      chartRenderContent: (sessionId, runId, callId) => client.getChartRenderContent(sessionId, runId, callId),
       subscribe: (sessionId, runId, callbacks, afterSequence) => client.subscribeRun(sessionId, runId, callbacks, afterSequence),
       chartRenderContentUrl: (sessionId, runId, callId) => client.chartRenderContentUrl(sessionId, runId, callId),
       timelineObservationUrl: (sessionId, runId, callId) => client.timelineObservationUrl(sessionId, runId, callId),
