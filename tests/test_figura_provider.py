@@ -568,3 +568,87 @@ def test_mimo_custom_token_plan_url_and_key_are_used_as_a_profile_pair() -> None
     assert profile.api_key == "token-plan-key"
     assert profile.timeout_seconds == 90
     assert transport.calls[0]["extra_body"]["thinking"] == {"type": "disabled"}
+
+
+@pytest.mark.parametrize("reasoning", [None, "", "private text"])
+@pytest.mark.parametrize("sdk", [False, True])
+def test_deepseek_preserves_explicit_reasoning_value(reasoning, sdk) -> None:
+    from openai.types.chat import ChatCompletionMessage
+
+    message = {"role": "assistant", "content": "ok", "reasoning_content": reasoning}
+    if sdk:
+        message = ChatCompletionMessage.model_validate(message)
+    transport = FakeTransport({"choices": [{"message": message, "finish_reason": "stop"}]})
+    client = _factory(transport).create(ProviderId.DEEPSEEK, MODEL_IDS[ProviderId.DEEPSEEK])
+    response = _invoke(client, _request(ProviderId.DEEPSEEK))
+    assert response.continuation is not None
+    assert response.continuation.reasoning_content == reasoning
+    request = _request(ProviderId.DEEPSEEK, tools=_TOOLS, thinking_mode=True, messages=(
+        ProviderMessage(MessageRole.ASSISTANT, "ok", continuation=response.continuation),
+        ProviderMessage(MessageRole.USER, "continue"),
+    ))
+    _invoke(client, request)
+    assert "reasoning_content" in transport.calls[-1]["messages"][0]
+    assert transport.calls[-1]["messages"][0]["reasoning_content"] == reasoning
+
+
+@pytest.mark.parametrize("sdk", [False, True])
+def test_deepseek_does_not_invent_an_absent_reasoning_field(sdk) -> None:
+    from openai.types.chat import ChatCompletionMessage
+
+    message = {"role": "assistant", "content": "ok"}
+    if sdk:
+        message = ChatCompletionMessage.model_validate(message)
+    client = _factory(FakeTransport({"choices": [{"message": message, "finish_reason": "stop"}]})).create(
+        ProviderId.DEEPSEEK, MODEL_IDS[ProviderId.DEEPSEEK]
+    )
+    assert _invoke(client, _request(ProviderId.DEEPSEEK)).continuation is None
+
+
+@pytest.mark.parametrize("parts, expected, present", [
+    ([], None, False), ([None], None, True), ([""], "", True),
+    ([None, "", "a", None, "b"], "ab", True),
+])
+def test_deepseek_stream_keeps_reasoning_presence(parts, expected, present) -> None:
+    events = [{"choices": [{"delta": {"reasoning_content": part}, "finish_reason": None}]} for part in parts]
+    events.append({"choices": [{"delta": {"content": "ok"}, "finish_reason": "stop"}]})
+    client = _factory(FakeTransport(events)).create(ProviderId.DEEPSEEK, MODEL_IDS[ProviderId.DEEPSEEK])
+    response = _invoke(client, _request(ProviderId.DEEPSEEK, stream=True))
+    assert (response.continuation is not None) is present
+    if present:
+        assert response.continuation.reasoning_content == expected
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("reasoning", [0, False, [], {}])
+def test_deepseek_rejects_malformed_reasoning(reasoning, stream) -> None:
+    raw = [{"choices": [{"delta": {"reasoning_content": reasoning}, "finish_reason": "stop"}]}] if stream else {
+        "choices": [{"message": {"content": "ok", "reasoning_content": reasoning}, "finish_reason": "stop"}]
+    }
+    client = _factory(FakeTransport(raw)).create(ProviderId.DEEPSEEK, MODEL_IDS[ProviderId.DEEPSEEK])
+    with pytest.raises(ProviderCallError):
+        _invoke(client, _request(ProviderId.DEEPSEEK, stream=stream))
+
+
+def test_deepseek_sdk_unset_default_null_is_absent():
+    from pydantic import BaseModel
+    class Message(BaseModel):
+        content: str = 'ok'
+        reasoning_content: str | None = None
+    for message, present in [(Message(), False), (Message(reasoning_content=None), True)]:
+        client = _factory(FakeTransport({'choices': [{'message': message, 'finish_reason': 'stop'}]})).create(
+            ProviderId.DEEPSEEK, MODEL_IDS[ProviderId.DEEPSEEK])
+        response = _invoke(client, _request(ProviderId.DEEPSEEK))
+        assert (response.continuation is not None) is present
+
+
+@pytest.mark.parametrize('reasoning', [None, '', 'text'])
+def test_deepseek_stream_sdk_extra_field_preserves_value(reasoning):
+    from openai.types.chat import ChatCompletionChunk
+    event = ChatCompletionChunk.model_validate({'id':'chunk', 'object':'chat.completion.chunk',
+        'created':0, 'model':MODEL_IDS[ProviderId.DEEPSEEK], 'choices':[{'index':0,
+        'delta':{'content':'ok', 'reasoning_content':reasoning}, 'finish_reason':'stop'}]})
+    client = _factory(FakeTransport([event])).create(ProviderId.DEEPSEEK, MODEL_IDS[ProviderId.DEEPSEEK])
+    response = _invoke(client, _request(ProviderId.DEEPSEEK, stream=True))
+    assert response.continuation is not None
+    assert response.continuation.reasoning_content == reasoning

@@ -220,10 +220,19 @@ def validate_provider_continuation_fact(
         raise RunError(invalid_code)
     if fact.schema_version != 1:
         raise RunError(RunErrorCode.UNSUPPORTED_VERSION)
-    for value, maximum in (
-        (fact.reasoning_content, MAX_PROVIDER_CONTINUATION_BYTES),
-        (fact.created_at, 64),
+    content = fact.reasoning_content
+    if (
+        (content is not None and not isinstance(content, str))
+        or (fact.provider_id != ProviderId.DEEPSEEK.value and not content)
     ):
+        raise RunError(invalid_code)
+    if isinstance(content, str):
+        try:
+            if len(content.encode("utf-8")) > MAX_PROVIDER_CONTINUATION_BYTES:
+                raise RunError(invalid_code)
+        except UnicodeEncodeError:
+            raise RunError(invalid_code) from None
+    for value, maximum in ((fact.created_at, 64),):
         if not isinstance(value, str) or not value:
             raise RunError(invalid_code)
         try:

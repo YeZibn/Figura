@@ -58,7 +58,7 @@ class ProviderContinuationFact:
     provider_id: str
     format_version: int
     schema_version: int
-    reasoning_content: str = field(repr=False)
+    reasoning_content: str | None = field(repr=False)
     created_at: str
 
 

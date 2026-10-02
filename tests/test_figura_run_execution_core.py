@@ -225,7 +225,7 @@ def test_v4_migration_adds_attachment_table_without_changing_run_state(tmp_path)
     after = migrated_store.read_run_state(session.session_id, run.run_id)
 
     with sqlite3.connect(store.database_path) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 8
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 9
         assert connection.execute("PRAGMA quick_check").fetchone()[0] == "ok"
         assert connection.execute(
             "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'attachments'"
@@ -260,7 +260,7 @@ def test_v5_migration_preserves_attachments_and_adds_panels(tmp_path) -> None:
     after = migrated_store.read_run_state(session.session_id, run.run_id)
 
     with sqlite3.connect(store.database_path) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 8
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 9
         assert connection.execute("PRAGMA quick_check").fetchone()[0] == "ok"
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
         assert connection.execute(
@@ -296,7 +296,7 @@ def test_v7_migration_adds_scoped_deletion_without_changing_run_facts(tmp_path) 
     after = migrated_store.read_run_state(session.session_id, run.run_id)
 
     with sqlite3.connect(store.database_path) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 8
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 9
         assert connection.execute(
             "SELECT session_id FROM session_deletion_scopes"
         ).fetchall() == []
@@ -1146,3 +1146,85 @@ def test_untrusted_session_cannot_read_records_even_if_run_id_is_known(tmp_path)
         app.read_run_state(second.session_id, run.run_id)
 
     assert error.value.code is RunErrorCode.RUN_NOT_FOUND
+
+
+def _make_schema8(store):
+    from figura.storage.schema import _CONTINUATION_SCHEMA
+
+    with sqlite3.connect(store.database_path) as connection:
+        for name in ('continuation_matches_model_response', 'immutable_run_provider_continuation_update',
+                     'immutable_run_provider_continuation_delete'):
+            connection.execute(f'DROP TRIGGER {name}')
+        old_table = _CONTINUATION_SCHEMA[0].replace('run_provider_continuations (', 'run_provider_continuations_old (').replace(
+            "reasoning_content TEXT CHECK (\n            (provider_id = 'deepseek' OR (reasoning_content IS NOT NULL AND length(reasoning_content) > 0))\n            AND (reasoning_content IS NULL OR length(CAST(reasoning_content AS BLOB)) <= 524288)\n        )",
+            'reasoning_content TEXT NOT NULL CHECK (length(reasoning_content) > 0 AND length(CAST(reasoning_content AS BLOB)) <= 524288)'
+        )
+        connection.execute(old_table)
+        connection.execute('INSERT INTO run_provider_continuations_old SELECT * FROM run_provider_continuations')
+        connection.execute('DROP TABLE run_provider_continuations')
+        connection.execute('ALTER TABLE run_provider_continuations_old RENAME TO run_provider_continuations')
+        for statement in _CONTINUATION_SCHEMA[1:]:
+            connection.execute(statement)
+        connection.execute('PRAGMA user_version = 8')
+
+
+@pytest.mark.parametrize('reasoning', [None, '', 'private text'])
+def test_schema9_preserves_explicit_deepseek_values_and_schema8_history(tmp_path, reasoning):
+    from dataclasses import replace
+    store, coordinator = _app(tmp_path)
+    session = coordinator.create_session()
+    run = coordinator.create_run(replace(_request(session.session_id),
+        provider_id='deepseek', model_id=MODEL_IDS[ProviderId.DEEPSEEK]))
+    response = ProviderResponse(ProviderId.DEEPSEEK, MODEL_IDS[ProviderId.DEEPSEEK], 'ok', (),
+        FinishReason.STOP, continuation=ProviderContinuation(ProviderId.DEEPSEEK, 1, 'original'))
+    _commit_response(coordinator, session.session_id, run.run_id, 1, response)
+    state = coordinator.read_run_state(session.session_id, run.run_id)
+    coordinator.complete_run(session.session_id, run.run_id, state.checkpoint.revision)
+    before = coordinator.read_run_state(session.session_id, run.run_id)
+    _make_schema8(store)
+    store = FiguraRunStore(tmp_path)
+    coordinator = RunCoordinator(store, _factory())
+    assert coordinator.read_run_state(session.session_id, run.run_id) == before
+    next_run = coordinator.create_run(replace(_request(session.session_id, key='next'),
+        provider_id='deepseek', model_id=MODEL_IDS[ProviderId.DEEPSEEK]))
+    _commit_response(coordinator, session.session_id, next_run.run_id, 1,
+        replace(response, continuation=ProviderContinuation(ProviderId.DEEPSEEK, 1, reasoning)))
+    restarted = FiguraRunStore(tmp_path)
+    new_state = restarted.read_run_state(session.session_id, next_run.run_id)
+    assert new_state.provider_continuations[0].reasoning_content == reasoning
+    assert 'private text' not in repr(new_state)
+    with sqlite3.connect(store.database_path) as connection:
+        assert connection.execute('PRAGMA user_version').fetchone()[0] == 9
+        assert connection.execute('PRAGMA foreign_key_check').fetchall() == []
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute('DELETE FROM run_provider_continuations')
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute("UPDATE run_provider_continuations SET reasoning_content='changed'")
+
+    coordinator = RunCoordinator(restarted, _factory())
+    coordinator.complete_run(session.session_id, next_run.run_id, new_state.checkpoint.revision)
+    with restarted.database.write() as connection:
+        restarted.begin_session_deletion(connection, session.session_id)
+        restarted.delete_session_run_facts(connection, session.session_id)
+        restarted.delete_session_runs(connection, session.session_id)
+        restarted.complete_session_deletion(connection, session.session_id)
+    assert not restarted.session_exists(session.session_id)
+
+
+def test_schema9_migration_failure_rolls_back_table_and_version(tmp_path, monkeypatch):
+    import figura.storage.schema as schema
+    store, coordinator = _app(tmp_path)
+    session = coordinator.create_session()
+    run = coordinator.create_run(_request(session.session_id))
+    before = coordinator.read_run_state(session.session_id, run.run_id)
+    _make_schema8(store)
+    def fail(_connection):
+        raise RunError(RunErrorCode.INTEGRITY_ERROR)
+    monkeypatch.setattr(schema, '_validate_migration', fail)
+    with pytest.raises(RunError):
+        FiguraRunStore(tmp_path)
+    with sqlite3.connect(store.database_path) as connection:
+        assert connection.execute('PRAGMA user_version').fetchone()[0] == 8
+        assert 'NOT NULL' in connection.execute("SELECT sql FROM sqlite_master WHERE name='run_provider_continuations'").fetchone()[0]
+    monkeypatch.undo()
+    assert FiguraRunStore(tmp_path).read_run_state(session.session_id, run.run_id) == before

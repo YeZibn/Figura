@@ -6,7 +6,7 @@ import sqlite3
 
 from figura.runtime.errors import RunError, RunErrorCode
 
-_SCHEMA_VERSION = 8
+_SCHEMA_VERSION = 9
 
 
 def _run_stream_events_table(table_name: str) -> str:
@@ -163,8 +163,9 @@ _CONTINUATION_SCHEMA = (
         provider_id TEXT NOT NULL CHECK (provider_id IN ('qwen', 'deepseek', 'mimo')),
         format_version INTEGER NOT NULL CHECK (format_version > 0),
         schema_version INTEGER NOT NULL CHECK (schema_version > 0),
-        reasoning_content TEXT NOT NULL CHECK (
-            length(reasoning_content) > 0 AND length(CAST(reasoning_content AS BLOB)) <= 524288
+        reasoning_content TEXT CHECK (
+            (provider_id = 'deepseek' OR (reasoning_content IS NOT NULL AND length(reasoning_content) > 0))
+            AND (reasoning_content IS NULL OR length(CAST(reasoning_content AS BLOB)) <= 524288)
         ),
         created_at TEXT NOT NULL,
         UNIQUE(run_id, response_record_id),
@@ -325,6 +326,25 @@ def _migrate_session_deletion(connection: sqlite3.Connection) -> None:
         connection.execute(statement)
 
 
+def _migrate_continuations(connection: sqlite3.Connection) -> None:
+    for name in (
+        "continuation_matches_model_response",
+        "immutable_run_provider_continuation_update",
+        "immutable_run_provider_continuation_delete",
+    ):
+        connection.execute(f"DROP TRIGGER IF EXISTS {name}")
+    connection.execute(_CONTINUATION_SCHEMA[0].replace(
+        "CREATE TABLE run_provider_continuations", "CREATE TABLE run_provider_continuations_v9"
+    ))
+    connection.execute(
+        "INSERT INTO run_provider_continuations_v9 SELECT * FROM run_provider_continuations"
+    )
+    connection.execute("DROP TABLE run_provider_continuations")
+    connection.execute("ALTER TABLE run_provider_continuations_v9 RENAME TO run_provider_continuations")
+    for statement in _CONTINUATION_SCHEMA[1:]:
+        connection.execute(statement)
+
+
 def initialize_schema(connection: sqlite3.Connection) -> None:
     """Initialize or migrate the database while holding its writer lock."""
     connection.execute("PRAGMA journal_mode = WAL")
@@ -361,7 +381,7 @@ def initialize_schema(connection: sqlite3.Connection) -> None:
         elif version == 3:
             for statement in _PROVIDER_ATTEMPT_SCHEMA:
                 connection.execute(statement)
-        elif version in {4, 5, 6, 7}:
+        elif version in {4, 5, 6, 7, 8}:
             pass
         else:
             raise RunError(RunErrorCode.UNSUPPORTED_VERSION)
@@ -373,8 +393,10 @@ def initialize_schema(connection: sqlite3.Connection) -> None:
         elif version == 5:
             for statement in _PANEL_SCHEMA:
                 connection.execute(statement)
-        if version > 0:
+        if 0 < version < 8:
             _migrate_run_stream_events(connection)
+        if 3 <= version < 9:
+            _migrate_continuations(connection)
         _migrate_session_deletion(connection)
         _validate_migration(connection)
         connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")

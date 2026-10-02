@@ -824,7 +824,8 @@ def test_complete_session_history_message_limit_fails_before_claim(tmp_path, mon
     _assert_request_rejected_before_claim(state, factory)
 
 
-def test_deepseek_replays_prior_run_continuation_before_dispatch(tmp_path) -> None:
+@pytest.mark.parametrize("reasoning", [None, "", "private DeepSeek continuation"])
+def test_deepseek_replays_prior_run_continuation_before_dispatch(tmp_path, reasoning) -> None:
     transport = _PayloadTransport()
     store, coordinator, session, factory = _multi_provider_runtime(tmp_path, transport)
     prior_run = coordinator.create_run(
@@ -837,7 +838,7 @@ def test_deepseek_replays_prior_run_continuation_before_dispatch(tmp_path) -> No
         )
     )
     continuation = ProviderContinuation(
-        ProviderId.DEEPSEEK, 1, "private DeepSeek continuation"
+        ProviderId.DEEPSEEK, 1, reasoning
     )
     _complete_provider_text_run(
         coordinator,
@@ -855,6 +856,8 @@ def test_deepseek_replays_prior_run_continuation_before_dispatch(tmp_path) -> No
             idempotency_key="deepseek-target-run",
         )
     )
+    store = FiguraRunStore(tmp_path)
+    coordinator = RunCoordinator(store, factory)
     dispatch_states = []
     transport.before_create = lambda: dispatch_states.append(
         coordinator.read_run_state(session.session_id, target_run.run_id)
@@ -950,6 +953,8 @@ def test_missing_deepseek_history_continuation_fails_before_claim(tmp_path) -> N
     assert state.run.status is RunStatus.FAILED
     assert state.provider_attempts == ()
     assert transport.calls == []
+    assert "缺少必要" in state.run.terminal_message
+    assert "reasoning_content" not in json.dumps([dict(event.payload) for event in state.events])
 
 
 def test_complete_session_history_does_not_attach_unloaded_images(tmp_path, monkeypatch) -> None:
@@ -1213,3 +1218,30 @@ def test_unsupported_provider_finish_reason_is_committed_then_fails(
     assert state.provider_attempts[0].status.value == "response_committed"
     assert state.tool_facts == ()
     assert len(factory.client.requests) == 1
+
+
+def test_unknown_preparation_error_uses_generic_safe_terminal_message(tmp_path):
+    store, coordinator, session, run = _app(tmp_path)
+    factory = _FakeFactory([])
+    def fail():
+        raise RuntimeError('secret endpoint /private/path reasoning_content')
+    factory.client.after_prepare = fail
+    state = _agent(store, coordinator, _registry(), factory).execute(session.session_id, run.run_id)
+    assert state.run.terminal_message == 'Run 执行未能完成。'
+    assert state.provider_attempts == ()
+    assert factory.client.requests == []
+
+
+def test_terminal_preparation_message_is_allowlisted_and_preserves_stale_check(tmp_path):
+    from figura.runtime.errors import RunError, RunErrorCode
+    from figura.runtime.models import PREPARATION_MESSAGES
+    store, coordinator, session, run = _app(tmp_path)
+    with pytest.raises(RunError) as unsafe:
+        coordinator.fail_run(session.session_id, run.run_id, 1, terminal_message='secret' * 100)
+    assert unsafe.value.code is RunErrorCode.INVALID_REQUEST
+    assert coordinator.read_run_state(session.session_id, run.run_id).run.status is RunStatus.RUNNING
+    with pytest.raises(RunError) as stale:
+        coordinator.fail_run(session.session_id, run.run_id, 2,
+            terminal_message=PREPARATION_MESSAGES['invalid_request'])
+    assert stale.value.code is RunErrorCode.STALE_CHECKPOINT
+    assert coordinator.read_run_state(session.session_id, run.run_id).run.status is RunStatus.RUNNING

@@ -144,6 +144,7 @@ def assemble_chart_figure_definition(
         description=(
             "将 1 到 4 个已结构化的图表按顺序组合为一个 Figure 画布。"
             "每个 chart_spec 必须是完整有效的 ChartSpecData；measurement_refs 仅引用同一 Session 中已成功提交的测量调用。"
+            "pie 数据点使用 category/value，不提供 series，axes 使用 null；多个系列的饼图分别放到独立子图。"
             "该工具只校验并保存组合内容，不绘制图像。"
         ),
         parameters_schema=CHART_FIGURE_SCHEMA,

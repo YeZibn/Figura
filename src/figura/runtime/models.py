@@ -69,6 +69,15 @@ TERMINAL_MESSAGES: Mapping[TerminalCode, str] = MappingProxyType(
 )
 
 
+PREPARATION_MESSAGES: Mapping[str, str] = MappingProxyType({
+    "missing_deepseek_continuation": "DeepSeek 工具历史缺少必要的 reasoning continuation，无法继续请求。",
+    "invalid_request": "模型请求未通过本地校验，无法继续执行。",
+    "unsupported_capability": "当前服务商不支持该请求能力。",
+    "invalid_configuration": "当前模型配置无效，无法准备请求。",
+    "configuration_missing": "当前模型配置不完整，无法准备请求。",
+})
+
+
 @dataclass(frozen=True)
 class Session:
     session_id: str

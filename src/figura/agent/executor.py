@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from figura.runtime.models import PREPARATION_MESSAGES
 from figura.providers import ProviderFactory, ProviderResponse
 from figura.providers.errors import ProviderCallError, ProviderFailureCode
 from figura.runtime.coordinator import RunCoordinator
@@ -102,6 +103,8 @@ class AgentExecutor:
         try:
             try:
                 prepared = client.prepare(request)
+            except ProviderCallError as error:
+                return self._fail_run(state, terminal_message=_preparation_failure_message(error))
             except Exception:
                 return self._fail_run(state)
 
@@ -302,6 +305,8 @@ class AgentExecutor:
         self,
         state: RunState,
         terminal_code: TerminalCode = TerminalCode.EXECUTION_FAILED,
+        *,
+        terminal_message: str | None = None,
     ) -> RunState:
         try:
             self._coordinator.fail_run(
@@ -309,6 +314,7 @@ class AgentExecutor:
                 state.run.run_id,
                 state.checkpoint.revision,
                 terminal_code,
+                terminal_message=terminal_message,
             )
         except RunError as error:
             if error.code not in {RunErrorCode.STALE_CHECKPOINT, RunErrorCode.INVALID_TRANSITION}:
@@ -326,3 +332,13 @@ def _accepted_provider_response(response: object) -> bool:
         and not response.tool_calls
         and bool(response.assistant_content.strip())
     )
+
+
+def _preparation_failure_message(error: ProviderCallError) -> str | None:
+    failure = error.failure
+    key = failure.failure_code.value
+    if key == "invalid_request" and failure.safe_message == (
+        "DeepSeek thinking 模式的工具历史必须包含 reasoning continuation。"
+    ):
+        key = "missing_deepseek_continuation"
+    return PREPARATION_MESSAGES.get(key)

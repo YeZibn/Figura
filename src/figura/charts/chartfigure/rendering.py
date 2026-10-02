@@ -5,12 +5,16 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Mapping
 from io import BytesIO
-from math import ceil
+from math import ceil, fsum
 
 import matplotlib as mpl
 from matplotlib.axes import Axes as PlotAxes
+from matplotlib.backend_bases import RendererBase
+from matplotlib.text import Text
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.figure import Figure
+from matplotlib.font_manager import FontProperties
+from matplotlib.transforms import Bbox
 
 from figura.charts.chartspec.models import (
     Axes,
@@ -60,40 +64,61 @@ def render_chart_figure_image(value: ChartFigure) -> tuple[bytes, int, int]:
         facecolor="white",
     )
     canvas = FigureCanvasAgg(figure)
-    axes = figure.subplots(rows, value.layout.columns, squeeze=False)
-
     with mpl.rc_context(
         {
             "font.family": "sans-serif",
-            "font.sans-serif": [
-                "PingFang SC",
-                "Arial Unicode MS",
-                "Noto Sans CJK SC",
-                "DejaVu Sans",
-            ],
+            "font.sans-serif": ["PingFang SC", "Arial Unicode MS", "Noto Sans CJK SC", "DejaVu Sans"],
             "axes.unicode_minus": False,
             "axes.facecolor": "white",
-            "figure.facecolor": "white",
-            "savefig.facecolor": "white",
         }
     ):
+        width, height = canvas.get_width_height()
+        canvas.draw()
+        renderer = canvas.get_renderer()
+        top = height - 12
+        if value.title:
+            title = _canvas_text(figure, renderer, value.title, 20, top, width - 40, 16, bold=True)
+            canvas.draw()
+            top = title.get_window_extent(renderer).y0 - 16
+        cell_height = (top - 12) / rows
+        cell_width = width / value.layout.columns
+        regions: list[tuple[PlotAxes, Bbox]] = []
         for index, chart in enumerate(value.charts):
             row, column = divmod(index, value.layout.columns)
-            _render_chart(axes[row][column], chart)
-        for index in range(chart_count, rows * value.layout.columns):
-            row, column = divmod(index, value.layout.columns)
-            axes[row][column].set_visible(False)
-
-        if value.title:
-            figure.suptitle(value.title, y=0.99, fontsize=16, fontweight="bold")
-        figure.subplots_adjust(
-            left=0.1,
-            right=0.97,
-            bottom=0.1,
-            top=0.92 if value.title else 0.96,
-            wspace=0.28,
-            hspace=0.55,
-        )
+            left = column * cell_width + 16
+            right = (column + 1) * cell_width - 16
+            bottom = top - (row + 1) * cell_height + 12
+            child_top = top - row * cell_height - 8
+            metadata = chart.chart_spec.metadata
+            if metadata.title:
+                title = _canvas_text(figure, renderer, metadata.title, left, child_top, right - left, 12)
+                canvas.draw()
+                child_top = title.get_window_extent(renderer).y0 - 12
+            caption = "\n".join(text for text in (metadata.source, metadata.note) if text)
+            if caption:
+                text = _canvas_text(figure, renderer, caption, left, bottom, right - left, 8, bottom=True)
+                canvas.draw()
+                bottom = text.get_window_extent(renderer).y1 + 12
+            region = Bbox.from_extents(left, bottom, right, child_top)
+            if region.height < 140:
+                raise ValueError("ChartFigure text does not fit the canvas")
+            axis = figure.add_axes([
+                (left + 50) / width, (bottom + 45) / height,
+                (region.width - 75) / width, (region.height - 60) / height,
+            ])
+            _render_chart(axis, chart)
+            _fit_plot(axis, region, canvas)
+            regions.append((axis, region))
+        canvas.draw()
+        if any(not _contains(figure.bbox, text.get_window_extent(renderer)) for text in figure.texts):
+            raise ValueError("ChartFigure text does not fit the canvas")
+        for axis, region in regions:
+            bbox = axis.get_tightbbox(renderer)
+            if bbox is None or not _contains(region, bbox):
+                raise ValueError("ChartFigure plot labels do not fit the canvas")
+            labels = [text.get_window_extent(renderer) for text in axis.texts if text.get_text()]
+            if any(a.overlaps(b) for index, a in enumerate(labels) for b in labels[index + 1:]):
+                raise ValueError("ChartFigure pie labels overlap")
         output = BytesIO()
         canvas.print_png(output)
 
@@ -118,26 +143,58 @@ def _render_chart(axis: PlotAxes, item: ChartFigureItem) -> None:
     else:
         raise ValueError("unsupported chart type")
 
-    if metadata.title:
-        axis.set_title(metadata.title, fontsize=12)
     if isinstance(spec.axes, Axes):
         axis.set_xlabel(spec.axes.x.label)
         axis.set_ylabel(spec.axes.y.label)
         _apply_axis_bounds(axis, spec.axes)
 
-    caption = "\n".join(text for text in (metadata.source, metadata.note) if text)
-    if caption:
-        axis.text(
-            0,
-            -0.2,
-            caption,
-            transform=axis.transAxes,
-            ha="left",
-            va="top",
-            fontsize=8,
-            color="#666666",
-            wrap=True,
-        )
+
+def _canvas_text(
+    figure: Figure, renderer: RendererBase, content: str,
+    x: float, y: float, width: float, size: int,
+    *, bold: bool = False, bottom: bool = False,
+) -> Text:
+    font = FontProperties(size=size, weight="bold" if bold else "normal")
+    lines = []
+    for paragraph in content.split("\n"):
+        line = ""
+        for char in paragraph:
+            candidate = line + char
+            measured = renderer.get_text_width_height_descent(candidate, font, ismath=False)[0]
+            if measured > width and line:
+                lines.append(line.rstrip())
+                line = char
+            else:
+                line = candidate
+        lines.append(line.rstrip())
+    return figure.text(
+        x / figure.bbox.width, y / figure.bbox.height, "\n".join(lines),
+        ha="left", va="bottom" if bottom else "top", fontproperties=font, parse_math=False,
+        color="#666666" if size == 8 else "#222222",
+    )
+
+
+def _contains(outer: Bbox, inner: Bbox) -> bool:
+    return (inner.x0 >= outer.x0 - 1 and inner.y0 >= outer.y0 - 1
+            and inner.x1 <= outer.x1 + 1 and inner.y1 <= outer.y1 + 1)
+
+
+def _fit_plot(axis: PlotAxes, region: Bbox, canvas: FigureCanvasAgg) -> None:
+    for _ in range(3):
+        canvas.draw()
+        bbox = axis.get_tightbbox(canvas.get_renderer())
+        if bbox is None or _contains(region, bbox):
+            return
+        position = axis.get_window_extent()
+        left = position.x0 + max(0, region.x0 - bbox.x0)
+        bottom = position.y0 + max(0, region.y0 - bbox.y0)
+        right = position.x1 - max(0, bbox.x1 - region.x1)
+        top = position.y1 - max(0, bbox.y1 - region.y1)
+        if right - left < 100 or top - bottom < 100:
+            raise ValueError("ChartFigure plot does not fit the canvas")
+        axis.set_position(Bbox.from_extents(left, bottom, right, top).transformed(
+            axis.figure.transFigure.inverted()
+        ))
 
 
 def _render_bar(axis: PlotAxes, item: ChartFigureItem) -> None:
@@ -206,10 +263,19 @@ def _render_pie(axis: PlotAxes, item: ChartFigureItem) -> None:
     points = tuple(
         point for point in item.chart_spec.dataset if isinstance(point, CategoryValuePoint)
     )
+    total = fsum(point.value for point in points)
+    percentages = iter(point.value / total * 100 for point in points)
+
+    def percentage_label(_percent: float) -> str:
+        percent = next(percentages)
+        return f"{percent:.1f}%" if percent > 0 else ""
+
     axis.pie(
         [point.value for point in points],
         labels=[point.category for point in points],
         colors=[_COLORS[index % len(_COLORS)] for index in range(len(points))],
+        autopct=percentage_label,
+        textprops={"fontsize": 9},
         startangle=90,
         counterclock=False,
     )

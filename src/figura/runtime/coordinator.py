@@ -243,6 +243,8 @@ class RunCoordinator:
         run_id: str,
         expected_revision: int,
         terminal_code: TerminalCode = TerminalCode.EXECUTION_FAILED,
+        *,
+        terminal_message: str | None = None,
     ) -> Run:
         if type(expected_revision) is not int or expected_revision < 1:
             raise RunError(RunErrorCode.INVALID_REQUEST)
@@ -254,6 +256,7 @@ class RunCoordinator:
             expected_revision=expected_revision,
             status=RunStatus.FAILED,
             terminal_code=terminal_code,
+            terminal_message=terminal_message,
         )
 
     def interrupt_run(self, session_id: str, run_id: str, expected_revision: int) -> Run:
@@ -328,10 +331,11 @@ class RunCoordinator:
                 raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
             if continuation.format_version != 1:
                 raise RunError(RunErrorCode.UNSUPPORTED_VERSION)
+            content = continuation.reasoning_content
             if (
-                not isinstance(continuation.reasoning_content, str)
-                or _byte_length(continuation.reasoning_content) == 0
-                or _byte_length(continuation.reasoning_content) > MAX_PROVIDER_CONTINUATION_BYTES
+                (content is not None and not isinstance(content, str))
+                or (provider_id is not ProviderId.DEEPSEEK and not content)
+                or (isinstance(content, str) and _byte_length(content) > MAX_PROVIDER_CONTINUATION_BYTES)
             ):
                 raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
             if not isinstance(continuation_ref, str) or not continuation_ref or _byte_length(continuation_ref) > 128:

@@ -9,6 +9,7 @@ from .limits import CHART_SPEC_SCHEMA_VERSION, MAX_DATA_POINTS, MAX_FINITE_NUMBE
 
 
 _SERIES_SCHEMA: dict[str, Any] = {
+    "description": "系列名称；pie 不提供此字段。",
     "type": "string",
     "minLength": 1,
     "maxLength": MAX_TEXT_LENGTH,
@@ -84,6 +85,7 @@ CHART_SPEC_DATA_SCHEMA: dict[str, Any] = {
         },
         "metadata": _METADATA_SCHEMA,
         "axes": {
+            "description": "bar/line/scatter 需要坐标轴；pie 使用 null。",
             "anyOf": [
                 {
                     "type": "object",
@@ -98,6 +100,7 @@ CHART_SPEC_DATA_SCHEMA: dict[str, Any] = {
             ]
         },
         "dataset": {
+            "description": "pie 使用 category/value，不提供 series；多个系列作为独立 ChartFigure 子图。",
             "type": "array",
             "items": {
                 "anyOf": [

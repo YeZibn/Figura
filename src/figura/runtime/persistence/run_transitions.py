@@ -20,6 +20,7 @@ from ..models import (
     Run,
     RunStatus,
     TERMINAL_MESSAGES,
+    PREPARATION_MESSAGES,
     TerminalCode,
 )
 from ..records import (
@@ -107,6 +108,7 @@ class RunTransitionRepository:
         expected_revision: int,
         status: RunStatus,
         terminal_code: TerminalCode,
+        terminal_message: str | None = None,
     ) -> Run:
         if status not in {RunStatus.FAILED, RunStatus.INTERRUPTED}:
             raise RunError(RunErrorCode.INVALID_TRANSITION)
@@ -114,7 +116,18 @@ class RunTransitionRepository:
             raise RunError(RunErrorCode.INVALID_TRANSITION)
         now = _utc_now()
         event_kind = EventKind.RUN_INTERRUPTED if status is RunStatus.INTERRUPTED else EventKind.RUN_FAILED
-        message = TERMINAL_MESSAGES[terminal_code]
+        if terminal_message is not None:
+            try:
+                valid = isinstance(terminal_message, str) and 0 < len(terminal_message.encode("utf-8")) <= 256
+            except UnicodeEncodeError:
+                valid = False
+            if (
+                not valid
+                or terminal_code is not TerminalCode.EXECUTION_FAILED
+                or terminal_message not in PREPARATION_MESSAGES.values()
+            ):
+                raise RunError(RunErrorCode.INVALID_REQUEST)
+        message = terminal_message if terminal_message is not None else TERMINAL_MESSAGES[terminal_code]
         with self._database.write() as connection:
             run = self._runs._scoped_run(connection, session_id, run_id)
             checkpoint = self._runs._checkpoint_for_write(connection, run_id)

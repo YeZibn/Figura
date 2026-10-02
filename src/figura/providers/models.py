@@ -73,12 +73,12 @@ class ProviderContinuation:
     """Provider-private data needed to continue a later call.
 
     The payload is deliberately excluded from repr and public projections. It
-    is transient in this change; durable ownership belongs to a later change.
+    is persisted privately by Runtime with its originating model response.
     """
 
     provider_id: ProviderId
     format_version: int
-    reasoning_content: str = field(repr=False)
+    reasoning_content: str | None = field(repr=False)
 
 
 @dataclass(frozen=True)

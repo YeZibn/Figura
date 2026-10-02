@@ -13,6 +13,7 @@ from .models import (
     RecordKind,
     RunStatus,
     TERMINAL_MESSAGES,
+    PREPARATION_MESSAGES,
     TerminalCode,
 )
 from .records import (
@@ -335,7 +336,10 @@ def _validate_state(state: RunState) -> None:
             code = TerminalCode(run.terminal_code)
         except ValueError:
             raise RunError(RunErrorCode.INTEGRITY_ERROR) from None
-        if run.terminal_message != TERMINAL_MESSAGES[code]:
+        if run.terminal_message != TERMINAL_MESSAGES[code] and not (
+            code is TerminalCode.EXECUTION_FAILED
+            and run.terminal_message in PREPARATION_MESSAGES.values()
+        ):
             raise RunError(RunErrorCode.INTEGRITY_ERROR)
         if (run.status is RunStatus.INTERRUPTED) != (code is TerminalCode.INTERRUPTED):
             raise RunError(RunErrorCode.INTEGRITY_ERROR)

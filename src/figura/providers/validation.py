@@ -147,7 +147,7 @@ def validate_request(request: ProviderRequest, expected_provider: ProviderId) ->
                     pending_tool_calls.add(call.call_id)
                 if message.continuation is not None:
                     _validate_continuation(message.continuation, provider_id)
-                    text_bytes += len(message.continuation.reasoning_content.encode("utf-8"))
+                    text_bytes += len((message.continuation.reasoning_content or "").encode("utf-8"))
         if message.role is not MessageRole.USER and any(isinstance(block, ImageBlock) for block in blocks):
             raise fail(ProviderFailureCode.UNSUPPORTED_CAPABILITY, "图片仅支持出现在 user 消息中。")
 
@@ -194,7 +194,9 @@ def _validate_tool_call(call: object) -> None:
 def _validate_continuation(value: ProviderContinuation, expected: ProviderId) -> None:
     if value.provider_id is not expected or value.format_version != 1:
         raise fail(ProviderFailureCode.INVALID_REQUEST, "续接数据与当前服务商或格式版本不匹配。")
-    if not isinstance(value.reasoning_content, str):
+    if (value.reasoning_content is not None and not isinstance(value.reasoning_content, str)) or (
+        expected is not ProviderId.DEEPSEEK and not value.reasoning_content
+    ):
         raise fail(ProviderFailureCode.INVALID_REQUEST, "续接数据格式无效。")
 
 

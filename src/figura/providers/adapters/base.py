@@ -37,6 +37,7 @@ from ..validation import (
 _MAX_RESPONSE_TEXT_CHARS = 1_048_576
 _MAX_RESPONSE_ID_CHARS = 256
 _MAX_USAGE_VALUE = 2_147_483_647
+_MISSING = object()
 _TOOL_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 
@@ -44,6 +45,15 @@ def value(obj: Any, key: str, default: Any = None) -> Any:
     if isinstance(obj, Mapping):
         return obj.get(key, default)
     return getattr(obj, key, default)
+
+
+def _reasoning_value(message: Any) -> Any:
+    # SDK defaults do not mean the server actually returned this field.
+    fields = getattr(message, "model_fields_set", None)
+    extra = getattr(message, "model_extra", None) or {}
+    if fields is not None and "reasoning_content" not in fields and "reasoning_content" not in extra:
+        return _MISSING
+    return value(message, "reasoning_content", _MISSING)
 
 
 def resolve_options(
@@ -89,8 +99,11 @@ class ProviderPolicy:
         if message is None:
             raise ProviderProtocolError()
         content = value(message, "content") or ""
-        reasoning = value(message, "reasoning_content") or ""
-        if not isinstance(content, str) or not isinstance(reasoning, str):
+        reasoning = (
+            _reasoning_value(message) if self.provider_id is ProviderId.DEEPSEEK
+            else value(message, "reasoning_content") or ""
+        )
+        if not isinstance(content, str):
             raise ProviderProtocolError()
         tool_calls = tuple(
             _normalized_tool_call(
@@ -118,6 +131,7 @@ class ProviderPolicy:
     ) -> ProviderResponse:
         content_parts: list[str] = []
         reasoning_parts: list[str] = []
+        reasoning_present = False
         tool_parts: dict[int, dict[str, str]] = {}
         finish_reason: FinishReason | None = None
         provider_response_id: str | None = None
@@ -138,7 +152,14 @@ class ProviderPolicy:
                 text = value(delta, "content")
                 if isinstance(text, str):
                     content_parts.append(text)
-                reasoning = value(delta, "reasoning_content")
+                reasoning = (
+                    _reasoning_value(delta) if self.provider_id is ProviderId.DEEPSEEK
+                    else value(delta, "reasoning_content")
+                )
+                if self.provider_id is ProviderId.DEEPSEEK and reasoning is not _MISSING:
+                    reasoning_present = True
+                    if reasoning is not None and not isinstance(reasoning, str):
+                        raise ProviderProtocolError()
                 if isinstance(reasoning, str):
                     reasoning_parts.append(reasoning)
                 for fallback_index, tool_delta in enumerate(value(delta, "tool_calls", ()) or ()):
@@ -178,6 +199,11 @@ class ProviderPolicy:
         for index in sorted(tool_parts):
             entry = tool_parts[index]
             tool_calls.append(_normalized_tool_call(entry["call_id"], entry["name"], entry["arguments"]))
+        reasoning_content = "".join(reasoning_parts)
+        if self.provider_id is ProviderId.DEEPSEEK:
+            reasoning_content = (
+                reasoning_content if reasoning_parts else None
+            ) if reasoning_present else _MISSING
         return _response(
             self.provider_id,
             request.model_id,
@@ -186,7 +212,7 @@ class ProviderPolicy:
             finish_reason,
             usage,
             provider_response_id,
-            "".join(reasoning_parts),
+            reasoning_content,
         )
 
     def _base_payload(
@@ -290,17 +316,18 @@ def _response(
     finish_reason: FinishReason,
     usage: ProviderUsage | None,
     provider_response_id: str | None,
-    reasoning_content: str,
+    reasoning_content: Any,
 ) -> ProviderResponse:
     if not isinstance(assistant_content, str) or len(assistant_content) > _MAX_RESPONSE_TEXT_CHARS:
         raise ProviderProtocolError()
-    if not isinstance(reasoning_content, str) or len(reasoning_content) > _MAX_RESPONSE_TEXT_CHARS:
-        raise ProviderProtocolError()
-    continuation = (
-        ProviderContinuation(provider_id, 1, reasoning_content)
-        if reasoning_content
-        else None
-    )
+    continuation = None
+    if reasoning_content is not _MISSING:
+        if reasoning_content is not None and (
+            not isinstance(reasoning_content, str) or len(reasoning_content) > _MAX_RESPONSE_TEXT_CHARS
+        ):
+            raise ProviderProtocolError()
+        if provider_id is ProviderId.DEEPSEEK or reasoning_content:
+            continuation = ProviderContinuation(provider_id, 1, reasoning_content)
     return ProviderResponse(
         provider_id=provider_id,
         model_id=model_id,

@@ -283,6 +283,7 @@ class FiguraRunStore:
         expected_revision: int,
         status: RunStatus,
         terminal_code: TerminalCode,
+        terminal_message: str | None = None,
     ) -> Run:
         return self._transitions.terminal_run(
             session_id=session_id,
@@ -290,4 +291,5 @@ class FiguraRunStore:
             expected_revision=expected_revision,
             status=status,
             terminal_code=terminal_code,
+            terminal_message=terminal_message,
         )
