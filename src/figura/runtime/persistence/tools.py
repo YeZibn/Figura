@@ -33,6 +33,7 @@ from .mappers import (
     _encode_action,
     _tool_fact_from_row,
 )
+from .controls import assert_not_stopped, read_stop_request
 from .runs import RunRepository
 from .transaction_helpers import _append_run_event, _insert_tool_fact
 
@@ -69,6 +70,7 @@ class ToolRepository:
 
         with self._database.write() as connection:
             run = self._runs._scoped_run(connection, session_id, run_id)
+            assert_not_stopped(connection, run_id)
             checkpoint = self._runs._checkpoint_for_write(connection, run_id)
             if run.status is not RunStatus.RUNNING:
                 raise RunError(RunErrorCode.INVALID_TRANSITION)
@@ -172,6 +174,7 @@ class ToolRepository:
 
         with self._database.write() as connection:
             run = self._runs._scoped_run(connection, session_id, run_id)
+            assert_not_stopped(connection, run_id)
             checkpoint = self._runs._checkpoint_for_write(connection, run_id)
             if run.status is not RunStatus.RUNNING:
                 raise RunError(RunErrorCode.INVALID_TRANSITION)

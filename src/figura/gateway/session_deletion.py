@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import shutil
+from contextlib import ExitStack
+from figura.runtime.run_lock import RunExecutionOwnership, RunExecutionLockUnavailable
 from pathlib import Path
 
 from figura.runtime.errors import RunError, RunErrorCode
@@ -42,6 +44,16 @@ class FiguraSessionDeletion:
             raise RunError(RunErrorCode.STORAGE_ERROR) from None
 
     def delete(self, session_id: str) -> None:
+        snapshot = self._store.read_session_snapshot(session_id)
+        try:
+            with ExitStack() as locks:
+                for state in snapshot.run_states:
+                    locks.enter_context(RunExecutionOwnership(self._store.data_root).acquire(state.run.run_id))
+                self._delete_locked(session_id)
+        except RunExecutionLockUnavailable:
+            raise RunError(RunErrorCode.SESSION_HAS_RUNNING_RUN) from None
+
+    def _delete_locked(self, session_id: str) -> None:
         if not _is_session_id(session_id):
             raise RunError(RunErrorCode.INVALID_REQUEST)
         session_trash = self._trash_root / session_id

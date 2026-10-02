@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import defaultdict
 
 from figura.shared.json_schema import JsonValueError, canonical_json_dumps
+from figura.runtime.validation import _validate_state
 from figura.runtime.errors import RunError, RunErrorCode
 from figura.runtime.models import RecordKind, Run, RunStatus, ToolFactKind
 from figura.runtime.records import (
@@ -19,6 +20,9 @@ from figura.runtime.records import (
 )
 
 from .models import (
+    IncompleteBatchContext,
+    IncompleteCallContext,
+    RunHistoryOutcome,
     AssistantMessage,
     MemoryMessage,
     MemoryToolCall,
@@ -48,6 +52,7 @@ def project_session_history(
         raise RunError(RunErrorCode.INTEGRITY_ERROR)
 
     messages: list[MemoryMessage] = []
+    outcomes: list[RunHistoryOutcome] = []
     for state in prior_states:
         if (
             not isinstance(state, RunState)
@@ -55,17 +60,32 @@ def project_session_history(
             or state.run.status is RunStatus.RUNNING
         ):
             raise RunError(RunErrorCode.INVALID_TRANSITION)
-        messages.extend(project_run_messages(state))
+        _validate_state(state)
+        batches: list[IncompleteBatchContext] = []
+        abnormal = state.run.status in {RunStatus.FAILED, RunStatus.INTERRUPTED}
+        messages.extend(_project_run_messages(state, batches if abnormal else None))
+        if abnormal:
+            outcomes.append(RunHistoryOutcome(
+                state.run.run_id, state.run.ordinal, state.run.status.value,
+                state.run.terminal_code, tuple(batches),
+            ))
     return SessionHistory(
         session_id=target_run.session_id,
         target_run_id=target_run.run_id,
         target_run_ordinal=target_run.ordinal,
         messages=tuple(messages),
+        run_outcomes=tuple(outcomes),
     )
 
 
 def project_run_messages(state: RunState) -> tuple[MemoryMessage, ...]:
     """Project one Run's committed user, assistant, and tool messages."""
+    return _project_run_messages(state, None)
+
+
+def _project_run_messages(
+    state: RunState, batches: list[IncompleteBatchContext] | None,
+) -> tuple[MemoryMessage, ...]:
     if not isinstance(state, RunState):
         raise RunError(RunErrorCode.INTEGRITY_ERROR)
     run = state.run
@@ -147,6 +167,28 @@ def project_run_messages(state: RunState) -> tuple[MemoryMessage, ...]:
         if bool(call_pairs) != (record.payload.finish_reason == "tool_calls"):
             raise RunError(RunErrorCode.INTEGRITY_ERROR)
 
+        incomplete = any(sequence not in results_by_call for sequence, _ in call_pairs)
+        if incomplete and batches is not None:
+            calls = []
+            for sequence, call in call_pairs:
+                results = results_by_call.get(sequence, ())
+                if len(results) > 1:
+                    raise RunError(RunErrorCode.INTEGRITY_ERROR)
+                result_sequence, result = results[0] if results else (None, None)
+                status = (
+                    "committed_success" if result.outcome.value == "succeeded" else "committed_failure"
+                ) if result is not None else (
+                    "outcome_unknown" if attempts_by_call.get(sequence) else "not_started"
+                )
+                calls.append(IncompleteCallContext(
+                    call.call_id, sequence, call.tool_name, call.position, status,
+                    result_sequence, tool_observation(result) if result is not None else None,
+                ))
+            batches.append(IncompleteBatchContext(
+                record.record_id, record.payload.assistant_content, tuple(calls),
+            ))
+            continue
+
         tool_calls = tuple(
             MemoryToolCall(
                 call_id=call.call_id,
@@ -195,7 +237,7 @@ def project_run_messages(state: RunState) -> tuple[MemoryMessage, ...]:
         raise RunError(RunErrorCode.INTEGRITY_ERROR)
     if any(len(results) != 1 for results in results_by_call.values()):
         raise RunError(RunErrorCode.INTEGRITY_ERROR)
-    if any(sequence not in results_by_call for sequence in calls_by_sequence):
+    if batches is None and any(sequence not in results_by_call for sequence in calls_by_sequence):
         raise RunError(RunErrorCode.INVALID_TRANSITION)
     return tuple(messages)
 

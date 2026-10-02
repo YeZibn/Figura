@@ -94,6 +94,7 @@ export function FiguraApp() {
   const trackRun = (sessionId: string, runId: string, afterSequence: number) => {
     controllerRef.current?.close()
     const controller = createRunController({
+      activityPollIntervalMs: 2000,
       client: {
         getRunHistory: (id, targetRunId, after) => api.runs.history(id, targetRunId, after),
         subscribeRun: (id, targetRunId, callbacks, after) => api.runs.subscribe(id, targetRunId, callbacks, after),
@@ -112,6 +113,7 @@ export function FiguraApp() {
             summary: { ...item.summary, eventCount: Math.max(item.summary.eventCount, event.sequence), updatedAt: event.timestamp },
           } : item))
           if (event.kind === 'run_progress') {
+            void controllerRef.current?.reconcile()
             void api.runs.timeline(sessionId, runId).then((snapshot) => {
               if (activeIdRef.current === sessionId) {
                 setToolTimelines((current) => ({ ...current, [runId]: snapshot }))
@@ -216,14 +218,8 @@ export function FiguraApp() {
       activeRunRef.current = { sessionId: activeId, runId, lastSequence: cursor }
       setActiveRunId(runId)
       setRunState('running')
-      if (running.summary.executionState === 'needs_reconciliation') {
-        setLoading(false)
-        controllerRef.current?.close()
-        controllerRef.current = null
-      } else {
-        setLoading(true)
-        trackRun(activeId, runId, cursor)
-      }
+      setLoading(true)
+      trackRun(activeId, runId, cursor)
     }).catch((reason) => {
       if (current) setError(toUserMessage(reason))
     }).finally(() => {
@@ -276,6 +272,7 @@ export function FiguraApp() {
   }
 
   const requestDeleteSession = (sessionId: string) => {
+    if (sessionId === activeIdRef.current && activeRunRef.current) return
     const session = sessions.find((item) => item.id === sessionId)
     if (!session) return
     setDeleteError(null)
@@ -285,6 +282,7 @@ export function FiguraApp() {
   const confirmDeleteSession = async () => {
     if (!confirmAction || confirmAction.kind !== 'session' || deletingSession) return
     const deletedSession = confirmAction.session
+    if (deletedSession.id === activeIdRef.current && activeRunRef.current) return
     const deletedIndex = sessions.findIndex((item) => item.id === deletedSession.id)
     setDeletingSession(true)
     setDeleteError(null)
@@ -459,6 +457,27 @@ export function FiguraApp() {
     }
   }
 
+  const [requestingStop, setRequestingStop] = useState(false)
+  const activeSummary = timelines.find((item) => item.summary.runId === activeRunId)?.summary
+  const stopping = requestingStop || activeSummary?.executionState === 'stopping'
+  const requestStop = async () => {
+    const active = activeRunRef.current
+    if (!active || stopping) return
+    setRequestingStop(true)
+    try {
+      const summary = await api.runs.requestRunStop(active.sessionId, active.runId)
+      if (activeIdRef.current === active.sessionId) {
+        setTimelines((items) => items.map((item) => item.summary.runId === active.runId ? { ...item, summary } : item))
+      }
+      await controllerRef.current?.reconcile()
+    } catch (reason) {
+      setError(toUserMessage(reason))
+      await controllerRef.current?.reconcile()
+    } finally {
+      setRequestingStop(false)
+    }
+  }
+
   const changeProvider = (value: string) => {
     if (!providers.includes(value as FiguraProviderId)) return
     const next = value as FiguraProviderId
@@ -490,6 +509,7 @@ export function FiguraApp() {
         onSelect={selectSession}
         onCreate={openCreateSession}
         onDelete={requestDeleteSession}
+        disabledDeleteSessionId={activeRunId ? activeId : undefined}
         mode="figura"
         runtimeStatus={null}
         health={null}
@@ -511,6 +531,8 @@ export function FiguraApp() {
         onProviderValueChange={changeProvider}
         onSubmit={submit}
         hideRunActions
+        onFiguraStop={activeSummary?.availableActions?.includes('stop') || stopping ? () => void requestStop() : undefined}
+        figuraStopping={stopping}
         submissionBlocked={Boolean(activeRunId)}
         loading={loading}
         loadingSession={loadingSession}

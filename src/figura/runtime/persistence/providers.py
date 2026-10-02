@@ -47,6 +47,7 @@ from ..records import (
 )
 from ..validation import _validate_id
 from .mappers import _encode_action
+from .controls import assert_not_stopped, read_stop_request
 from .runs import RunRepository
 from .transaction_helpers import _append_run_event, _next_event_sequence
 
@@ -70,6 +71,7 @@ class ProviderRepository:
         now = _utc_now()
         with self._database.write() as connection:
             run = self._runs._scoped_run(connection, session_id, run_id)
+            assert_not_stopped(connection, run_id)
             checkpoint = self._runs._checkpoint_for_write(connection, run_id)
             if run.status is not RunStatus.RUNNING:
                 raise RunError(RunErrorCode.INVALID_TRANSITION)
@@ -338,6 +340,13 @@ class ProviderRepository:
         )
         with self._database.write() as connection:
             run = self._runs._scoped_run(connection, session_id, run_id)
+            stopping = read_stop_request(connection, run_id) is not None
+            if stopping:
+                terminal_code = TerminalCode.INTERRUPTED
+                message = TERMINAL_MESSAGES[terminal_code]
+                event_json = encode_event_payload(EventKind.RUN_INTERRUPTED, {"terminal_code": terminal_code.value})
+            status = RunStatus.INTERRUPTED if stopping else RunStatus.FAILED
+            event_kind = EventKind.RUN_INTERRUPTED if stopping else EventKind.RUN_FAILED
             checkpoint = self._runs._checkpoint_for_write(connection, run_id)
             expected_action = NextAction(
                 ActionKind.PROVIDER_ATTEMPT, attempt_id=attempt_id
@@ -362,9 +371,9 @@ class ProviderRepository:
             if cursor.rowcount != 1:
                 raise RunError(RunErrorCode.INVALID_TRANSITION)
             cursor = connection.execute(
-                "UPDATE runs SET status = 'failed', finished_at = ?, terminal_code = ?, terminal_message = ? "
+                "UPDATE runs SET status = ?, finished_at = ?, terminal_code = ?, terminal_message = ? "
                 "WHERE run_id = ? AND session_id = ? AND status = 'running'",
-                (now, terminal_code.value, message, run_id, session_id),
+                (status.value, now, terminal_code.value, message, run_id, session_id),
             )
             if cursor.rowcount != 1:
                 raise RunError(RunErrorCode.INVALID_TRANSITION)
@@ -378,15 +387,15 @@ class ProviderRepository:
             event_sequence = _next_event_sequence(connection, run_id)
             connection.execute(
                 "INSERT INTO run_stream_events(run_id, event_sequence, event_kind, payload_json, created_at) "
-                "VALUES (?, ?, 'run_failed', ?, ?)",
-                (run_id, event_sequence, event_json, now),
+                "VALUES (?, ?, ?, ?, ?)",
+                (run_id, event_sequence, event_kind.value, event_json, now),
             )
         return Run(
             run_id=run.run_id,
             session_id=run.session_id,
             ordinal=run.ordinal,
             input_record_id=run.input_record_id,
-            status=RunStatus.FAILED,
+            status=status,
             provider=run.provider,
             model=run.model,
             created_at=run.created_at,

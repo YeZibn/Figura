@@ -95,8 +95,10 @@ def _validate_provider_attempts(
                 or not isinstance(attempt.failure_code, str)
                 or not isinstance(attempt.finished_at, str)
                 or not attempt.finished_at
-                or run.status is not RunStatus.FAILED
-                or run.terminal_code != TerminalCode.EXECUTION_FAILED.value
+                or (run.status, run.terminal_code) not in {
+                    (RunStatus.FAILED, TerminalCode.EXECUTION_FAILED.value),
+                    (RunStatus.INTERRUPTED, TerminalCode.INTERRUPTED.value),
+                }
             ):
                 raise RunError(RunErrorCode.INTEGRITY_ERROR)
         elif attempt.status is ProviderAttemptStatus.OUTCOME_UNKNOWN:
@@ -105,8 +107,10 @@ def _validate_provider_attempts(
                 or attempt.response_record_id is not None
                 or not isinstance(attempt.finished_at, str)
                 or not attempt.finished_at
-                or run.status is not RunStatus.FAILED
-                or run.terminal_code != TerminalCode.PROVIDER_OUTCOME_UNKNOWN.value
+                or (run.status, run.terminal_code) not in {
+                    (RunStatus.FAILED, TerminalCode.PROVIDER_OUTCOME_UNKNOWN.value),
+                    (RunStatus.INTERRUPTED, TerminalCode.INTERRUPTED.value),
+                }
             ):
                 raise RunError(RunErrorCode.INTEGRITY_ERROR)
         else:

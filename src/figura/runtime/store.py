@@ -12,6 +12,7 @@ from figura.tools.contracts import ReplayEffect, ToolExecutionResult
 from .models import (
     Run,
     RunStatus,
+    RunStopRequest,
     Session,
     SessionListEntry,
     TerminalCode,
@@ -26,6 +27,7 @@ from .records import (
     ToolCallFact,
     ToolExecutionFact,
 )
+from .persistence.controls import RunControlRepository
 from .persistence.providers import ProviderRepository
 from .persistence.runs import RunRepository
 from .persistence.sessions import SessionRepository
@@ -47,6 +49,10 @@ class FiguraRunStore:
         self._providers = ProviderRepository(self._database, self._runs)
         self._tools = ToolRepository(self._database, self._runs)
         self._transitions = RunTransitionRepository(self._database, self._runs)
+        self._controls = RunControlRepository(self._database, self._runs)
+
+    def request_stop(self, session_id: str, run_id: str) -> RunStopRequest | None:
+        return self._controls.request_stop(session_id, run_id)
 
     @property
     def database(self) -> SqliteDatabase:

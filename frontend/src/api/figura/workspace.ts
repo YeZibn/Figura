@@ -32,6 +32,7 @@ export function createFiguraWorkspaceApi(client: FiguraClient): FiguraWorkspaceA
       contentUrl: (sessionId, panelId) => client.panelContentUrl(sessionId, panelId),
     },
     runs: {
+      requestRunStop: async (sessionId, runId) => mapRun((await client.requestRunStop(sessionId, runId)).run),
       async start(sessionId, text, attachmentIds, providerId, idempotencyKey) {
         return mapRunHandle(await client.startRun(sessionId, text, attachmentIds, providerId, idempotencyKey))
       },
@@ -104,6 +105,8 @@ function mapRun(dto: FiguraRunDto): RunSummary {
     terminalCode: dto.terminalCode,
     terminalMessage: dto.terminalMessage,
     executionState: dto.executionState,
+    stopRequestedAt: dto.stopRequestedAt,
+    availableActions: dto.availableActions,
     chartRenders: dto.chartRenders,
   }
 }

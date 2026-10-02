@@ -24,6 +24,7 @@ export type WorkspaceApi = {
     start(sessionId: string, text: string, attachmentIds: string[], provider: Provider, options: RunStartOptions): Promise<RunHandle>
     resume(sessionId: string, runId: string, options: RunResumeOptions): Promise<RunHandle>
     interrupt(sessionId: string, runId: string): Promise<RunHandle>
+    requestRunStop?(sessionId: string, runId: string): Promise<import('../types/protocol').RunSummary>
     history(sessionId: string, runId: string): Promise<RunHistory>
   }
   evaluations: {

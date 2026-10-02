@@ -1,3 +1,4 @@
+import type { RunSummary } from '../../types/protocol'
 import type { AgentRunEvent, Attachment, ChartRenderSummary, RunHandle, RunHistory, Session, SessionData } from '../../types/protocol'
 import type { RunSubscription } from '../client'
 
@@ -56,7 +57,9 @@ export type FiguraRunDto = {
   finishedAt: string | null
   terminalCode: string | null
   terminalMessage: string | null
-  executionState: 'active' | 'needs_reconciliation'
+  executionState: 'active' | 'needs_reconciliation' | 'queued' | 'executing' | 'recovering' | 'stopping' | 'terminal'
+  stopRequestedAt?: string | null
+  availableActions?: Array<'stop'>
   chartRenders: FiguraChartRenderDto[]
 }
 export type FiguraSessionDataDto = {
@@ -124,7 +127,7 @@ export type FiguraToolCallDetailDto = {
   source?: FiguraToolTimelineSourceDto | null
   observationAvailable?: boolean
 }
-export type FiguraRunHandleDto = Omit<FiguraRunDto, 'executionState' | 'chartRenders'>
+export type FiguraRunHandleDto = Omit<FiguraRunDto, 'executionState' | 'chartRenders' | 'stopRequestedAt' | 'availableActions'>
 
 export type FiguraClient = {
   readonly baseUrl: string
@@ -138,6 +141,7 @@ export type FiguraClient = {
   uploadAttachment(sessionId: string, file: File): Promise<FiguraAttachmentDto>
   deleteAttachment(sessionId: string, attachmentId: string): Promise<void>
   startRun(sessionId: string, text: string, attachmentIds: string[], providerId: FiguraProviderId, idempotencyKey: string): Promise<FiguraRunHandleDto>
+  requestRunStop(sessionId: string, runId: string): Promise<{ run: FiguraRunDto; stopRequest: { requestId: string; requestedAt: string; reason: string } | null }>
   getRunHistory(sessionId: string, runId: string, afterSequence?: number): Promise<FiguraRunHistoryDto>
   getRunTimeline(sessionId: string, runId: string): Promise<FiguraToolTimelineSnapshotDto>
   getRunTimelineCall(sessionId: string, runId: string, callId: string): Promise<FiguraToolCallDetailDto>
@@ -168,6 +172,7 @@ export type FiguraWorkspaceApi = {
   }
   runs: {
     start(sessionId: string, text: string, attachmentIds: string[], providerId: FiguraProviderId, idempotencyKey: string): Promise<RunHandle>
+    requestRunStop(sessionId: string, runId: string): Promise<RunSummary>
     history(sessionId: string, runId: string, afterSequence?: number): Promise<RunHistory>
     timeline(sessionId: string, runId: string): Promise<FiguraToolTimelineSnapshotDto>
     timelineCall(sessionId: string, runId: string, callId: string): Promise<FiguraToolCallDetailDto>

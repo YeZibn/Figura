@@ -1,6 +1,6 @@
 # Memory：当前跨 Run 对话投影
 
-> 更新日期：2026-10-02。[返回系统总览](../figura-implementation-overview.md)。依据：当前 `src/figura/memory/` 与 `src/figura/agent/` 工作树实现，以及 [Session Memory 主规格](../../openspec/figura/openspec/specs/session-memory/spec.md)。本文描述已实现的临时投影，不代表独立的长期记忆存储。
+> 更新日期：2026-10-03。[返回系统总览](../figura-implementation-overview.md)。依据：当前 `src/figura/memory/` 与 `src/figura/agent/` 工作树实现，以及 [Session Memory 主规格](../../openspec/figura/openspec/specs/session-memory/spec.md)。本文描述已实现的临时投影，不代表独立的长期记忆存储。
 
 ## 1. 职责与边界
 
@@ -19,7 +19,7 @@ flowchart LR
     Facts -->|有序 prior RunState 聚合| Repo
     Repo --> Store --> Coordinator -->|先前 RunState tuple| Agent
     Agent -->|目标 Run 与先前 RunState| Memory[Session Memory 投影]
-    Memory -->|SessionHistory 与角色消息| Agent
+    Memory -->|SessionHistory.messages 与 run_outcomes| Agent
     Agent -->|Run 输入、已提交工具事实和 Sources 元数据| State[RunExecutionState]
     State -->|六类类型化资源与精简清单| Agent
     Agent -->|最新工具批次的图像资源引用| Reader[RunExecutionImageReader]
@@ -33,9 +33,9 @@ Runtime 在一个 SQLite 读快照内读取目标 Run 的所有较早 ordinal，
 ## 3. 内部流转与失败边界
 
 1. **读取稳定前缀**：Agent 在模型动作中调用 `RunCoordinator.read_prior_run_states(session_id, run_id)`。RunRepository 对目标 Run 做同 Session 校验，在单个 SQLite 读事务中加载所有较小 ordinal 的 RunState；缺失、ordinal 缺口、跨 Session 或先前仍为 running 时不返回部分历史。
-2. **投影旧 Run**：`project_session_history` 要求先前 Run ordinal 恰为 `1..target_run.ordinal-1`，且 Session 相同、全部终态。它按 Run ordinal 顺序调用 `project_run_messages`。每个 Run 先生成一条用户消息，再按 ExecutionRecord 顺序生成助手消息；工具调用保留 provider 顺序，且每个工具结果与其原 call ID 配对。
-3. **投影当前 Run**：AgentRequestBuilder 同样对当前 Run 已提交前缀调用 `project_run_messages`，将其接在 SessionHistory 后面。最终回答记录只引用已有助手响应，不再产生重复消息。未完成工具批次、无匹配调用的结果、重复/错误来源引用或不受支持的事实会使整次投影失败；不会省略问题消息后继续。
-4. **恢复图像和调用期字段**：每条用户消息保留原文本和有序 attachment ID。AgentRequestBuilder 把消息文本与附件 ID 保留在完整对话中；另外从 RunExecutionState 加入完整的类型化资源清单。当前 Run 最新已提交工具批次中成功的 `load_image`、`extract_text`、四种测量和 `render_chart_figure` 结果，按对应资源引用交给 `RunExecutionImageReader`；Reader 解析原图、内存重建 OCR/测量标注图，或读取校验后的 ChartRender PNG，再按工具调用顺序加入紧接着的 Provider 请求。ChartFigure 资源本身不会隐式渲染，必须由模型显式调用渲染工具。历史 Run 图像不会自动重放。已配对完整结果的旧 registry 工具调用允许作为惰性历史进入请求，不重新执行；未解决调用或不完整批次仍拒绝。Provider continuation 不属于 Memory 投影；Agent 从较早 Run 与当前 Run 的私有事实建立 `(run_id, response_record_id)` 索引，只将 provider 相同、格式版本受支持的值附加到精确对应的 assistant。不同 provider 的续接不附加；所选 Provider 要求但缺少兼容值时，prepare 本地失败，不伪造续接或删掉历史。
+2. **投影旧 Run**：`project_session_history` 要求先前 Run ordinal 恰为 `1..target_run.ordinal-1`，且 Session 相同、全部终态。它先验证 Runtime 聚合，再按 Run ordinal 顺序投影。每个 Run 先生成一条用户消息，再按 ExecutionRecord 顺序生成助手消息；工具调用保留 provider 顺序，且每个工具结果与其原 call ID 配对。
+3. **投影当前 Run**：AgentRequestBuilder 同样对当前 Run 已提交前缀调用 `project_run_messages`，将其接在 SessionHistory 后面。最终回答记录只引用已有助手响应，不再产生重复消息。当前/completed Run 的不完整批次、无匹配调用的结果、重复/错误来源引用或不受支持的事实会使整次投影失败。较早 failed/interrupted Run 的合法尾部按下面的异常投影转换，不能用该转换容忍腐坏。
+4. **恢复图像和调用期字段**：每条用户消息保留原文本和有序 attachment ID。AgentRequestBuilder 把消息文本与附件 ID 保留在完整对话中；另外从 RunExecutionState 加入完整的类型化资源清单。当前 Run 最新已提交工具批次中成功的 `load_image`、`extract_text`、四种测量和 `render_chart_figure` 结果，按对应资源引用交给 `RunExecutionImageReader`；Reader 解析原图、内存重建 OCR/测量标注图，或读取校验后的 ChartRender PNG，再按工具调用顺序加入紧接着的 Provider 请求。ChartFigure 资源本身不会隐式渲染，必须由模型显式调用渲染工具。历史 Run 图像不会自动重放。已配对完整结果的旧 registry 工具调用允许作为惰性历史进入请求，不重新执行；合法异常尾部不作为原生调用消息重放；其余未解决调用或不完整批次仍拒绝。Provider continuation 不属于 Memory 投影；Agent 从较早 Run 与当前 Run 的私有事实建立 `(run_id, response_record_id)` 索引，只将 provider 相同、格式版本受支持的值附加到精确对应的 assistant。不同 provider 的续接不附加；所选 Provider 要求但缺少兼容值时，prepare 本地失败，不伪造续接或删掉历史。
 5. **先准备再领取 attempt**：AgentRequestBuilder 仅组装完整 ProviderRequest；Agent 创建 Provider client 后调用 `prepare` 检查消息、指令、工具、图片及文本/Schema 字节限制，并完成 Provider 专属 payload 准备。通过后才在锁内复查 checkpoint、claim attempt 并 dispatch 已准备请求。Memory 不删旧 Run、不删消息、不总结、不做预算。历史/资源构建失败时不创建 client；超限或缺少必需 continuation 等 prepare 失败时 client 已创建，但不领取 attempt、不发送请求，并由既有 Run 终态保留安全说明。详见[Provider 流转](provider.md#2-内部流转)。
 
 旧 Run 的执行事实不因后续 Run 重写。新消息只有在所属 Run 中提交后，才会在之后的模型动作中被重建；Session Memory 自身没有独立写入、更新或恢复流程。
@@ -102,19 +102,42 @@ Runtime 在一个 SQLite 读快照内读取目标 Run 的所有较早 ordinal，
 | `SessionHistory.target_run_id` | `str` | 必填 | 当前请求所属的目标 Run ID | `project_session_history` → `target_run.run_id` | AgentRequestBuilder → 确认历史边界；仅内部使用，不独立修订 |
 | `SessionHistory.target_run_ordinal` | `int` | 必填 | 目标 Run 在 Session 内的 ordinal | `project_session_history` → `target_run.ordinal` | AgentRequestBuilder → 历史边界和序号校验；仅内部使用，不独立修订 |
 | `SessionHistory.messages` | `tuple[MemoryMessage, ...]` | 默认 `()` | 所有 lower-ordinal Run 的 UserMessage、AssistantMessage、ToolMessage；空 tuple 表示首个 Run | `project_session_history` → 每个更早 Run 的 input/response/tool facts | AgentRequestBuilder → 完整 Provider 对话前缀；内部不可变，不独立公开、裁剪或修订 |
+| `SessionHistory.run_outcomes` | `tuple[RunHistoryOutcome, ...]` | `()`；repr=False | 每个较早 failed/interrupted Run 的终态说明，按 ordinal 有序 | project_session_history → Runtime 原事实 | AgentRequestBuilder → 第三层 JSON；不持久/不公开/不裁剪 |
 
 `MemoryMessage` 是类型别名 `UserMessage | AssistantMessage | ToolMessage`，自身没有 dataclass 字段。模型定义位于 [`memory/models.py`](../../src/figura/memory/models.py)，投影与校验位于 [`memory/projector.py`](../../src/figura/memory/projector.py)。Runtime 源模型和各来源字段的权威表见[运行时字段合同](runtime.md#4-完整模型字段)。
+
+### 合法异常尾部投影
+
+当前工作树已存在，主规格已同步，对应 change 已归档。较早 failed/interrupted Run 保留所有闭合交互和一条原用户消息；整个未完成末尾批次从原生 assistant/tool 消息中转换为以下调用期对象。已提交成功/失败观察只出现在 `prior_run_outcomes`，未知与未开始不生成 tool result，也不生成 continuation。无响应失败仍有 outcome，batches 为空。调用参数保留在 Runtime，不复制进异常说明。成功资源继续由 Agent 从原结果索引和授权读取，未确认文件不成为资源，历史图像不自动加载。
+
+| 完整字段路径 | 类型 | 默认 | 语义 | 写入者 → 权威来源 → 读取/公开 |
+|---|---|---|---|---|
+| RunHistoryOutcome.run_id | str | 必填 | 原 Run 身份 | project_session_history → Run.run_id → Agent 第三层 JSON；临时、不可变、不独立公开 |
+| RunHistoryOutcome.run_ordinal | int | 必填 | 小于目标的原 ordinal | project_session_history → Run.ordinal → Agent 第三层 JSON；临时、不可变、不独立公开 |
+| RunHistoryOutcome.status | str | 必填 | failed/interrupted | project_session_history → Run.status → Agent 第三层 JSON；临时、不可变、不独立公开 |
+| RunHistoryOutcome.terminal_code | str | 必填 | 固定终态码 | project_session_history → Run.terminal_code → Agent 第三层 JSON；临时、不可变、不独立公开 |
+| RunHistoryOutcome.incomplete_batches | tuple[IncompleteBatchContext, ...] | ()；repr=False | 最多一个合法末尾批次 | project_session_history → ModelResponseFact/Tool facts → Agent 第三层 JSON；临时、不可变、不独立公开 |
+| IncompleteBatchContext.source_response_record_id | str | 必填 | 源响应引用 | project_session_history → ExecutionRecord.record_id → Agent 第三层 JSON；临时、不可变、不独立公开 |
+| IncompleteBatchContext.assistant_text | str | 必填；repr=False | 完整原意图文本，可空 | project_session_history → ModelResponseFact.assistant_content → Agent 第三层 JSON；临时、不可变、不独立公开 |
+| IncompleteBatchContext.calls | tuple[IncompleteCallContext, ...] | () | 整个批次，按 position 顺序 | project_session_history → ToolCallFact → Agent 第三层 JSON；临时、不可变、不独立公开 |
+| IncompleteCallContext.call_id | str | 必填 | 原 opaque 调用 ID | project_session_history → ToolCallFact.call_id → Agent 第三层 JSON；临时、不可变、不独立公开 |
+| IncompleteCallContext.tool_call_sequence | int | 必填 | 原调用事实序号 | project_session_history → ToolExecutionFact.tool_sequence → Agent 第三层 JSON；临时、不可变、不独立公开 |
+| IncompleteCallContext.tool_name | str | 必填 | 原工具名 | project_session_history → ToolCallFact.tool_name → Agent 第三层 JSON；临时、不可变、不独立公开 |
+| IncompleteCallContext.position | int | 必填 | 原 Provider 顺序 | project_session_history → ToolCallFact.position → Agent 第三层 JSON；临时、不可变、不独立公开 |
+| IncompleteCallContext.state | str | 必填 | committed_success/committed_failure/not_started/outcome_unknown | project_session_history → ToolResultFact/ToolAttemptStartedFact → Agent 第三层 JSON；临时、不可变、不独立公开 |
+| IncompleteCallContext.source_result_tool_sequence | int 或 None | None | 仅 committed 状态有源结果引用 | project_session_history → 结果 ToolExecutionFact.tool_sequence → Agent 第三层 JSON；临时、不可变、不独立公开 |
+| IncompleteCallContext.observation_json | str 或 None | None；repr=False | 仅 committed 状态完整 tool_observation；未知不伪造观察 | project_session_history → ToolResultFact → Agent 第三层 JSON；临时、不可变、不独立公开 |
 
 ## 5. 不变量、状态与依据
 
 - Memory 仅包含同一 Session 中目标 Run ordinal 之前的终态 Run；时间戳和数据库行顺序不决定对话顺序。
-- 任一历史 Run 无效时整份历史不 dispatch；不通过跳过坏 Run、缺失附件或未完成工具调用来拼装部分对话。
+- 任一历史 Run 无效时整份历史不 dispatch；不跳过坏 Run 或缺失附件；合法终态尾部必须完整转换为异常上下文。
 - 附件 ID 仍由所属 Session 校验，图像字节只在对应的成功 `load_image` 后进入下一次 Provider 请求；Memory 对象中无附件字节和本机路径。
 - Provider continuation 与源 Run/响应绑定；Memory 投影不含该 payload。Agent 在 Provider 请求边界按 `(run_id, source_record_id)` 私下读取兼容续接，仅附加到对应 assistant；不复制到目标 Run，不混入助手正文、提示资产、工具结果或公开 DTO。
 - 完整历史超过 Provider 硬限制时当前 Run 在 Provider attempt claim 前失败；持久 Run 事实与 Memory 投影均不裁剪。
 - Run 创建由 Runtime 保证同一 Session 同时最多一个 running Run；幂等重放先于 active Run 检查。完整创建与读取语义见[运行时流程](runtime.md#2-内部流转)。
 - Session 整体删除后，源事实与私有续接一并删除，Memory 不另留副本。删除事务和文件恢复见[Web 会话删除](web.md#会话删除与恢复)。
 
-**规格差异：**Session Memory 主规格已允许在 Provider 请求边界重放兼容源续接；Agent ReAct 主规格的旧段落与 `Do not carry continuation across Runs` 场景仍禁止这种重放，与当前代码及 Session Memory 规格冲突。本篇按当前实现说明，并显式保留此差异；本次文档维护没有修改主规格。
+**规格状态：**Session Memory 与 Agent ReAct 主规格已同步兼容源续接重放和异常终态投影，旧的禁止跨 Run 续接文字已修正。跨 Provider 历史转换与调用 ID 重映射仍未实现；不兼容 continuation 继续在请求准备阶段拒绝。本次只维护文档，没有修改主规格。
 
 代码：[Session Memory 模型](../../src/figura/memory/models.py)、[投影器](../../src/figura/memory/projector.py)、[Agent 请求构建](../../src/figura/agent/request.py)、[历史 Run 快照读取](../../src/figura/runtime/persistence/snapshots.py)。规格：[Session Memory](../../openspec/figura/openspec/specs/session-memory/spec.md)、[Agent ReAct](../../openspec/figura/openspec/specs/agent-react-execution/spec.md)、[Run 核心](../../openspec/figura/openspec/specs/run-execution-core/spec.md)。

@@ -96,7 +96,7 @@ class AgentRequestBuilder:
             instructions=(
                 build_static_instruction(),
                 build_tool_instruction(registry),
-                build_execution_instruction(execution_state),
+                build_execution_instruction(execution_state, history.run_outcomes),
             ),
             messages=messages,
             options=ProviderOptions(

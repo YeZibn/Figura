@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
+from contextlib import ExitStack
+from pathlib import Path
 
 from figura.providers import (
     FinishReason,
@@ -25,12 +27,13 @@ from .codecs.tools import (
     validate_tool_call_batch,
 )
 from .errors import RunError, RunErrorCode
-from .run_lock import PerRunExecutionLock, RunExecutionLockUnavailable
+from .run_lock import PerRunExecutionLock, RunExecutionOwnership, RunExecutionLockUnavailable
 from .models import (
     ActionKind,
     Run,
     RunCreateRequest,
     RunStatus,
+    RunStopRequest,
     Session,
     SessionListEntry,
     TerminalCode,
@@ -65,6 +68,13 @@ class RunCoordinator:
     def __init__(self, store: FiguraRunStore, provider_factory: ProviderFactory) -> None:
         self._store = store
         self._provider_factory = provider_factory
+
+    @property
+    def data_root(self) -> Path:
+        return self._store.data_root
+
+    def request_stop(self, session_id: str, run_id: str) -> RunStopRequest | None:
+        return self._store.request_stop(session_id, run_id)
 
     def create_session(self, name: str | None = None) -> Session:
         if name is not None and (not isinstance(name, str) or _byte_length(name) > _MAX_SESSION_NAME_BYTES):
@@ -114,19 +124,26 @@ class RunCoordinator:
         if selected is None or not selected.available or selected.model_id != request.model_id:
             raise RunError(RunErrorCode.PROVIDER_UNAVAILABLE)
 
-        return self._store.create_initial_run(
-            session_id=request.session_id,
-            provider_id=provider_id.value,
-            model_id=request.model_id,
-            input_payload=RunInput(
-                text=request.text,
-                attachment_ids=tuple(request.attachment_ids),
-                requested_provider=provider_id.value,
-                requested_model=request.model_id,
-            ),
-            key_digest=key_digest,
-            request_fingerprint=fingerprint,
-        )
+        try:
+            with ExitStack() as locks:
+                snapshot = self.read_session_snapshot(request.session_id)
+                for state in snapshot.run_states:
+                    locks.enter_context(RunExecutionOwnership(self.data_root).acquire(state.run.run_id))
+                return self._store.create_initial_run(
+                    session_id=request.session_id,
+                    provider_id=provider_id.value,
+                    model_id=request.model_id,
+                    input_payload=RunInput(
+                        text=request.text,
+                        attachment_ids=tuple(request.attachment_ids),
+                        requested_provider=provider_id.value,
+                        requested_model=request.model_id,
+                    ),
+                    key_digest=key_digest,
+                    request_fingerprint=fingerprint,
+                )
+        except RunExecutionLockUnavailable:
+            raise RunError(RunErrorCode.INVALID_TRANSITION) from None
 
     def read_run_state(self, session_id: str, run_id: str) -> RunState:
         return self._store.read_run_state(session_id, run_id)
@@ -180,7 +197,15 @@ class RunCoordinator:
             continuation_id=continuation_ref,
         )
 
-    def complete_run(
+    def complete_run(self, session_id: str, run_id: str, expected_revision: int) -> ExecutionRecord:
+        try:
+            with RunExecutionOwnership(self.data_root).acquire(run_id):
+                with PerRunExecutionLock(self.data_root).acquire(run_id):
+                    return self._complete_owned_run(session_id, run_id, expected_revision)
+        except RunExecutionLockUnavailable:
+            raise RunError(RunErrorCode.INVALID_TRANSITION) from None
+
+    def _complete_owned_run(
         self, session_id: str, run_id: str, expected_revision: int
     ) -> ExecutionRecord:
         if type(expected_revision) is not int or expected_revision < 1:
@@ -214,6 +239,13 @@ class RunCoordinator:
 
     def resolve_orphaned_provider_attempt(self, session_id: str, run_id: str) -> RunState:
         try:
+            with RunExecutionOwnership(self.data_root).acquire(run_id):
+                return self._resolve_owned_provider_attempt(session_id, run_id)
+        except RunExecutionLockUnavailable:
+            raise RunError(RunErrorCode.INVALID_TRANSITION) from None
+
+    def _resolve_owned_provider_attempt(self, session_id: str, run_id: str) -> RunState:
+        try:
             with PerRunExecutionLock(self._store.data_root).acquire(run_id):
                 state = self._store.read_run_state(session_id, run_id)
                 action = state.checkpoint.next_action
@@ -237,7 +269,18 @@ class RunCoordinator:
         except RunExecutionLockUnavailable:
             raise RunError(RunErrorCode.INVALID_TRANSITION) from None
 
-    def fail_run(
+    def fail_run(self, session_id: str, run_id: str, expected_revision: int,
+                 terminal_code: TerminalCode = TerminalCode.EXECUTION_FAILED, *,
+                 terminal_message: str | None = None) -> Run:
+        try:
+            with RunExecutionOwnership(self.data_root).acquire(run_id):
+                with PerRunExecutionLock(self.data_root).acquire(run_id):
+                    return self._fail_owned_run(session_id, run_id, expected_revision,
+                                                terminal_code, terminal_message=terminal_message)
+        except RunExecutionLockUnavailable:
+            raise RunError(RunErrorCode.INVALID_TRANSITION) from None
+
+    def _fail_owned_run(
         self,
         session_id: str,
         run_id: str,
@@ -260,6 +303,14 @@ class RunCoordinator:
         )
 
     def interrupt_run(self, session_id: str, run_id: str, expected_revision: int) -> Run:
+        try:
+            with RunExecutionOwnership(self.data_root).acquire(run_id):
+                with PerRunExecutionLock(self.data_root).acquire(run_id):
+                    return self._interrupt_owned_run(session_id, run_id, expected_revision)
+        except RunExecutionLockUnavailable:
+            raise RunError(RunErrorCode.INVALID_TRANSITION) from None
+
+    def _interrupt_owned_run(self, session_id: str, run_id: str, expected_revision: int) -> Run:
         if type(expected_revision) is not int or expected_revision < 1:
             raise RunError(RunErrorCode.INVALID_REQUEST)
         return self._store.terminal_run(

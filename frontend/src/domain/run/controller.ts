@@ -16,6 +16,7 @@ export type RunControllerOptions = {
   runId: string
   callbacks: RunControllerCallbacks
   maxReconnectAttempts?: number
+  activityPollIntervalMs?: number
 }
 
 export type RunController = {
@@ -40,6 +41,8 @@ export function createRunController(options: RunControllerOptions): RunControlle
   let reconnectAttempts = 0
   let reconnectTimer: ReturnType<typeof setTimeout> | undefined
   let subscription: RunSubscription | null = null
+  let activityTimer: ReturnType<typeof setInterval> | undefined
+  let activityReadPending = false
   let connectionGeneration = 0
 
   const isCurrent = () => !closed && options.callbacks.isCurrent()
@@ -59,6 +62,8 @@ export function createRunController(options: RunControllerOptions): RunControlle
     closed = true
     connectionGeneration += 1
     clearTimer()
+    if (activityTimer !== undefined) clearInterval(activityTimer)
+    activityTimer = undefined
     closeSubscription()
   }
 
@@ -147,6 +152,14 @@ export function createRunController(options: RunControllerOptions): RunControlle
       cursor = Math.max(0, afterSequence)
       reconnectAttempts = 0
       connect(cursor)
+      if (isCurrent() && options.activityPollIntervalMs && options.activityPollIntervalMs > 0) {
+        if (activityTimer !== undefined) clearInterval(activityTimer)
+        activityTimer = setInterval(() => {
+          if (!isCurrent() || activityReadPending) return
+          activityReadPending = true
+          void reconcile().finally(() => { activityReadPending = false })
+        }, options.activityPollIntervalMs)
+      }
     },
     reconcile,
     close,

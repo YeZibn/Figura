@@ -56,10 +56,16 @@ class TerminalCode(str, Enum):
     STORAGE_ERROR = "storage_error"
     INTERRUPTED = "interrupted"
     PROVIDER_OUTCOME_UNKNOWN = "provider_outcome_unknown"
+    TOOL_OUTCOME_UNKNOWN = "tool_outcome_unknown"
+    TOOL_RECOVERY_UNAVAILABLE = "tool_recovery_unavailable"
+    TOOL_RECOVERY_EXHAUSTED = "tool_recovery_exhausted"
 
 
 TERMINAL_MESSAGES: Mapping[TerminalCode, str] = MappingProxyType(
     {
+        TerminalCode.TOOL_OUTCOME_UNKNOWN: "工具执行结果状态未知，当前 Run 已停止。",
+        TerminalCode.TOOL_RECOVERY_UNAVAILABLE: "原工具版本或恢复条件不可用，当前 Run 已停止。",
+        TerminalCode.TOOL_RECOVERY_EXHAUSTED: "工具自动恢复次数已达上限，当前 Run 已停止。",
         TerminalCode.EXECUTION_FAILED: "Run 执行未能完成。",
         TerminalCode.INVALID_RESPONSE: "Run 收到无法接受的模型结果。",
         TerminalCode.STORAGE_ERROR: "Run 执行结果未能保存。",
@@ -154,3 +160,11 @@ class RunCreateRequest:
     model_id: str
     idempotency_key: str = field(repr=False)
     attachment_ids: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class RunStopRequest:
+    run_id: str
+    request_id: str
+    requested_at: str
+    reason: str

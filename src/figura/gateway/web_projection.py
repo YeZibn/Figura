@@ -10,7 +10,7 @@ from figura.agent.execution_resources import (
     RunExecutionState,
     ToolResourceRef,
 )
-from figura.runtime.models import ActionKind, EventKind, RecordKind, Run, Session
+from figura.runtime.models import EventKind, RecordKind, Run, Session
 from figura.runtime.records import (
     FinalAnswerFact,
     ModelResponseFact,
@@ -39,10 +39,11 @@ def session_summary(
 def session_snapshot(
     snapshot: SessionSnapshot,
     chart_renders_by_run: Mapping[str, tuple[dict[str, object], ...]] | None = None,
+    activity=None,
 ) -> dict[str, object]:
     render_summaries = chart_renders_by_run or {}
     runs = [
-        run_summary(state, render_summaries.get(state.run.run_id, ()))
+        run_summary(state, render_summaries.get(state.run.run_id, ()), activity(state.run.run_id) if activity else None)
         for state in snapshot.run_states
     ]
     activity_values = [snapshot.session.updated_at]
@@ -157,14 +158,9 @@ def chart_render_summaries(
 def run_summary(
     state: RunState,
     chart_renders: tuple[dict[str, object], ...] = (),
+    activity: str | None = None,
 ) -> dict[str, object]:
     run = state.run
-    action = state.checkpoint.next_action
-    needs_reconciliation = (
-        run.status.value == "running"
-        and action is not None
-        and action.action_kind is ActionKind.TOOL_ATTEMPT
-    )
     return {
         "runId": run.run_id,
         "sessionId": run.session_id,
@@ -177,7 +173,10 @@ def run_summary(
         "finishedAt": run.finished_at,
         "terminalCode": run.terminal_code,
         "terminalMessage": run.terminal_message,
-        "executionState": "needs_reconciliation" if needs_reconciliation else "active",
+        "executionState": ("terminal" if run.status.value != "running" else
+                           "stopping" if state.stop_request else activity or "queued"),
+        "stopRequestedAt": state.stop_request.requested_at if state.stop_request else None,
+        "availableActions": ["stop"] if run.status.value == "running" and state.stop_request is None else [],
         "chartRenders": list(chart_renders),
     }
 
@@ -202,6 +201,7 @@ def run_history(
     state: RunState,
     after_sequence: int = 0,
     chart_renders: tuple[dict[str, object], ...] = (),
+    activity: str | None = None,
 ) -> dict[str, object]:
     events = [
         event_projection(state, event)
@@ -209,7 +209,7 @@ def run_history(
         if event.event_sequence > after_sequence
     ]
     return {
-        "run": run_summary(state, chart_renders),
+        "run": run_summary(state, chart_renders, activity),
         "events": events,
         "historyGap": False,
     }

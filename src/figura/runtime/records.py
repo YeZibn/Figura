@@ -11,6 +11,7 @@ from figura.sources.models import AttachmentMetadata
 from figura.tools.contracts import ReplayEffect, ToolExecutionError, ToolOutcome
 
 from .models import (
+    RunStopRequest,
     EventKind,
     ExecutionCheckpoint,
     RecordKind,
@@ -177,4 +178,5 @@ class RunState:
     tool_facts: tuple[ToolExecutionFact, ...] = field(default=(), repr=False)
     provider_continuations: tuple[ProviderContinuationFact, ...] = field(default=(), repr=False)
     provider_attempts: tuple[ProviderAttempt, ...] = field(default=(), repr=False)
+    stop_request: RunStopRequest | None = None
 

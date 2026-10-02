@@ -61,7 +61,9 @@ export type RunSummary = {
   rootRunId?: string | null
   continuationKind?: ContinuationKind | null
   recovery?: RunRecovery | null
-  executionState?: 'active' | 'needs_reconciliation'
+  executionState?: 'active' | 'needs_reconciliation' | 'queued' | 'executing' | 'recovering' | 'stopping' | 'terminal'
+  stopRequestedAt?: string | null
+  availableActions?: Array<'stop'>
   chartRenders?: ChartRenderSummary[]
 }
 

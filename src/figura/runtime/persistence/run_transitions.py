@@ -29,6 +29,7 @@ from ..records import (
     ModelResponseFact,
 )
 from .mappers import _record_from_row
+from .controls import assert_not_stopped, read_stop_request
 from .runs import RunRepository
 from .transaction_helpers import _next_event_sequence
 
@@ -43,6 +44,7 @@ class RunTransitionRepository:
     ) -> ExecutionRecord:
         now = _utc_now()
         with self._database.write() as connection:
+            assert_not_stopped(connection, run_id)
             current_state = self._runs._read_run_state_from_connection(connection, session_id, run_id)
             run = current_state.run
             checkpoint = current_state.checkpoint
@@ -131,6 +133,16 @@ class RunTransitionRepository:
         with self._database.write() as connection:
             run = self._runs._scoped_run(connection, session_id, run_id)
             checkpoint = self._runs._checkpoint_for_write(connection, run_id)
+            if read_stop_request(connection, run_id) is not None:
+                status = RunStatus.INTERRUPTED
+                terminal_code = TerminalCode.INTERRUPTED
+                message = TERMINAL_MESSAGES[terminal_code]
+                event_kind = EventKind.RUN_INTERRUPTED
+            if status is RunStatus.INTERRUPTED:
+                connection.execute(
+                    "UPDATE run_provider_attempts SET status = 'outcome_unknown', finished_at = ? "
+                    "WHERE run_id = ? AND status = 'started'", (now, run_id),
+                )
             if run.status is not RunStatus.RUNNING:
                 raise RunError(RunErrorCode.INVALID_TRANSITION)
             if checkpoint.revision != expected_revision:

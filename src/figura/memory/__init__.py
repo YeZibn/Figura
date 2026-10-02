@@ -2,6 +2,9 @@
 
 from .models import (
     AssistantMessage,
+    RunHistoryOutcome,
+    IncompleteBatchContext,
+    IncompleteCallContext,
     MemoryMessage,
     MemoryToolCall,
     SessionHistory,
@@ -12,6 +15,9 @@ from .projector import project_run_messages, project_session_history, tool_obser
 
 __all__ = [
     "AssistantMessage",
+    "RunHistoryOutcome",
+    "IncompleteBatchContext",
+    "IncompleteCallContext",
     "MemoryMessage",
     "MemoryToolCall",
     "SessionHistory",

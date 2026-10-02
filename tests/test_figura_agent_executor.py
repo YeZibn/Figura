@@ -30,6 +30,7 @@ from figura.providers.errors import ProviderCallError, ProviderFailure, Provider
 from figura.providers.validation import validate_request
 from figura.runtime.coordinator import RunCoordinator
 from figura.runtime.models import ActionKind, RunCreateRequest, RunStatus, TerminalCode, ToolFactKind
+from figura.runtime.records import ToolAttemptStartedFact
 from figura.runtime.store import FiguraRunStore
 from figura.runtime.tool_execution import DurableToolExecutor
 from figura.runtime.run_lock import PerRunExecutionLock
@@ -704,7 +705,7 @@ def test_unexpected_provider_exception_after_claim_fails_unknown_without_resend(
     assert len(factory.selections) == 1
 
 
-def test_unresolved_tool_attempt_returns_without_tool_recovery_or_provider_call(tmp_path) -> None:
+def test_orphan_tool_attempt_recovers_and_continues(tmp_path) -> None:
     store, coordinator, session, run = _app(tmp_path)
     handler_calls: list[str] = []
     registry = _registry(handler_calls)
@@ -736,17 +737,16 @@ def test_unresolved_tool_attempt_returns_without_tool_recovery_or_provider_call(
         attempt_id="attempt-pending",
     )
     unresolved = coordinator.read_run_state(session.session_id, run.run_id)
-    factory = _FakeFactory([])
+    factory = _FakeFactory([_response()])
 
     result = _agent(store, coordinator, registry, factory).execute(
         session.session_id, run.run_id
     )
 
-    assert result == unresolved
-    assert result.checkpoint.next_action.action_kind is ActionKind.TOOL_ATTEMPT
-    assert handler_calls == []
-    assert factory.client.requests == []
-    assert factory.selections == []
+    assert result.run.status is RunStatus.COMPLETED
+    assert handler_calls == ["call-pending"]
+    assert len(factory.client.requests) == 1
+    assert len([fact for fact in result.tool_facts if isinstance(fact.payload, ToolAttemptStartedFact)]) == 2
 
 
 def test_agent_does_not_dispatch_when_run_lock_is_held(tmp_path) -> None:
@@ -1131,7 +1131,7 @@ def test_unresolved_old_registry_call_is_not_executed_under_the_new_registry(tmp
     )
 
 
-def test_incomplete_prior_tool_work_fails_before_claim(tmp_path) -> None:
+def test_incomplete_prior_tool_work_is_explained_before_dispatch(tmp_path) -> None:
     _store, coordinator, session, prior = _app(tmp_path)
     registry = _registry()
     _commit_tool_response(
@@ -1159,7 +1159,9 @@ def test_incomplete_prior_tool_work_fails_before_claim(tmp_path) -> None:
         session.session_id, current.run_id
     )
 
-    _assert_request_rejected_before_claim(state, factory)
+    assert state.run.status is RunStatus.COMPLETED
+    assert len(factory.client.requests) == 1
+    assert "prior_run_outcomes" in factory.client.requests[0].instructions[2].content
 
 
 def test_agent_accepts_exactly_eight_provider_attempts_without_sending_ninth(tmp_path) -> None:

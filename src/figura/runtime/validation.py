@@ -12,6 +12,7 @@ from .models import (
     ProviderAttemptStatus,
     RecordKind,
     RunStatus,
+    RunStopRequest,
     TERMINAL_MESSAGES,
     PREPARATION_MESSAGES,
     TerminalCode,
@@ -42,6 +43,17 @@ def _validate_id(value: object) -> None:
 
 def _validate_state(state: RunState) -> None:
     run, checkpoint = state.run, state.checkpoint
+    stop = state.stop_request
+    if stop is not None and not isinstance(stop, RunStopRequest):
+        raise RunError(RunErrorCode.INTEGRITY_ERROR)
+    if stop is not None and (
+        stop.run_id != run.run_id
+        or not isinstance(stop.request_id, str) or not stop.request_id
+        or len(stop.request_id) > 128
+        or not isinstance(stop.requested_at, str) or not stop.requested_at
+        or stop.reason != "user_requested"
+    ):
+        raise RunError(RunErrorCode.INTEGRITY_ERROR)
     records, events, tool_facts = state.records, state.events, state.tool_facts
     if (
         checkpoint.run_id != run.run_id
@@ -292,7 +304,7 @@ def _validate_state(state: RunState) -> None:
             attempt_id=state.provider_attempts[-1].attempt_id,
         )
     elif (
-        run.status is RunStatus.FAILED
+        run.status in {RunStatus.FAILED, RunStatus.INTERRUPTED}
         and state.provider_attempts
         and state.provider_attempts[-1].status
         in {ProviderAttemptStatus.KNOWN_FAILURE, ProviderAttemptStatus.OUTCOME_UNKNOWN}
@@ -354,17 +366,27 @@ def _validate_state(state: RunState) -> None:
     terminal_event = events[-1] if run.status is not RunStatus.RUNNING else None
     progress_events = events[1:-1] if terminal_event is not None else events[1:]
     previous_revision = 0
+    stop_notifications = 0
     for event in progress_events:
         revision = event.payload.get("checkpoint_revision")
         if (
             event.event_kind is not EventKind.RUN_PROGRESS
             or set(event.payload) != {"checkpoint_revision"}
             or type(revision) is not int
-            or revision <= previous_revision
+            or revision < previous_revision
             or revision > checkpoint.revision
         ):
             raise RunError(RunErrorCode.INTEGRITY_ERROR)
+        is_stop_notification = stop is not None and event.created_at == stop.requested_at
+        if is_stop_notification:
+            if stop_notifications:
+                raise RunError(RunErrorCode.INTEGRITY_ERROR)
+            stop_notifications += 1
+        elif revision == previous_revision:
+            raise RunError(RunErrorCode.INTEGRITY_ERROR)
         previous_revision = revision
+    if stop is not None and stop_notifications != 1:
+        raise RunError(RunErrorCode.INTEGRITY_ERROR)
 
     if terminal_event is not None:
         if run.status is RunStatus.COMPLETED:

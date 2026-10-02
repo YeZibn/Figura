@@ -66,3 +66,18 @@ class PerRunExecutionLock:
             raise
         except (ImportError, OSError, ValueError):
             raise RunExecutionLockUnavailable("Run lock storage is unavailable") from None
+
+
+class RunExecutionOwnership(PerRunExecutionLock):
+    """Exclusive owner of the complete execution task, separate from action locks."""
+
+    def __init__(self, data_root: str | os.PathLike[str]) -> None:
+        super().__init__(data_root)
+        self._lock_root = Path(data_root).expanduser() / ".run-owner-locks"
+
+    def is_held(self, run_id: str) -> bool:
+        try:
+            with self.acquire(run_id):
+                return False
+        except RunExecutionLockUnavailable:
+            return True

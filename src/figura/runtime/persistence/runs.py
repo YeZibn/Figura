@@ -102,7 +102,10 @@ def _read_run_state_from_connection(
         "SELECT * FROM run_provider_attempts WHERE run_id = ? ORDER BY attempt_sequence",
         (run_id,),
     ).fetchall()
+    from .controls import read_stop_request
+
     state = RunState(
+        stop_request=read_stop_request(connection, run_id),
         run=_run_from_row(run_row),
         records=tuple(_record_from_row(row) for row in record_rows),
         checkpoint=_checkpoint_from_row(checkpoint_row),
@@ -319,6 +322,7 @@ class RunRepository:
             "DELETE FROM run_idempotency WHERE session_id = ?", (session_id,)
         )
         for table in (
+            "run_stop_requests",
             "run_provider_continuations",
             "run_provider_attempts",
             "run_execution_checkpoints",

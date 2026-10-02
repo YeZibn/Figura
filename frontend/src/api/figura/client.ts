@@ -161,6 +161,11 @@ export function createFiguraClient(baseUrl = defaultBaseUrl): FiguraClient {
       })
       return payload.run
     },
+    async requestRunStop(sessionId, runId) {
+      return request(`/sessions/${encodeURIComponent(sessionId)}/runs/${encodeURIComponent(runId)}/stop`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+      })
+    },
     async getRunHistory(sessionId, runId, afterSequence = 0) {
       return request<FiguraRunHistoryDto>(
         `/sessions/${encodeURIComponent(sessionId)}/runs/${encodeURIComponent(runId)}/history?afterSequence=${Math.max(0, afterSequence)}`,

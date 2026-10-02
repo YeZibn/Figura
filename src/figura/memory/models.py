@@ -42,6 +42,33 @@ class ToolMessage:
     content: str = field(repr=False)
 
 
+@dataclass(frozen=True)
+class IncompleteCallContext:
+    call_id: str
+    tool_call_sequence: int
+    tool_name: str
+    position: int
+    state: str
+    source_result_tool_sequence: int | None = None
+    observation_json: str | None = field(default=None, repr=False)
+
+
+@dataclass(frozen=True)
+class IncompleteBatchContext:
+    source_response_record_id: str
+    assistant_text: str = field(repr=False)
+    calls: tuple[IncompleteCallContext, ...] = ()
+
+
+@dataclass(frozen=True)
+class RunHistoryOutcome:
+    run_id: str
+    run_ordinal: int
+    status: str
+    terminal_code: str
+    incomplete_batches: tuple[IncompleteBatchContext, ...] = field(default=(), repr=False)
+
+
 MemoryMessage: TypeAlias = UserMessage | AssistantMessage | ToolMessage
 
 
@@ -51,3 +78,4 @@ class SessionHistory:
     target_run_id: str
     target_run_ordinal: int
     messages: tuple[MemoryMessage, ...] = field(default=(), repr=False)
+    run_outcomes: tuple[RunHistoryOutcome, ...] = field(default=(), repr=False)

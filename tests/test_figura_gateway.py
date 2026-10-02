@@ -30,6 +30,7 @@ from figura.providers import FinishReason, MODEL_IDS, ProviderFactory, ProviderI
 from figura.runtime.coordinator import RunCoordinator
 from figura.runtime.models import RunCreateRequest, RunStatus, TerminalCode
 from figura.runtime.store import FiguraRunStore
+from figura.runtime.run_lock import RunExecutionOwnership
 from figura.runtime.tool_execution import DurableToolExecutor
 from figura.sources.repository import SourcesRepository
 from figura.tools import ReplayEffect, ToolExecutionResult, ToolOutcome, ToolRegistry
@@ -293,7 +294,7 @@ def test_session_projection_preserves_run_input_and_hides_internal_records(tmp_p
                 "timestamp": run.created_at,
             }
         ]
-        assert payload["runs"][0]["executionState"] == "active"
+        assert payload["runs"][0]["executionState"] == "queued"
         assert not {"records", "events", "toolFacts", "providerContinuations"} & payload.keys()
         assert "qwen-secret" not in response.body.decode()
     finally:
@@ -711,8 +712,11 @@ def test_timeline_status_uses_run_facts_and_dispatcher_ownership(tmp_path):
 
         app.dispatcher.ensure_scheduled(run)
         assert started.wait(timeout=1)
-        owned = _json(app.handle("GET", url, {}))
-        assert [step["status"] for step in owned["steps"]] == ["running", "pending"]
+        # A queued task alone is not proof of handler ownership.
+        assert _json(app.handle("GET", url, {}))["steps"][0]["status"] == "needs_reconciliation"
+        with RunExecutionOwnership(store.data_root).acquire(run.run_id):
+            owned = _json(app.handle("GET", url, {}))
+            assert [step["status"] for step in owned["steps"]] == ["running", "pending"]
 
         unknown = app.handle(
             "GET",

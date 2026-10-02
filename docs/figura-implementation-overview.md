@@ -1,6 +1,6 @@
 # Figura 系统总览
 
-> 更新日期：2026-10-02。范围：新 Figura 的当前工作树 `src/figura/`。代码、主规格、归档记录、目标设计和旧 `chartagent` 分别标记。本文是入口；组件内部流程与完整字段见按领域划分的专题文档。
+> 更新日期：2026-10-03。范围：新 Figura 的当前工作树 `src/figura/`。代码、主规格、归档记录、目标设计和旧 `chartagent` 分别标记。本文是入口；组件内部流程与完整字段见按领域划分的专题文档。
 
 ## 1. 一眼看懂 Figura
 
@@ -9,20 +9,21 @@ Figura 接收用户文本和图像，创建可恢复的 Run，让 Agent 调用�
 ```mermaid
 flowchart LR
     UI[Web: React 界面] -->|FiguraClient / Workspace API| Gateway[Web: 本地 Gateway]
-    Gateway -->|Session、Run 查询、创建与整会话删除| Runtime[Runtime]
+    Gateway -->|Session、Run 查询、创建、停止请求与整会话删除| Runtime[Runtime]
     Gateway -->|附件/Panel 操作与 ChartFigure PNG 内容读取| Sources
     Sources -->|附件与 Panel 元数据| DB[(Figura SQLite / storage)]
     Sources -->|私有附件、独立 Panel 与 ChartFigure PNG| Files[(私有图片文件)]
     Gateway --> Delete[Web: Session 删除协调]
     Delete -->|同一事务删除 Session 聚合| Runtime
     Delete -->|暂存 / 回滚恢复 / 提交清理| Sources
-    Gateway -->|异步提交已持久化 Run| Dispatcher[Run Dispatcher]
+    Gateway -->|异步提交、启动恢复与周期补偿| Dispatcher[Run Dispatcher]
+    Dispatcher -->|扫描持久 running Run| Runtime
     Dispatcher -->|execute(session_id, run_id)| Agent[Agent]
     Gateway -->|本地配置可用性| Provider[Provider Boundary]
-    Runtime -->|RunState、Checkpoint 与源响应私有续接| Agent
+    Runtime -->|RunState、停止请求、Checkpoint 与源响应私有续接| Agent
     Agent -->|读取较早的终态 RunState| Runtime
     Agent -->|当前 Run 与较早 Run 的事实| Memory[Memory]
-    Memory -->|完整有序角色消息| Agent
+    Memory -->|闭合角色消息与异常终态上下文| Agent
     Runtime -->|Run 输入与已提交工具事实| Catalog[Agent RunExecutionStateService]
     Sources -->|附件元数据与 Panel 记录| Catalog
     Catalog -->|resources: Attachment / Panel / OCR / Measurement / ChartFigure / ChartRender| Agent
@@ -52,15 +53,15 @@ flowchart LR
 
 | 组件 | 职责与跨组件交付 | 当前状态 | 内部文档 |
 |---|---|---|---|
-| Runtime | Session、Run、执行事实、Attempt、Checkpoint、生命周期与进度事件；交付可恢复 `RunState` 和同 Session 较早 Run 的一致快照；每 Session 至多一个 running Run | 已实现；当前 schema v9，支持受控 Session 整体删除、本地 Provider 准备失败的安全终态说明 | [Runtime](figura/runtime.md) |
+| Runtime | Session、Run、执行事实、Attempt、Checkpoint、生命周期与进度事件；交付可恢复 `RunState` 和同 Session 较早 Run 的一致快照；每 Session 至多一个 running Run | 当前工作树已实现；schema v10，持久停止请求、全任务执行所有权、受控 Session 删除与安全终态说明 | [Runtime](figura/runtime.md) |
 | Sources | 管理 Session 附件与 Panel 元数据、私有附件/Panel 图像和 ChartFigure PNG 文件、图像验证/处理和授权读取；与 Runtime 共用一份 SQLite | 已实现；渲染 PNG 只存私有文件，无独立元数据表；整会话删除含文件暂存、恢复与启动对账 | [Sources](figura/sources.md) |
-| Agent | 按 checkpoint 组装请求、协调模型和工具、提交结果与终态；从 Run 事实和 Sources 元数据重建类型化资源目录，并统一授权图像读取 | 已实现 ReAct、三层中文提示、六类资源目录、最新工具批次图像回看、源响应续接重放与 prepare→claim→dispatch；最新静态资产补强已归档，代码尚未提交 | [Agent 编排与资源目录](figura/agent.md) |
-| Memory | 从同 Session 的 Run 事实构建完整角色消息；无独立持久化、裁剪或摘要 | 已实现完整 Session 对话投影；续接由 Agent 请求边界私下关联，Memory 无该 payload | [Memory](figura/memory.md) |
+| Agent | 按 checkpoint 组装请求、协调模型和工具、提交结果与终态；从 Run 事实和 Sources 元数据重建类型化资源目录，并统一授权图像读取 | 已实现 ReAct、三层中文提示、六类资源目录、最新工具批次图像回看、源响应续接重放与 prepare→claim→dispatch；统一 owner 下检查停止并有限恢复工具；相关 change 已归档，代码尚未提交 | [Agent 编排与资源目录](figura/agent.md) |
+| Memory | 从同 Session 的 Run 事实构建闭合角色消息与异常终态上下文；无独立持久化、裁剪或摘要 | 当前工作树已实现合法异常尾部转换；续接由 Agent 请求边界私下关联，Memory 无该 payload | [Memory](figura/memory.md) |
 | Provider | 选择固定 provider/model，归一化请求、响应和安全失败 | 已实现 Qwen、DeepSeek、MiMo；prepare/dispatch 分离，DeepSeek 续接区分缺失、空字符串和 null | [Provider](figura/provider.md) |
 | Tools | 版本化定义、参数/结果校验及 handler；执行事实归 Runtime | 当前工作树 `figura-web-v6` 提供 `assemble_chart_figure` 与 `render_chart_figure`；图表渲染 change 已归档且主规格已同步 | [Tools](figura/tools.md) |
 | Shared / Validation | 被多个能力复用的 JSON Schema 校验与图像大小限制 | 当前已实现 | [Validation](figura/validation.md) |
 | Storage | 一份 SQLite 的连接、事务和 schema 初始化；由 Runtime 与 Sources 共用 | 当前已实现 | [Runtime](figura/runtime.md)、[Sources](figura/sources.md) |
-| Web | 本地 Gateway、Session/Run/Panel/ChartFigure 渲染内容与工具时间线只读 HTTP API、安全历史投影和 SSE；前端经 Figura client 复用工作区 UI | 已实现会话删除、Panel/生成图懒加载预览、生成图大图及下载、Run 工具时间线；详情与观察图按需读取 | [Web](figura/web.md) |
+| Web | 本地 Gateway、Session/Run/Panel/ChartFigure 渲染内容与工具时间线只读 HTTP API、安全历史投影和 SSE；前端经 Figura client 复用工作区 UI | 当前工作树已实现协作停止、周期恢复调度、活动状态补读、会话删除与图片/工具时间线；详情与观察图按需读取 | [Web](figura/web.md) |
 | Charts | `ChartSpecData` 单图值与 `ChartFigure` 多图画布值，严格解析、规范序列化、纯校验和 PNG 绘制 | 已实现；单图与画布分属 `chartspec/`、`chartfigure/`；绘图按实际文字布局，越界/重叠失败，pie 显示百分比 | [Charts](figura/charts.md) |
 
 ## 3. 跨组件内容流
@@ -71,6 +72,8 @@ flowchart LR
 4. **工具、渲染与恢复**：Tool Runtime 校验图像/Panel、OCR、四类测量、`assemble_chart_figure` 和 `render_chart_figure`。组装工具委托 Charts 严格解析与语义校验，并检查同 Session 目录中已提交成功的测量引用。渲染工具只接受已提交 Figure；Charts 生成 PNG，Sources 按 `(run_id, call_id)` 私下保存，Runtime 仍沿用通用工具事实持久化调用和结果。Agent 从成功配对事实重建 Figure 与渲染资源；同批次成功 PNG 随后加入下一次 Provider 请求。网页内容路由核对 Session、成功事实、摘要和文件。没有独立 Figure/渲染表。Panel 与渲染文件为幂等本地写，观察和 Figure 组装为 `replay_safe`。分别见[Tool 调用](figura/tools.md#2-内部流转)、[画布组装](figura/tools.md#7-图表画布组装工具)、[图表渲染](figura/tools.md#8-图表渲染工具)、[Charts](figura/charts.md)、[Sources](figura/sources.md)和[Agent 资源目录](figura/agent.md#4-runexecutionstate-资源合同与完整字段)。
 5. **返回网页**：Gateway 从 Runtime 读取 Session snapshot、Run history 和安全事件，再投影 JSON/SSE。Run 工具时间线从当前 Run 的 ToolCall、Attempt 和 Result 事实生成；列表先返回有界摘要，详情与 OCR/测量观察图按需读取。持久 `run_progress` SSE 事件只通知前端刷新时间线，不携带工具 payload。Session-scoped Panel 与 ChartFigure 渲染路由只提供成功工具结果对应的 PNG；Run DTO 附加渲染摘要，React Gallery 按渲染所在 Run 懒加载所有成功预览，每张均可打开交互大图并通过同一授权内容路由下载 PNG。Conversation 不把 Agent 的完整 Session Memory、工具消息或 Provider continuation 暴露为普通对话。详见[网页端边界](figura/web.md)。
 6. **图表链**：当前有 `ChartSpecData`、`ChartFigure`、纯 PNG renderer、Sources 私有 PNG 文件保存和网页预览；Figure 全文/摘要及渲染调用/结果分别借用 Run 工具调用/结果事实保留，Agent 可跨 Run 从统一资源目录索引成功画布与渲染内容。仍没有单独图表对象表、来源证据模型、生成图验证、发布或 Evaluation。[规划能力](#4-规划能力与边界)标出这些未实现部分。
+
+7. **停止、恢复与后续对话**：停止请求经 Gateway 写入 Runtime 独立控制事务；Agent 在执行 owner 保护下允许已开始动作提交真实结果，随后在边界 interrupted。Dispatcher 启动与周期扫描都从持久 checkpoint 推进，未知 Provider 不重发，安全工具沿原调用身份有限重放。后续 Run 保留闭合交互，将合法未完成末尾批次整体转换为异常上下文；成功资源仍可授权引用，未知调用不会被补造成结果。完整流程见 [Runtime](figura/runtime.md#停止所有权与恢复事务)、[Agent](figura/agent.md#异常-run-推进与后续请求)、[Memory](figura/memory.md#合法异常尾部投影) 和 [Web](figura/web.md#协作停止与客户端生命周期)。
 
 ## 4. 规划能力与边界
 
@@ -104,8 +107,12 @@ flowchart LR
 
 查**完整字段**时，从组件表进入该合同的 owner 专题；跨领域使用者只链接并解释消费方式。专题边界由模型的语义、权威 owner、生命周期和不变量决定，后续出现独立领域时增建子文档，不能按调用链强行合并。嵌套值、联合 payload、枚举和字段来源在所属专题展开。查长期完整产品构想时，参阅[Figura 架构设计草案](figura-architecture-design.md)，其中未实现部分不自动成为当前合同。
 
-当前主规格位于 `openspec/figura/openspec/specs/`。截至 2026-10-02，`openspec list --store figura --json` 未列出活动 change。统一资源目录、分层提示（包括 `improve-figura-prompt-assets`）、测量、图像观察、Figure assembly 和图表渲染相关 change 已归档，相关 delta 已同步进主规格，但仍有下表列出的历史段落冲突。prompt 资产和相应规格在当前工作树中有未提交改动；归档不代表代码已提交或发布。旧系统代码与规格分别位于 `src/chartagent/` 和 `openspec/chartagent/`，只在迁移或兼容性分析中对照。
+当前主规格位于 `openspec/figura/openspec/specs/`。截至 2026-10-03，`openspec list --store figura --json` 未列出活动 change。统一资源目录、分层提示（包括 `improve-figura-prompt-assets`）、测量、图像观察、Figure assembly 和图表渲染相关 change 已归档，相关 delta 已同步进主规格，但仍有下表列出的历史段落冲突。prompt 资产和相应规格在当前工作树中有未提交改动；归档不代表代码已提交或发布。旧系统代码与规格分别位于 `src/chartagent/` 和 `openspec/chartagent/`，只在迁移或兼容性分析中对照。
 
+
+当前工作树已接通协作停止和异常历史续用：Web 保存停止请求，Agent 在 Run owner 保护下完成当前动作并在边界收尾；Gateway 周期扫描补偿无人执行的 running Run。安全工具按原幂等身份有限恢复，未知 Provider 不重发。Memory 将合法异常尾部转为调用期 outcome，闭合历史及已提交资源继续可用。新增控制和字段详见 [Runtime](figura/runtime.md)、[Memory](figura/memory.md)、[Agent](figura/agent.md)、[Web](figura/web.md)。对应 change 已归档，主规格已同步；线程阻塞时仍需等待，调用 ID 重映射和跨 Provider 历史转换不属于本次实现。
+
+实现依据见 [归档设计](../openspec/figura/openspec/changes/archive/2026-10-02-recover-abnormal-runs-and-history/design.md)；该 change 的六篇 delta 已同步至主规格。新的过程预算策略仍处于讨论阶段，未纳入当前实现。
 
 ### 规格与实现的已知差异
 
@@ -113,7 +120,6 @@ flowchart LR
 
 | 边界 | 当前实现与较新主规格 | 仍残留的旧规格文字 |
 |---|---|---|
-| 跨 Run Provider 续接 | Agent 按同 Session 源 Run/响应重放兼容值；[Session Memory](../openspec/figura/openspec/specs/session-memory/spec.md) 已允许；中性 Memory 仍不含 payload | [Agent ReAct](../openspec/figura/openspec/specs/agent-react-execution/spec.md) 仍有仅当前 Run / 禁止跨 Run 段落与场景 |
 | 统一资源目录 | `RunExecutionState` 只有 `run_id`、`resources`；类型化引用和内容见 [run-execution-resources](../openspec/figura/openspec/specs/run-execution-resources/spec.md) 与 [Agent 字段](figura/agent.md#4-runexecutionstate-资源合同与完整字段) | [柱状测量](../openspec/figura/openspec/specs/bar-chart-measurement/spec.md)、[OCR](../openspec/figura/openspec/specs/ocr-text-observation/spec.md)、[画布组装](../openspec/figura/openspec/specs/chart-figure-assembly/spec.md)、[渲染](../openspec/figura/openspec/specs/chart-rendering/spec.md) 仍引用 `available_attachments`、`panels`、`chart_figures`、`chart_renders` 旧分散字段 |
 
-本轮维护核对了总览和全部九篇专题，按当前定义检查 Python dataclass 字段及 Web DTO/接口、公开投影、跨组件读写和失败恢复路径。文档维护不证明应用回归测试通过，也不表示已提交或发布。
+2026-10-03 本轮维护聚焦 Run 恢复与停止、异常历史续用，核对总览及 Agent、Runtime、Memory、Web 专题的相关模型字段、HTTP/客户端合同、公开投影和失败恢复路径。文档维护不证明应用回归测试通过，也不表示已提交或发布。

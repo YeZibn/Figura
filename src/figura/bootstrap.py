@@ -100,6 +100,10 @@ def recover_running_runs(application: FiguraGatewayApplication) -> int:
     """Schedule persisted Runs through the ordinary safe executor path."""
     scheduled = 0
     for run in application.coordinator.list_running_runs():
-        if application.dispatcher.ensure_scheduled(run, wait_for_capacity=True):
-            scheduled += 1
+        from figura.gateway.dispatcher import DispatcherFull
+        try:
+            if application.dispatcher.ensure_scheduled(run):
+                scheduled += 1
+        except DispatcherFull:
+            break
     return scheduled

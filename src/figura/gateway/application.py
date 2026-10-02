@@ -16,6 +16,7 @@ from figura.providers import MODEL_IDS, ProviderFactory, ProviderId
 from figura.runtime.coordinator import RunCoordinator
 from figura.runtime.errors import RunError, RunErrorCode
 from figura.runtime.models import RunCreateRequest, RunStatus
+from figura.runtime.run_lock import RunExecutionOwnership
 
 from .dispatcher import DispatcherFull, RunDispatcher
 from .session_deletion import FiguraSessionDeletion
@@ -24,6 +25,7 @@ from .web_projection import (
     chart_render_summaries,
     panel,
     run_handle,
+    run_summary,
     run_history,
     session_snapshot,
 )
@@ -64,6 +66,14 @@ class FiguraGatewayApplication:
         self.dispatcher = dispatcher
         self.session_deletion = session_deletion
         self.allowed_origins = frozenset(allowed_origins)
+
+    def _run_activity(self, run_id: str) -> str:
+        local = self.dispatcher.activity(run_id)
+        if local is not None:
+            return local
+        if RunExecutionOwnership(self.coordinator.data_root).is_held(run_id):
+            return "active"
+        return "queued"
 
     def close(self) -> None:
         self.dispatcher.close()
@@ -137,7 +147,7 @@ class FiguraGatewayApplication:
                 snapshot = self.coordinator.read_session_snapshot(session_id)
                 return self._json(
                     200,
-                    session_snapshot(snapshot, self._session_chart_renders(snapshot)),
+                    session_snapshot(snapshot, self._session_chart_renders(snapshot), self._run_activity),
                     headers,
                 )
             if len(parts) == 3 and parts[2] == "attachments":
@@ -232,6 +242,24 @@ class FiguraGatewayApplication:
                         )
                 return self._json(202, {"run": run_handle(run)}, headers)
 
+            if len(parts) == 5 and parts[2] == "runs" and parts[4] == "stop" and method == "POST":
+                if body and _read_json(body) != {}:
+                    raise _BadRequest
+                request = self.coordinator.request_stop(session_id, parts[3])
+                state = self.coordinator.read_run_state(session_id, parts[3])
+                if state.run.status is RunStatus.RUNNING:
+                    try:
+                        self.dispatcher.ensure_scheduled(state.run)
+                    except DispatcherFull:
+                        pass  # The durable request is retried by bounded compensation.
+                execution = self.execution_state.build(state, self.coordinator.read_prior_run_states(session_id, parts[3]))
+                renders = chart_render_summaries(execution).get(parts[3], ())
+                return self._json(202 if state.run.status is RunStatus.RUNNING else 200, {
+                    "run": run_summary(state, renders, self._run_activity(parts[3])),
+                    "stopRequest": {"requestId": request.request_id, "requestedAt": request.requested_at,
+                                    "reason": request.reason} if request else None,
+                }, headers)
+
             if len(parts) == 5 and parts[2] == "runs" and parts[4] == "history" and method == "GET":
                 after_sequence = _read_cursor(query)
                 state = self.coordinator.read_run_state(session_id, parts[3])
@@ -240,7 +268,7 @@ class FiguraGatewayApplication:
                     self.coordinator.read_prior_run_states(session_id, parts[3]),
                 )
                 chart_renders = chart_render_summaries(execution).get(parts[3], ())
-                return self._json(200, run_history(state, after_sequence, chart_renders), headers)
+                return self._json(200, run_history(state, after_sequence, chart_renders, self._run_activity(parts[3])), headers)
             if (
                 len(parts) == 5
                 and parts[2] == "runs"
@@ -250,7 +278,7 @@ class FiguraGatewayApplication:
                 state = self.coordinator.read_run_state(session_id, parts[3])
                 return self._json(
                     200,
-                    run_timeline(state, self.dispatcher.owns(parts[3])),
+                    run_timeline(state, RunExecutionOwnership(self.coordinator.data_root).is_held(parts[3])),
                     headers,
                 )
             if (
@@ -267,7 +295,7 @@ class FiguraGatewayApplication:
                         state,
                         parts[5],
                         execution,
-                        self.dispatcher.owns(parts[3]),
+                        RunExecutionOwnership(self.coordinator.data_root).is_held(parts[3]),
                     ),
                     headers,
                 )

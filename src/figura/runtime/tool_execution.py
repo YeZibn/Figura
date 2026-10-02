@@ -26,7 +26,7 @@ from .records import (
     ToolCallFact,
     ToolExecutionFact,
 )
-from .run_lock import PerRunExecutionLock, RunExecutionLockUnavailable
+from .run_lock import PerRunExecutionLock, RunExecutionOwnership, RunExecutionLockUnavailable
 from .store import FiguraRunStore
 
 
@@ -62,7 +62,14 @@ class DurableToolExecutor:
     def registry(self) -> ToolRegistry:
         return self._registry
 
-    def execute_pending(
+    def execute_pending(self, session_id: str, run_id: str, *, max_calls: int | None = None) -> RunState:
+        try:
+            with RunExecutionOwnership(self._store.data_root).acquire(run_id):
+                return self.execute_owned_pending(session_id, run_id, max_calls=max_calls)
+        except RunExecutionLockUnavailable:
+            raise RunError(RunErrorCode.INVALID_TRANSITION) from None
+
+    def execute_owned_pending(
         self,
         session_id: str,
         run_id: str,
@@ -89,13 +96,20 @@ class DurableToolExecutor:
         return self._execute_from_state_locked(state, max_calls=max_calls)
 
     def recover_unknown_attempt(self, session_id: str, run_id: str) -> RunState:
+        try:
+            with RunExecutionOwnership(self._store.data_root).acquire(run_id):
+                return self.recover_owned_attempt(session_id, run_id)
+        except RunExecutionLockUnavailable:
+            raise RunError(RunErrorCode.INVALID_TRANSITION) from None
+
+    def recover_owned_attempt(self, session_id: str, run_id: str) -> RunState:
         """Recover an orphaned attempt only after acquiring its Run process lock."""
         try:
             with self._lock.acquire(run_id):
                 state = self._store.read_run_state(session_id, run_id)
                 action = state.checkpoint.next_action
                 if action is None or action.action_kind is not ActionKind.TOOL_ATTEMPT:
-                    return self._execute_from_state_locked(state)
+                    return self._execute_from_state_locked(state, max_calls=1)
 
                 call_fact = _call_fact_at(state, action.tool_call_sequence)
                 call = call_fact.payload
@@ -129,11 +143,18 @@ class DurableToolExecutor:
                     expected_revision=state.checkpoint.revision + 1,
                     replay_effect=attempt.replay_effect,
                 )
-                return self._execute_from_state_locked(resumed)
+                return resumed
         except RunExecutionLockUnavailable:
             raise RunError(RunErrorCode.INVALID_TRANSITION) from None
 
-    def reconcile_unknown_attempt(
+    def reconcile_unknown_attempt(self, session_id: str, run_id: str, result: ToolExecutionResult) -> RunState:
+        try:
+            with RunExecutionOwnership(self._store.data_root).acquire(run_id):
+                return self._reconcile_owned_attempt(session_id, run_id, result)
+        except RunExecutionLockUnavailable:
+            raise RunError(RunErrorCode.INVALID_TRANSITION) from None
+
+    def _reconcile_owned_attempt(
         self,
         session_id: str,
         run_id: str,

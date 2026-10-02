@@ -6,7 +6,7 @@ import sqlite3
 
 from figura.runtime.errors import RunError, RunErrorCode
 
-_SCHEMA_VERSION = 9
+_SCHEMA_VERSION = 10
 
 
 def _run_stream_events_table(table_name: str) -> str:
@@ -381,7 +381,7 @@ def initialize_schema(connection: sqlite3.Connection) -> None:
         elif version == 3:
             for statement in _PROVIDER_ATTEMPT_SCHEMA:
                 connection.execute(statement)
-        elif version in {4, 5, 6, 7, 8}:
+        elif version in {4, 5, 6, 7, 8, 9}:
             pass
         else:
             raise RunError(RunErrorCode.UNSUPPORTED_VERSION)
@@ -398,6 +398,20 @@ def initialize_schema(connection: sqlite3.Connection) -> None:
         if 3 <= version < 9:
             _migrate_continuations(connection)
         _migrate_session_deletion(connection)
+        connection.execute("""CREATE TABLE IF NOT EXISTS run_stop_requests (
+            run_id TEXT PRIMARY KEY REFERENCES runs(run_id) ON DELETE CASCADE,
+            request_id TEXT NOT NULL UNIQUE,
+            requested_at TEXT NOT NULL,
+            reason TEXT NOT NULL CHECK (reason = 'user_requested')
+        )""")
+        connection.execute("""CREATE TRIGGER IF NOT EXISTS immutable_run_stop_request_update
+            BEFORE UPDATE ON run_stop_requests
+            BEGIN SELECT RAISE(ABORT, 'immutable stop request'); END""")
+        connection.execute("""CREATE TRIGGER IF NOT EXISTS immutable_run_stop_request_delete
+            BEFORE DELETE ON run_stop_requests
+            WHEN NOT EXISTS (SELECT 1 FROM session_deletion_scopes g JOIN runs r
+                ON r.session_id = g.session_id WHERE r.run_id = OLD.run_id)
+            BEGIN SELECT RAISE(ABORT, 'immutable stop request'); END""")
         _validate_migration(connection)
         connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
         connection.commit()
