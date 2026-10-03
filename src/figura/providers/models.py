@@ -55,6 +55,8 @@ class TextBlock:
 class ImageBlock:
     media_type: str
     image_bytes: bytes = field(repr=False)
+    source_ref: Mapping[str, str] | None = field(default=None, repr=False, compare=False)
+    observation_kind: str = field(default="original", compare=False)
 
 
 ContentBlock: TypeAlias = TextBlock | ImageBlock
@@ -106,11 +108,11 @@ class FunctionTool:
 
 @dataclass(frozen=True)
 class ProviderOptions:
-    max_completion_tokens: int
+    max_completion_tokens: int | None = None
     stream: bool = False
     thinking_mode: bool | None = None
     reasoning_effort: str | None = None
-    schema_version: int = 1
+    schema_version: int = 2
 
 
 @dataclass(frozen=True)
@@ -121,6 +123,7 @@ class ProviderRequest:
     messages: tuple[ProviderMessage, ...]
     options: ProviderOptions
     tools: tuple[FunctionTool, ...] = ()
+    asset_contract: Mapping[str, object] | None = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if isinstance(self.instructions, list):

@@ -13,19 +13,22 @@ from figura.shared.json_schema import (
 )
 from .contracts import ToolDefinition, ToolDefinitionError
 from .limits import (
-    MAX_REGISTRY_BYTES,
     MAX_REGISTRY_VERSION_BYTES,
-    MAX_TOOL_COUNT,
-    MAX_TOOL_SCHEMA_BYTES,
 )
+from figura.shared.payloads import ExecutionPayloadLimits, current_payload_limits, payload_scope
 
 
 class ToolRegistry:
     """A fixed definition set whose declaration order is model-facing order."""
 
-    __slots__ = ("_version", "_definitions", "_by_name")
+    __slots__ = ("_version", "_definitions", "_by_name", "payload_limits")
 
-    def __init__(self, registry_version: str, definitions: Iterable[ToolDefinition]) -> None:
+    def __init__(self, registry_version: str, definitions: Iterable[ToolDefinition], *, payload_limits: ExecutionPayloadLimits | None = None) -> None:
+        object.__setattr__(self, "payload_limits", payload_limits or current_payload_limits())
+        self._initialize(registry_version, definitions)
+
+    @payload_scope
+    def _initialize(self, registry_version: str, definitions: Iterable[ToolDefinition]) -> None:
         if not isinstance(registry_version, str) or not registry_version:
             raise ToolDefinitionError("registry_version must be a non-empty string")
         try:
@@ -36,28 +39,27 @@ class ToolRegistry:
             raise ToolDefinitionError("registry_version exceeds its byte limit")
 
         ordered = tuple(definitions)
-        if len(ordered) > MAX_TOOL_COUNT:
-            raise ToolDefinitionError("registry contains too many tools")
         by_name: dict[str, ToolDefinition] = {}
-        total_bytes = 0
+        projection = []
         for definition in ordered:
             if not isinstance(definition, ToolDefinition):
                 raise ToolDefinitionError("registry entries must be ToolDefinition values")
             if definition.name in by_name:
                 raise ToolDefinitionError("registry tool names must be unique")
             by_name[definition.name] = definition
-            total_bytes += len(definition.description.encode("utf-8"))
+            schemas = []
             for schema in (definition.parameters_schema, definition.result_schema):
                 try:
                     validated = validate_schema_definition(schema, require_object=True)
-                    serialized = canonical_json_dumps(validated).encode("utf-8")
+                    schemas.append(validated)
                 except (SchemaDefinitionError, JsonValueError):
                     raise ToolDefinitionError("registry schemas must be valid bounded object schemas") from None
-                if len(serialized) > MAX_TOOL_SCHEMA_BYTES:
-                    raise ToolDefinitionError("tool schema exceeds its byte limit")
-                total_bytes += len(serialized)
-            if total_bytes > MAX_REGISTRY_BYTES:
-                raise ToolDefinitionError("registry schemas and descriptions exceed their total byte limit")
+            projection.append({"name": definition.name, "description": definition.description,
+                               "parameters": schemas[0], "result": schemas[1]})
+        try:
+            canonical_json_dumps(projection)
+        except JsonValueError:
+            raise ToolDefinitionError("complete registry exceeds its payload guard") from None
 
         object.__setattr__(self, "_version", registry_version)
         object.__setattr__(self, "_definitions", ordered)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import math
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Mapping
@@ -17,7 +18,6 @@ _DEFAULT_BASE_URLS = {
     ProviderId.MIMO: "https://api.xiaomimimo.com/v1",
 }
 _DEFAULT_TIMEOUT_SECONDS = 60.0
-_MAX_TIMEOUT_SECONDS = 600.0
 
 
 @dataclass(frozen=True)
@@ -30,6 +30,7 @@ class ProviderProfile:
     thinking_mode: bool
     reasoning_effort: str | None
     configuration_error: ProviderFailureCode | None = None
+    max_completion_tokens: int | None = None
 
     def availability(self) -> ProviderAvailability:
         reason = self.configuration_error
@@ -79,6 +80,7 @@ def _profile_from_env(
         base_url = _DEFAULT_BASE_URLS.get(provider_id)
 
     configuration_error: ProviderFailureCode | None = None
+    max_completion_tokens: int | None = None
     if base_url is not None:
         try:
             parsed_url = urlsplit(base_url)
@@ -98,7 +100,7 @@ def _profile_from_env(
     raw_timeout = environ.get(f"{prefix}_TIMEOUT_SECONDS", "60").strip()
     try:
         timeout_seconds = float(raw_timeout)
-        if not 0 < timeout_seconds <= _MAX_TIMEOUT_SECONDS:
+        if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
             raise ValueError
     except (TypeError, ValueError):
         timeout_seconds = _DEFAULT_TIMEOUT_SECONDS
@@ -118,6 +120,13 @@ def _profile_from_env(
     if provider_id is ProviderId.MIMO and reasoning_effort is not None:
         configuration_error = ProviderFailureCode.INVALID_CONFIGURATION
 
+    raw_completion = environ.get(f"{prefix}_MAX_COMPLETION_TOKENS", "").strip()
+    completion = None
+    if raw_completion:
+        if not raw_completion.isascii() or not raw_completion.isdigit() or int(raw_completion) <= 0:
+            configuration_error = ProviderFailureCode.INVALID_CONFIGURATION
+        else:
+            completion = int(raw_completion)
     return ProviderProfile(
         provider_id=provider_id,
         model_id=MODEL_IDS[provider_id],
@@ -127,4 +136,5 @@ def _profile_from_env(
         thinking_mode=thinking_mode,
         reasoning_effort=reasoning_effort,
         configuration_error=configuration_error,
+        max_completion_tokens=completion,
     )

@@ -1,6 +1,6 @@
 # Provider：模型请求与响应边界
 
-> 更新日期：2026-10-02。[返回总览](../figura-implementation-overview.md)。本篇拥有模型服务的调用期合同、配置、适配与规范化失败；持久 `ProviderAttempt` 和 `ProviderContinuationFact` 由[Run Runtime](runtime.md#4-完整模型字段)定义。
+> 更新日期：2026-10-03。[返回总览](../figura-implementation-overview.md)。本篇拥有模型服务的调用期合同、配置、适配与规范化失败；持久 `ProviderAttempt` 和 `ProviderContinuationFact` 由[Run Runtime](runtime.md#4-完整模型字段)定义。
 
 ## 1. 职责与边界
 
@@ -51,6 +51,8 @@ adapter 区分服务端实际返回字段与 SDK 默认属性：未返回 `reaso
 |---|---|---|---|---|
 | ImageBlock.media_type | str | 必传 | 由图片内容验证得到的媒体类型 | FiguraAttachmentService / AgentRequestBuilder → 调用期内存 → Provider adapter；字节不入 Run 事实或普通日志 |
 | ImageBlock.image_bytes | bytes | 必传 | 已验证图像字节，仅调用期内存 | FiguraAttachmentService / AgentRequestBuilder → 调用期内存 → Provider adapter；字节不入 Run 事实或普通日志 |
+| ImageBlock.source_ref | Mapping[str, str] 或 None | None；repr=False | Agent 图片的完整 typed ref；直接 Provider 调用可无；不进入 wire | Agent image feedback → 调用期内存 → prepare 私有 manifest，字段见 [Runtime](runtime.md#providerrequestbinding) |
+| ImageBlock.observation_kind | str | original | original/annotated/rendered 回看类别；不进入 wire | Agent image feedback → 调用期内存 → prepare manifest |
 
 ### ProviderToolCall
 
@@ -81,6 +83,7 @@ ProviderClient 私有的冻结调用封套，`repr=False` 且禁止序列化；�
 | `_PreparedProviderCall.owner` | `object` | 必传；`repr=False` | 当前 client 的进程内身份 token；dispatch 必须按对象身份匹配 | ProviderClient.prepare → 私有内存 → 同 client.dispatch；不公开、不持久化或修订 |
 | `_PreparedProviderCall.request` | `ProviderRequest` | 必传；`repr=False` | 已通过校验的规范请求，供响应归一化使用 | ProviderClient.prepare → 私有内存 → dispatch/adapter；字段合同见本页，不另存副本 |
 | `_PreparedProviderCall.payload` | `Mapping[str, Any]` | 必传；`repr=False` | adapter 已准备的原生请求参数，可含图像和私有续接；作为本次 transport.create 的参数 | adapter.build_payload / prepare → 私有内存 → dispatch/transport；无公开或独立修订入口 |
+| `_PreparedProviderCall.descriptor` | `Mapping[str, Any]` | 必传；`repr=False` | 冻结的安全描述：provider/model、endpoint SHA-256、prepared payload（含 timeout）、POST/path 与 endpoint binding 的 canonical SHA-256、resolved options（包括冻结的 phase timeout）与完整 asset manifest | prepare → 私有内存 → Runtime binding；各持久字段见 [Runtime](runtime.md#providerrequestbinding)，不公开 |
 
 ### ProviderMessage
 
@@ -93,6 +96,7 @@ ProviderClient 私有的冻结调用封套，`repr=False` 且禁止序列化；�
 | ProviderMessage.tool_calls | tuple[ProviderToolCall, ...] | () | 有序工具调用；可为空 | AgentRequestBuilder → 调用期 ProviderRequest → Provider adapter；从执行事实重建 |
 | ProviderMessage.tool_call_id | str \| None | None | tool 角色消息对应的调用 ID | AgentRequestBuilder → 调用期 ProviderRequest → Provider adapter；从执行事实重建 |
 | ProviderMessage.continuation | ProviderContinuation \| None | None | Provider 私有续接；仅在适用历史消息中存在 | AgentRequestBuilder → 调用期 ProviderRequest → Provider adapter；从执行事实重建 |
+
 
 ### FunctionTool
 
@@ -107,15 +111,15 @@ ProviderClient 私有的冻结调用封套，`repr=False` 且禁止序列化；�
 
 ### ProviderOptions
 
-本次 Provider 请求的选项。 **写入者：**AgentRequestBuilder / Provider adapter。**权威位置：**调用期 ProviderRequest。**读取与公开：**Provider adapter；不作为 Run 独立事实。[定义](../../src/figura/providers/models.py)。
+本次 Provider 请求的选项。 **写入者：**AgentRequestBuilder / Provider adapter。**权威位置：**调用期 ProviderRequest。**读取与公开：**Provider adapter；prepare 时解析，复制到 Runtime 私有请求绑定。[定义](../../src/figura/providers/models.py)。
 
 | 完整字段路径 | 类型 | 构造默认 | 含义与约束 | 写入 → 权威 → 读取/公开 |
 |---|---|---|---|---|
-| ProviderOptions.max_completion_tokens | int | 必传 | 本次输出 token 上限 | AgentRequestBuilder / Provider adapter → 调用期 ProviderRequest → Provider adapter；不作为 Run 独立事实 |
-| ProviderOptions.stream | bool | False | 是否流式；当前 Agent 固定 false | AgentRequestBuilder / Provider adapter → 调用期 ProviderRequest → Provider adapter；不作为 Run 独立事实 |
-| ProviderOptions.thinking_mode | bool \| None | None | 本次请求的可选思考模式 | AgentRequestBuilder / Provider adapter → 调用期 ProviderRequest → Provider adapter；不作为 Run 独立事实 |
-| ProviderOptions.reasoning_effort | str \| None | None | 本次请求的可选推理强度 | AgentRequestBuilder / Provider adapter → 调用期 ProviderRequest → Provider adapter；不作为 Run 独立事实 |
-| ProviderOptions.schema_version | int | 1 | 该值或 payload 的版本号 | AgentRequestBuilder / Provider adapter → 调用期 ProviderRequest → Provider adapter；不作为 Run 独立事实 |
+| ProviderOptions.max_completion_tokens | int \| None | None | 可选单请求输出上限；未设则省略 wire 参数 | AgentRequestBuilder / Provider adapter → 调用期 ProviderRequest → Provider adapter；prepare 时解析，复制到 Runtime 私有请求绑定 |
+| ProviderOptions.stream | bool | False | 是否流式；当前 Agent 固定 false | AgentRequestBuilder / Provider adapter → 调用期 ProviderRequest → Provider adapter；prepare 时解析，复制到 Runtime 私有请求绑定 |
+| ProviderOptions.thinking_mode | bool \| None | None | 本次请求的可选思考模式 | AgentRequestBuilder / Provider adapter → 调用期 ProviderRequest → Provider adapter；prepare 时解析，复制到 Runtime 私有请求绑定 |
+| ProviderOptions.reasoning_effort | str \| None | None | 本次请求的可选推理强度 | AgentRequestBuilder / Provider adapter → 调用期 ProviderRequest → Provider adapter；prepare 时解析，复制到 Runtime 私有请求绑定 |
+| ProviderOptions.schema_version | int | 2 | 该值或 payload 的版本号 | AgentRequestBuilder / Provider adapter → 调用期 ProviderRequest → Provider adapter；prepare 时解析，复制到 Runtime 私有请求绑定 |
 
 ### ProviderRequest
 
@@ -129,6 +133,7 @@ ProviderClient 私有的冻结调用封套，`repr=False` 且禁止序列化；�
 | ProviderRequest.messages | tuple[ProviderMessage, ...] | 必传 | 有序角色消息；由已提交事实重建 | AgentRequestBuilder → 调用期内存 → ProviderClient；不得记录图片字节或密钥 |
 | ProviderRequest.options | ProviderOptions | 必传 | 本次请求的 ProviderOptions | AgentRequestBuilder → 调用期内存 → ProviderClient；不得记录图片字节或密钥 |
 | ProviderRequest.tools | tuple[FunctionTool, ...] | () | 本次可用的工具投影 | AgentRequestBuilder → 调用期内存 → ProviderClient；不得记录图片字节或密钥 |
+| ProviderRequest.asset_contract | Mapping[str, object] 或 None | None；repr=False | 私有 prompt_digest、registry_version、registry_digest；Agent 按完整声明计算，直接 Provider 调用从指令/工具投影计算 | AgentRequestBuilder → 调用期内存 → prepare 私有 manifest；不进入 wire，字段见 Runtime |
 
 ### ProviderUsage
 
@@ -176,10 +181,12 @@ ProviderClient 私有的冻结调用封套，`repr=False` 且禁止序列化；�
 | ProviderProfile.model_id | str | 必传 | 固定或响应中的模型身份 | ProviderSettings.from_env → 进程内，不入 Run → ProviderFactory；密钥与 endpoint 不公开 |
 | ProviderProfile.api_key | str \| None | 必传 | 私有 API 凭据；不入 Run/日志/公开投影 | ProviderSettings.from_env → 进程内，不入 Run → ProviderFactory；密钥与 endpoint 不公开 |
 | ProviderProfile.base_url | str \| None | 必传 | 经校验的私有 Provider endpoint | ProviderSettings.from_env → 进程内，不入 Run → ProviderFactory；密钥与 endpoint 不公开 |
-| ProviderProfile.timeout_seconds | float | 必传 | Provider 超时秒数 | ProviderSettings.from_env → 进程内，不入 Run → ProviderFactory；密钥与 endpoint 不公开 |
+| ProviderProfile.timeout_seconds | float | 必传 | I/O phase 超时，默认60秒；有限正数，无600秒上限 | ProviderSettings.from_env → 进程配置 → prepare 冻结到私有 binding；每次发送显式传入 SDK |
 | ProviderProfile.thinking_mode | bool | 必传 | 从进程配置解析的思考模式布尔值 | ProviderSettings.from_env → 进程内，不入 Run → ProviderFactory；密钥与 endpoint 不公开 |
 | ProviderProfile.reasoning_effort | str \| None | 必传 | 进程配置中的可选推理强度 | ProviderSettings.from_env → 进程内，不入 Run → ProviderFactory；密钥与 endpoint 不公开 |
 | ProviderProfile.configuration_error | ProviderFailureCode \| None | None | 配置校验失败码；可空 | ProviderSettings.from_env → 进程内，不入 Run → ProviderFactory；密钥与 endpoint 不公开 |
+
+| ProviderProfile.max_completion_tokens | int \| None | None | 每 Provider 可选默认输出 token 数，正整数；prepare 固定到本次 resolved options | 配置 → 进程内 profile → prepare；不直接公开 |
 
 ### ProviderSettings
 
@@ -200,6 +207,17 @@ ProviderClient 私有的冻结调用封套，`repr=False` 且禁止序列化；�
 | ProviderFailure.transient | bool | 必传 | 该失败是否可视为临时 | ProviderClient / adapter → 调用期；安全 code 可入 Attempt → Agent；不包含原始 SDK payload |
 | ProviderFailure.safe_message | str | 必传 | 可安全展示的有界失败说明 | ProviderClient / adapter → 调用期；安全 code 可入 Attempt → Agent；不包含原始 SDK payload |
 | ProviderFailure.http_status | int \| None | None | 可选 HTTP 状态码 | ProviderClient / adapter → 调用期；安全 code 可入 Attempt → Agent；不包含原始 SDK payload |
+
+| ProviderFailure.retry_after_seconds | float \| None | None | 安全解析 Retry-After 的秒数；非法、非有限或不可表示日期忽略 | 网络分类 → 调用期 → Runtime deadline；不保留原 header/body |
+| ProviderFailure.category | str 或 None（构造后为 str） | None → 按 safe code/known/transient/status 推导 | temporary_unsent / temporary_rejected / temporary_unknown / permanent / invalid_response / internal_error | Provider 分类 → 调用期 → Runtime Attempt.failure_category；只保存安全类别 |
+
+### 网络与物理边界
+
+SDK `max_retries=0`、HTTP transport `retries=0`。原始 HTTP 字节流在 SDK JSON 解析前检查 Content-Length 与累计接收量；完整 JSON 严格拒绝重复 keys、非有限值和非法 Unicode。已有直接 stream 也限制 raw SSE 累计字节、单事件 JSON 与规范化整体；Agent 仍为 non-streaming，不给部分 stream 补发。
+
+Provider 的通用 messages/instructions/tools/calls/文本和图片数量上限已删除。结构化请求以图片 media type、byte count、SHA-256 占位计 JSON；真实 data URL 计入 wire fingerprint，图像仍另有 single/total bytes guard。响应正文、全部 tool calls 和 continuation 一并检查。DeepSeek continuation、strict Schema、thinking、vision 能力保持 adapter 的实际合同。
+
+408/429/500/502/503/504 可按已知性进入临时恢复；quota/balance 429、认证、配置、TLS、确定性 DNS、无效响应、length 与内部异常不恢复。Connect/Pool timeout 是可证明 no-send；read/write timeout 和临时断连为 outcome unknown。Runtime 拥有重试次数、deadline 和替代 attempt，Provider 本身每次仅发送一次。未知请求可能已在服务端生成并计费，替代请求无法保证远端 exactly-once。
 
 ## 5. 枚举与依据
 

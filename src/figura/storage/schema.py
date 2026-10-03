@@ -6,7 +6,7 @@ import sqlite3
 
 from figura.runtime.errors import RunError, RunErrorCode
 
-_SCHEMA_VERSION = 10
+_SCHEMA_VERSION = 11
 
 
 def _run_stream_events_table(table_name: str) -> str:
@@ -290,6 +290,18 @@ def _validate_migration(connection: sqlite3.Connection) -> None:
     quick_check = connection.execute("PRAGMA quick_check").fetchone()
     if foreign_key_violations or quick_check is None or quick_check[0] != "ok":
         raise RunError(RunErrorCode.INTEGRITY_ERROR)
+    from figura.runtime.persistence.runs import _read_run_state_from_connection
+    from figura.shared.payloads import ExecutionPayloadLimits, use_payload_read_limits
+
+    ceiling = connection.execute("SELECT read_ceiling FROM execution_payload_metadata WHERE singleton = 1").fetchone()[0]
+    previous_factory = connection.row_factory
+    connection.row_factory = sqlite3.Row
+    try:
+        with use_payload_read_limits(ExecutionPayloadLimits(ceiling)):
+            for row in connection.execute("SELECT session_id, run_id FROM runs").fetchall():
+                _read_run_state_from_connection(connection, row["session_id"], row["run_id"])
+    finally:
+        connection.row_factory = previous_factory
 
 
 def _migrate_run_stream_events(connection: sqlite3.Connection) -> None:
@@ -345,9 +357,73 @@ def _migrate_continuations(connection: sqlite3.Connection) -> None:
         connection.execute(statement)
 
 
+def _migrate_execution_policy(connection: sqlite3.Connection) -> None:
+    """Rebuild bounded v10 tables atomically without changing existing facts."""
+    triggers = connection.execute("SELECT name, sql FROM sqlite_master WHERE type = 'trigger'").fetchall()
+    for row in triggers:
+        connection.execute(f'DROP TRIGGER "{row[0]}"')
+    tables = {
+        "run_execution_records": _CORE_SCHEMA[2].replace(" AND length(CAST(payload_json AS BLOB)) <= 262144", ""),
+        "run_tool_execution_facts": _TOOL_SCHEMA[0].replace(" AND length(CAST(payload_json AS BLOB)) <= 524288", ""),
+        "run_provider_continuations": _CONTINUATION_SCHEMA[0].replace(
+            "AND (reasoning_content IS NULL OR length(CAST(reasoning_content AS BLOB)) <= 524288)", ""),
+        "run_provider_attempts": _PROVIDER_ATTEMPT_SCHEMA[0].replace(
+            "attempt_sequence BETWEEN 1 AND 8", "attempt_sequence > 0"
+        ).replace("        UNIQUE(run_id, base_record_sequence, base_tool_sequence),", "").replace(
+            "        started_at TEXT NOT NULL,",
+            """        operation_id TEXT NULL REFERENCES run_provider_request_bindings(operation_id),
+        operation_attempt_number INTEGER NULL CHECK (operation_attempt_number BETWEEN 1 AND 4),
+        retry_of_attempt_id TEXT NULL REFERENCES run_provider_attempts(attempt_id),
+        failure_category TEXT NULL CHECK (failure_category IN ('temporary_unsent', 'temporary_rejected', 'temporary_unknown', 'permanent', 'invalid_response', 'internal_error')),
+        http_status INTEGER NULL CHECK (http_status BETWEEN 100 AND 599),
+        next_eligible_at TEXT NULL,
+        started_at TEXT NOT NULL,"""),
+    }
+    connection.execute("""CREATE TABLE IF NOT EXISTS run_provider_request_bindings (
+        operation_id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL REFERENCES runs(run_id) ON DELETE RESTRICT,
+        base_record_sequence INTEGER NOT NULL,
+        base_tool_sequence INTEGER NOT NULL,
+        payload_json TEXT NOT NULL CHECK (json_valid(payload_json)),
+        UNIQUE(run_id, base_record_sequence, base_tool_sequence)
+    )""")
+    for name, sql in tables.items():
+        connection.execute(sql.replace(f"CREATE TABLE {name}", f"CREATE TABLE {name}_v11"))
+        columns = [row[1] for row in connection.execute(f"PRAGMA table_info({name})")]
+        projection = ', '.join(columns)
+        connection.execute(f"INSERT INTO {name}_v11 ({projection}) SELECT {projection} FROM {name}")
+        connection.execute(f"DROP TABLE {name}")
+        connection.execute(f"ALTER TABLE {name}_v11 RENAME TO {name}")
+    for name, sql in triggers:
+        if name == "provider_attempt_has_one_terminal_transition":
+            sql = sql.replace("OR NEW.started_at <> OLD.started_at", """OR NEW.started_at <> OLD.started_at
+          OR NEW.operation_id IS NOT OLD.operation_id
+          OR NEW.operation_attempt_number IS NOT OLD.operation_attempt_number
+          OR NEW.retry_of_attempt_id IS NOT OLD.retry_of_attempt_id""")
+        connection.execute(sql.replace("AND schema_version = 2", "AND schema_version IN (2, 3)"))
+    connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS one_operation_attempt_number ON run_provider_attempts(operation_id, operation_attempt_number) WHERE operation_id IS NOT NULL")
+    connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS one_active_provider_operation ON run_provider_attempts(operation_id) WHERE operation_id IS NOT NULL AND status = 'started'")
+    connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS one_accepted_provider_operation ON run_provider_attempts(operation_id) WHERE operation_id IS NOT NULL AND status = 'response_committed'")
+    connection.execute("""CREATE TRIGGER IF NOT EXISTS immutable_provider_binding_update BEFORE UPDATE ON run_provider_request_bindings
+        BEGIN SELECT RAISE(ABORT, 'immutable provider binding'); END""")
+    connection.execute("""CREATE TRIGGER IF NOT EXISTS immutable_provider_binding_delete BEFORE DELETE ON run_provider_request_bindings
+        WHEN NOT EXISTS (SELECT 1 FROM runs JOIN session_deletion_scopes USING(session_id) WHERE runs.run_id = OLD.run_id)
+        BEGIN SELECT RAISE(ABORT, 'immutable provider binding'); END""")
+    connection.execute("""CREATE TRIGGER IF NOT EXISTS provider_attempt_matches_binding
+        BEFORE INSERT ON run_provider_attempts
+        WHEN NEW.operation_id IS NOT NULL AND NOT EXISTS (
+            SELECT 1 FROM run_provider_request_bindings b WHERE b.operation_id = NEW.operation_id
+              AND b.run_id = NEW.run_id AND b.base_record_sequence = NEW.base_record_sequence
+              AND b.base_tool_sequence = NEW.base_tool_sequence
+        ) BEGIN SELECT RAISE(ABORT, 'provider binding prefix mismatch'); END""")
+    connection.execute("CREATE TABLE IF NOT EXISTS execution_payload_metadata (singleton INTEGER PRIMARY KEY CHECK(singleton = 1), read_ceiling INTEGER NOT NULL CHECK(read_ceiling > 0))")
+    connection.execute("INSERT OR IGNORE INTO execution_payload_metadata VALUES (1, 33554432)")
+
+
 def initialize_schema(connection: sqlite3.Connection) -> None:
     """Initialize or migrate the database while holding its writer lock."""
     connection.execute("PRAGMA journal_mode = WAL")
+    connection.execute("PRAGMA foreign_keys = OFF")
     connection.execute("BEGIN IMMEDIATE")
     try:
         # Read the migration version after acquiring the writer lock so concurrent
@@ -381,7 +457,7 @@ def initialize_schema(connection: sqlite3.Connection) -> None:
         elif version == 3:
             for statement in _PROVIDER_ATTEMPT_SCHEMA:
                 connection.execute(statement)
-        elif version in {4, 5, 6, 7, 8, 9}:
+        elif version in {4, 5, 6, 7, 8, 9, 10}:
             pass
         else:
             raise RunError(RunErrorCode.UNSUPPORTED_VERSION)
@@ -394,6 +470,9 @@ def initialize_schema(connection: sqlite3.Connection) -> None:
             for statement in _PANEL_SCHEMA:
                 connection.execute(statement)
         if 0 < version < 8:
+            # Older fixtures/deployments have no deletion scope yet; make all
+            # existing scoped triggers valid before SQLite rewrites table names.
+            connection.execute("CREATE TABLE IF NOT EXISTS session_deletion_scopes (session_id TEXT PRIMARY KEY REFERENCES sessions(session_id) ON DELETE RESTRICT, created_at TEXT NOT NULL)")
             _migrate_run_stream_events(connection)
         if 3 <= version < 9:
             _migrate_continuations(connection)
@@ -412,9 +491,13 @@ def initialize_schema(connection: sqlite3.Connection) -> None:
             WHEN NOT EXISTS (SELECT 1 FROM session_deletion_scopes g JOIN runs r
                 ON r.session_id = g.session_id WHERE r.run_id = OLD.run_id)
             BEGIN SELECT RAISE(ABORT, 'immutable stop request'); END""")
+        _migrate_execution_policy(connection)
         _validate_migration(connection)
         connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
         connection.commit()
     except Exception:
         connection.rollback()
         raise
+
+    finally:
+        connection.execute("PRAGMA foreign_keys = ON")

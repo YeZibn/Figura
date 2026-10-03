@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import uuid
+from figura.providers.retries import retry_deadline
+from figura.shared.payloads import decode_json, encode_json, PayloadError
+from ..codecs.bindings import encode_binding, decode_binding
 
 from figura.providers.errors import ProviderFailureCode
 from figura.providers.models import (
@@ -42,6 +45,7 @@ from ..records import (
     ExecutionRecord,
     ModelResponseFact,
     ProviderAttempt,
+    ProviderRequestBinding,
     ProviderContinuationFact,
     ToolCallFact,
 )
@@ -64,6 +68,7 @@ class ProviderRepository:
         run_id: str,
         expected_revision: int,
         attempt_id: str,
+        binding: ProviderRequestBinding | None = None,
     ) -> ProviderAttempt:
         if type(expected_revision) is not int or expected_revision < 1:
             raise RunError(RunErrorCode.INVALID_REQUEST)
@@ -77,7 +82,27 @@ class ProviderRepository:
                 raise RunError(RunErrorCode.INVALID_TRANSITION)
             if checkpoint.revision != expected_revision:
                 raise RunError(RunErrorCode.STALE_CHECKPOINT)
-            if checkpoint.next_action != NextAction(ActionKind.MODEL):
+            operation_number, previous_id, operation_id = None, None, None
+            action = checkpoint.next_action
+            if action == NextAction(ActionKind.MODEL):
+                if binding is not None:
+                    if (binding.run_id, binding.provider_id, binding.model_id, binding.base_record_sequence, binding.base_tool_sequence) != (run_id, run.provider, run.model, checkpoint.last_committed_record_sequence, checkpoint.last_committed_tool_sequence):
+                        raise RunError(RunErrorCode.INVALID_TRANSITION)
+                    raw_binding = encode_binding(binding)
+                    connection.execute("INSERT INTO run_provider_request_bindings VALUES (?, ?, ?, ?, ?)",
+                        (binding.operation_id, run_id, binding.base_record_sequence, binding.base_tool_sequence, raw_binding))
+                    operation_id, operation_number = binding.operation_id, 1
+            elif action is not None and action.action_kind is ActionKind.PROVIDER_RETRY:
+                previous = connection.execute("SELECT * FROM run_provider_attempts WHERE run_id = ? AND attempt_id = ?", (run_id, action.attempt_id)).fetchone()
+                if previous is None or previous["status"] not in {"known_failure", "outcome_unknown"} or previous["failure_category"] not in {"temporary_unsent", "temporary_rejected", "temporary_unknown"} or not previous["next_eligible_at"] or previous["next_eligible_at"] > now:
+                    raise RunError(RunErrorCode.INVALID_TRANSITION)
+                row = connection.execute("SELECT payload_json FROM run_provider_request_bindings WHERE operation_id = ?", (previous["operation_id"],)).fetchone()
+                if row is None or binding is None or encode_binding(binding) != row[0]:
+                    raise RunError(RunErrorCode.INVALID_TRANSITION)
+                if not binding.generation_only or previous["operation_attempt_number"] >= binding.max_attempts:
+                    raise RunError(RunErrorCode.INVALID_TRANSITION)
+                operation_id, operation_number, previous_id = binding.operation_id, previous["operation_attempt_number"] + 1, previous["attempt_id"]
+            else:
                 raise RunError(RunErrorCode.INVALID_TRANSITION)
             attempt_sequence = int(
                 connection.execute(
@@ -85,26 +110,24 @@ class ProviderRepository:
                     (run_id,),
                 ).fetchone()[0]
             ) + 1
-            if attempt_sequence > 8:
-                raise RunError(RunErrorCode.INVALID_TRANSITION)
             connection.execute(
                 "INSERT INTO run_provider_attempts(attempt_id, run_id, attempt_sequence, "
                 "base_record_sequence, base_tool_sequence, status, response_record_id, failure_code, "
-                "started_at, finished_at) VALUES (?, ?, ?, ?, ?, 'started', NULL, NULL, ?, NULL)",
+                "started_at, finished_at, operation_id, operation_attempt_number, retry_of_attempt_id) VALUES (?, ?, ?, ?, ?, 'started', NULL, NULL, ?, NULL, ?, ?, ?)",
                 (
                     attempt_id,
                     run_id,
                     attempt_sequence,
                     checkpoint.last_committed_record_sequence,
                     checkpoint.last_committed_tool_sequence,
-                    now,
+                    now, operation_id, operation_number, previous_id,
                 ),
             )
             action_json = _encode_action(
                 NextAction(ActionKind.PROVIDER_ATTEMPT, attempt_id=attempt_id)
             )
             cursor = connection.execute(
-                "UPDATE run_execution_checkpoints SET revision = revision + 1, next_action_json = ?, "
+                "UPDATE run_execution_checkpoints SET schema_version = 2, revision = revision + 1, next_action_json = ?, "
                 "updated_at = ? WHERE run_id = ? AND revision = ?",
                 (action_json, now, run_id, expected_revision),
             )
@@ -121,6 +144,7 @@ class ProviderRepository:
             failure_code=None,
             started_at=now,
             finished_at=None,
+            operation_id=operation_id, operation_attempt_number=operation_number, retry_of_attempt_id=previous_id,
         )
 
     def commit_model_response(
@@ -142,7 +166,7 @@ class ProviderRepository:
         if (
             not isinstance(payload, ModelResponseFact)
             or type(payload.schema_version) is not int
-            or payload.schema_version != 2
+            or payload.schema_version not in {2, 3}
         ):
             raise RunError(RunErrorCode.UNSUPPORTED_VERSION)
         if (
@@ -166,6 +190,12 @@ class ProviderRepository:
         raw_tool_facts = tuple(
             encode_tool_fact(ToolFactKind.TOOL_CALL, call) for call in tool_calls
         )
+        try:
+            encode_json({"response": decode_json(raw_payload), "tool_calls": [decode_json(raw) for raw in raw_tool_facts],
+                "continuation": {"provider_id": continuation.provider_id, "format_version": continuation.format_version,
+                    "reasoning_content": continuation.reasoning_content} if continuation else None})
+        except PayloadError:
+            raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD) from None
         with self._database.write() as connection:
             run = self._runs._scoped_run(connection, session_id, run_id)
             checkpoint = self._runs._checkpoint_for_write(connection, run_id)
@@ -208,7 +238,7 @@ class ProviderRepository:
                     response_record_id=record_id,
                     provider_id=continuation_provider.value,
                     format_version=continuation.format_version,
-                    schema_version=1,
+                    schema_version=2,
                     reasoning_content=continuation.reasoning_content,
                     created_at=now,
                 )
@@ -264,7 +294,7 @@ class ProviderRepository:
             for offset, (call, raw_fact) in enumerate(zip(tool_calls, raw_tool_facts)):
                 connection.execute(
                     "INSERT INTO run_tool_execution_facts(run_id, tool_sequence, fact_kind, schema_version, payload_json, created_at) "
-                    "VALUES (?, ?, 'tool_call', 1, ?, ?)",
+                    "VALUES (?, ?, 'tool_call', 2, ?, ?)",
                     (run_id, first_tool_sequence + offset, raw_fact, now),
                 )
             attempt_cursor = connection.execute(
@@ -281,7 +311,7 @@ class ProviderRepository:
             )
             last_tool_sequence = checkpoint.last_committed_tool_sequence + len(tool_calls)
             cursor = connection.execute(
-                "UPDATE run_execution_checkpoints SET revision = revision + 1, last_committed_record_sequence = ?, "
+                "UPDATE run_execution_checkpoints SET schema_version = 2, revision = revision + 1, last_committed_record_sequence = ?, "
                 "last_committed_tool_sequence = ?, "
                 "next_action_json = ?, updated_at = ? WHERE run_id = ? AND revision = ?",
                 (sequence, last_tool_sequence, next_action, now, run_id, expected_revision),
@@ -307,6 +337,10 @@ class ProviderRepository:
         attempt_id: str,
         outcome_unknown: bool,
         failure_code: str | None,
+        transient: bool = False,
+        http_status: int | None = None,
+        retry_after_seconds: float | None = None,
+        failure_category: str | None = None,
     ) -> Run:
         if type(expected_revision) is not int or expected_revision < 1:
             raise RunError(RunErrorCode.INVALID_REQUEST)
@@ -358,18 +392,36 @@ class ProviderRepository:
             if checkpoint.next_action != expected_action:
                 raise RunError(RunErrorCode.INVALID_TRANSITION)
             attempt_row = connection.execute(
-                "SELECT status FROM run_provider_attempts WHERE run_id = ? AND attempt_id = ?",
+                "SELECT * FROM run_provider_attempts WHERE run_id = ? AND attempt_id = ?",
                 (run_id, attempt_id),
             ).fetchone()
             if attempt_row is None or attempt_row["status"] != ProviderAttemptStatus.STARTED.value:
                 raise RunError(RunErrorCode.INVALID_TRANSITION)
+            category = failure_category
+            if category is None:
+                category = ("temporary_unknown" if outcome_unknown else "temporary_rejected" if http_status is not None else "temporary_unsent") if transient else "invalid_response" if failure_code == "invalid_provider_response" else "internal_error" if failure_code is None else "permanent"
+            if category not in {"temporary_unsent", "temporary_rejected", "temporary_unknown", "permanent", "invalid_response", "internal_error"} or transient != category.startswith("temporary_"):
+                raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
+            if category == "temporary_unknown" and not outcome_unknown or category in {"temporary_unsent", "temporary_rejected"} and outcome_unknown:
+                raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
+            retry = transient and not stopping and attempt_row["operation_id"] is not None and attempt_row["operation_attempt_number"] < 4
+            if retry:
+                binding_row = connection.execute("SELECT payload_json FROM run_provider_request_bindings WHERE operation_id = ?", (attempt_row["operation_id"],)).fetchone()
+                retry = binding_row is not None and decode_binding(binding_row[0]).generation_only
+            due = retry_deadline(attempt_row["operation_attempt_number"], retry_after_seconds) if retry else None
             cursor = connection.execute(
-                "UPDATE run_provider_attempts SET status = ?, failure_code = ?, finished_at = ? "
+                "UPDATE run_provider_attempts SET status = ?, failure_code = ?, finished_at = ?, failure_category = ?, http_status = ?, next_eligible_at = ? "
                 "WHERE run_id = ? AND attempt_id = ? AND status = 'started'",
-                (attempt_status.value, failure_code, now, run_id, attempt_id),
+                (attempt_status.value, failure_code, now, category, http_status, due, run_id, attempt_id),
             )
             if cursor.rowcount != 1:
                 raise RunError(RunErrorCode.INVALID_TRANSITION)
+            if retry:
+                connection.execute("UPDATE run_execution_checkpoints SET schema_version = 2, revision = revision + 1, next_action_json = ?, updated_at = ? WHERE run_id = ? AND revision = ?",
+                    (_encode_action(NextAction(ActionKind.PROVIDER_RETRY, attempt_id=attempt_id)), now, run_id, expected_revision))
+                _append_run_event(connection, run_id=run_id, kind=EventKind.RUN_PROGRESS,
+                    payload={"checkpoint_revision": expected_revision + 1}, created_at=now)
+                return run
             cursor = connection.execute(
                 "UPDATE runs SET status = ?, finished_at = ?, terminal_code = ?, terminal_message = ? "
                 "WHERE run_id = ? AND session_id = ? AND status = 'running'",
@@ -378,7 +430,7 @@ class ProviderRepository:
             if cursor.rowcount != 1:
                 raise RunError(RunErrorCode.INVALID_TRANSITION)
             cursor = connection.execute(
-                "UPDATE run_execution_checkpoints SET revision = revision + 1, updated_at = ? "
+                "UPDATE run_execution_checkpoints SET schema_version = 2, revision = revision + 1, updated_at = ? "
                 "WHERE run_id = ? AND revision = ?",
                 (now, run_id, expected_revision),
             )

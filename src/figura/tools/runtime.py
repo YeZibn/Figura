@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import inspect
-import json
 from collections.abc import Mapping
 from typing import Any
 
 from figura.shared.json_schema import JsonValueError, canonical_json_dumps, normalize_json_value, validate_instance
+from figura.shared.payloads import PayloadError, PayloadTooLarge, decode_json, encode_json, payload_scope
 from .contracts import (
     ReplayEffect,
     ToolContext,
@@ -18,9 +18,10 @@ from .contracts import (
     ToolInvocation,
     ToolInvocationError,
     ToolOutcome,
+    ToolOutcomeUnknown,
     freeze_json_value,
 )
-from .limits import MAX_ARGUMENT_BYTES, MAX_ERROR_POINTER_BYTES, MAX_RESULT_BYTES
+from .limits import MAX_ERROR_POINTER_BYTES
 from .registry import ToolRegistry
 
 
@@ -31,14 +32,6 @@ _ARGUMENT_MESSAGES = {
     "not_object": "工具参数必须是 JSON 对象。",
     "schema": "工具参数未通过定义校验。",
 }
-
-
-class _DuplicateObjectKey(ValueError):
-    pass
-
-
-class _NonFiniteConstant(ValueError):
-    pass
 
 
 class ToolRuntime:
@@ -58,7 +51,12 @@ class ToolRuntime:
     def registry(self) -> ToolRegistry:
         return self._registry
 
-    def invoke(self, invocation: ToolInvocation, context: ToolContext) -> ToolExecutionResult:
+    @property
+    def payload_limits(self):
+        return self.registry.payload_limits
+
+    @payload_scope
+    def invoke(self, invocation: ToolInvocation, context: ToolContext, *, durable: bool = False) -> ToolExecutionResult:
         if not isinstance(invocation, ToolInvocation):
             raise ToolInvocationError("invalid_invocation", "工具调用结构无效。")
         if not isinstance(context, ToolContext):
@@ -118,6 +116,8 @@ class ToolRuntime:
         try:
             cancelled = context.cancellation.is_cancelled()
         except Exception:
+            if durable:
+                raise
             cancelled = True
         if cancelled:
             return _failed(
@@ -134,6 +134,8 @@ class ToolRuntime:
                 close = getattr(output, "close", None)
                 if callable(close):
                     close()
+                if durable and definition.replay_effect is not ReplayEffect.REPLAY_SAFE:
+                    raise ToolOutcomeUnknown()
                 return _handler_failed(invocation)
         except ToolFailure as error:
             return ToolExecutionResult(
@@ -142,50 +144,26 @@ class ToolRuntime:
                 outcome=ToolOutcome.FAILED,
                 error=error.error,
             )
+        except ToolOutcomeUnknown:
+            raise
         except Exception:
+            if durable and definition.replay_effect is not ReplayEffect.REPLAY_SAFE:
+                raise ToolOutcomeUnknown() from None
             return _handler_failed(invocation)
 
-        return _success_or_failure(invocation, definition, output)
+        result = _success_or_failure(invocation, definition, output)
+        if durable and result.outcome is ToolOutcome.FAILED and definition.replay_effect is not ReplayEffect.REPLAY_SAFE:
+            raise ToolOutcomeUnknown()
+        return result
 
 
 def _parse_arguments(raw: str) -> tuple[Any, tuple[str, str] | None]:
     try:
-        size = len(raw.encode("utf-8"))
-    except UnicodeEncodeError:
-        return None, ("invalid_arguments", _ARGUMENT_MESSAGES["invalid_json"])
-    if size > MAX_ARGUMENT_BYTES:
+        return decode_json(raw), None
+    except PayloadTooLarge:
         return None, ("arguments_too_large", "工具参数超出允许大小。")
-
-    def pairs_hook(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-        result: dict[str, Any] = {}
-        for key, value in pairs:
-            if key in result:
-                raise _DuplicateObjectKey
-            result[key] = value
-        return result
-
-    def reject_constant(_value: str) -> None:
-        raise _NonFiniteConstant
-
-    try:
-        value = json.loads(raw, object_pairs_hook=pairs_hook, parse_constant=reject_constant)
-    except _DuplicateObjectKey:
-        return None, ("invalid_arguments", _ARGUMENT_MESSAGES["duplicate_key"])
-    except _NonFiniteConstant:
-        return None, ("invalid_arguments", _ARGUMENT_MESSAGES["non_finite_number"])
-    except (json.JSONDecodeError, TypeError, ValueError, RecursionError, OverflowError):
+    except PayloadError:
         return None, ("invalid_arguments", _ARGUMENT_MESSAGES["invalid_json"])
-
-    try:
-        value = normalize_json_value(value)
-    except JsonValueError as error:
-        message = (
-            _ARGUMENT_MESSAGES["non_finite_number"]
-            if str(error) == "JSON numbers must be finite"
-            else _ARGUMENT_MESSAGES["invalid_json"]
-        )
-        return None, ("invalid_arguments", message)
-    return value, None
 
 
 def _success_or_failure(
@@ -202,25 +180,20 @@ def _success_or_failure(
             retryable=False,
         )
     try:
+        encode_json({"call_id": invocation.call_id, "tool_name": invocation.name,
+            "outcome": "succeeded", "result": output, "error": None})
         normalized = normalize_json_value(output)
         if not isinstance(normalized, dict):
             raise JsonValueError("result is not an object")
-        serialized = canonical_json_dumps(normalized)
-        output_size = len(serialized.encode("utf-8"))
+        encode_json(normalized)
+    except PayloadTooLarge:
+        return _failed(invocation.call_id, invocation.name, "result_too_large", "工具返回结果超出允许大小。", retryable=False)
     except Exception:
         return _failed(
             invocation.call_id,
             invocation.name,
             "invalid_result",
             "工具返回结果不符合定义。",
-            retryable=False,
-        )
-    if output_size > MAX_RESULT_BYTES:
-        return _failed(
-            invocation.call_id,
-            invocation.name,
-            "result_too_large",
-            "工具返回结果超出允许大小。",
             retryable=False,
         )
     issue = validate_instance(normalized, definition.result_schema)

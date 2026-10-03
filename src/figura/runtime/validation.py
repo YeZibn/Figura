@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from figura.shared.payloads import payload_read_scope
+
 from figura.providers.models import FinishReason
 
 from .errors import RunError, RunErrorCode
@@ -41,6 +43,7 @@ def _validate_id(value: object) -> None:
         raise RunError(RunErrorCode.INVALID_REQUEST)
 
 
+@payload_read_scope
 def _validate_state(state: RunState) -> None:
     run, checkpoint = state.run, state.checkpoint
     stop = state.stop_request
@@ -57,7 +60,7 @@ def _validate_state(state: RunState) -> None:
     records, events, tool_facts = state.records, state.events, state.tool_facts
     if (
         checkpoint.run_id != run.run_id
-        or checkpoint.schema_version != 1
+        or checkpoint.schema_version not in {1, 2}
         or type(checkpoint.last_committed_tool_sequence) is not int
         or checkpoint.last_committed_tool_sequence < 0
     ):
@@ -121,7 +124,7 @@ def _validate_state(state: RunState) -> None:
     results_by_attempt: dict[str, tuple[ToolExecutionFact, ToolResultFact]] = {}
 
     for fact in tool_facts:
-        if fact.run_id != run.run_id or fact.schema_version != 1:
+        if fact.run_id != run.run_id or fact.schema_version not in {1, 2}:
             raise RunError(RunErrorCode.INTEGRITY_ERROR)
         if fact.fact_kind is ToolFactKind.TOOL_CALL and isinstance(fact.payload, ToolCallFact):
             call = fact.payload
@@ -182,7 +185,7 @@ def _validate_state(state: RunState) -> None:
     for response_id in batch_response_ids:
         call_pairs = calls_by_response[response_id]
         call_pairs.sort(key=lambda pair: pair[1].position)
-        if not 1 <= len(call_pairs) <= 64:
+        if not call_pairs:
             raise RunError(RunErrorCode.INTEGRITY_ERROR)
         if [call.position for _, call in call_pairs] != list(range(len(call_pairs))):
             raise RunError(RunErrorCode.INTEGRITY_ERROR)
@@ -220,6 +223,7 @@ def _validate_state(state: RunState) -> None:
         provider_attempts=state.provider_attempts,
         tool_facts=tool_facts,
         calls_by_sequence=calls_by_sequence,
+        bindings=state.provider_request_bindings,
     )
 
     unresolved_action: NextAction | None = None
@@ -313,6 +317,10 @@ def _validate_state(state: RunState) -> None:
             ActionKind.PROVIDER_ATTEMPT,
             attempt_id=state.provider_attempts[-1].attempt_id,
         )
+
+    if (state.provider_attempts and state.provider_attempts[-1].next_eligible_at is not None
+            and state.provider_attempts[-1].status in {ProviderAttemptStatus.KNOWN_FAILURE, ProviderAttemptStatus.OUTCOME_UNKNOWN}):
+        expected_action = NextAction(ActionKind.PROVIDER_RETRY, attempt_id=state.provider_attempts[-1].attempt_id)
 
     if run.status is RunStatus.RUNNING:
         if (

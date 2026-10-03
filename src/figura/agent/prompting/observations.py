@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import asdict
+from types import MappingProxyType
 
 from figura.agent.execution_images import RunExecutionImageReader
 from figura.agent.execution_resources import (
@@ -137,7 +139,7 @@ def build_observation_messages(
             label = "OCR 结果" if resource_kind == "ocr" else "测量结果"
             blocks.extend((
                 TextBlock(f"{label}图像回看：{call.tool_name}；调用 ID：{call.call_id}。"),
-                ImageBlock("image/png", image_bytes),
+                ImageBlock("image/png", image_bytes, MappingProxyType(asdict(ref)), "annotated"),
             ))
             continue
 
@@ -167,7 +169,7 @@ def build_observation_messages(
                     f"Figure 图像回看：render_chart_figure；运行 ID：{state.run.run_id}；"
                     f"调用 ID：{call.call_id}。"
                 ),
-                ImageBlock("image/png", image_bytes),
+                ImageBlock("image/png", image_bytes, MappingProxyType(asdict(ref)), "rendered"),
             ))
 
     if not blocks:
@@ -191,7 +193,7 @@ def _source_image_block(
     image_bytes, _width, _height = image_reader.read_source(session_id, state, ref)
     if not image_bytes or len(image_bytes) > MAX_IMAGE_BYTES:
         raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
-    return ImageBlock(media_type, image_bytes)
+    return ImageBlock(media_type, image_bytes, MappingProxyType(asdict(ref)), "original")
 
 
 def _thaw_json(value: object) -> object:

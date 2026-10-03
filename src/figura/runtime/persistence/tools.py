@@ -105,6 +105,8 @@ class ToolRepository:
                     and existing.payload.tool_call_sequence == tool_call_sequence
                 ):
                     attempt_number += 1
+            if attempt_number > 3:
+                raise RunError(RunErrorCode.INVALID_TRANSITION)
             start = ToolAttemptStartedFact(
                 tool_call_sequence=tool_call_sequence,
                 call_id=call.call_id,
@@ -130,7 +132,7 @@ class ToolRepository:
                 )
             )
             cursor = connection.execute(
-                "UPDATE run_execution_checkpoints SET revision = revision + 1, "
+                "UPDATE run_execution_checkpoints SET schema_version = 2, revision = revision + 1, "
                 "last_committed_tool_sequence = ?, next_action_json = ?, updated_at = ? "
                 "WHERE run_id = ? AND revision = ?",
                 (tool_sequence, action_json, now, run_id, expected_revision),
@@ -217,6 +219,8 @@ class ToolRepository:
             if not attempts_for_call or attempts_for_call[-1].attempt_id != previous_attempt_id:
                 raise RunError(RunErrorCode.INVALID_TRANSITION)
             previous = attempts_for_call[-1]
+            if previous.attempt_number >= 3:
+                raise RunError(RunErrorCode.INVALID_TRANSITION)
             if (
                 previous.registry_version != registry_version
                 or previous.replay_effect is ReplayEffect.RECONCILE_REQUIRED
@@ -258,7 +262,7 @@ class ToolRepository:
                 )
             )
             cursor = connection.execute(
-                "UPDATE run_execution_checkpoints SET revision = revision + 1, "
+                "UPDATE run_execution_checkpoints SET schema_version = 2, revision = revision + 1, "
                 "last_committed_tool_sequence = ?, next_action_json = ?, updated_at = ? "
                 "WHERE run_id = ? AND revision = ?",
                 (tool_sequence, action_json, now, run_id, expected_revision),
@@ -387,7 +391,7 @@ class ToolRepository:
                 else NextAction(ActionKind.MODEL)
             )
             cursor = connection.execute(
-                "UPDATE run_execution_checkpoints SET revision = revision + 1, "
+                "UPDATE run_execution_checkpoints SET schema_version = 2, revision = revision + 1, "
                 "last_committed_tool_sequence = ?, next_action_json = ?, updated_at = ? "
                 "WHERE run_id = ? AND revision = ?",
                 (tool_sequence, _encode_action(next_action), now, run_id, expected_revision),

@@ -7,8 +7,10 @@ import sqlite3
 
 from figura.providers.models import ProviderContinuation
 from figura.storage.database import SqliteDatabase
+from figura.shared.payloads import ExecutionPayloadLimits, payload_scope
 from figura.tools.contracts import ReplayEffect, ToolExecutionResult
 
+from .run_lock import owned_claim
 from .models import (
     Run,
     RunStatus,
@@ -21,6 +23,7 @@ from .records import (
     ExecutionRecord,
     ModelResponseFact,
     ProviderAttempt,
+    ProviderRequestBinding,
     RunInput,
     RunState,
     SessionSnapshot,
@@ -39,8 +42,9 @@ from .persistence.tools import ToolRepository
 class FiguraRunStore:
     """Own the SQLite database and coordinate Runtime persistence operations."""
 
-    def __init__(self, data_root: str | os.PathLike[str]) -> None:
-        self._database = SqliteDatabase(data_root)
+    def __init__(self, data_root: str | os.PathLike[str], *, payload_limits: ExecutionPayloadLimits | None = None) -> None:
+        self.payload_limits = payload_limits or ExecutionPayloadLimits.from_env()
+        self._database = SqliteDatabase(data_root, payload_limits=self.payload_limits)
         self.data_root = self._database.data_root
         self.database_path = self._database.database_path
         self._sessions = SessionRepository(self._database)
@@ -125,6 +129,7 @@ class FiguraRunStore:
     ) -> Run | None:
         return self._runs.find_idempotent_run(session_id, key_digest, request_fingerprint)
 
+    @payload_scope
     def create_initial_run(
         self,
         *,
@@ -150,6 +155,7 @@ class FiguraRunStore:
     def read_prior_run_states(self, session_id: str, run_id: str) -> tuple[RunState, ...]:
         return self._snapshots.read_prior_run_states(session_id, run_id)
 
+    @owned_claim
     def begin_provider_attempt(
         self,
         *,
@@ -157,14 +163,17 @@ class FiguraRunStore:
         run_id: str,
         expected_revision: int,
         attempt_id: str,
+        binding: ProviderRequestBinding | None = None,
     ) -> ProviderAttempt:
         return self._providers.begin_provider_attempt(
             session_id=session_id,
             run_id=run_id,
             expected_revision=expected_revision,
-            attempt_id=attempt_id,
+            attempt_id=attempt_id, binding=binding,
         )
 
+    @payload_scope
+    @owned_claim
     def commit_model_response(
         self,
         *,
@@ -190,6 +199,7 @@ class FiguraRunStore:
             continuation_id=continuation_id,
         )
 
+    @owned_claim
     def fail_provider_attempt(
         self,
         *,
@@ -199,6 +209,10 @@ class FiguraRunStore:
         attempt_id: str,
         outcome_unknown: bool,
         failure_code: str | None,
+        transient: bool = False,
+        http_status: int | None = None,
+        retry_after_seconds: float | None = None,
+        failure_category: str | None = None,
     ) -> Run:
         return self._providers.fail_provider_attempt(
             session_id=session_id,
@@ -206,9 +220,10 @@ class FiguraRunStore:
             expected_revision=expected_revision,
             attempt_id=attempt_id,
             outcome_unknown=outcome_unknown,
-            failure_code=failure_code,
+            failure_code=failure_code, transient=transient, http_status=http_status, retry_after_seconds=retry_after_seconds, failure_category=failure_category,
         )
 
+    @owned_claim
     def begin_tool_attempt(
         self,
         *,
@@ -230,6 +245,7 @@ class FiguraRunStore:
             attempt_id=attempt_id,
         )
 
+    @owned_claim
     def begin_tool_replay_attempt(
         self,
         *,
@@ -251,6 +267,8 @@ class FiguraRunStore:
             attempt_id=attempt_id,
         )
 
+    @payload_scope
+    @owned_claim
     def commit_tool_result(
         self,
         *,
@@ -268,6 +286,7 @@ class FiguraRunStore:
             result=result,
         )
 
+    @owned_claim
     def complete_run(
         self,
         *,
@@ -281,6 +300,7 @@ class FiguraRunStore:
             expected_revision=expected_revision,
         )
 
+    @owned_claim
     def terminal_run(
         self,
         *,

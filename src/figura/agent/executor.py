@@ -3,6 +3,12 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
+from dataclasses import replace
+import time
+import uuid
+from datetime import datetime, timezone
+from figura.providers.models import ProviderOptions
+from figura.shared.payloads import payload_scope
 
 from figura.runtime.models import PREPARATION_MESSAGES
 from figura.providers import ProviderFactory, ProviderResponse
@@ -14,6 +20,7 @@ from figura.runtime.models import ActionKind, RunStatus, TerminalCode, ToolFactK
 from figura.runtime.records import (
     ModelResponseFact,
     RunState,
+    ProviderRequestBinding,
     ToolAttemptStartedFact,
     ToolCallFact,
 )
@@ -21,10 +28,7 @@ from figura.runtime.tool_execution import DurableToolExecutor
 from figura.runtime.run_lock import PerRunExecutionLock, RunExecutionOwnership, RunExecutionLockUnavailable
 
 from .request import AgentRequestBuilder
-
-
-_MAX_PROVIDER_ATTEMPTS = 8
-_MAX_STARTED_TOOL_CALLS = 32
+from figura.tools.contracts import ToolOutcomeUnknown
 
 
 class AgentExecutor:
@@ -62,7 +66,40 @@ class AgentExecutor:
     def coordinator(self) -> RunCoordinator:
         return self._coordinator
 
+    @property
+    def payload_limits(self):
+        return self._coordinator.payload_limits
+
     def execute(self, session_id: str, run_id: str) -> RunState:
+        """Synchronous driver waits outside ownership and never holds a worker during backoff."""
+        while True:
+            before = self._coordinator.read_run_state(session_id, run_id)
+            state = self.execute_slice(session_id, run_id)
+            if state.run.status is not RunStatus.RUNNING:
+                return state
+            action = state.checkpoint.next_action
+            if state.checkpoint.revision == before.checkpoint.revision and self.is_ready(state):
+                return state
+            if action and action.action_kind is ActionKind.PROVIDER_RETRY:
+                if state.stop_request is None and not self.is_ready(state):
+                    time.sleep(min(0.1, self.retry_delay(state)))
+                continue
+            if state.checkpoint.revision == before.checkpoint.revision:
+                return state
+
+    @staticmethod
+    def retry_delay(state: RunState) -> float:
+        if not state.provider_attempts or state.provider_attempts[-1].next_eligible_at is None:
+            return 0.0
+        due = datetime.fromisoformat(state.provider_attempts[-1].next_eligible_at.replace("Z", "+00:00"))
+        return max(0.0, (due - datetime.now(timezone.utc)).total_seconds())
+
+    @classmethod
+    def is_ready(cls, state: RunState) -> bool:
+        return state.stop_request is not None or cls.retry_delay(state) == 0
+
+    @payload_scope
+    def execute_slice(self, session_id: str, run_id: str) -> RunState:
         try:
             with self._owner.acquire(run_id):
                 try:
@@ -76,6 +113,8 @@ class AgentExecutor:
                                       RunErrorCode.UNSUPPORTED_VERSION, RunErrorCode.RUN_NOT_FOUND}:
                         raise
                     return self._close_unexpected(session_id, run_id)
+                except ToolOutcomeUnknown:
+                    return self._coordinator.read_run_state(session_id, run_id)
                 except Exception:
                     return self._close_unexpected(session_id, run_id)
         except RunExecutionLockUnavailable:
@@ -126,7 +165,7 @@ class AgentExecutor:
     def _execute_owned(self, session_id: str, run_id: str) -> RunState:
         """Advance until terminal, externally unresolved, or another owner holds the Run."""
         state = self._coordinator.read_run_state(session_id, run_id)
-        while state.run.status is RunStatus.RUNNING:
+        if state.run.status is RunStatus.RUNNING:
             state = self._coordinator.read_run_state(session_id, run_id)
             if state.stop_request is not None:
                 return self._stop_owned(state)
@@ -135,7 +174,7 @@ class AgentExecutor:
             action = state.checkpoint.next_action
             if action is None:
                 raise RunError(RunErrorCode.INTEGRITY_ERROR)
-            if action.action_kind is ActionKind.MODEL:
+            if action.action_kind in {ActionKind.MODEL, ActionKind.PROVIDER_RETRY}:
                 next_state = self._execute_model_action(state)
             elif action.action_kind is ActionKind.TOOL_EXECUTION:
                 next_state = self._execute_tool_action(state)
@@ -154,18 +193,26 @@ class AgentExecutor:
                 and next_state.checkpoint.next_action == state.checkpoint.next_action
             ):
                 return next_state
-            state = next_state
+            return next_state
         return state
 
     def _execute_model_action(self, state: RunState) -> RunState:
         session_id, run_id = state.run.session_id, state.run.run_id
-        if len(state.provider_attempts) >= _MAX_PROVIDER_ATTEMPTS:
-            return self._fail_run(state)
+        if not self.is_ready(state):
+            return state
+        binding = None
+        if state.checkpoint.next_action.action_kind is ActionKind.PROVIDER_RETRY:
+            last = state.provider_attempts[-1]
+            binding = next((item for item in state.provider_request_bindings if item.operation_id == last.operation_id), None)
+            if binding is None:
+                return self._fail_run(state)
         try:
             prior_run_states = self._coordinator.read_prior_run_states(session_id, run_id)
             request = self._requests.build(
                 state, self._tools.registry, prior_run_states
             )
+            if binding:
+                request = replace(request, options=ProviderOptions(**{key: value for key, value in binding.options.items() if key != "timeout_seconds"}))
         except RunError:
             return self._fail_run(state)
 
@@ -176,7 +223,16 @@ class AgentExecutor:
 
         try:
             try:
-                prepared = client.prepare(request)
+                prepared = client.prepare(request, frozen_options=True, frozen_timeout_seconds=binding.options["timeout_seconds"]) if binding else client.prepare(request)
+                descriptor = prepared.descriptor
+                if binding:
+                    if any(descriptor[key] != getattr(binding, key) for key in ("provider_id", "model_id", "endpoint_binding", "request_fingerprint")) or descriptor["asset_manifest"] != binding.asset_manifest:
+                        return self._fail_run(state)
+                else:
+                    binding = ProviderRequestBinding(operation_id=uuid.uuid4().hex, run_id=run_id,
+                        base_record_sequence=state.checkpoint.last_committed_record_sequence,
+                        base_tool_sequence=state.checkpoint.last_committed_tool_sequence,
+                        created_at=datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z"), **descriptor)
             except ProviderCallError as error:
                 return self._fail_run(state, terminal_message=_preparation_failure_message(error))
             except Exception:
@@ -192,7 +248,7 @@ class AgentExecutor:
                     return current
 
                 attempt = self._coordinator.begin_provider_attempt(
-                    session_id, run_id, current.checkpoint.revision
+                    session_id, run_id, current.checkpoint.revision, binding=binding
                 )
                 claimed = self._coordinator.read_run_state(session_id, run_id)
                 try:
@@ -205,6 +261,9 @@ class AgentExecutor:
                         attempt.attempt_id,
                         outcome_unknown=not error.failure.outcome_known,
                         failure_code=error.failure.failure_code.value,
+                        transient=error.failure.transient and not request.options.stream,
+                        http_status=error.failure.http_status, retry_after_seconds=error.failure.retry_after_seconds,
+                        failure_category=error.failure.category,
                     )
                     return self._coordinator.read_run_state(session_id, run_id)
                 except Exception:
@@ -279,24 +338,20 @@ class AgentExecutor:
         ):
             return self._fail_run(state)
 
-        started_calls = {
-            fact.payload.tool_call_sequence
-            for fact in state.tool_facts
-            if fact.fact_kind is ToolFactKind.TOOL_ATTEMPT_STARTED
-            and isinstance(fact.payload, ToolAttemptStartedFact)
-        }
-        remaining = _MAX_STARTED_TOOL_CALLS - len(started_calls)
-        if remaining <= 0:
-            return self._fail_run(state)
         try:
             progressed = self._tools.execute_owned_pending(
                 state.run.session_id,
                 state.run.run_id,
-                max_calls=min(remaining, 1),
+                max_calls=1,
             )
         except RunStopRequested:
             raise
         except RunError as error:
+            if error.code in {
+                RunErrorCode.STORAGE_ERROR, RunErrorCode.INTEGRITY_ERROR,
+                RunErrorCode.UNSUPPORTED_VERSION, RunErrorCode.RUN_NOT_FOUND,
+            }:
+                raise
             current = self._coordinator.read_run_state(state.run.session_id, state.run.run_id)
             if (
                 current.run.status is not RunStatus.RUNNING
@@ -320,19 +375,6 @@ class AgentExecutor:
                 return current
             raise
 
-        if (
-            progressed.checkpoint.next_action is not None
-            and progressed.checkpoint.next_action.action_kind is ActionKind.TOOL_EXECUTION
-            and len(
-                {
-                    fact.payload.tool_call_sequence
-                    for fact in progressed.tool_facts
-                    if fact.fact_kind is ToolFactKind.TOOL_ATTEMPT_STARTED
-                    and isinstance(fact.payload, ToolAttemptStartedFact)
-                }
-            ) >= _MAX_STARTED_TOOL_CALLS
-        ):
-            return self._fail_run(progressed)
         return progressed
 
     def _resolve_provider_attempt(self, state: RunState) -> RunState:

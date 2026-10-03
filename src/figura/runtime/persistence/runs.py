@@ -103,9 +103,11 @@ def _read_run_state_from_connection(
         (run_id,),
     ).fetchall()
     from .controls import read_stop_request
+    from ..codecs.bindings import decode_binding
 
     state = RunState(
         stop_request=read_stop_request(connection, run_id),
+        provider_request_bindings=tuple(decode_binding(row[0]) for row in connection.execute("SELECT payload_json FROM run_provider_request_bindings WHERE run_id = ? ORDER BY base_record_sequence", (run_id,))),
         run=_run_from_row(run_row),
         records=tuple(_record_from_row(row) for row in record_rows),
         checkpoint=_checkpoint_from_row(checkpoint_row),
@@ -231,12 +233,12 @@ class RunRepository:
             )
             connection.execute(
                 "INSERT INTO run_execution_records(record_id, run_id, record_sequence, record_kind, schema_version, payload_json, created_at) "
-                "VALUES (?, ?, 1, 'input', 1, ?, ?)",
+                "VALUES (?, ?, 1, 'input', 2, ?, ?)",
                 (input_record_id, run_id, input_json, now),
             )
             connection.execute(
                 "INSERT INTO run_execution_checkpoints(run_id, revision, last_committed_record_sequence, last_committed_tool_sequence, next_action_json, schema_version, updated_at) "
-                "VALUES (?, 1, 1, 0, ?, 1, ?)",
+                "VALUES (?, 1, 1, 0, ?, 2, ?)",
                 (run_id, action_json, now),
             )
             connection.execute(
@@ -264,7 +266,7 @@ class RunRepository:
     def read_run_state(self, session_id: str, run_id: str) -> RunState:
         _validate_id(session_id)
         _validate_id(run_id)
-        with self._database.read() as connection:
+        with self._database.read_snapshot() as connection:
             state = self._read_run_state_from_connection(connection, session_id, run_id)
             input_payload = state.records[0].payload
             if not isinstance(input_payload, RunInput):
@@ -325,6 +327,7 @@ class RunRepository:
             "run_stop_requests",
             "run_provider_continuations",
             "run_provider_attempts",
+            "run_provider_request_bindings",
             "run_execution_checkpoints",
             "run_stream_events",
             "run_tool_execution_facts",

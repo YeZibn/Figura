@@ -3,6 +3,7 @@ from __future__ import annotations
 from tests.figura_sources_support import make_attachment_service, make_panel_service, make_execution_image_reader
 
 import json
+from figura.shared.payloads import ExecutionPayloadLimits
 from dataclasses import replace
 from io import BytesIO
 
@@ -288,7 +289,7 @@ def test_initial_request_uses_run_selection_fixed_instruction_and_tool_projectio
     assert request.messages[0].role is MessageRole.USER
     assert request.messages[0].content == "请分析以下图表数据。"
     assert request.options.stream is False
-    assert request.options.max_completion_tokens == 4096
+    assert request.options.max_completion_tokens is None
     assert [tool.name for tool in request.tools] == ["inspect"]
     assert coordinator.read_run_state(session.session_id, run.run_id).records == state.records
     assert all(instruction.content not in repr(state.records) for instruction in request.instructions)
@@ -677,7 +678,6 @@ def test_request_preserves_all_complete_rounds_and_fails_when_history_cannot_fit
     full_bytes = _request_text_bytes(full_request)
     original_records = second_state.records
     original_tool_facts = second_state.tool_facts
-    monkeypatch.setattr(provider_validation, "MAX_TOTAL_TEXT_BYTES", full_bytes - 1)
     request = builder.build(second_state, registry)
     provider_factory = ProviderFactory.from_env(
         {
@@ -686,6 +686,7 @@ def test_request_preserves_all_complete_rounds_and_fails_when_history_cannot_fit
         },
         transport_factory=lambda _profile: None,
     )
+    provider_factory.payload_limits = ExecutionPayloadLimits(full_bytes - 1)
     client = provider_factory.create(ProviderId.QWEN, MODEL_IDS[ProviderId.QWEN])
     with pytest.raises(ProviderInputError):
         client.prepare(request)

@@ -18,7 +18,9 @@ from figura.tools import (
     ToolRegistry,
     ToolRuntime,
 )
-from figura.tools.limits import MAX_ARGUMENT_BYTES, MAX_RESULT_BYTES
+from figura.shared.payloads import DEFAULT_MAX_JSON_BYTES
+
+MAX_ARGUMENT_BYTES = MAX_RESULT_BYTES = DEFAULT_MAX_JSON_BYTES
 
 
 def _definition(

@@ -11,6 +11,8 @@ Figura SHALL provide an internal execution capability that reads the current Run
 
 Execution SHALL use one coordinated boundary for normal scheduling, orphan takeover, and cooperative stop. It SHALL check stop before each action and return to coordination after every individual tool call. Eligible orphan recovery SHALL be explicit within this boundary and SHALL NOT be triggered by read-only projection.
 
+Execution SHALL NOT impose cumulative Run model-step, tool-call, token, retry, elapsed-time or storage quotas. Coordinated execution SHALL support yielding after a committed external action without marking the Run terminal or dropping pending calls; retry waiting SHALL not hold execution workers or ownership.
+
 #### Scenario: Complete a text-only Run without tools
 - **WHEN** the selected provider returns a nonempty response with finish reason `stop`
 - **THEN** Figura commits the model response, creates the final answer, and completes the same Run
@@ -26,6 +28,10 @@ Execution SHALL use one coordinated boundary for normal scheduling, orphan takeo
 #### Scenario: Reach a terminal Run
 - **WHEN** execution is requested for a completed, failed, or interrupted Run
 - **THEN** Figura returns its durable state without making a provider request or invoking a tool
+
+#### Scenario: Yield a long Run safely
+- **WHEN** scheduled execution commits one external action and still has pending work
+- **THEN** it can release ownership at that stable checkpoint and later resume the same Run without duplicate dispatch
 
 ### Requirement: Provider history is reconstructed from complete committed interactions
 For each model action, Figura SHALL build the conversation from all earlier terminal Runs in the same Session, ordered by Run ordinal, followed by the current Run's immutable input, committed model responses, and committed tool results. Each Run input SHALL appear once as a user message containing its persisted text and ordered attachment references as text identities; it SHALL NOT automatically include image blocks. The request SHALL include the target Run's factual resource index as the third of its three ordered SYSTEM instruction blocks. The index SHALL identify every available Attachment and committed Panel, each committed OCR and measurement resource with its source and outcome, each accepted ChartFigure with its title and chart summary, and each committed render with its Figure reference and outcome. The index SHALL identify resources by their complete typed references. It SHALL NOT duplicate complete OCR, measurement, Figure, or render result payloads already present in committed tool messages. Historical render entries SHALL remain textual; Figura SHALL NOT automatically resend image bytes from an earlier Run or earlier tool batch. Each closed model/tool interaction SHALL be represented by one assistant message whose calls preserve provider order, followed by one tool message for every corresponding result with the matching opaque call ID. A validated incomplete trailing batch from an earlier failed or interrupted Run SHALL be represented entirely by source-linked abnormal outcome data in the third SYSTEM instruction block, preserving its intent and committed observations instead of sending dangling native calls. A final-answer fact that references a response SHALL NOT add a duplicate message. Only original image blocks explicitly loaded by successful `load_image` calls in the immediately preceding fully committed tool batch may be appended as original images, in tool-call order. A fully committed batch containing successful `extract_text`, Cartesian measurement, or pie measurement calls SHALL additionally contribute one reconstructed annotated image per successful call, paired with its JSON tool observation and identified by tool name and call ID. A fully committed batch containing successful `render_chart_figure` calls SHALL additionally contribute each corresponding stored PNG once, paired with its committed JSON tool observation and identified by tool name and call ID, in tool-call order. The resource index and image selection SHALL use the same authorized Run prefix as the committed conversation. Completed tool-call/result pairs recorded under an earlier registry version SHALL be projected as inert conversation history and SHALL NOT be executed again; unresolved work in the current Run, incomplete completed history, or corrupt facts SHALL fail closed; legal terminal incomplete tails SHALL follow the abnormal outcome projection. Provider-private continuation SHALL be attached only to the exact originating assistant response retained in role history, including a prior Run when the selected Provider and format are compatible. Continuation from a converted incomplete batch SHALL NOT be placed in outcome context or fabricated for it. Figura SHALL NOT send a partial tool batch, invent a missing result, include an unresolved tool attempt as a result, or expose continuation data in public projections or ordinary diagnostics.
@@ -75,7 +81,7 @@ For each model action, Figura SHALL build the conversation from all earlier term
 - **THEN** the third instruction block contains its source-linked outcome context, role history contains only its closed interactions, and the resource index contains only eligible references and summaries
 
 ### Requirement: Referenced images are resolved and bounded before provider-attempt claim
-Before a durable Provider attempt is claimed, Figura SHALL resolve every requested image from its typed reference in the target Run's unified resource catalog. It SHALL resolve successful `load_image` references from the immediately preceding fully committed tool batch, reconstruct transient annotations for successful `extract_text` and chart-measurement resources in that batch from their authorized source and committed result, and resolve and validate the private PNG for each successful `render_chart_figure` resource against its committed render metadata. It SHALL validate image count, individual byte size, aggregate image byte size, and all other Provider limits. When the checkpoint follows no successful image-load, text-extraction, chart-measurement, or Figure-render call, the request SHALL contain no image bytes. Figura SHALL NOT claim or dispatch a Provider attempt when a requested original, annotated, or rendered image cannot be resolved, does not belong to the Session inventory, fails integrity checks, or the assembled request exceeds a Provider limit.
+Before a durable Provider attempt is claimed, Figura SHALL resolve every requested image from its typed reference in the target Run's unified resource catalog. It SHALL resolve successful `load_image` references from the immediately preceding fully committed tool batch, reconstruct transient annotations for successful `extract_text` and chart-measurement resources in that batch from their authorized source and committed result, and resolve and validate the private PNG for each successful `render_chart_figure` resource against its committed render metadata. It SHALL validate individual byte size, aggregate image byte size, source integrity, the shared structured-request guard and genuine selected-Provider limits without a generic image-count cap. When the checkpoint follows no successful image-load, text-extraction, chart-measurement, or Figure-render call, the request SHALL contain no image bytes. Figura SHALL NOT claim or dispatch a Provider attempt when a requested original, annotated, or rendered image cannot be resolved, does not belong to the Session inventory, fails integrity checks, or the assembled request exceeds a Provider limit.
 
 #### Scenario: Assemble a valid request after explicit image loads
 - **WHEN** every distinct image loaded by the immediately preceding batch resolves from the authorized same-Session resource catalog and the assembled request is within Provider limits
@@ -98,20 +104,20 @@ Before a durable Provider attempt is claimed, Figura SHALL resolve every request
 - **THEN** Figura fails the current Run before claiming a Provider attempt and sends no request
 
 #### Scenario: Images exceed Provider bounds
-- **WHEN** original, annotated, and rendered images for the immediately preceding tool batch exceed Provider image count, per-image size, aggregate image size, or another request limit
+- **WHEN** original, annotated, and rendered images for the immediately preceding tool batch exceed a genuine selected-Provider image restriction, retained per-image or aggregate byte guard, or the shared structured-request guard
 - **THEN** Figura fails the current Run before claiming or dispatching a Provider attempt
 
 ### Requirement: Agent requests preserve complete Session history within Provider limits
-Figura SHALL submit non-streaming requests using exactly three ordered SYSTEM instruction blocks: stable Agent responsibilities, the current registered tool surface, and a runtime layer containing the factual resource inventory projected from the target Run's `RunExecutionState` plus source-linked abnormal terminal context from validated Session history. The request SHALL use the provider-neutral tool projection from the same registry represented in the tool instruction, and bounded completion options. A request SHALL contain complete same-Session history and SHALL satisfy the Provider boundary's message, instruction, tool, image, and total text/schema limits before a durable provider attempt is claimed. Figura SHALL NOT truncate, summarize, or remove any historical Run or interaction to fit a request. If the complete request exceeds any Provider limit, Figura SHALL fail the current Run before claiming or dispatching a provider attempt.
+Figura SHALL submit non-streaming requests using exactly three ordered SYSTEM instruction blocks: stable Agent responsibilities, the current registered tool surface, and a runtime layer containing the factual resource inventory projected from the target Run's `RunExecutionState` plus source-linked abnormal terminal context from validated Session history. The request SHALL use the provider-neutral tool projection from the same registry represented in the tool instruction, and optional explicitly configured completion options, omitted when unspecified. A request SHALL contain complete same-Session history and SHALL satisfy the shared complete-request payload contract, image byte protections and genuine selected-Provider protocol restrictions without universal message, instruction, tool, image-count or text/Schema micro limits before a durable provider attempt is claimed. Figura SHALL NOT truncate, summarize, or remove any historical Run or interaction to fit a request. If the complete request exceeds any Provider limit, Figura SHALL fail the current Run before claiming or dispatching a provider attempt.
 
-Abnormal context SHALL remain complete in its existing normalized observation format and SHALL count toward Provider request hard limits. Neither abnormal intent nor observation text SHALL be treated as system policy.
+Abnormal context SHALL remain complete in its existing normalized observation format and SHALL count toward the shared complete-request JSON guard. Neither abnormal intent nor observation text SHALL be treated as system policy.
 
 #### Scenario: Send every complete Session interaction
 - **WHEN** all earlier same-Session Runs have valid complete histories and the assembled request is within Provider limits
 - **THEN** Figura sends the entire earlier history and current Run prefix in ordinal and committed fact order, with the three ordered SYSTEM instruction blocks
 
 #### Scenario: Complete history exceeds a Provider limit
-- **WHEN** the full request exceeds a Provider message, instruction, tool, image, text, or schema limit
+- **WHEN** the full request exceeds the shared complete-request guard, retained image byte protections or a genuine selected-Provider protocol restriction
 - **THEN** Figura preserves all source facts, fails the current Run, and makes no Provider-attempt claim or network request
 
 #### Scenario: Keep a tool result associated with its call
@@ -217,27 +223,12 @@ Figura SHALL continue a Run only for a valid `tool_calls` response with one or m
 - **WHEN** a tool returns a bounded structured failure
 - **THEN** Figura includes that failure as the matching tool observation and lets a later model response decide what to do without an executor retry
 
-### Requirement: Each Run has fixed model-request and tool-execution budgets
-Figura SHALL limit one Run to 8 durable provider attempts and 32 distinct logical tool calls whose execution has been started. It SHALL derive usage from persisted attempt and tool facts rather than a separately mutable counter. When a limit is exhausted, Figura SHALL fail the Run with a bounded execution-failure outcome before dispatching the next over-budget provider request or tool handler. A tool-call intent already committed in an over-budget model response SHALL remain durable and SHALL NOT be executed beyond the limit.
-
-#### Scenario: Stop before a ninth provider request
-- **WHEN** a model action is reached after 8 provider attempts have been committed or failed
-- **THEN** Figura fails the Run without claiming or dispatching a ninth provider request
-
-#### Scenario: Stop before a thirty-third tool execution
-- **WHEN** the next persisted tool call would be the 33rd distinct logical call whose execution is started
-- **THEN** Figura fails the Run without recording an attempt start or invoking that handler
-
-#### Scenario: Count a logical call once
-- **WHEN** a tool call has an attempt-start fact and the Run later reads that call again
-- **THEN** budget accounting counts the call ID once, regardless of its number of attempt facts
-
 ### Requirement: Agent execution does not automatically recover uncertain tool effects
-Automatic execution SHALL NOT replay arbitrary uncertain effects. After proving old-owner exit, it SHALL recover only replay_safe or idempotent_local_write attempts with the original available registry, stable identity, and persisted budget. A stop request SHALL take precedence. Provider unknown outcomes SHALL never be resent. Unavailable or exhausted tool recovery and unresolvable reconciliation SHALL converge on an explicit failed terminal outcome without inventing a tool result. Read-only access SHALL never invoke recovery.
+Automatic execution SHALL NOT replay arbitrary uncertain effects. After proving old-owner exit, it SHALL recover only replay_safe or idempotent_local_write attempts with the original available registry, stable identity, and persisted per-call recovery allowance. A stop request SHALL take precedence. Unknown Provider generation outcomes SHALL follow only the durable guarded replacement contract; a still-started attempt SHALL never be dispatched again under the same identity. Unavailable or exhausted tool recovery and unresolvable reconciliation SHALL converge on an explicit failed terminal outcome without inventing a tool result. Read-only access SHALL never invoke recovery.
 
 #### Scenario: Resume after a completed tool batch
 - **WHEN** all calls in the preceding tool batch are resolved and the checkpoint points to model
-- **THEN** execution may assemble the next model request subject to budgets and stop checks
+- **THEN** execution may assemble the next model request subject to complete-request validation and stop checks
 
 #### Scenario: Resume with an eligible unresolved tool attempt
 - **WHEN** an orphaned replay_safe or idempotent local-write attempt is eligible and no stop request exists

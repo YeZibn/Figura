@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from figura.shared.payloads import ExecutionPayloadLimits
 
 from figura.agent import AgentExecutor, AgentRequestBuilder
 from figura.sources.attachments import FiguraAttachmentService
@@ -43,10 +44,12 @@ def create_application(
     selected_data_dir = Path(data_dir).expanduser() if data_dir is not None else root / ".figura"
     if not selected_data_dir.is_absolute():
         selected_data_dir = root / selected_data_dir
-    store = FiguraRunStore(selected_data_dir)
+    limits = ExecutionPayloadLimits.from_env()
+    store = FiguraRunStore(selected_data_dir, payload_limits=limits)
     sources = SourcesRepository(store.database)
     attachment_service = FiguraAttachmentService(sources, store.data_root)
-    factory = provider_factory or ProviderFactory.from_env()
+    factory = provider_factory or ProviderFactory(payload_limits=limits)
+    factory.payload_limits = limits
     coordinator = RunCoordinator(store, factory)
     panel_service = FiguraPanelService(sources, store.data_root, attachment_service)
     chart_renders = FiguraChartRenderService(store.data_root)
@@ -71,6 +74,7 @@ def create_application(
             assemble_chart_figure_definition(execution_state.for_run),
             render_chart_figure_definition(execution_state.for_run, chart_renders),
         ),
+        payload_limits=limits,
     )
     runtime = ToolRuntime(registry)
     lock = PerRunExecutionLock(store.data_root)
@@ -98,12 +102,4 @@ def create_application(
 
 def recover_running_runs(application: FiguraGatewayApplication) -> int:
     """Schedule persisted Runs through the ordinary safe executor path."""
-    scheduled = 0
-    for run in application.coordinator.list_running_runs():
-        from figura.gateway.dispatcher import DispatcherFull
-        try:
-            if application.dispatcher.ensure_scheduled(run):
-                scheduled += 1
-        except DispatcherFull:
-            break
-    return scheduled
+    return application.dispatcher.scan_ready(application.coordinator)

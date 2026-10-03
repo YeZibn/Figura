@@ -18,11 +18,8 @@ from figura.providers import (
     ProviderToolCall,
     ProviderUsage,
 )
-from figura.shared.image_limits import MAX_IMAGE_COUNT
+from figura.shared.payloads import encode_json, PayloadError, payload_scope
 
-from .codecs.records import (
-    MAX_PROVIDER_CONTINUATION_BYTES,
-)
 from .codecs.tools import (
     validate_tool_call_batch,
 )
@@ -42,6 +39,7 @@ from .records import (
     ExecutionRecord,
     ModelResponseFact,
     ProviderAttempt,
+    ProviderRequestBinding,
     RunInput,
     RunState,
     SessionSnapshot,
@@ -50,13 +48,13 @@ from .records import (
 from .store import FiguraRunStore
 
 
-_MAX_INPUT_BYTES = 64 * 1024
+
 
 
 _MAX_IDEMPOTENCY_KEY_BYTES = 128
 
 
-_MAX_RESPONSE_BYTES = 128 * 1024
+
 
 
 _MAX_SESSION_NAME_BYTES = 256
@@ -66,6 +64,7 @@ class RunCoordinator:
     """Validate application requests and delegate atomic transitions to the store."""
 
     def __init__(self, store: FiguraRunStore, provider_factory: ProviderFactory) -> None:
+        self.payload_limits = store.payload_limits
         self._store = store
         self._provider_factory = provider_factory
 
@@ -96,8 +95,13 @@ class RunCoordinator:
     def list_running_runs(self) -> tuple[Run, ...]:
         return self._store.list_running_runs()
 
+    @payload_scope
     def create_run(self, request: RunCreateRequest) -> Run:
         self._validate_create_request(request)
+        try:
+            encode_json({"text": request.text, "attachment_ids": request.attachment_ids})
+        except PayloadError:
+            raise RunError(RunErrorCode.INVALID_REQUEST) from None
         try:
             provider_id = ProviderId(request.provider_id)
         except (TypeError, ValueError):
@@ -152,7 +156,7 @@ class RunCoordinator:
         return self._store.read_prior_run_states(session_id, run_id)
 
     def begin_provider_attempt(
-        self, session_id: str, run_id: str, expected_revision: int
+        self, session_id: str, run_id: str, expected_revision: int, *, binding: ProviderRequestBinding | None = None
     ) -> ProviderAttempt:
         if type(expected_revision) is not int or expected_revision < 1:
             raise RunError(RunErrorCode.INVALID_REQUEST)
@@ -160,9 +164,10 @@ class RunCoordinator:
             session_id=session_id,
             run_id=run_id,
             expected_revision=expected_revision,
-            attempt_id=uuid.uuid4().hex,
+            attempt_id=uuid.uuid4().hex, binding=binding,
         )
 
+    @payload_scope
     def commit_model_response(
         self,
         session_id: str,
@@ -225,6 +230,10 @@ class RunCoordinator:
         *,
         outcome_unknown: bool,
         failure_code: str | None,
+        transient: bool = False,
+        http_status: int | None = None,
+        retry_after_seconds: float | None = None,
+        failure_category: str | None = None,
     ) -> Run:
         if type(expected_revision) is not int or expected_revision < 1:
             raise RunError(RunErrorCode.INVALID_REQUEST)
@@ -234,7 +243,7 @@ class RunCoordinator:
             expected_revision=expected_revision,
             attempt_id=attempt_id,
             outcome_unknown=outcome_unknown,
-            failure_code=failure_code,
+            failure_code=failure_code, transient=transient, http_status=http_status, retry_after_seconds=retry_after_seconds, failure_category=failure_category,
         )
 
     def resolve_orphaned_provider_attempt(self, session_id: str, run_id: str) -> RunState:
@@ -263,7 +272,7 @@ class RunCoordinator:
                     expected_revision=state.checkpoint.revision,
                     attempt_id=action.attempt_id,
                     outcome_unknown=True,
-                    failure_code=None,
+                    failure_code=None, transient=state.provider_attempts[-1].operation_id is not None,
                 )
                 return self._store.read_run_state(session_id, run_id)
         except RunExecutionLockUnavailable:
@@ -331,7 +340,7 @@ class RunCoordinator:
         if not isinstance(request.text, str):
             raise RunError(RunErrorCode.INVALID_REQUEST)
         text_size = _byte_length(request.text)
-        if text_size == 0 or text_size > _MAX_INPUT_BYTES or not request.text.strip():
+        if text_size == 0 or not request.text.strip():
             raise RunError(RunErrorCode.INVALID_REQUEST)
         if not isinstance(request.idempotency_key, str):
             raise RunError(RunErrorCode.INVALID_REQUEST)
@@ -339,8 +348,6 @@ class RunCoordinator:
         if key_size == 0 or key_size > _MAX_IDEMPOTENCY_KEY_BYTES:
             raise RunError(RunErrorCode.INVALID_REQUEST)
         if not isinstance(request.attachment_ids, (tuple, list)):
-            raise RunError(RunErrorCode.INVALID_REQUEST)
-        if len(request.attachment_ids) > MAX_IMAGE_COUNT:
             raise RunError(RunErrorCode.INVALID_REQUEST)
         if any(
             not isinstance(attachment_id, str)
@@ -386,14 +393,13 @@ class RunCoordinator:
             if (
                 (content is not None and not isinstance(content, str))
                 or (provider_id is not ProviderId.DEEPSEEK and not content)
-                or (isinstance(content, str) and _byte_length(content) > MAX_PROVIDER_CONTINUATION_BYTES)
             ):
                 raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
             if not isinstance(continuation_ref, str) or not continuation_ref or _byte_length(continuation_ref) > 128:
                 raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
         if not isinstance(response.model_id, str) or not response.model_id or _byte_length(response.model_id) > 128:
             raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
-        if not isinstance(response.assistant_content, str) or _byte_length(response.assistant_content) > _MAX_RESPONSE_BYTES:
+        if not isinstance(response.assistant_content, str):
             raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
         if response.usage is not None and not isinstance(response.usage, ProviderUsage):
             raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
@@ -410,7 +416,7 @@ class RunCoordinator:
             usage=response.usage,
             provider_response_id=response.provider_response_id,
             continuation_ref=continuation_ref,
-            schema_version=2,
+            schema_version=3,
         )
 
     @staticmethod

@@ -649,7 +649,7 @@ def test_render_feedback_fails_on_corrupt_png_before_provider_attempt(tmp_path) 
 
 @pytest.mark.parametrize(
     ("limit_name", "limit_value"),
-    (("MAX_IMAGE_COUNT", 0), ("MAX_TOTAL_IMAGE_BYTES", 1)),
+    (("MAX_IMAGE_BYTES", 1), ("MAX_TOTAL_IMAGE_BYTES", 1)),
 )
 def test_render_feedback_provider_image_limit_fails_before_provider_attempt(
     tmp_path, monkeypatch, limit_name: str, limit_value: int

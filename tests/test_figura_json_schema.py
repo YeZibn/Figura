@@ -100,26 +100,17 @@ def test_schema_rejects_unsupported_keywords_and_malformed_anyof() -> None:
     assert malformed.value.code == "invalid_anyOf"
 
 
-def test_schema_and_instance_depth_and_property_bounds_are_enforced() -> None:
+def test_schema_actual_json_depth_and_large_properties() -> None:
     deeply_nested: dict[str, object] = {"type": "string"}
     for _ in range(17):
         deeply_nested = {"type": "object", "properties": {"nested": deeply_nested}}
-    with pytest.raises(SchemaDefinitionError) as depth_error:
-        validate_schema_definition(deeply_nested)
-
-    too_many_schema_properties = {
-        "type": "object",
-        "properties": {f"field_{index}": {"type": "string"} for index in range(257)},
-    }
+    assert validate_schema_definition(deeply_nested)
+    for _ in range(17):
+        deeply_nested = {"type": "object", "properties": {"nested": deeply_nested}}
     with pytest.raises(SchemaDefinitionError):
-        validate_schema_definition(too_many_schema_properties)
-
-    instance = {f"field_{index}": index for index in range(257)}
-    issue = validate_instance(instance, {"type": "object"})
-
-    assert depth_error.value.code == "schema_too_deep"
-    assert issue is not None
-    assert issue.code == "invalid_json_value"
+        validate_schema_definition(deeply_nested)
+    schema = {"type": "object", "properties": {f"f{i}": {"type": "integer"} for i in range(300)}}
+    assert validate_instance({f"f{i}": i for i in range(300)}, schema) is None
 
 
 @pytest.mark.parametrize("value", [math.nan, math.inf, -math.inf])

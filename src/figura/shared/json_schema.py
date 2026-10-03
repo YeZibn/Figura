@@ -2,19 +2,16 @@
 
 from __future__ import annotations
 
-import json
 import math
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
+from .payloads import MAX_JSON_DEPTH, PayloadError, encode_json, normalize_json
 
 
-MAX_SCHEMA_DEPTH = 16
-MAX_SCHEMA_PROPERTIES = 256
-MAX_SCHEMA_BYTES = 128 * 1024
-MAX_VALUE_DEPTH = 64
-MAX_OBJECT_PROPERTIES = 256
+MAX_SCHEMA_DEPTH = MAX_JSON_DEPTH
+MAX_VALUE_DEPTH = MAX_JSON_DEPTH
 
 SUPPORTED_SCHEMA_KEYWORDS = frozenset(
     {
@@ -67,52 +64,26 @@ class SchemaDefinitionError(ValueError):
 def canonical_json_dumps(value: Any) -> str:
     """Return deterministic compact JSON, rejecting non-JSON Python values."""
 
-    normalized = normalize_json_value(value)
     try:
-        return json.dumps(
-            normalized,
-            ensure_ascii=False,
-            allow_nan=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-    except (TypeError, ValueError, OverflowError, RecursionError):
+        return encode_json(value)
+    except PayloadError:
         raise JsonValueError("value is not serializable as JSON") from None
 
 
 def normalize_json_value(value: Any, *, max_depth: int = MAX_VALUE_DEPTH) -> Any:
     """Copy JSON data into plain dict/list values and enforce bounded shape."""
 
-    def visit(item: Any, depth: int) -> Any:
-        if depth > max_depth:
-            raise JsonValueError("JSON nesting is too deep")
-        if item is None or type(item) in (str, bool, int):
-            return item
-        if type(item) is float:
-            if not math.isfinite(item):
-                raise JsonValueError("JSON numbers must be finite")
-            return item
-        if isinstance(item, Mapping):
-            if len(item) > MAX_OBJECT_PROPERTIES:
-                raise JsonValueError("JSON object has too many properties")
-            normalized: dict[str, Any] = {}
-            for key, nested in item.items():
-                if not isinstance(key, str):
-                    raise JsonValueError("JSON object keys must be strings")
-                normalized[key] = visit(nested, depth + 1)
-            return normalized
-        if isinstance(item, (list, tuple)):
-            return [visit(nested, depth + 1) for nested in item]
-        raise JsonValueError("value is not JSON-compatible")
-
-    return visit(value, 0)
+    try:
+        return normalize_json(value, max_depth=max_depth)
+    except PayloadError:
+        raise JsonValueError("value is not JSON-compatible") from None
 
 
 def validate_schema_definition(
     schema: object,
     *,
     require_object: bool = False,
-    max_bytes: int = MAX_SCHEMA_BYTES,
+    max_bytes: int | None = None,
 ) -> dict[str, Any]:
     """Validate a schema in Figura's deliberately small supported dialect."""
 
@@ -126,7 +97,7 @@ def validate_schema_definition(
         size = len(canonical_json_dumps(normalized).encode("utf-8"))
     except (JsonValueError, UnicodeEncodeError):
         raise SchemaDefinitionError("schema_not_json") from None
-    if size > max_bytes:
+    if max_bytes is not None and size > max_bytes:
         raise SchemaDefinitionError("schema_too_large")
     if require_object and normalized.get("type") != "object":
         raise SchemaDefinitionError("top_level_not_object")
@@ -146,7 +117,7 @@ def _validate_schema_node(schema: Mapping[str, Any], *, depth: int, pointer: str
         raise SchemaDefinitionError("unsupported_type", _join(pointer, "type"))
 
     properties = schema.get("properties", {})
-    if not isinstance(properties, Mapping) or len(properties) > MAX_SCHEMA_PROPERTIES:
+    if not isinstance(properties, Mapping):
         raise SchemaDefinitionError("invalid_properties", _join(pointer, "properties"))
     for name, nested in properties.items():
         if not isinstance(name, str) or not isinstance(nested, Mapping):
@@ -179,7 +150,7 @@ def _validate_schema_node(schema: Mapping[str, Any], *, depth: int, pointer: str
         if key in schema and not isinstance(schema[key], list):
             raise SchemaDefinitionError(f"invalid_{key}", _join(pointer, key))
     for key in ("description", "title", "pattern"):
-        if key in schema and (not isinstance(schema[key], str) or len(schema[key]) > 8192):
+        if key in schema and not isinstance(schema[key], str):
             raise SchemaDefinitionError(f"invalid_{key}", _join(pointer, key))
     if "pattern" in schema:
         try:
@@ -195,7 +166,7 @@ def _validate_schema_node(schema: Mapping[str, Any], *, depth: int, pointer: str
             raise SchemaDefinitionError(f"invalid_{key}", _join(pointer, key))
     if "uniqueItems" in schema and type(schema["uniqueItems"]) is not bool:
         raise SchemaDefinitionError("invalid_uniqueItems", _join(pointer, "uniqueItems"))
-    if "enum" in schema and (not schema["enum"] or len(schema["enum"]) > 256):
+    if "enum" in schema and not schema["enum"]:
         raise SchemaDefinitionError("invalid_enum", _join(pointer, "enum"))
     if "anyOf" in schema:
         variants = schema["anyOf"]

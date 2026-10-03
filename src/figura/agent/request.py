@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
+from types import MappingProxyType
+from figura.shared.payloads import encode_json
+
 from figura.agent.execution_images import RunExecutionImageReader
 from figura.agent.execution_state import RunExecutionStateService
 from figura.agent.prompting.execution import build_execution_instruction
@@ -29,9 +33,6 @@ from figura.runtime.errors import RunError, RunErrorCode
 from figura.runtime.models import ActionKind, RunStatus
 from figura.runtime.records import RunState
 from figura.tools import ToolRegistry, project_provider_tools
-
-
-_MAX_COMPLETION_TOKENS = 4096
 
 
 class AgentRequestBuilder:
@@ -65,7 +66,7 @@ class AgentRequestBuilder:
         if (
             state.run.status is not RunStatus.RUNNING
             or state.checkpoint.next_action is None
-            or state.checkpoint.next_action.action_kind is not ActionKind.MODEL
+            or state.checkpoint.next_action.action_kind not in {ActionKind.MODEL, ActionKind.PROVIDER_RETRY}
         ):
             raise RunError(RunErrorCode.INVALID_TRANSITION)
         try:
@@ -90,20 +91,30 @@ class AgentRequestBuilder:
         except (TypeError, ValueError):
             raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD) from None
 
+        instructions = (
+            build_static_instruction(),
+            build_tool_instruction(registry),
+            build_execution_instruction(execution_state, history.run_outcomes),
+        )
+        registry_projection = [{"name": d.name, "description": d.description,
+            "parameters": d.parameters_schema, "result": d.result_schema,
+            "replay_effect": d.replay_effect.value} for d in registry]
+        asset_contract = MappingProxyType({
+            "prompt_digest": hashlib.sha256(encode_json([
+                {"role": i.role.value, "content": i.content} for i in instructions]).encode()).hexdigest(),
+            "registry_version": registry.version,
+            "registry_digest": hashlib.sha256(encode_json(registry_projection).encode()).hexdigest(),
+        })
         request = ProviderRequest(
             provider_id=provider_id,
             model_id=state.run.model,
-            instructions=(
-                build_static_instruction(),
-                build_tool_instruction(registry),
-                build_execution_instruction(execution_state, history.run_outcomes),
-            ),
+            instructions=instructions,
             messages=messages,
             options=ProviderOptions(
-                max_completion_tokens=_MAX_COMPLETION_TOKENS,
                 stream=False,
             ),
             tools=tools,
+            asset_contract=asset_contract,
         )
         return request
 

@@ -29,6 +29,23 @@ class ProviderFailure:
     transient: bool
     safe_message: str
     http_status: int | None = None
+    retry_after_seconds: float | None = None
+    category: str | None = None
+
+    def __post_init__(self) -> None:
+        category = self.category
+        if category is None:
+            if self.transient:
+                category = "temporary_rejected" if self.outcome_known and self.http_status is not None else "temporary_unsent" if self.outcome_known else "temporary_unknown"
+            elif self.failure_code is ProviderFailureCode.INVALID_PROVIDER_RESPONSE:
+                category = "invalid_response"
+            elif self.failure_code is ProviderFailureCode.TRANSPORT_ERROR:
+                category = "internal_error"
+            else:
+                category = "permanent"
+        if category not in {"temporary_unsent", "temporary_rejected", "temporary_unknown", "permanent", "invalid_response", "internal_error"}:
+            raise ValueError("invalid provider failure category")
+        object.__setattr__(self, "category", category)
 
 
 class ProviderCallError(Exception):

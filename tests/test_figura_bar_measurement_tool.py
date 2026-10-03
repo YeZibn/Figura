@@ -32,7 +32,7 @@ from figura.sources.chart_renders import FiguraChartRenderService
 from figura.sources.panels import FiguraPanelService
 from figura.sources.repository import SourcesRepository
 from figura.tools import ReplayEffect, ToolContext, ToolInvocation, ToolOutcome, ToolRegistry, ToolRuntime
-from figura.tools.limits import MAX_RESULT_BYTES
+from figura.shared.payloads import DEFAULT_MAX_JSON_BYTES as MAX_RESULT_BYTES
 from figura.tools.implementations.image import image_tool_definitions
 from figura.tools.implementations.extract_text import extract_text_definition
 from figura.tools.implementations.measure_bars import measure_bars_definition
@@ -835,7 +835,7 @@ def test_ocr_and_pie_feedback_image_limit_fails_before_next_provider_attempt(tmp
         ),
     )
     prior_attempts = coordinator.read_run_state(session.session_id, run.run_id).provider_attempts
-    monkeypatch.setattr(provider_validation, "MAX_IMAGE_COUNT", 1)
+    monkeypatch.setattr(provider_validation, "MAX_TOTAL_IMAGE_BYTES", 1)
 
     request = _request_builder(store, attachments, panels, execution_state).build(
         coordinator.read_run_state(session.session_id, run.run_id), registry
@@ -1069,7 +1069,7 @@ def test_measurement_feedback_keeps_multiple_source_images_in_call_order(tmp_pat
     assert len([block for block in blocks if isinstance(block, ImageBlock)]) == 2
 
 
-def test_measurement_overlay_obeys_provider_image_count_limit(tmp_path, monkeypatch) -> None:
+def test_measurement_overlay_obeys_provider_image_byte_limit(tmp_path, monkeypatch) -> None:
     import figura.providers.validation as provider_validation
 
     (
@@ -1095,7 +1095,7 @@ def test_measurement_overlay_obeys_provider_image_count_limit(tmp_path, monkeypa
             ProviderToolCall("measure-for-limit", "measure_bars", arguments),
         ),
     )
-    monkeypatch.setattr(provider_validation, "MAX_IMAGE_COUNT", 1)
+    monkeypatch.setattr(provider_validation, "MAX_TOTAL_IMAGE_BYTES", 1)
 
     request = _request_builder(store, attachments, panels, execution_state).build(
         coordinator.read_run_state(session.session_id, run.run_id), registry

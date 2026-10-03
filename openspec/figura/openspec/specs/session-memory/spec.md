@@ -65,10 +65,10 @@ Figura SHALL project each earlier Run input as one user message containing its p
 - **THEN** Figura fails closed instead of treating corruption as a recoverable incomplete tail
 
 ### Requirement: Session history remains complete and private to its owning Session
-Figura SHALL retain the complete projected history and source-linked outcome contexts in memory for request construction and SHALL rely on the Provider boundary's existing hard limits rather than a Memory retention, token, or summarization budget. It SHALL preserve Session ownership for every Run and attachment reference and SHALL expose no continuation payload or local attachment path through the projection's public surface.
+Figura SHALL retain the complete projected history and source-linked outcome contexts in memory for request construction and SHALL apply no Memory retention, token or summarization budget; complete request preparation SHALL use the shared execution-payload protection and genuine selected-Provider protocol restrictions rather than deleted generic counts and micro byte limits. It SHALL preserve Session ownership for every Run and attachment reference and SHALL expose no continuation payload or local attachment path through the projection's public surface.
 
 #### Scenario: Preserve full history beyond a Provider request limit
-- **WHEN** complete Session history exceeds a Provider message, image, text, or schema limit
+- **WHEN** complete Session history exceeds the complete request payload or image byte guard or a genuine Provider protocol restriction
 - **THEN** the projection remains complete and request construction fails before Provider-attempt claim without pruning, summarizing, or dispatching the history
 
 #### Scenario: Reject a cross-Session attachment reference
@@ -91,5 +91,5 @@ Figura SHALL derive outcome context for each earlier failed or interrupted Run f
 - **THEN** history retains its user input and a safe outcome context without inventing an assistant response
 
 #### Scenario: Preserve source data without trimming
-- **WHEN** outcome context makes a subsequent request exceed a Provider hard limit
+- **WHEN** outcome context makes a subsequent request exceed the complete request payload guard or a genuine Provider protocol restriction
 - **THEN** preparation fails before attempt claim without dropping committed observations or summarizing the tail

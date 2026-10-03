@@ -43,7 +43,7 @@ Gateway 只绑定 loopback，并验证浏览器 Origin 白名单。启动时进�
 2. **读取 Provider 与 Session**：`GET /health` 返回三个 allowlist Provider 的配置可用性及固定 model ID，不探测远端网络。Session 列表使用 Runtime 的 SQL 聚合；创建 Session 后，网页读取 Session 详情以取得消息、附件及 Run 投影。Web DTO 字段见[第 4 节](#4-web-dto-字段)，Runtime 的聚合读取值见[Run Runtime](runtime.md#4-完整模型字段)。
 3. **上传、管理及读取分区图像**：浏览器向 Session attachment endpoint 上传原始字节并通过 query 传文件名；Gateway 委托 Sources 做媒体内容验证、大小限制、文件名净化和私有存储。浏览器只能在所属 Session 中列出、预览或删除；已被 Run 引用的附件不能删除。Run 输入保留有序附件 ID，图片字节不进入 Runtime 输入或 Web DTO。Panel 使用独立 Session-scoped list/content 路由；Agent 的 RunExecutionState 根据已提交成功分割结果筛选列表，Sources 提供 metadata 和 PNG 内容；图像读取返回 `image/png` 且不缓存。
 4. **创建 Run**：浏览器提交 `text`、有序 `attachmentIds`、allowlist `providerId` 和 `Idempotency-Key`。浏览器不提交 model ID。Gateway 从 Provider allowlist 解析固定 model，Runtime 原子写入 Run、RunInput、初始 Checkpoint、幂等映射和创建事件后，Gateway 将其交给有界 Dispatcher 并返回 `202` Run handle。一个 Session 同时最多一个 running Run；同 key 同 payload 重放返回原 Run，key 冲突或 Session 已有不同 running Run 时返回安全错误。若本地 Dispatcher 暂时满，Run 可能已持久化而请求返回有界 `503`；使用原幂等键重试会复用该 Run 并尝试调度。
-5. **执行与恢复**：Dispatcher 当前默认最多 3 个并发 worker、另有 8 个排队槽。Agent 从 Runtime checkpoint 执行，不确定的 Provider attempt 不自动重发，未知工具 attempt 由统一 Agent 按原 registry、replay 分类和持久预算恢复或安全终结。Gateway 启动时按 Session ID 和 Run ordinal 列出所有持久 running Run，再走相同 Dispatcher/Agent 路径；周期扫描默认每 2 秒进行有界调度补偿，满队列延后、同 Run 去重，关闭先停止扫描再关闭线程池；锁忙等待下一轮。
+5. **执行与恢复**：Dispatcher 默认 3 worker、8 queued，通过 `execute_slice` 每次执行一个外部动作。启动、周期扫描和有进展的 worker 退出共用 `scan_ready`；按 `(session_id, run_id)` 稳定排序并沿 cursor 轮转，长 Run 重新进入队尾。未到 `next_eligible_at` 的重试者不占队列/worker，停止通知绕过到期筛选。多进程由 Runtime OS owner 和 action lock 仲裁；锁忙或 worker 无进展时等下一次周期补偿，不 busy loop。网络恢复读取不可变请求绑定；未知工具遵循原版本、effect 和持久恢复次数。
 6. **读取历史、工具时间线、图片产物和事件**：Session detail 从一个 Runtime SQLite 读快照生成消息、附件和 Run 投影；前端另调 Panel list route，按 `runId` 将 Panels 放到对应 Run 下，浏览器通过 Session-scoped content URL 懒加载 Panel PNG。Run DTO/history 的 `chartRenders` 只含成功提交的渲染元数据；Gallery 将所有成功预览按渲染所在 Run 分组，并通过 Session/Run/render-call-scoped 内容 URL 懒加载 PNG；每张均能打开大图并下载。展开 Run 时，前端读取时间线列表；展开某一步时再读安全详情，成功 OCR/测量项可通过受授权 URL 查看观察图。Gateway 核对所属 Session、已提交结果和来源引用后才返回 `image/png`。Run history 按 `afterSequence` 返回更大的事件序号；SSE 先重放游标后的持久事件，再跟随后续事件，并以 `runId:sequence` 作为事件 ID。`run_progress` 只携带 Checkpoint revision，前端收到后重新读取时间线。终态事件送达后关闭流。前端 RunController 负责历史补读、游标合并和终态收敛；终态后重新加载 Session detail 与 Panel list。
 
 Session Web message projection 与 Agent 的 [Session Memory](memory.md) 分离：前者仅显示每个 Run 的持久用户输入和已接受最终答案；后者还会把模型响应中的工具调用、工具结果投影成完整 Provider 对话，二者均从 Runtime 权威事实读取，但消费者和公开范围不同。
@@ -365,3 +365,7 @@ Web Gateway 投影运行输入/最终答案、安全生命周期、已提交 Pan
 | StopResponse.stopRequest | StopRequestDto 或 null | 必填 | 首次持久请求；终态且未曾请求则 null |
 
 `FiguraApp` 依据 availableActions 提供停止，接受后显示“正在停止，等待当前步骤结束”，禁止重复停止、新提交和删除。请求响应丢失时刷新历史核实持久状态，不自动重发用户消息。既有唯一 Run controller 负责事件游标、reconnect、终态收敛与 running 期间每 2 秒的有界活动读取；SSE progress 只触发刷新，event identity 仍为 runId:sequence。页面重载恢复 running/stopping；终态保留图库与工具时间线并允许继续同 Session，owner 短暂未释放时冲突刷新等待。GET/history/timeline 均不推进执行。线程 handler 不返回时保持 stopping，不宣称强制停止。
+
+### Gateway 请求边界
+
+Run-create 完整 JSON 使用组合根注入的 `ExecutionPayloadLimits`，HTTP Content-Length 在读取前检查，应用内调用同样严格解码。图片上传仍使用 Sources 的单图 guard。health、Session/history/timeline/detail、SSE 读取只读取事实和安全投影，不调度或执行。重试等待仍为 `running`，事件身份保持 `runId:sequence`；不增加外部 retry/resume API。

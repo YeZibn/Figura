@@ -11,16 +11,14 @@ from types import MappingProxyType
 from typing import Any, TypeAlias
 
 from figura.shared.json_schema import JsonValueError, canonical_json_dumps, normalize_json_value
+from figura.shared.payloads import PayloadError, opaque_call_id, utf8_size
 from .limits import (
-    MAX_CALL_ID_BYTES,
     MAX_ERROR_MESSAGE_BYTES,
     MAX_ERROR_POINTER_BYTES,
-    MAX_RESULT_BYTES,
-    MAX_TOOL_DESCRIPTION_BYTES,
 )
 
 
-_TOOL_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_TOOL_NAME = re.compile(r"^[A-Za-z0-9_-]+$")
 _ERROR_CODE = re.compile(r"^[a-z][a-z0-9_.-]{0,63}$")
 ToolHandler: TypeAlias = Callable[["ToolContext", Mapping[str, Any]], object]
 
@@ -147,6 +145,13 @@ class ToolFailure(Exception):
         super().__init__(self.error.message)
 
 
+class ToolOutcomeUnknown(Exception):
+    """A handler returned without proving whether its write effect occurred."""
+
+    def __init__(self) -> None:
+        super().__init__("tool effect outcome is unknown")
+
+
 @dataclass(frozen=True)
 class ToolExecutionResult:
     call_id: str
@@ -171,14 +176,18 @@ class ToolExecutionResult:
             if not isinstance(normalized, dict):
                 raise ValueError("successful result must contain a JSON object")
             try:
-                result_size = len(canonical_json_dumps(normalized).encode("utf-8"))
+                canonical_json_dumps(normalized)
             except (JsonValueError, UnicodeEncodeError):
                 raise ValueError("successful result must contain bounded JSON data") from None
-            if result_size > MAX_RESULT_BYTES:
-                raise ValueError("successful result exceeds its byte limit")
             object.__setattr__(self, "result", freeze_json_value(normalized))
         elif self.result is not None or not isinstance(self.error, ToolExecutionError):
             raise ValueError("failed result must contain only an error")
+        try:
+            canonical_json_dumps({"call_id": self.call_id, "tool_name": self.tool_name,
+                                  "outcome": self.outcome.value, "result": self.result,
+                                  "error": vars(self.error) if self.error else None})
+        except JsonValueError:
+            raise ValueError("complete tool observation exceeds its payload guard") from None
 
 
 @dataclass(frozen=True)
@@ -199,15 +208,13 @@ class ToolDefinition:
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not _TOOL_NAME.fullmatch(self.name):
-            raise ToolDefinitionError("tool name must contain 1 to 64 ASCII letters, digits, '_' or '-'")
+            raise ToolDefinitionError("tool name must contain ASCII letters, digits, '_' or '-'")
         if not isinstance(self.description, str):
             raise ToolDefinitionError("tool description must be a string")
         try:
-            description_size = _utf8_size(self.description)
-        except UnicodeEncodeError:
+            utf8_size(self.description)
+        except PayloadError:
             raise ToolDefinitionError("tool description must be valid UTF-8") from None
-        if description_size > MAX_TOOL_DESCRIPTION_BYTES:
-            raise ToolDefinitionError("tool description exceeds its byte limit")
         try:
             replay_effect = ReplayEffect(self.replay_effect)
         except (TypeError, ValueError):
@@ -220,14 +227,10 @@ class ToolDefinition:
 
 
 def _validate_call_id(value: object) -> None:
-    if not isinstance(value, str):
-        raise ToolInvocationError("invalid_call_id", "工具调用 ID 无效。")
     try:
-        size = len(value.encode("utf-8"))
-    except UnicodeEncodeError:
+        opaque_call_id(value)
+    except PayloadError:
         raise ToolInvocationError("invalid_call_id", "工具调用 ID 无效。") from None
-    if not value or size > MAX_CALL_ID_BYTES:
-        raise ToolInvocationError("invalid_call_id", "工具调用 ID 无效。")
 
 
 def _utf8_size(value: str) -> int:

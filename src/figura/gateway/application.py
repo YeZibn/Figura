@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from figura.shared.payloads import decode_json, PayloadError, payload_scope, current_payload_limits
 from dataclasses import dataclass
 from typing import Mapping
 from urllib.parse import parse_qs, urlsplit
@@ -33,7 +34,6 @@ from .timeline_projection import observation_ref, run_timeline, tool_call_detail
 
 
 _API_PREFIX = "/api/v1"
-_JSON_LIMIT_BYTES = 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -84,6 +84,11 @@ class FiguraGatewayApplication:
             return method.upper() in {"GET", "HEAD"}
         return origin in self.allowed_origins
 
+    @property
+    def payload_limits(self):
+        return self.coordinator.payload_limits
+
+    @payload_scope
     def handle(
         self,
         method: str,
@@ -452,9 +457,9 @@ class FiguraGatewayApplication:
 
 
 def _read_json(body: bytes) -> dict[str, object]:
-    if not body or len(body) > _JSON_LIMIT_BYTES:
+    if not body or len(body) > current_payload_limits().max_json_bytes:
         raise _BadRequest
-    value = json.loads(body.decode("utf-8"))
+    value = decode_json(body.decode("utf-8"))
     if not isinstance(value, dict):
         raise _BadRequest
     return value

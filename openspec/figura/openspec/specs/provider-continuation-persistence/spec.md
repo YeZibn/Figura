@@ -56,10 +56,10 @@ Figura SHALL retain a committed continuation for the lifetime of its Run, includ
 - **THEN** Figura retains the original payload with that Run and does not consume or delete it
 
 ### Requirement: Continuation payloads are bounded and private
-Figura SHALL reject a continuation whose UTF-8 encoded payload exceeds 512 KiB before committing any part of the model-response transition. Figura SHALL NOT truncate continuation data. Explicit DeepSeek null SHALL contain no text bytes; empty strings SHALL remain subject to the same ownership and privacy constraints as nonempty strings. Continuation payloads and references SHALL be omitted from public Run summaries, lifecycle events, ordinary logs, traces, and user-facing error messages; only trusted internal history reconstruction may read the payload.
+Figura SHALL reject a continuation whose complete envelope or complete response transition exceeds the shared execution-payload guard before committing any part of the model-response transition. Figura SHALL NOT truncate continuation data. Explicit DeepSeek null SHALL contain no text bytes; empty strings SHALL remain subject to the same ownership and privacy constraints as nonempty strings. Continuation payloads and references SHALL be omitted from public Run summaries, lifecycle events, ordinary logs, traces, and user-facing error messages; only trusted internal history reconstruction may read the payload.
 
 #### Scenario: Continuation exceeds the payload bound
-- **WHEN** a provider response contains continuation data larger than 512 KiB when encoded as UTF-8
+- **WHEN** a provider response contains continuation data whose complete UTF-8 JSON envelope or complete response transition exceeds the shared payload guard
 - **THEN** Figura rejects the complete response transition, retains the prior committed checkpoint, and reports only a bounded safe error
 
 #### Scenario: Project Run state publicly
@@ -69,6 +69,10 @@ Figura SHALL reject a continuation whose UTF-8 encoded payload exceeds 512 KiB b
 #### Scenario: Reconstruct provider history internally
 - **WHEN** trusted execution code assembles the next provider request from committed Run history
 - **THEN** it can retrieve and pass the exact continuation payload for the originating assistant response without merging it into assistant text
+
+#### Scenario: Accept a continuation above the previous micro limit
+- **WHEN** a valid continuation exceeds 512 KiB but fits the shared complete-envelope and response-transition guards
+- **THEN** Figura commits it unchanged while preserving exact source identity, format, empty/null distinctions and privacy
 
 ### Requirement: Continuation value-domain migration preserves committed history
 When upgrading a supported existing store to support explicit DeepSeek empty and null continuations, Figura SHALL retain existing continuation values, identities, response links, immutable facts, checkpoints, and terminal outcomes. Migration SHALL remain atomic and SHALL preserve referential integrity, continuation immutability, and authorized Session aggregate deletion. Figura SHALL NOT infer a missing historical payload or rewrite terminal Runs to repair unavailable reasoning.

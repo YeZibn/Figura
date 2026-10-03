@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import base64
 import copy
+from dataclasses import asdict
+from figura.shared.payloads import PayloadError, encode_json, current_payload_limits, utf8_size
 import re
 from collections.abc import Iterable, Mapping
 from typing import Any
@@ -27,18 +29,16 @@ from ..models import (
     TextBlock,
 )
 from ..validation import (
-    MAX_TOOL_CALLS_PER_RESPONSE,
     fail,
     validate_request,
     validate_tools_for_endpoint,
 )
 
 
-_MAX_RESPONSE_TEXT_CHARS = 1_048_576
 _MAX_RESPONSE_ID_CHARS = 256
 _MAX_USAGE_VALUE = 2_147_483_647
 _MISSING = object()
-_TOOL_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_TOOL_NAME = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
 def value(obj: Any, key: str, default: Any = None) -> Any:
@@ -113,8 +113,6 @@ class ProviderPolicy:
             )
             for call in (value(message, "tool_calls", ()) or ())
         )
-        if len(tool_calls) > MAX_TOOL_CALLS_PER_RESPONSE:
-            raise ProviderProtocolError()
         return _response(
             self.provider_id,
             request.model_id,
@@ -137,7 +135,15 @@ class ProviderPolicy:
         provider_response_id: str | None = None
         usage: ProviderUsage | None = None
 
+        aggregate_bytes = 0
         for event in events:
+            try:
+                raw_event = event.model_dump(mode="json") if hasattr(event, "model_dump") else _event_json(event)
+                aggregate_bytes += utf8_size(encode_json(raw_event))
+                if aggregate_bytes > current_payload_limits().max_json_bytes:
+                    raise PayloadError()
+            except PayloadError:
+                raise ProviderProtocolError() from None
             event_id = value(event, "id")
             if provider_response_id is None and isinstance(event_id, str):
                 provider_response_id = _bounded_response_id(event_id)
@@ -166,11 +172,7 @@ class ProviderPolicy:
                     index = value(tool_delta, "index")
                     if type(index) is not int or index < 0:
                         index = len(tool_parts) + fallback_index
-                    if index >= MAX_TOOL_CALLS_PER_RESPONSE:
-                        raise ProviderProtocolError()
                     entry = tool_parts.setdefault(index, {"call_id": "", "name": "", "arguments": ""})
-                    if len(tool_parts) > MAX_TOOL_CALLS_PER_RESPONSE:
-                        raise ProviderProtocolError()
                     call_id = value(tool_delta, "id")
                     if isinstance(call_id, str):
                         entry["call_id"] += call_id
@@ -191,10 +193,6 @@ class ProviderPolicy:
                 outcome_known=False,
                 transient=True,
             )
-        if sum(map(len, content_parts)) > _MAX_RESPONSE_TEXT_CHARS:
-            raise ProviderProtocolError()
-        if sum(map(len, reasoning_parts)) > _MAX_RESPONSE_TEXT_CHARS:
-            raise ProviderProtocolError()
         tool_calls: list[ProviderToolCall] = []
         for index in sorted(tool_parts):
             entry = tool_parts[index]
@@ -233,9 +231,11 @@ class ProviderPolicy:
         payload: dict[str, Any] = {
             "model": request.model_id,
             "messages": messages,
-            "max_completion_tokens": request.options.max_completion_tokens,
             "stream": request.options.stream,
         }
+        completion = request.options.max_completion_tokens
+        if completion is not None:
+            payload["max_completion_tokens"] = completion
         if request.tools:
             payload["tools"] = [_tool_payload(tool) for tool in request.tools]
             payload["tool_choice"] = "auto"
@@ -318,17 +318,17 @@ def _response(
     provider_response_id: str | None,
     reasoning_content: Any,
 ) -> ProviderResponse:
-    if not isinstance(assistant_content, str) or len(assistant_content) > _MAX_RESPONSE_TEXT_CHARS:
+    if not isinstance(assistant_content, str):
         raise ProviderProtocolError()
     continuation = None
     if reasoning_content is not _MISSING:
         if reasoning_content is not None and (
-            not isinstance(reasoning_content, str) or len(reasoning_content) > _MAX_RESPONSE_TEXT_CHARS
+            not isinstance(reasoning_content, str)
         ):
             raise ProviderProtocolError()
         if provider_id is ProviderId.DEEPSEEK or reasoning_content:
             continuation = ProviderContinuation(provider_id, 1, reasoning_content)
-    return ProviderResponse(
+    response = ProviderResponse(
         provider_id=provider_id,
         model_id=model_id,
         assistant_content=assistant_content,
@@ -339,16 +339,20 @@ def _response(
         continuation=continuation,
     )
 
+    try:
+        encode_json(asdict(response))
+    except PayloadError:
+        raise ProviderProtocolError() from None
+    return response
+
 
 def _normalized_tool_call(call_id: Any, name: Any, arguments: Any) -> ProviderToolCall:
     if (
         not isinstance(call_id, str)
         or not call_id
-        or len(call_id) > _MAX_RESPONSE_ID_CHARS
         or not isinstance(name, str)
         or not _TOOL_NAME.fullmatch(name)
         or not isinstance(arguments, str)
-        or len(arguments) > _MAX_RESPONSE_TEXT_CHARS
     ):
         raise ProviderProtocolError()
     return ProviderToolCall(call_id=call_id, name=name, arguments=arguments)
@@ -388,3 +392,14 @@ def _usage(raw_usage: Any) -> ProviderUsage | None:
     if not any(item is not None for item in values.values()):
         return None
     return ProviderUsage(**values)
+
+
+def _event_json(value):
+    # Injected transports may use attribute objects like the SDK response types.
+    if isinstance(value, Mapping):
+        return {key: _event_json(item) for key, item in value.items()}
+    if isinstance(value, (tuple, list)):
+        return [_event_json(item) for item in value]
+    if hasattr(value, "__dict__"):
+        return _event_json(vars(value))
+    return value

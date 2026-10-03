@@ -4,7 +4,7 @@
 
 ## 1. 职责与边界
 
-Session Memory 将同一 Session 中目标 Run 之前的终态 Run 投影为有序对话消息，供后续 Provider 请求使用。它读取 Runtime 持久化的 Run 事实，不拥有这些事实，也不创建消息表、历史副本、摘要、裁剪预算或跨 Session 用户记忆。每次模型动作都从提交事实重新构建完整上下文；超过 Provider 硬限制时，由 Agent 在领取 Provider attempt 前失败。
+Session Memory 将同一 Session 中目标 Run 之前的终态 Run 投影为有序对话消息，供后续 Provider 请求使用。它读取 Runtime 持久化的 Run 事实，不拥有这些事实，也不创建消息表、历史副本、摘要、裁剪预算或跨 Session 用户记忆。每次模型动作都从提交事实重新构建完整上下文；超过共享执行 JSON guard 或本地能力合同则在 claim 前失败，真正厂商上下文拒绝作为普通失败处理。
 
 权威内容仍属于 [Run Runtime](runtime.md)：用户输入来自 `RunInput`，助手内容来自 `ModelResponseFact`，工具调用与结果来自 `ToolCallFact`、`ToolAttemptStartedFact`、`ToolResultFact`。Memory 对象只是一组不可变、调用期投影；附件只保留 ID。Agent 的附件、Panel、OCR、测量、ChartFigure 与 ChartRender 资源目录及图像加载规则由[Agent](agent.md#4-runexecutionstate-资源合同与完整字段)定义，附件与 Panel 的持久模型由[Sources](sources.md)定义；历史附件不会因为进入 Memory 而自动解析为图像字节。
 
@@ -134,7 +134,7 @@ Runtime 在一个 SQLite 读快照内读取目标 Run 的所有较早 ordinal，
 - 任一历史 Run 无效时整份历史不 dispatch；不跳过坏 Run 或缺失附件；合法终态尾部必须完整转换为异常上下文。
 - 附件 ID 仍由所属 Session 校验，图像字节只在对应的成功 `load_image` 后进入下一次 Provider 请求；Memory 对象中无附件字节和本机路径。
 - Provider continuation 与源 Run/响应绑定；Memory 投影不含该 payload。Agent 在 Provider 请求边界按 `(run_id, source_record_id)` 私下读取兼容续接，仅附加到对应 assistant；不复制到目标 Run，不混入助手正文、提示资产、工具结果或公开 DTO。
-- 完整历史超过 Provider 硬限制时当前 Run 在 Provider attempt claim 前失败；持久 Run 事实与 Memory 投影均不裁剪。
+- 完整历史超过共享 JSON guard 时在 claim 前失败；厂商远端 context 拒绝不触发裁剪或自动补发；持久 Run 事实与 Memory 投影均不裁剪。
 - Run 创建由 Runtime 保证同一 Session 同时最多一个 running Run；幂等重放先于 active Run 检查。完整创建与读取语义见[运行时流程](runtime.md#2-内部流转)。
 - Session 整体删除后，源事实与私有续接一并删除，Memory 不另留副本。删除事务和文件恢复见[Web 会话删除](web.md#会话删除与恢复)。
 

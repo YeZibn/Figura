@@ -17,6 +17,7 @@ from figura.tools.contracts import (
     ToolContext,
     ToolDefinition,
     ToolFailure,
+    ToolOutcomeUnknown,
 )
 
 
@@ -27,7 +28,7 @@ _PARAMETERS_SCHEMA = {
             "type": "object",
             "properties": {
                 "run_id": {"type": "string", "minLength": 1, "maxLength": 128},
-                "call_id": {"type": "string", "minLength": 1, "maxLength": 256},
+                "call_id": {"type": "string", "minLength": 1},
             },
             "required": ["run_id", "call_id"],
             "additionalProperties": False,
@@ -112,13 +113,8 @@ def render_chart_figure_definition(
 
         try:
             png, width, height = renders.store(context.run_id, context.call_id, png)
-        except RunError as error:
-            retryable = error.code is RunErrorCode.STORAGE_ERROR
-            raise ToolFailure(
-                "chart_render_storage_failed",
-                "生成的 PNG 图像当前无法保存或校验。",
-                retryable=retryable,
-            ) from None
+        except RunError:
+            raise ToolOutcomeUnknown() from None
 
         return {
             "figure_ref": {"run_id": reference_run_id, "call_id": reference_call_id},

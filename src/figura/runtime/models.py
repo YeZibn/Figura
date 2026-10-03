@@ -24,6 +24,7 @@ class RecordKind(str, Enum):
 class ActionKind(str, Enum):
     MODEL = "model"
     PROVIDER_ATTEMPT = "provider_attempt"
+    PROVIDER_RETRY = "provider_retry"
     TOOL_EXECUTION = "tool_execution"
     TOOL_ATTEMPT = "tool_attempt"
     FINAL = "final"

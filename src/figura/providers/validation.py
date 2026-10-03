@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 import re
+import hashlib
+from dataclasses import asdict
+from figura.shared.payloads import PayloadError, encode_json, utf8_size
 from typing import Any, Iterable, Mapping
 from urllib.parse import urlsplit
 
-from figura.shared.image_limits import MAX_IMAGE_BYTES, MAX_IMAGE_COUNT, MAX_TOTAL_IMAGE_BYTES
+from figura.shared.image_limits import MAX_IMAGE_BYTES, MAX_TOTAL_IMAGE_BYTES
 from figura.shared.json_schema import (
-    JsonValueError,
     SchemaDefinitionError,
-    canonical_json_dumps,
     validate_schema_definition,
 )
 from .errors import ProviderFailure, ProviderFailureCode, ProviderInputError
@@ -31,14 +32,8 @@ from .models import (
 )
 
 
-MAX_COMPLETION_TOKENS = 131_072
-MAX_MESSAGE_COUNT = 256
-MAX_INSTRUCTION_COUNT = 32
-MAX_TOOL_COUNT = 64
-MAX_TOOL_CALLS_PER_RESPONSE = 64
-MAX_TOTAL_TEXT_BYTES = 1_048_576
 SUPPORTED_MEDIA_TYPES = frozenset({"image/jpeg", "image/png", "image/gif", "image/webp"})
-_TOOL_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_TOOL_NAME = re.compile(r"^[A-Za-z0-9_-]+$")
 def fail(
     code: ProviderFailureCode,
     safe_message: str,
@@ -63,7 +58,7 @@ def coerce_provider_id(value: ProviderId | str) -> ProviderId:
         raise fail(ProviderFailureCode.UNSUPPORTED_PROVIDER, "不支持所选模型服务商。") from None
 
 
-def validate_request(request: ProviderRequest, expected_provider: ProviderId) -> None:
+def _validate_request(request: ProviderRequest, expected_provider: ProviderId) -> None:
     provider_id = coerce_provider_id(request.provider_id)
     if provider_id is not expected_provider:
         raise fail(ProviderFailureCode.INVALID_REQUEST, "请求的模型服务商与客户端配置不匹配。")
@@ -72,9 +67,9 @@ def validate_request(request: ProviderRequest, expected_provider: ProviderId) ->
     options = request.options
     if not isinstance(options, ProviderOptions):
         raise fail(ProviderFailureCode.INVALID_REQUEST, "模型请求必须包含有效的 options。")
-    if options.schema_version != 1:
+    if options.schema_version not in {1, 2}:
         raise fail(ProviderFailureCode.INVALID_REQUEST, "不支持此版本的模型请求选项。")
-    if type(options.max_completion_tokens) is not int or not 1 <= options.max_completion_tokens <= MAX_COMPLETION_TOKENS:
+    if options.max_completion_tokens is not None and (type(options.max_completion_tokens) is not int or options.max_completion_tokens <= 0):
         raise fail(ProviderFailureCode.INVALID_REQUEST, "max_completion_tokens 超出允许范围。")
     if type(options.stream) is not bool:
         raise fail(ProviderFailureCode.INVALID_REQUEST, "stream 必须是布尔值。")
@@ -82,22 +77,14 @@ def validate_request(request: ProviderRequest, expected_provider: ProviderId) ->
         raise fail(ProviderFailureCode.INVALID_REQUEST, "thinking_mode 必须是布尔值。")
     if options.reasoning_effort is not None and not isinstance(options.reasoning_effort, str):
         raise fail(ProviderFailureCode.INVALID_REQUEST, "reasoning_effort 必须是字符串。")
-    if len(request.instructions) > MAX_INSTRUCTION_COUNT:
-        raise fail(ProviderFailureCode.INVALID_REQUEST, "指令块数量超出允许范围。")
-    if len(request.messages) > MAX_MESSAGE_COUNT:
-        raise fail(ProviderFailureCode.INVALID_REQUEST, "对话消息数量超出允许范围。")
-    if len(request.tools) > MAX_TOOL_COUNT:
-        raise fail(ProviderFailureCode.INVALID_REQUEST, "工具定义数量超出允许范围。")
 
-    text_bytes = 0
-    image_count = 0
     image_bytes = 0
     for instruction in request.instructions:
         if not isinstance(instruction, InstructionBlock) or not isinstance(instruction.role, InstructionRole):
             raise fail(ProviderFailureCode.INVALID_REQUEST, "指令角色或结构无效。")
         if not isinstance(instruction.content, str):
             raise fail(ProviderFailureCode.INVALID_REQUEST, "指令内容必须是文本。")
-        text_bytes += len(instruction.content.encode("utf-8"))
+        utf8_size(instruction.content)
 
     pending_tool_calls: set[str] = set()
     seen_tool_call_ids: set[str] = set()
@@ -109,7 +96,7 @@ def validate_request(request: ProviderRequest, expected_provider: ProviderId) ->
             if isinstance(block, TextBlock):
                 if not isinstance(block.text, str):
                     raise fail(ProviderFailureCode.INVALID_REQUEST, "文本内容必须是字符串。")
-                text_bytes += len(block.text.encode("utf-8"))
+                utf8_size(block.text)
             elif isinstance(block, ImageBlock):
                 if message.role is not MessageRole.USER:
                     raise fail(ProviderFailureCode.UNSUPPORTED_CAPABILITY, "图片仅支持出现在 user 消息中。")
@@ -119,7 +106,6 @@ def validate_request(request: ProviderRequest, expected_provider: ProviderId) ->
                     raise fail(ProviderFailureCode.INVALID_REQUEST, "图片内容不能为空。")
                 if len(block.image_bytes) > MAX_IMAGE_BYTES:
                     raise fail(ProviderFailureCode.INVALID_REQUEST, "单张图片超出允许大小。")
-                image_count += 1
                 image_bytes += len(block.image_bytes)
             else:
                 raise fail(ProviderFailureCode.UNSUPPORTED_CAPABILITY, "不支持此消息内容类型。")
@@ -136,35 +122,30 @@ def validate_request(request: ProviderRequest, expected_provider: ProviderId) ->
             if message.role is MessageRole.USER and (message.tool_calls or message.continuation is not None):
                 raise fail(ProviderFailureCode.INVALID_REQUEST, "user 消息不能包含工具调用或续接数据。")
             if message.role is MessageRole.ASSISTANT:
-                if len(message.tool_calls) > MAX_TOOL_CALLS_PER_RESPONSE:
-                    raise fail(ProviderFailureCode.INVALID_REQUEST, "单条消息的工具调用数量超出允许范围。")
                 for call in message.tool_calls:
                     _validate_tool_call(call)
-                    text_bytes += len(call.arguments.encode("utf-8"))
+                    utf8_size(call.arguments)
                     if call.call_id in seen_tool_call_ids:
                         raise fail(ProviderFailureCode.INVALID_REQUEST, "工具调用 ID 重复。")
                     seen_tool_call_ids.add(call.call_id)
                     pending_tool_calls.add(call.call_id)
                 if message.continuation is not None:
                     _validate_continuation(message.continuation, provider_id)
-                    text_bytes += len((message.continuation.reasoning_content or "").encode("utf-8"))
+                    utf8_size(message.continuation.reasoning_content or "")
         if message.role is not MessageRole.USER and any(isinstance(block, ImageBlock) for block in blocks):
             raise fail(ProviderFailureCode.UNSUPPORTED_CAPABILITY, "图片仅支持出现在 user 消息中。")
 
     if pending_tool_calls:
         raise fail(ProviderFailureCode.INVALID_REQUEST, "历史工具调用缺少对应的工具结果。")
-    if image_count > MAX_IMAGE_COUNT or image_bytes > MAX_TOTAL_IMAGE_BYTES:
+    if image_bytes > MAX_TOTAL_IMAGE_BYTES:
         raise fail(ProviderFailureCode.INVALID_REQUEST, "图片总量超出允许范围。")
 
     for tool in request.tools:
         _validate_function_tool(tool, provider_id)
-        text_bytes += len(tool.description.encode("utf-8"))
-        try:
-            text_bytes += len(canonical_json_dumps(tool.parameters).encode("utf-8"))
-        except JsonValueError:
-            raise fail(ProviderFailureCode.INVALID_REQUEST, "工具 Schema 必须是合法 JSON 数据。") from None
-    if text_bytes > MAX_TOTAL_TEXT_BYTES:
-        raise fail(ProviderFailureCode.INVALID_REQUEST, "请求文本和工具 Schema 总量超出允许范围。")
+    try:
+        encode_json(request_projection(request))
+    except PayloadError:
+        raise fail(ProviderFailureCode.INVALID_REQUEST, "模型请求超过执行载荷边界或包含无效 JSON 文本。") from None
 
 
 def _content_blocks(content: object) -> tuple[TextBlock | ImageBlock, ...]:
@@ -182,7 +163,6 @@ def _validate_tool_call(call: object) -> None:
     if (
         not isinstance(call.call_id, str)
         or not call.call_id
-        or len(call.call_id) > 256
         or not isinstance(call.name, str)
         or not _TOOL_NAME.fullmatch(call.name)
     ):
@@ -204,8 +184,8 @@ def _validate_function_tool(tool: object, provider_id: ProviderId) -> None:
     if not isinstance(tool, FunctionTool):
         raise fail(ProviderFailureCode.INVALID_REQUEST, "函数工具结构无效。")
     if not isinstance(tool.name, str) or not _TOOL_NAME.fullmatch(tool.name):
-        raise fail(ProviderFailureCode.INVALID_REQUEST, "工具名称必须为 1 到 64 个字母、数字、下划线或短横线。")
-    if not isinstance(tool.description, str) or len(tool.description) > 8192:
+        raise fail(ProviderFailureCode.INVALID_REQUEST, "工具名称必须为 非空字母、数字、下划线或短横线。")
+    if not isinstance(tool.description, str) :
         raise fail(ProviderFailureCode.INVALID_REQUEST, "工具描述无效或超出允许范围。")
     if tool.strict is not None and type(tool.strict) is not bool:
         raise fail(ProviderFailureCode.INVALID_REQUEST, "strict 必须是布尔值。")
@@ -263,7 +243,7 @@ def _provider_schema_error(error: SchemaDefinitionError) -> tuple[ProviderFailur
         "invalid_required_reference": "工具 Schema 的 required 引用了无效字段。",
         "invalid_items": "当前适配器不支持此 items Schema。",
         "invalid_additional_properties": "additionalProperties 必须是布尔值或 Schema。",
-        "invalid_enum": "工具 Schema 的 enum 必须包含 1 到 256 个值。",
+        "invalid_enum": "工具 Schema 的 enum 必须包含 至少一个值。",
         "invalid_anyOf": "工具 Schema 的 anyOf 结构无效。",
         "invalid_description": "工具 Schema 的 description 必须是有界字符串。",
         "invalid_title": "工具 Schema 的 title 必须是有界字符串。",
@@ -300,3 +280,30 @@ def _validate_strict_schema(schema: Mapping[str, Any], depth: int) -> None:
     if "anyOf" in schema:
         for nested in schema["anyOf"]:
             _validate_strict_schema(nested, depth + 1)
+
+
+def request_projection(request: ProviderRequest) -> dict[str, Any]:
+    """Count image metadata here; image content has its independent byte guard."""
+    messages = []
+    for message in request.messages:
+        content = message.content
+        if not isinstance(content, str):
+            content = [
+                {"type": "text", "text": block.text} if isinstance(block, TextBlock) else
+                {"type": "image", "media_type": block.media_type, "byte_count": len(block.image_bytes), "sha256": hashlib.sha256(block.image_bytes).hexdigest()}
+                for block in content
+            ]
+        messages.append({"role": message.role.value, "content": content,
+            "tool_calls": [asdict(call) for call in message.tool_calls],
+            "tool_call_id": message.tool_call_id,
+            "continuation": asdict(message.continuation) if message.continuation else None})
+    return {"provider_id": request.provider_id, "model_id": request.model_id,
+        "instructions": [asdict(item) for item in request.instructions], "messages": messages,
+        "tools": [asdict(tool) for tool in request.tools], "options": asdict(request.options)}
+
+
+def validate_request(request: ProviderRequest, expected_provider: ProviderId) -> None:
+    try:
+        _validate_request(request, expected_provider)
+    except (PayloadError, UnicodeError):
+        raise fail(ProviderFailureCode.INVALID_REQUEST, "模型请求超过执行载荷边界或包含无效文本。") from None

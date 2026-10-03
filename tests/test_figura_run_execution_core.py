@@ -178,7 +178,7 @@ def test_run_input_codec_round_trips_ordered_attachment_ids() -> None:
     )
 
     encoded = encode_payload(RecordKind.INPUT, payload)
-    decoded = decode_payload(RecordKind.INPUT, encoded, expected_schema_version=1)
+    decoded = decode_payload(RecordKind.INPUT, encoded, expected_schema_version=2)
 
     assert decoded == payload
 
@@ -187,7 +187,6 @@ def test_run_input_codec_round_trips_ordered_attachment_ids() -> None:
     "attachment_ids",
     [
         ("duplicate", "duplicate"),
-        tuple(f"attachment-{index}" for index in range(17)),
         ("",),
         ("x" * 129,),
     ],
@@ -225,7 +224,7 @@ def test_v4_migration_adds_attachment_table_without_changing_run_state(tmp_path)
     after = migrated_store.read_run_state(session.session_id, run.run_id)
 
     with sqlite3.connect(store.database_path) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 10
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 11
         assert connection.execute("PRAGMA quick_check").fetchone()[0] == "ok"
         assert connection.execute(
             "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'attachments'"
@@ -260,7 +259,7 @@ def test_v5_migration_preserves_attachments_and_adds_panels(tmp_path) -> None:
     after = migrated_store.read_run_state(session.session_id, run.run_id)
 
     with sqlite3.connect(store.database_path) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 10
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 11
         assert connection.execute("PRAGMA quick_check").fetchone()[0] == "ok"
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
         assert connection.execute(
@@ -299,7 +298,7 @@ def test_v7_migration_adds_scoped_deletion_without_changing_run_facts(tmp_path) 
     after = migrated_store.read_run_state(session.session_id, run.run_id)
 
     with sqlite3.connect(store.database_path) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 10
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 11
         assert connection.execute(
             "SELECT session_id FROM session_deletion_scopes"
         ).fetchall() == []
@@ -598,7 +597,7 @@ def test_text_response_commit_advances_checkpoint_and_rejects_tool_payloads(tmp_
     assert state.checkpoint.next_action.action_kind is ActionKind.FINAL
     assert state.checkpoint.next_action.response_record_id == record.record_id
     assert [event.event_sequence for event in state.events] == [1]
-    assert state.records[-1].payload.schema_version == 2
+    assert state.records[-1].payload.schema_version == 3
     assert state.records[-1].payload.continuation_ref is None
 
 
@@ -639,7 +638,7 @@ def test_model_response_round_trips_optional_continuation_for_text_and_tools(
     response_fact = state.records[-1].payload
 
     assert isinstance(response_fact, ModelResponseFact)
-    assert response_fact.schema_version == 2
+    assert response_fact.schema_version == 3
     assert (response_fact.continuation_ref is not None) is with_continuation
     assert len(state.provider_continuations) == int(with_continuation)
     assert len(state.tool_facts) == int(with_tools)
@@ -649,7 +648,7 @@ def test_model_response_round_trips_optional_continuation_for_text_and_tools(
         assert persisted.response_record_id == record.record_id
         assert persisted.provider_id == ProviderId.QWEN.value
         assert persisted.format_version == 1
-        assert persisted.schema_version == 1
+        assert persisted.schema_version == 2
         assert persisted.reasoning_content == "exact private continuation"
         assert persisted.created_at == record.created_at
         assert response_fact.continuation_ref == persisted.continuation_id
@@ -696,7 +695,7 @@ def test_v1_model_response_remains_readable_and_non_response_facts_stay_v1(tmp_p
             "WHERE run_id = ? ORDER BY record_sequence",
             (fresh_run.run_id,),
         ).fetchall()
-    assert versions == [("input", 1), ("model_response", 2), ("final_answer", 1)]
+    assert versions == [("input", 2), ("model_response", 3), ("final_answer", 2)]
 
 
 def test_unknown_model_response_version_fails_closed(tmp_path) -> None:
@@ -877,7 +876,7 @@ def test_corrupt_continuation_rows_fail_closed(tmp_path, corruption, expected_co
         elif corruption == "unknown_schema":
             connection.execute("DROP TRIGGER immutable_run_provider_continuation_update")
             connection.execute(
-                "UPDATE run_provider_continuations SET schema_version = 2 WHERE run_id = ?",
+                "UPDATE run_provider_continuations SET schema_version = 99 WHERE run_id = ?",
                 (run.run_id,),
             )
         else:
@@ -999,13 +998,14 @@ def test_two_sqlite_writers_racing_on_the_same_revision_commit_only_one_record(t
     session = app.create_session()
     run = app.create_run(_request(session.session_id))
     other_app = RunCoordinator(FiguraRunStore(tmp_path), _factory())
+    attempt = app.begin_provider_attempt(session.session_id, run.run_id, 1)
     barrier = Barrier(2)
 
     def commit(coordinator: RunCoordinator):
         barrier.wait()
         try:
-            return _commit_response(coordinator,
-                session.session_id, run.run_id, 1, _response()
+            return coordinator.commit_model_response(
+                session.session_id, run.run_id, 2, _response(), provider_attempt_id=attempt.attempt_id
             )
         except RunError as error:
             return error.code
@@ -1064,7 +1064,7 @@ def test_unknown_checkpoint_schema_version_fails_closed(tmp_path) -> None:
     run = app.create_run(_request(session.session_id))
     with sqlite3.connect(store.database_path) as connection:
         connection.execute(
-            "UPDATE run_execution_checkpoints SET schema_version = 2 WHERE run_id = ?",
+            "UPDATE run_execution_checkpoints SET schema_version = 99 WHERE run_id = ?",
             (run.run_id,),
         )
 
@@ -1098,7 +1098,7 @@ def test_unknown_execution_record_schema_version_fails_closed(tmp_path) -> None:
     with sqlite3.connect(store.database_path) as connection:
         connection.execute("DROP TRIGGER immutable_run_record_update")
         connection.execute(
-            "UPDATE run_execution_records SET schema_version = 2 WHERE run_id = ?",
+            "UPDATE run_execution_records SET schema_version = 99 WHERE run_id = ?",
             (run.run_id,),
         )
 
@@ -1197,7 +1197,7 @@ def test_schema9_preserves_explicit_deepseek_values_and_schema8_history(tmp_path
     assert new_state.provider_continuations[0].reasoning_content == reasoning
     assert 'private text' not in repr(new_state)
     with sqlite3.connect(store.database_path) as connection:
-        assert connection.execute('PRAGMA user_version').fetchone()[0] == 10
+        assert connection.execute('PRAGMA user_version').fetchone()[0] == 11
         assert connection.execute('PRAGMA foreign_key_check').fetchall() == []
         with pytest.raises(sqlite3.IntegrityError):
             connection.execute('DELETE FROM run_provider_continuations')

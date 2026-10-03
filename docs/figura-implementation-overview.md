@@ -20,7 +20,7 @@ flowchart LR
     Dispatcher -->|扫描持久 running Run| Runtime
     Dispatcher -->|execute(session_id, run_id)| Agent[Agent]
     Gateway -->|本地配置可用性| Provider[Provider Boundary]
-    Runtime -->|RunState、停止请求、Checkpoint 与源响应私有续接| Agent
+    Runtime -->|RunState、请求绑定、重试到期时间、停止请求与私有续接| Agent
     Agent -->|读取较早的终态 RunState| Runtime
     Agent -->|当前 Run 与较早 Run 的事实| Memory[Memory]
     Memory -->|闭合角色消息与异常终态上下文| Agent
@@ -53,7 +53,7 @@ flowchart LR
 
 | 组件 | 职责与跨组件交付 | 当前状态 | 内部文档 |
 |---|---|---|---|
-| Runtime | Session、Run、执行事实、Attempt、Checkpoint、生命周期与进度事件；交付可恢复 `RunState` 和同 Session 较早 Run 的一致快照；每 Session 至多一个 running Run | 当前工作树已实现；schema v10，持久停止请求、全任务执行所有权、受控 Session 删除与安全终态说明 | [Runtime](figura/runtime.md) |
+| Runtime | Session、Run、执行事实、Attempt、Checkpoint、生命周期与进度事件；交付可恢复 `RunState` 和同 Session 较早 Run 的一致快照；每 Session 至多一个 running Run | 当前工作树已实现；schema v11，持久 Provider 请求绑定/重试、单动作执行所有权、停止请求、受控 Session 删除与安全终态说明 | [Runtime](figura/runtime.md) |
 | Sources | 管理 Session 附件与 Panel 元数据、私有附件/Panel 图像和 ChartFigure PNG 文件、图像验证/处理和授权读取；与 Runtime 共用一份 SQLite | 已实现；渲染 PNG 只存私有文件，无独立元数据表；整会话删除含文件暂存、恢复与启动对账 | [Sources](figura/sources.md) |
 | Agent | 按 checkpoint 组装请求、协调模型和工具、提交结果与终态；从 Run 事实和 Sources 元数据重建类型化资源目录，并统一授权图像读取 | 已实现 ReAct、三层中文提示、六类资源目录、最新工具批次图像回看、源响应续接重放与 prepare→claim→dispatch；统一 owner 下检查停止并有限恢复工具；相关 change 已归档，代码尚未提交 | [Agent 编排与资源目录](figura/agent.md) |
 | Memory | 从同 Session 的 Run 事实构建闭合角色消息与异常终态上下文；无独立持久化、裁剪或摘要 | 当前工作树已实现合法异常尾部转换；续接由 Agent 请求边界私下关联，Memory 无该 payload | [Memory](figura/memory.md) |
@@ -74,6 +74,8 @@ flowchart LR
 6. **图表链**：当前有 `ChartSpecData`、`ChartFigure`、纯 PNG renderer、Sources 私有 PNG 文件保存和网页预览；Figure 全文/摘要及渲染调用/结果分别借用 Run 工具调用/结果事实保留，Agent 可跨 Run 从统一资源目录索引成功画布与渲染内容。仍没有单独图表对象表、来源证据模型、生成图验证、发布或 Evaluation。[规划能力](#4-规划能力与边界)标出这些未实现部分。
 
 7. **停止、恢复与后续对话**：停止请求经 Gateway 写入 Runtime 独立控制事务；Agent 在执行 owner 保护下允许已开始动作提交真实结果，随后在边界 interrupted。Dispatcher 启动与周期扫描都从持久 checkpoint 推进，未知 Provider 不重发，安全工具沿原调用身份有限重放。后续 Run 保留闭合交互，将合法未完成末尾批次整体转换为异常上下文；成功资源仍可授权引用，未知调用不会被补造成结果。完整流程见 [Runtime](figura/runtime.md#停止所有权与恢复事务)、[Agent](figura/agent.md#异常-run-推进与后续请求)、[Memory](figura/memory.md#合法异常尾部投影) 和 [Web](figura/web.md#协作停止与客户端生命周期)。
+
+执行策略在当前工作树中已统一：Run 不再有累计模型轮次、工具次数、时间或 token 配额；每个逻辑 Provider 请求保留首次加三次网络恢复，工具已知失败由模型重新决定。共享执行 JSON 单元默认 32 MiB，图片、事件、隐私、并发和领域保护各自保留。字段与迁移见 [Runtime](figura/runtime.md#providerrequestbinding)，基础合同见 [Validation](figura/validation.md)。本 change 的 delta 已同步到主规格，change 尚未归档或提交。上下文压缩、摘要和窗口规划继续留在下一步。
 
 ## 4. 规划能力与边界
 
@@ -107,12 +109,12 @@ flowchart LR
 
 查**完整字段**时，从组件表进入该合同的 owner 专题；跨领域使用者只链接并解释消费方式。专题边界由模型的语义、权威 owner、生命周期和不变量决定，后续出现独立领域时增建子文档，不能按调用链强行合并。嵌套值、联合 payload、枚举和字段来源在所属专题展开。查长期完整产品构想时，参阅[Figura 架构设计草案](figura-architecture-design.md)，其中未实现部分不自动成为当前合同。
 
-当前主规格位于 `openspec/figura/openspec/specs/`。截至 2026-10-03，`openspec list --store figura --json` 未列出活动 change。统一资源目录、分层提示（包括 `improve-figura-prompt-assets`）、测量、图像观察、Figure assembly 和图表渲染相关 change 已归档，相关 delta 已同步进主规格，但仍有下表列出的历史段落冲突。prompt 资产和相应规格在当前工作树中有未提交改动；归档不代表代码已提交或发布。旧系统代码与规格分别位于 `src/chartagent/` 和 `openspec/chartagent/`，只在迁移或兼容性分析中对照。
+当前主规格位于 `openspec/figura/openspec/specs/`。截至 2026-10-03，`add-durable-execution-policy-and-provider-retries` 已完成实现并同步主规格，仍为活动 change，尚未归档。统一资源目录、分层提示（包括 `improve-figura-prompt-assets`）、测量、图像观察、Figure assembly 和图表渲染相关 change 已归档，相关 delta 已同步进主规格，但仍有下表列出的历史段落冲突。prompt 资产和相应规格在当前工作树中有未提交改动；归档不代表代码已提交或发布。旧系统代码与规格分别位于 `src/chartagent/` 和 `openspec/chartagent/`，只在迁移或兼容性分析中对照。
 
 
 当前工作树已接通协作停止和异常历史续用：Web 保存停止请求，Agent 在 Run owner 保护下完成当前动作并在边界收尾；Gateway 周期扫描补偿无人执行的 running Run。安全工具按原幂等身份有限恢复，未知 Provider 不重发。Memory 将合法异常尾部转为调用期 outcome，闭合历史及已提交资源继续可用。新增控制和字段详见 [Runtime](figura/runtime.md)、[Memory](figura/memory.md)、[Agent](figura/agent.md)、[Web](figura/web.md)。对应 change 已归档，主规格已同步；线程阻塞时仍需等待，调用 ID 重映射和跨 Provider 历史转换不属于本次实现。
 
-实现依据见 [归档设计](../openspec/figura/openspec/changes/archive/2026-10-02-recover-abnormal-runs-and-history/design.md)；该 change 的六篇 delta 已同步至主规格。新的过程预算策略仍处于讨论阶段，未纳入当前实现。
+实现依据见 [归档设计](../openspec/figura/openspec/changes/archive/2026-10-03-recover-abnormal-runs-and-history/design.md)；该 change 的六篇 delta 已同步至主规格。新的过程预算策略仍处于讨论阶段，未纳入当前实现。
 
 ### 规格与实现的已知差异
 

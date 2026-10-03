@@ -1,6 +1,6 @@
 # Tool：能力定义与调用边界
 
-> 更新日期：2026-10-02。[返回总览](../figura-implementation-overview.md)。本篇拥有工具定义、注册、调用及结果合同；`ToolCallFact`、`ToolAttemptStartedFact`、`ToolResultFact` 是[Run Runtime](runtime.md#4-完整模型字段)所拥有的持久事实。
+> 更新日期：2026-10-03。[返回总览](../figura-implementation-overview.md)。本篇拥有工具定义、注册、调用及结果合同；`ToolCallFact`、`ToolAttemptStartedFact`、`ToolResultFact` 是[Run Runtime](runtime.md#4-完整模型字段)所拥有的持久事实。
 
 ## 1. 职责与边界
 
@@ -38,7 +38,7 @@
 | 完整字段路径 | 类型 | 构造默认 | 含义与约束 | 写入 → 权威 → 读取/公开 |
 |---|---|---|---|---|
 | ToolInvocation.call_id | str | 必传 | 模型给出的逻辑工具调用 ID | Agent / DurableToolExecutor → 调用期；逻辑意图另见 ToolCallFact → ToolRuntime |
-| ToolInvocation.name | str | 必传 | 注册的工具名称，1–64 位 ASCII 字母/数字/_/- | Agent / DurableToolExecutor → 调用期；逻辑意图另见 ToolCallFact → ToolRuntime |
+| ToolInvocation.name | str | 必传 | 注册的工具名称，非空 ASCII 字母/数字/_/-，无通用长度上限 | Agent / DurableToolExecutor → 调用期；逻辑意图另见 ToolCallFact → ToolRuntime |
 | ToolInvocation.arguments_json | str | 必传 | 模型提供的 JSON 参数原文；执行前严格解析 | Agent / DurableToolExecutor → 调用期；逻辑意图另见 ToolCallFact → ToolRuntime |
 
 ### ToolExecutionError
@@ -49,7 +49,7 @@
 |---|---|---|---|---|
 | ToolExecutionError.code | str | 必传 | 稳定错误/问题码 | ToolRuntime / handler → 调用期；可嵌入 ToolResultFact → Agent；仅安全字段可投影 |
 | ToolExecutionError.message | str | 必传 | 有界安全错误说明 | ToolRuntime / handler → 调用期；可嵌入 ToolResultFact → Agent；仅安全字段可投影 |
-| ToolExecutionError.retryable | bool | 必传 | 工具错误是否可重试 | ToolRuntime / handler → 调用期；可嵌入 ToolResultFact → Agent；仅安全字段可投影 |
+| ToolExecutionError.retryable | bool | 必传 | 供模型判断后续动作的信息，不触发 Runtime 自动失败重试 | ToolRuntime / handler → 调用期；可嵌入 ToolResultFact → Agent；仅安全字段可投影 |
 | ToolExecutionError.field_path | str \| None | None | 可空的有界 JSON Pointer 错误位置 | ToolRuntime / handler → 调用期；可嵌入 ToolResultFact → Agent；仅安全字段可投影 |
 
 ### ToolExecutionResult
@@ -70,7 +70,7 @@
 
 | 完整字段路径 | 类型 | 构造默认 | 含义与约束 | 写入 → 权威 → 读取/公开 |
 |---|---|---|---|---|
-| ToolDefinition.name | str | 必传 | 注册的工具名称，1–64 位 ASCII 字母/数字/_/- | 进程启动时组装 ToolRegistry → 进程内 Registry → Agent 工具投影与 ToolRuntime；handler 不进模型 |
+| ToolDefinition.name | str | 必传 | 注册的工具名称，非空 ASCII 字母/数字/_/-，无通用长度上限 | 进程启动时组装 ToolRegistry → 进程内 Registry → Agent 工具投影与 ToolRuntime；handler 不进模型 |
 | ToolDefinition.description | str | 必传 | 模型可见工具说明 | 进程启动时组装 ToolRegistry → 进程内 Registry → Agent 工具投影与 ToolRuntime；handler 不进模型 |
 | ToolDefinition.parameters_schema | Mapping[str, Any] | 必传 | 工具输入参数的有界对象 Schema | 进程启动时组装 ToolRegistry → 进程内 Registry → Agent 工具投影与 ToolRuntime；handler 不进模型 |
 | ToolDefinition.result_schema | Mapping[str, Any] | 必传 | 工具成功结果的有界对象 Schema | 进程启动时组装 ToolRegistry → 进程内 Registry → Agent 工具投影与 ToolRuntime；handler 不进模型 |
@@ -405,7 +405,7 @@ OCR 既为笛卡尔/Pie 测量提供轴刻度、标签与关联候选，也由 `
 |---|---|---|---|
 | `render_chart_figure.arguments.figure_ref` | object | 必填；无额外属性 | 被渲染的 Figure 工具调用引用 |
 | `render_chart_figure.arguments.figure_ref.run_id` | string | 必填；1–128 字符 | 组装 Figure 的 Run opaque ID |
-| `render_chart_figure.arguments.figure_ref.call_id` | string | 必填；1–256 字符 | 成功 `assemble_chart_figure` 调用的逻辑 ID |
+| `render_chart_figure.arguments.figure_ref.call_id` | string | 必填；非空有效 UTF-8，受完整 JSON 单元 guard | 成功 `assemble_chart_figure` 调用的逻辑 ID |
 
 **解析与授权：**handler 从目标 Run 的新鲜资源目录按 `ToolResourceRef("chart_figure", run_id, call_id)` 读取已接受 Figure。ChartFigureContent 已由 Agent 从已提交 assembly 调用参数完整重建并核对 canonical digest；handler 使用其中的完整 ChartFigure 交给 Charts 绘图，不再实现一条独立的 Runtime 事实查找路径。未知、失败、未提交、跨 Session、内容损坏或摘要不一致时返回有界失败，不创建可见产物。
 
@@ -417,7 +417,7 @@ OCR 既为笛卡尔/Pie 测量提供轴刻度、标签与关联候选，也由 `
 |---|---|---|---|
 | `render_chart_figure.result.figure_ref` | object | 必填；恰含 `run_id`、`call_id` | 原样返回被渲染 Figure 引用；Agent 用它匹配接受状态 |
 | `render_chart_figure.result.figure_ref.run_id` | string | 必填；1–128 字符 | 被渲染 Figure 的来源 Run ID |
-| `render_chart_figure.result.figure_ref.call_id` | string | 必填；1–256 字符 | 被渲染 Figure 的 assembly call ID |
+| `render_chart_figure.result.figure_ref.call_id` | string | 必填；非空有效 UTF-8，受完整 JSON 单元 guard | 被渲染 Figure 的 assembly call ID |
 | `render_chart_figure.result.figure_digest` | string | 必填；64 位小写十六进制 | 完整规范 Figure JSON 的 SHA-256；须匹配接受 Figure |
 | `render_chart_figure.result.image_sha256` | string | 必填；64 位小写十六进制 | PNG 内容 SHA-256；Agent 与 Gateway 读取文件时核对 |
 | `render_chart_figure.result.media_type` | string | 必填；固定 `image/png` | 文件媒体类型；Web 返回 `image/png` |
@@ -444,3 +444,9 @@ OCR 既为笛卡尔/Pie 测量提供轴刻度、标签与关联候选，也由 `
 将 Registry 从 `figura-web-v5` 提升为 `figura-web-v6` 会使尚无结果的 v5 工具调用不能在 v6 下继续执行。部署切换前应先让 v5 Run 到达终态；该变更不添加 v5 兼容 executor。
 
 绘图的文字布局与百分比规则见[Charts 绘制边界](charts.md#5-png-绘制边界)；模型不新增样式字段。会话删除会清除其私有 Panel/render 文件，详见[Sources](sources.md#2-内部流转与不变量)。已配对完整结果的旧 Registry 调用可以惰性历史进入后续请求，不能因此在新 Registry 下重新执行；未完成调用继续拒绝。旧测量/组装/渲染主规格对 RunExecutionState 分散字段的残留见[总览差异](../figura-implementation-overview.md#规格与实现的已知差异)。
+
+## 执行载荷与未知效果
+
+Registry 完整 metadata/parameter Schema/result Schema 投影、参数、成功/失败 observation 和耐久 fact 分别使用共享 JSON guard。删除工具数量、描述、Schema、参数、结果和批次 arguments 的通用微上限；领域 Schema 中的 maxItems/maxLength 继续生效，安全错误 message 512 B、pointer 256 B 保留。调用 ID 原值跨 intent、start、result、history 和 Figure 引用保留。
+
+已知 ToolFailure 或参数校验失败只提交一次 failed observation，`retryable=True` 由模型解读；模型的新决策使用新 call ID。未知的部分写入通过 `ToolOutcomeUnknown` 传播，不产生伪造 failed result。Panel 分割与 PNG 保存的无法确认存储异常采用这一分支；按原 replay_effect 和稳定 SHA-256 `[run_id, call_id]` 键恢复。存储 claim 入口强制每逻辑调用最多三次尝试。CancellationSignal 读取持久停止状态；读取失败传播并拒绝执行。尚在 native handler 内的动作保留 owner，真实返回后可保存结果再停止。

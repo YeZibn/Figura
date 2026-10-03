@@ -71,7 +71,10 @@ class FiguraRequestHandler(BaseHTTPRequestHandler):
             length = int(headers.get("content-length", "0"))
         except ValueError:
             length = -1
-        if length < 0 or length > _MAX_REQUEST_BYTES:
+        maximum = self.application.coordinator.payload_limits.max_json_bytes
+        if self.path.endswith("/attachments"):
+            maximum = _MAX_REQUEST_BYTES
+        if length < 0 or length > maximum:
             response = self.application._error(
                 413,
                 "request_too_large",

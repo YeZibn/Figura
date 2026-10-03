@@ -86,7 +86,7 @@ def test_contracts_are_typed_bounded_and_keep_handler_out_of_repr() -> None:
     ("call_id", "name", "arguments"),
     [
         ("", "inspect_chart", "{}"),
-        ("x" * 257, "inspect_chart", "{}"),
+        ("\ud800", "inspect_chart", "{}"),
         ("call-1", "bad name", "{}"),
         ("call-1", "inspect_chart", None),
     ],

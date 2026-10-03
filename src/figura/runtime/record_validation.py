@@ -7,6 +7,7 @@ from figura.providers.errors import ProviderFailureCode
 from .errors import RunError, RunErrorCode
 from .models import (
     ProviderAttemptStatus,
+    ActionKind, NextAction,
     Run,
     RunStatus,
     TerminalCode,
@@ -38,9 +39,8 @@ def _validate_provider_attempts(
     provider_attempts: tuple[ProviderAttempt, ...],
     tool_facts: tuple[ToolExecutionFact, ...],
     calls_by_sequence: dict[int, tuple[ToolExecutionFact, ToolCallFact]],
+    bindings: tuple = (),
 ) -> None:
-    if len(provider_attempts) > 8:
-        raise RunError(RunErrorCode.INTEGRITY_ERROR)
     if [attempt.attempt_sequence for attempt in provider_attempts] != list(
         range(1, len(provider_attempts) + 1)
     ):
@@ -90,27 +90,27 @@ def _validate_provider_attempts(
             linked_response_ids.add(attempt.response_record_id)
         elif attempt.status is ProviderAttemptStatus.KNOWN_FAILURE:
             if (
-                index != len(provider_attempts) - 1
+                (attempt.operation_id is None and index != len(provider_attempts) - 1)
                 or attempt.response_record_id is not None
                 or not isinstance(attempt.failure_code, str)
                 or not isinstance(attempt.finished_at, str)
                 or not attempt.finished_at
-                or (run.status, run.terminal_code) not in {
+                or (attempt.operation_id is None and (run.status, run.terminal_code) not in {
                     (RunStatus.FAILED, TerminalCode.EXECUTION_FAILED.value),
                     (RunStatus.INTERRUPTED, TerminalCode.INTERRUPTED.value),
-                }
+                })
             ):
                 raise RunError(RunErrorCode.INTEGRITY_ERROR)
         elif attempt.status is ProviderAttemptStatus.OUTCOME_UNKNOWN:
             if (
-                index != len(provider_attempts) - 1
+                (attempt.operation_id is None and index != len(provider_attempts) - 1)
                 or attempt.response_record_id is not None
                 or not isinstance(attempt.finished_at, str)
                 or not attempt.finished_at
-                or (run.status, run.terminal_code) not in {
+                or (attempt.operation_id is None and (run.status, run.terminal_code) not in {
                     (RunStatus.FAILED, TerminalCode.PROVIDER_OUTCOME_UNKNOWN.value),
                     (RunStatus.INTERRUPTED, TerminalCode.INTERRUPTED.value),
-                }
+                })
             ):
                 raise RunError(RunErrorCode.INTEGRITY_ERROR)
         else:
@@ -120,6 +120,63 @@ def _validate_provider_attempts(
                 ProviderFailureCode(attempt.failure_code)
             except ValueError:
                 raise RunError(RunErrorCode.INTEGRITY_ERROR) from None
+
+    from datetime import datetime
+    from .codecs.bindings import validate_binding
+    binding_map = {}
+    prefixes = set()
+    for binding in bindings:
+        try:
+            validate_binding(binding)
+        except RunError:
+            raise RunError(RunErrorCode.INTEGRITY_ERROR) from None
+        prefix = (binding.base_record_sequence, binding.base_tool_sequence)
+        if binding.operation_id in binding_map or prefix in prefixes or (binding.run_id, binding.provider_id, binding.model_id) != (run.run_id, run.provider, run.model):
+            raise RunError(RunErrorCode.INTEGRITY_ERROR)
+        binding_map[binding.operation_id] = binding
+        prefixes.add(prefix)
+    groups = {}
+    for attempt in provider_attempts:
+        if attempt.operation_id is None:
+            if any(value is not None for value in (attempt.operation_attempt_number, attempt.retry_of_attempt_id, attempt.http_status, attempt.next_eligible_at)):
+                raise RunError(RunErrorCode.INTEGRITY_ERROR)
+            continue
+        binding = binding_map.get(attempt.operation_id)
+        group = groups.setdefault(attempt.operation_id, [])
+        if binding is None or (attempt.base_record_sequence, attempt.base_tool_sequence) != (binding.base_record_sequence, binding.base_tool_sequence) or attempt.operation_attempt_number != len(group) + 1 or len(group) >= binding.max_attempts:
+            raise RunError(RunErrorCode.INTEGRITY_ERROR)
+        previous = group[-1] if group else None
+        if attempt.retry_of_attempt_id != (previous.attempt_id if previous else None):
+            raise RunError(RunErrorCode.INTEGRITY_ERROR)
+        if previous is not None and (previous.status not in {ProviderAttemptStatus.KNOWN_FAILURE, ProviderAttemptStatus.OUTCOME_UNKNOWN} or not previous.next_eligible_at or previous.next_eligible_at > attempt.started_at):
+            raise RunError(RunErrorCode.INTEGRITY_ERROR)
+        if attempt.status in {ProviderAttemptStatus.STARTED, ProviderAttemptStatus.RESPONSE_COMMITTED}:
+            if attempt.failure_category is not None or attempt.http_status is not None or attempt.next_eligible_at is not None:
+                raise RunError(RunErrorCode.INTEGRITY_ERROR)
+        elif attempt.failure_category not in {"temporary_unsent", "temporary_rejected", "temporary_unknown", "permanent", "invalid_response", "internal_error"}:
+            raise RunError(RunErrorCode.INTEGRITY_ERROR)
+        if attempt.failure_category == "temporary_unknown" and attempt.status is not ProviderAttemptStatus.OUTCOME_UNKNOWN or attempt.failure_category in {"temporary_unsent", "temporary_rejected"} and attempt.status is not ProviderAttemptStatus.KNOWN_FAILURE:
+            raise RunError(RunErrorCode.INTEGRITY_ERROR)
+        if attempt.next_eligible_at is not None:
+            try:
+                stamp = datetime.fromisoformat(attempt.next_eligible_at.replace("Z", "+00:00"))
+                if not attempt.next_eligible_at.endswith("Z") or stamp.tzinfo is None or attempt.operation_attempt_number >= 4 or attempt.failure_category not in {"temporary_unsent", "temporary_rejected", "temporary_unknown"}:
+                    raise ValueError
+            except (ValueError, TypeError):
+                raise RunError(RunErrorCode.INTEGRITY_ERROR) from None
+        group.append(attempt)
+    if set(groups) != set(binding_map):
+        raise RunError(RunErrorCode.INTEGRITY_ERROR)
+
+    if provider_attempts:
+        last = provider_attempts[-1]
+        if last.operation_id is not None and last.status in {ProviderAttemptStatus.KNOWN_FAILURE, ProviderAttemptStatus.OUTCOME_UNKNOWN}:
+            if run.status is RunStatus.RUNNING and (last.next_eligible_at is None or checkpoint.next_action != NextAction(ActionKind.PROVIDER_RETRY, attempt_id=last.attempt_id)):
+                raise RunError(RunErrorCode.INTEGRITY_ERROR)
+            if run.status is RunStatus.FAILED and last.next_eligible_at is None:
+                expected_code = TerminalCode.EXECUTION_FAILED if last.status is ProviderAttemptStatus.KNOWN_FAILURE else TerminalCode.PROVIDER_OUTCOME_UNKNOWN
+                if run.terminal_code != expected_code.value:
+                    raise RunError(RunErrorCode.INTEGRITY_ERROR)
 
     # Responses written before schema v4 form an unlinked prefix. All later
     # responses must have exactly one attempt row.
@@ -169,7 +226,7 @@ def _validate_provider_attempts(
             if response_record.record_sequence != attempt.base_record_sequence + 1:
                 raise RunError(RunErrorCode.INTEGRITY_ERROR)
             expected_base_record_sequence = response_record.record_sequence
-        elif index != len(provider_attempts) - 1:
+        elif attempt.operation_id is None and index != len(provider_attempts) - 1:
             raise RunError(RunErrorCode.INTEGRITY_ERROR)
 
     if provider_attempts:
@@ -204,7 +261,7 @@ def _validate_continuation_state(
         if reference is None:
             continue
         if (
-            response.schema_version != 2
+            response.schema_version not in {2, 3}
             or not isinstance(reference, str)
             or not reference
             or _utf8_length(reference) > 128

@@ -3,10 +3,17 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+import hashlib
+import json
+import math
+import httpx
+from types import MappingProxyType
+from figura.shared.payloads import ExecutionPayloadLimits, payload_scope, encode_json
+from .retries import classify_failure
+from .validation import request_projection
 from typing import Any
 
-from openai import APIConnectionError, APIStatusError, APITimeoutError, OpenAIError
 
 from .adapters import DeepSeekPolicy, MiMoPolicy, QwenPolicy
 from .adapters.base import ProviderPolicy
@@ -22,6 +29,7 @@ from .models import (
     MODEL_IDS,
     ProviderAvailability,
     ProviderId,
+    ImageBlock,
     ProviderRequest,
     ProviderResponse,
 )
@@ -41,6 +49,7 @@ class _PreparedProviderCall:
     owner: object = field(repr=False)
     request: ProviderRequest = field(repr=False)
     payload: Mapping[str, Any] = field(repr=False)
+    descriptor: Mapping[str, Any] = field(repr=False)
 
     def __reduce__(self) -> object:
         raise TypeError("Prepared provider calls cannot be serialized")
@@ -54,7 +63,9 @@ class ProviderClient:
         profile: ProviderProfile,
         policy: ProviderPolicy,
         transport: CompletionTransport,
+        payload_limits: ExecutionPayloadLimits | None = None,
     ) -> None:
+        self.payload_limits = payload_limits or ExecutionPayloadLimits.from_env()
         self.provider_id = profile.provider_id
         self.model_id = profile.model_id
         self._profile = profile
@@ -62,7 +73,8 @@ class ProviderClient:
         self._transport = transport
         self._preparation_token = object()
 
-    def prepare(self, request: ProviderRequest) -> _PreparedProviderCall:
+    @payload_scope
+    def prepare(self, request: ProviderRequest, *, frozen_options: bool = False, frozen_timeout_seconds: float | None = None) -> _PreparedProviderCall:
         """Validate and build one provider payload without contacting the service."""
         validate_request(request, self.provider_id)
         if request.model_id != self.model_id:
@@ -70,9 +82,51 @@ class ProviderClient:
                 ProviderFailureCode.UNSUPPORTED_MODEL,
                 "请求模型与已创建的模型客户端不匹配。",
             )
-        payload = self._policy.build_payload(request)
-        return _PreparedProviderCall(self._preparation_token, request, payload)
+        thinking = request.options.thinking_mode if frozen_options or request.options.thinking_mode is not None else self._profile.thinking_mode
+        effort = request.options.reasoning_effort if frozen_options or request.options.reasoning_effort is not None else self._profile.reasoning_effort
+        completion = request.options.max_completion_tokens if frozen_options or request.options.max_completion_tokens is not None else self._profile.max_completion_tokens
+        request = replace(request, options=replace(request.options, thinking_mode=thinking,
+            reasoning_effort=effort, max_completion_tokens=completion, schema_version=2))
+        effective_policy = type(self._policy)(replace(self._profile, thinking_mode=thinking,
+            reasoning_effort=effort, max_completion_tokens=completion))
+        payload = effective_policy.build_payload(request)
+        timeout = self._profile.timeout_seconds if frozen_timeout_seconds is None else frozen_timeout_seconds
+        if not isinstance(timeout, (int, float)) or isinstance(timeout, bool) or not math.isfinite(timeout) or timeout <= 0:
+            raise fail(ProviderFailureCode.INVALID_REQUEST, "模型请求超时配置无效。")
+        payload["timeout"] = timeout
+        endpoint = str(httpx.URL((self._profile.base_url or "").rstrip("/") + "/chat/completions"))
+        endpoint_binding = hashlib.sha256(endpoint.encode()).hexdigest()
+        fingerprint_input = {"method": "POST", "path": "/chat/completions", "endpoint_binding": endpoint_binding, "payload": payload}
+        digest = hashlib.sha256()
+        for chunk in json.JSONEncoder(ensure_ascii=False, allow_nan=False, sort_keys=True, separators=(",", ":")).iterencode(fingerprint_input):
+            digest.update(chunk.encode("utf-8"))
+        projection = request_projection(request)
+        images = []
+        for message in request.messages:
+            if isinstance(message.content, str):
+                continue
+            for block in message.content:
+                if isinstance(block, ImageBlock):
+                    images.append({"source_ref": block.source_ref,
+                        "observation_kind": block.observation_kind,
+                        "media_type": block.media_type, "byte_count": len(block.image_bytes),
+                        "sha256": hashlib.sha256(block.image_bytes).hexdigest()})
+        contract = request.asset_contract or {
+            "prompt_digest": hashlib.sha256(encode_json(projection["instructions"]).encode()).hexdigest(),
+            "registry_version": "provider-direct-v1",
+            "registry_digest": hashlib.sha256(encode_json(projection["tools"]).encode()).hexdigest(),
+        }
+        manifest = {**contract, "adapter_contract_version": 1, "images": images}
+        descriptor = {"provider_id": self.provider_id.value, "model_id": self.model_id,
+            "endpoint_binding": endpoint_binding,
+            "request_fingerprint": digest.hexdigest(),
+            "options": {"max_completion_tokens": completion, "stream": request.options.stream,
+                "thinking_mode": thinking, "reasoning_effort": effort, "timeout_seconds": timeout},
+            "asset_manifest": manifest}
+        encode_json(descriptor)
+        return _PreparedProviderCall(self._preparation_token, request, _freeze(payload), _freeze(descriptor))
 
+    @payload_scope
     def dispatch(self, prepared: _PreparedProviderCall) -> ProviderResponse:
         """Send the exact locally prepared payload once."""
         if (
@@ -85,7 +139,7 @@ class ProviderClient:
             )
         request = prepared.request
         try:
-            raw_response = self._transport.create(**prepared.payload)
+            raw_response = self._transport.create(**_thaw(prepared.payload))
             if request.options.stream:
                 return self._policy.normalize_stream(raw_response, request)
             return self._policy.normalize(raw_response, request)
@@ -117,7 +171,9 @@ class ProviderFactory:
         settings: ProviderSettings | None = None,
         *,
         transport_factory: Callable[[ProviderProfile], CompletionTransport] | None = None,
+        payload_limits: ExecutionPayloadLimits | None = None,
     ) -> None:
+        self.payload_limits = payload_limits or ExecutionPayloadLimits.from_env()
         self._settings = settings or ProviderSettings.from_env()
         self._transport_factory = transport_factory or OpenAISDKTransport
 
@@ -127,10 +183,11 @@ class ProviderFactory:
         environ: Mapping[str, str] | None = None,
         *,
         transport_factory: Callable[[ProviderProfile], CompletionTransport] | None = None,
+        payload_limits: ExecutionPayloadLimits | None = None,
     ) -> "ProviderFactory":
         return cls(
             ProviderSettings.from_env(environ),
-            transport_factory=transport_factory,
+            transport_factory=transport_factory, payload_limits=payload_limits,
         )
 
     def availability(self) -> tuple[ProviderAvailability, ...]:
@@ -185,55 +242,11 @@ class ProviderFactory:
                     safe_message="模型服务商客户端配置无效。",
                 )
             ) from None
-        return ProviderClient(profile, policy, transport)
+        return ProviderClient(profile, policy, transport, self.payload_limits)
 
 
 def _provider_failure(error: Exception) -> ProviderFailure:
-    if isinstance(error, APITimeoutError):
-        return ProviderFailure(
-            ProviderFailureCode.TIMEOUT,
-            outcome_known=False,
-            transient=True,
-            safe_message=_safe_message(ProviderFailureCode.TIMEOUT),
-        )
-    if isinstance(error, APIConnectionError):
-        return ProviderFailure(
-            ProviderFailureCode.CONNECTION_ERROR,
-            outcome_known=False,
-            transient=True,
-            safe_message=_safe_message(ProviderFailureCode.CONNECTION_ERROR),
-        )
-    if isinstance(error, APIStatusError):
-        status = getattr(error, "status_code", None)
-        status_code = status if type(status) is int and 100 <= status <= 599 else None
-        remote_outcome_known = (
-            status_code is not None and status_code < 500 and status_code != 408
-        )
-        code = (
-            ProviderFailureCode.PROVIDER_REJECTED
-            if remote_outcome_known
-            else ProviderFailureCode.PROVIDER_UNAVAILABLE
-        )
-        return ProviderFailure(
-            failure_code=code,
-            http_status=status_code,
-            outcome_known=remote_outcome_known,
-            transient=status_code == 408 or status_code == 429 or (status_code is not None and status_code >= 500),
-            safe_message=_safe_message(code),
-        )
-    if isinstance(error, OpenAIError):
-        return ProviderFailure(
-            ProviderFailureCode.TRANSPORT_ERROR,
-            outcome_known=False,
-            transient=True,
-            safe_message=_safe_message(ProviderFailureCode.TRANSPORT_ERROR),
-        )
-    return ProviderFailure(
-        ProviderFailureCode.TRANSPORT_ERROR,
-        outcome_known=False,
-        transient=True,
-        safe_message=_safe_message(ProviderFailureCode.TRANSPORT_ERROR),
-    )
+    return classify_failure(error)
 
 
 def _configuration_message(code: ProviderFailureCode) -> str:
@@ -253,3 +266,19 @@ def _safe_message(code: ProviderFailureCode) -> str:
         ProviderFailureCode.TRANSPORT_ERROR: "模型请求传输失败，远端结果未知。",
     }
     return messages.get(code, "模型服务调用失败。")
+
+
+def _freeze(value):
+    if isinstance(value, Mapping):
+        return MappingProxyType({key: _freeze(item) for key, item in value.items()})
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze(item) for item in value)
+    return value
+
+
+def _thaw(value):
+    if isinstance(value, Mapping):
+        return {key: _thaw(item) for key, item in value.items()}
+    if isinstance(value, (tuple, list)):
+        return [_thaw(item) for item in value]
+    return value

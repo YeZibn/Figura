@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from figura.shared.payloads import ExecutionPayloadLimits, use_payload_limits
 import threading
 import hashlib
 import logging
@@ -245,7 +246,7 @@ def _create_v1_database(data_root, *, conflicting_tool_table: bool = False, inva
     model_id = MODEL_IDS[ProviderId.QWEN]
     input_json = encode_payload(
         RecordKind.INPUT,
-        RunInput("legacy input", (), provider_id, model_id),
+        RunInput("legacy input", (), provider_id, model_id, schema_version=1),
     )
     event_json = encode_event_payload(
         EventKind.RUN_CREATED,
@@ -316,7 +317,7 @@ def _create_v2_database(data_root):
         current_payload = decode_payload(
             RecordKind.MODEL_RESPONSE,
             row[0],
-            expected_schema_version=2,
+            expected_schema_version=3,
         )
         assert isinstance(current_payload, ModelResponseFact)
         legacy_payload = encode_payload(
@@ -374,7 +375,7 @@ def _snapshot_run_rows(connection: sqlite3.Connection, *, session_id: str, run_i
     }
 
 
-def test_fresh_store_creates_schema_v10_attachment_and_execution_tables(tmp_path) -> None:
+def test_fresh_store_creates_schema_v11_attachment_and_execution_tables(tmp_path) -> None:
     store = FiguraRunStore(tmp_path)
 
     with sqlite3.connect(store.database_path) as connection:
@@ -401,7 +402,7 @@ def test_fresh_store_creates_schema_v10_attachment_and_execution_tables(tmp_path
             for row in connection.execute("PRAGMA table_info(attachments)")
         }
 
-    assert version == 10
+    assert version == 11
     assert quick_check == "ok"
     assert "run_provider_continuations" in tables
     assert "run_provider_attempts" in tables
@@ -450,7 +451,7 @@ def test_v6_migration_preserves_events_and_accepts_run_progress(tmp_path) -> Non
         foreign_key_violations = connection.execute("PRAGMA foreign_key_check").fetchall()
 
     assert migrated.events == before.events
-    assert version == 10
+    assert version == 11
     assert "run_progress" in event_schema
     assert quick_check == "ok"
     assert foreign_key_violations == []
@@ -474,7 +475,7 @@ def test_tool_call_fact_codec_preserves_bounded_provider_arguments() -> None:
     fact = _call(arguments_json=' { "label" : "折线图" } ')
 
     raw = encode_tool_fact(ToolFactKind.TOOL_CALL, fact)
-    decoded = decode_tool_fact(ToolFactKind.TOOL_CALL, 1, raw)
+    decoded = decode_tool_fact(ToolFactKind.TOOL_CALL, 2, raw)
 
     assert decoded == fact
     assert decoded.arguments_json == fact.arguments_json
@@ -803,7 +804,7 @@ def test_attempt_and_result_transitions_reject_stale_or_mismatched_inputs(tmp_pa
 def test_attempt_and_failure_facts_round_trip(kind, fact) -> None:
     raw = encode_tool_fact(kind, fact)
 
-    assert decode_tool_fact(kind, 1, raw) == fact
+    assert decode_tool_fact(kind, 2, raw) == fact
 
 
 def test_success_result_is_canonical_and_round_trips_as_an_object() -> None:
@@ -817,7 +818,7 @@ def test_success_result_is_canonical_and_round_trips_as_an_object() -> None:
     )
 
     raw = encode_tool_fact(ToolFactKind.TOOL_RESULT, fact)
-    decoded = decode_tool_fact(ToolFactKind.TOOL_RESULT, 1, raw)
+    decoded = decode_tool_fact(ToolFactKind.TOOL_RESULT, 2, raw)
 
     assert dict(decoded.result) == {"label": "趋势", "value": 3}
     assert '"fact_kind":"tool_result"' in raw
@@ -838,16 +839,15 @@ def test_tool_call_codec_rejects_invalid_or_oversized_arguments(fact) -> None:
         encode_tool_fact(ToolFactKind.TOOL_CALL, fact)
 
 
-def test_tool_call_batch_rejects_duplicate_ids_bad_positions_and_too_many_calls() -> None:
+def test_tool_call_batch_rejects_bad_pairing_but_allows_more_than_sixty_four() -> None:
     with pytest.raises(RunError):
         validate_tool_call_batch((_call(), _call(call_id="call-2", position=2)))
     with pytest.raises(RunError):
         validate_tool_call_batch((_call(), _call(call_id="call-1", position=1)))
-    with pytest.raises(RunError):
-        validate_tool_call_batch(tuple(_call(call_id=f"call-{i}", position=i) for i in range(65)))
+    validate_tool_call_batch(tuple(_call(call_id=f"call-{i}", position=i) for i in range(65)))
 
 
-def test_tool_call_batch_enforces_aggregate_argument_budget() -> None:
+def test_tool_call_batch_uses_complete_payload_guard() -> None:
     calls = tuple(
         _call(
             call_id=f"call-{i}",
@@ -857,11 +857,12 @@ def test_tool_call_batch_enforces_aggregate_argument_budget() -> None:
         for i in range(17)
     )
 
-    with pytest.raises(RunError):
+    validate_tool_call_batch(calls)
+    with use_payload_limits(ExecutionPayloadLimits(1024 * 1024)), pytest.raises(RunError):
         validate_tool_call_batch(calls)
 
 
-def test_result_codec_rejects_canonical_result_over_256_kib_and_unknown_versions() -> None:
+def test_result_codec_uses_configured_guard_and_rejects_unknown_versions() -> None:
     fact = ToolResultFact(
         tool_call_sequence=1,
         attempt_id="attempt-1",
@@ -871,7 +872,8 @@ def test_result_codec_rejects_canonical_result_over_256_kib_and_unknown_versions
         result={"value": "x" * (256 * 1024)},
     )
 
-    with pytest.raises(RunError):
+    encode_tool_fact(ToolFactKind.TOOL_RESULT, fact)
+    with use_payload_limits(ExecutionPayloadLimits(256 * 1024)), pytest.raises(RunError):
         encode_tool_fact(ToolFactKind.TOOL_RESULT, fact)
     with pytest.raises(RunError):
         decode_tool_fact(ToolFactKind.TOOL_RESULT, 2, '{"schema_version":2}')
@@ -899,7 +901,7 @@ def test_v1_migration_preserves_run_records_checkpoint_events_and_idempotency(tm
             )
         }
 
-    assert version == 10
+    assert version == 11
     assert quick_check == "ok"
     assert foreign_key_violations == []
     assert idempotency == ("legacy-session", "a" * 64, "b" * 64, "legacy-run")
@@ -954,7 +956,7 @@ def test_v2_migration_preserves_existing_run_facts_checkpoint_events_and_idempot
         foreign_key_violations = connection.execute("PRAGMA foreign_key_check").fetchall()
 
     state = store.read_run_state(session.session_id, run.run_id)
-    assert version == 10
+    assert version == 11
     assert quick_check == "ok"
     assert foreign_key_violations == []
     assert after == before
@@ -1012,7 +1014,7 @@ def test_v2_migration_failure_rolls_back_new_schema_and_can_retry(tmp_path) -> N
     store = FiguraRunStore(tmp_path)
     assert store.read_run_state(session.session_id, run.run_id).run.run_id == run.run_id
     with sqlite3.connect(database_path) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 10
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 11
 
 
 def test_v1_migration_rolls_back_schema_version_and_added_column_on_failure(tmp_path) -> None:
@@ -1120,7 +1122,7 @@ def test_model_response_commits_with_or_without_continuation_atomically(
     state = coordinator.read_run_state(session.session_id, run.run_id)
     response_fact = state.records[-1].payload
     assert isinstance(response_fact, ModelResponseFact)
-    assert response_fact.schema_version == 2
+    assert response_fact.schema_version == 3
     assert (response_fact.continuation_ref is not None) is has_continuation
     assert len(state.provider_continuations) == int(has_continuation)
     assert len(state.tool_facts) == int(has_tool_calls)
@@ -1158,7 +1160,7 @@ def test_model_response_commits_with_or_without_continuation_atomically(
             id="unsupported-format",
         ),
         pytest.param(
-            ProviderContinuation(ProviderId.QWEN, 1, "界" * (512 * 1024 // 3 + 1)),
+            ProviderContinuation(ProviderId.QWEN, 1, "界" * (32 * 1024 * 1024 // 3 + 1)),
             RunErrorCode.UNSUPPORTED_PAYLOAD,
             id="oversized-utf8",
         ),

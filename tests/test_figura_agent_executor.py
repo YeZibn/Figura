@@ -3,6 +3,7 @@ from __future__ import annotations
 from tests.figura_sources_support import make_attachment_service, make_panel_service, make_execution_image_reader
 
 import json
+from figura.shared.payloads import ExecutionPayloadLimits
 import sqlite3
 from io import BytesIO
 from types import SimpleNamespace
@@ -176,6 +177,7 @@ class _PayloadTransport:
 
 class _FakeClient:
     def __init__(self, outcomes):
+        self.payload_limits = ExecutionPayloadLimits()
         self.outcomes = list(outcomes)
         self.provider_id = None
         self.model_id = None
@@ -184,16 +186,23 @@ class _FakeClient:
         self.after_prepare = None
         self.before_dispatch = None
 
-    def prepare(self, request):
+    def prepare(self, request, *, frozen_options=False, frozen_timeout_seconds=None):
         self.prepared_requests.append(request)
         validate_request(request, self.provider_id)
         if request.model_id != self.model_id:
             raise ValueError("model mismatch")
         if self.after_prepare is not None:
             self.after_prepare()
-        return request
+        factory = ProviderFactory.from_env({
+            f"FIGURA_{self.provider_id.value.upper()}_API_KEY": "test-key",
+            f"FIGURA_{self.provider_id.value.upper()}_BASE_URL": "https://provider.example.test/v1",
+        }, transport_factory=lambda _profile: None)
+        factory.payload_limits = self.payload_limits
+        prepared = factory.create(self.provider_id, self.model_id).prepare(request, frozen_options=frozen_options, frozen_timeout_seconds=frozen_timeout_seconds)
+        return prepared
 
-    def dispatch(self, request):
+    def dispatch(self, prepared):
+        request = prepared.request
         self.requests.append(request)
         if self.before_dispatch is not None:
             self.before_dispatch()
@@ -615,7 +624,7 @@ def test_agent_passes_known_tool_failure_as_observation_without_repeating_call(t
     )
 
 
-def test_unknown_provider_outcome_fails_once_without_fallback_or_resend(tmp_path) -> None:
+def test_unknown_provider_outcome_is_replaced_without_fallback(tmp_path) -> None:
     store, coordinator, session, run = _app(tmp_path)
     failure = ProviderCallError(
         ProviderFailure(
@@ -625,17 +634,17 @@ def test_unknown_provider_outcome_fails_once_without_fallback_or_resend(tmp_path
             safe_message="请求状态未知。",
         )
     )
-    factory = _FakeFactory([failure])
+    factory = _FakeFactory([failure, _response()])
 
     state = _agent(store, coordinator, _registry(), factory).execute(
         session.session_id, run.run_id
     )
 
-    assert state.run.status is RunStatus.FAILED
-    assert state.run.terminal_code == TerminalCode.PROVIDER_OUTCOME_UNKNOWN.value
+    assert state.run.status is RunStatus.COMPLETED
+    assert state.provider_attempts[0].status.value == "outcome_unknown"
     assert state.provider_attempts[0].failure_code == ProviderFailureCode.TIMEOUT.value
-    assert len(factory.client.requests) == 1
-    assert len(factory.selections) == 1
+    assert len(factory.client.requests) == 2
+    assert len(factory.selections) == 2
 
 
 def test_known_provider_failure_is_persisted_without_provider_fallback(tmp_path) -> None:
@@ -764,27 +773,25 @@ def test_agent_does_not_dispatch_when_run_lock_is_held(tmp_path) -> None:
     assert len(factory.selections) == 1
 
 
-def test_agent_stops_at_tool_budget_without_running_thirty_third_call(tmp_path) -> None:
+def test_agent_runs_more_than_sixty_four_tools_in_order(tmp_path) -> None:
     store, coordinator, session, run = _app(tmp_path)
     handler_calls: list[str] = []
     registry = _registry(handler_calls)
     calls = tuple(
         ProviderToolCall(f"call-{index}", "inspect", f'{{"value":{index}}}')
-        for index in range(33)
+        for index in range(65)
     )
     factory = _FakeFactory(
-        [_response(content="批量检查。", reason=FinishReason.TOOL_CALLS, calls=calls)]
+        [_response(content="批量检查。", reason=FinishReason.TOOL_CALLS, calls=calls), _response()]
     )
 
     state = _agent(store, coordinator, registry, factory).execute(
         session.session_id, run.run_id
     )
 
-    assert state.run.status is RunStatus.FAILED
-    assert state.run.terminal_code == TerminalCode.EXECUTION_FAILED.value
-    assert len(handler_calls) == 32
-    assert len(factory.client.requests) == 1
-    assert state.checkpoint.next_action.action_kind is ActionKind.TOOL_EXECUTION
+    assert state.run.status is RunStatus.COMPLETED
+    assert handler_calls == [f"call-{index}" for index in range(65)]
+    assert len(factory.client.requests) == 2
 
 
 def test_request_that_cannot_fit_fails_during_preparation_before_attempt_claim(
@@ -794,7 +801,7 @@ def test_request_that_cannot_fit_fails_during_preparation_before_attempt_claim(
 
     store, coordinator, session, run = _app(tmp_path)
     factory = _FakeFactory([_response()])
-    monkeypatch.setattr(provider_validation, "MAX_TOTAL_TEXT_BYTES", 1)
+    factory.client.payload_limits = ExecutionPayloadLimits(1)
 
     state = _agent(store, coordinator, _registry(), factory).execute(
         session.session_id, run.run_id
@@ -808,20 +815,20 @@ def test_request_that_cannot_fit_fails_during_preparation_before_attempt_claim(
     assert factory.client.requests == []
 
 
-def test_complete_session_history_message_limit_fails_before_claim(tmp_path, monkeypatch) -> None:
+def test_complete_session_history_is_preserved_without_message_quota(tmp_path, monkeypatch) -> None:
     import figura.providers.validation as provider_validation
 
     _store, coordinator, session, prior = _app(tmp_path)
     _complete_text_run(coordinator, session.session_id, prior.run_id)
     current = _create_followup_run(coordinator, session.session_id)
     factory = _FakeFactory([_response()])
-    monkeypatch.setattr(provider_validation, "MAX_MESSAGE_COUNT", 2)
 
     state = _agent(_store, coordinator, _registry(), factory).execute(
         session.session_id, current.run_id
     )
 
-    _assert_request_rejected_before_claim(state, factory)
+    assert state.run.status is RunStatus.COMPLETED
+    assert len(factory.client.requests[0].messages) >= 3
 
 
 @pytest.mark.parametrize("reasoning", [None, "", "private DeepSeek continuation"])
@@ -966,7 +973,6 @@ def test_complete_session_history_does_not_attach_unloaded_images(tmp_path, monk
     _complete_text_run(coordinator, session.session_id, prior.run_id)
     current = _create_followup_run(coordinator, session.session_id)
     factory = _FakeFactory([_response()])
-    monkeypatch.setattr(provider_validation, "MAX_IMAGE_COUNT", 0)
 
     registry, builder = _image_runtime(store, coordinator, attachments)
     state = _agent(
@@ -1013,11 +1019,7 @@ def test_tool_schema_limit_fails_before_claim(tmp_path, monkeypatch) -> None:
         for tool in request.tools
     )
     factory = _FakeFactory([_response()])
-    monkeypatch.setattr(
-        provider_validation,
-        "MAX_TOTAL_TEXT_BYTES",
-        request_without_schemas + schema_bytes - 1,
-    )
+    factory.client.payload_limits = ExecutionPayloadLimits(request_without_schemas)
 
     state = _agent(store, coordinator, registry, factory, builder).execute(
         session.session_id, current.run_id
@@ -1164,7 +1166,7 @@ def test_incomplete_prior_tool_work_is_explained_before_dispatch(tmp_path) -> No
     assert "prior_run_outcomes" in factory.client.requests[0].instructions[2].content
 
 
-def test_agent_accepts_exactly_eight_provider_attempts_without_sending_ninth(tmp_path) -> None:
+def test_agent_completes_more_than_eight_model_rounds(tmp_path) -> None:
     store, coordinator, session, run = _app(tmp_path)
     registry = _registry()
     responses = [
@@ -1173,18 +1175,17 @@ def test_agent_accepts_exactly_eight_provider_attempts_without_sending_ninth(tmp
             reason=FinishReason.TOOL_CALLS,
             calls=(ProviderToolCall(f"call-{index}", "inspect", f'{{"value":{index}}}'),),
         )
-        for index in range(1, 9)
+        for index in range(1, 13)
     ]
-    factory = _FakeFactory(responses)
+    factory = _FakeFactory([*responses, _response()])
 
     state = _agent(store, coordinator, registry, factory).execute(
         session.session_id, run.run_id
     )
 
-    assert state.run.status is RunStatus.FAILED
-    assert state.run.terminal_code == TerminalCode.EXECUTION_FAILED.value
-    assert len(state.provider_attempts) == 8
-    assert len(factory.client.requests) == 8
+    assert state.run.status is RunStatus.COMPLETED
+    assert len(state.provider_attempts) == 13
+    assert len(factory.client.requests) == 13
 
 
 def test_empty_stop_response_is_committed_then_fails_as_invalid_response(tmp_path) -> None:

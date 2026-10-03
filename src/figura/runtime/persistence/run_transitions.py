@@ -76,7 +76,7 @@ class RunTransitionRepository:
             raw_payload = encode_payload(RecordKind.FINAL_ANSWER, payload)
             connection.execute(
                 "INSERT INTO run_execution_records(record_id, run_id, record_sequence, record_kind, schema_version, payload_json, created_at) "
-                "VALUES (?, ?, ?, 'final_answer', 1, ?, ?)",
+                "VALUES (?, ?, ?, 'final_answer', 2, ?, ?)",
                 (final_record_id, run_id, sequence, raw_payload, now),
             )
             cursor = connection.execute(
@@ -87,7 +87,7 @@ class RunTransitionRepository:
             if cursor.rowcount != 1:
                 raise RunError(RunErrorCode.INVALID_TRANSITION)
             cursor = connection.execute(
-                "UPDATE run_execution_checkpoints SET revision = revision + 1, last_committed_record_sequence = ?, "
+                "UPDATE run_execution_checkpoints SET schema_version = 2, revision = revision + 1, last_committed_record_sequence = ?, "
                 "next_action_json = NULL, updated_at = ? WHERE run_id = ? AND revision = ?",
                 (sequence, now, run_id, expected_revision),
             )
@@ -140,7 +140,7 @@ class RunTransitionRepository:
                 event_kind = EventKind.RUN_INTERRUPTED
             if status is RunStatus.INTERRUPTED:
                 connection.execute(
-                    "UPDATE run_provider_attempts SET status = 'outcome_unknown', finished_at = ? "
+                    "UPDATE run_provider_attempts SET status = 'outcome_unknown', failure_category = 'permanent', finished_at = ? "
                     "WHERE run_id = ? AND status = 'started'", (now, run_id),
                 )
             if run.status is not RunStatus.RUNNING:
@@ -155,7 +155,7 @@ class RunTransitionRepository:
             if cursor.rowcount != 1:
                 raise RunError(RunErrorCode.INVALID_TRANSITION)
             cursor = connection.execute(
-                "UPDATE run_execution_checkpoints SET revision = revision + 1, updated_at = ? "
+                "UPDATE run_execution_checkpoints SET schema_version = 2, revision = revision + 1, updated_at = ? "
                 "WHERE run_id = ? AND revision = ?",
                 (now, run_id, expected_revision),
             )

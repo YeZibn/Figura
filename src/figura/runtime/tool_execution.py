@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 
 from figura.shared.json_schema import canonical_json_dumps
+from figura.tools.contracts import CancellationSignal
 from figura.tools import (
     ReplayEffect,
     ToolContext,
@@ -258,7 +259,9 @@ class DurableToolExecutor:
                 session_id=state.run.session_id,
                 call_id=call.call_id,
                 idempotency_key=idempotency_key,
+                cancellation=CancellationSignal(_RunCancellation(self._store, state.run.session_id, state.run.run_id).is_cancelled),
             ),
+            durable=True,
         )
         self._store.commit_tool_result(
             session_id=state.run.session_id,
@@ -307,3 +310,13 @@ def _attempt_fact_for(state: RunState, attempt_id: str | None) -> ToolExecutionF
 def _idempotency_key(run_id: str, call_id: str) -> str:
     encoded = canonical_json_dumps([run_id, call_id]).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+class _RunCancellation:
+    def __init__(self, store: FiguraRunStore, session_id: str, run_id: str) -> None:
+        self.store, self.session_id, self.run_id = store, session_id, run_id
+
+    def is_cancelled(self) -> bool:
+        # A failed storage read propagates; execution cannot assume permission.
+        state = self.store.read_run_state(self.session_id, self.run_id)
+        return state.stop_request is not None or state.run.status is not RunStatus.RUNNING

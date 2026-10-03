@@ -34,6 +34,7 @@ from ..records import (
     RunStreamEvent,
     ToolExecutionFact,
 )
+from figura.shared.payloads import payload_read_scope
 from ..errors import RunError, RunErrorCode
 
 
@@ -79,7 +80,7 @@ def _record_from_row(row: sqlite3.Row) -> ExecutionRecord:
     schema_version = row["schema_version"]
     if type(schema_version) is not int:
         raise RunError(RunErrorCode.UNSUPPORTED_VERSION)
-    supported_versions = {1, 2} if kind is RecordKind.MODEL_RESPONSE else {1}
+    supported_versions = {1, 2, 3} if kind is RecordKind.MODEL_RESPONSE else {1, 2}
     if schema_version not in supported_versions:
         raise RunError(RunErrorCode.UNSUPPORTED_VERSION)
     payload = decode_payload(
@@ -97,6 +98,7 @@ def _record_from_row(row: sqlite3.Row) -> ExecutionRecord:
     )
 
 
+@payload_read_scope
 def _continuation_fact_from_row(row: sqlite3.Row) -> ProviderContinuationFact:
     fact = ProviderContinuationFact(
         continuation_id=row["continuation_id"],
@@ -127,11 +129,17 @@ def _provider_attempt_from_row(row: sqlite3.Row) -> ProviderAttempt:
         failure_code=row["failure_code"],
         started_at=row["started_at"],
         finished_at=row["finished_at"],
+        operation_id=row["operation_id"],
+        operation_attempt_number=row["operation_attempt_number"],
+        retry_of_attempt_id=row["retry_of_attempt_id"],
+        failure_category=row["failure_category"],
+        http_status=row["http_status"],
+        next_eligible_at=row["next_eligible_at"],
     )
 
 
 def _checkpoint_from_row(row: sqlite3.Row) -> ExecutionCheckpoint:
-    if row["schema_version"] != 1:
+    if row["schema_version"] not in {1, 2}:
         raise RunError(RunErrorCode.UNSUPPORTED_VERSION)
     return ExecutionCheckpoint(
         run_id=row["run_id"],
@@ -189,14 +197,14 @@ def _encode_action(action: NextAction | None) -> str | None:
     ):
         value = {"action_kind": "model"}
     elif (
-        action.action_kind is ActionKind.PROVIDER_ATTEMPT
+        action.action_kind in {ActionKind.PROVIDER_ATTEMPT, ActionKind.PROVIDER_RETRY}
         and action.response_record_id is None
         and action.tool_call_sequence is None
         and isinstance(action.attempt_id, str)
         and action.attempt_id
         and len(action.attempt_id.encode("utf-8")) <= 128
     ):
-        value = {"action_kind": "provider_attempt", "attempt_id": action.attempt_id}
+        value = {"action_kind": action.action_kind.value, "attempt_id": action.attempt_id}
     elif (
         action.action_kind is ActionKind.FINAL
         and action.response_record_id
@@ -243,12 +251,12 @@ def _decode_action(raw: str | None) -> NextAction | None:
         if (
             isinstance(value, dict)
             and set(value) == {"action_kind", "attempt_id"}
-            and value["action_kind"] == "provider_attempt"
+            and value["action_kind"] in {"provider_attempt", "provider_retry"}
             and isinstance(value["attempt_id"], str)
             and value["attempt_id"]
             and len(value["attempt_id"].encode("utf-8")) <= 128
         ):
-            return NextAction(ActionKind.PROVIDER_ATTEMPT, attempt_id=value["attempt_id"])
+            return NextAction(ActionKind(value["action_kind"]), attempt_id=value["attempt_id"])
         if (
             isinstance(value, dict)
             and set(value) == {"action_kind", "response_record_id"}

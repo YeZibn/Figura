@@ -34,7 +34,7 @@ class RunInput:
     attachment_ids: tuple[str, ...]
     requested_provider: str
     requested_model: str
-    schema_version: int = 1
+    schema_version: int = 2
 
 
 @dataclass(frozen=True)
@@ -46,7 +46,7 @@ class ModelResponseFact:
     usage: ProviderUsage | None = None
     provider_response_id: str | None = None
     continuation_ref: str | None = field(default=None, repr=False)
-    schema_version: int = 2
+    schema_version: int = 3
 
 
 @dataclass(frozen=True)
@@ -75,6 +75,32 @@ class ProviderAttempt:
     failure_code: str | None
     started_at: str
     finished_at: str | None
+    operation_id: str | None = None
+    operation_attempt_number: int | None = None
+    retry_of_attempt_id: str | None = None
+    failure_category: str | None = None
+    http_status: int | None = None
+    next_eligible_at: str | None = None
+
+
+@dataclass(frozen=True)
+class ProviderRequestBinding:
+    operation_id: str
+    run_id: str
+    base_record_sequence: int
+    base_tool_sequence: int
+    provider_id: str
+    model_id: str
+    request_fingerprint: str
+    endpoint_binding: str
+    options: Mapping[str, object] = field(repr=False)
+    asset_manifest: Mapping[str, object] = field(repr=False)
+    created_at: str
+    request_contract_version: int = 1
+    schema_version: int = 1
+    generation_only: bool = True
+    max_attempts: int = 4
+    retry_policy_version: int = 1
 
 
 @dataclass(frozen=True)
@@ -82,7 +108,7 @@ class FinalAnswerFact:
     response_record_id: str
     artifact_refs: tuple[str, ...] = ()
     guard_version: str = "text-only-v1"
-    schema_version: int = 1
+    schema_version: int = 2
 
 
 RecordPayload: TypeAlias = RunInput | ModelResponseFact | FinalAnswerFact
@@ -96,7 +122,7 @@ class ToolCallFact:
     arguments_json: str = field(repr=False)
     position: int = 0
     registry_version: str = ""
-    schema_version: int = 1
+    schema_version: int = 2
 
 
 @dataclass(frozen=True)
@@ -107,7 +133,7 @@ class ToolAttemptStartedFact:
     attempt_number: int
     replay_effect: ReplayEffect
     registry_version: str
-    schema_version: int = 1
+    schema_version: int = 2
 
 
 @dataclass(frozen=True)
@@ -119,7 +145,7 @@ class ToolResultFact:
     outcome: ToolOutcome
     result: Mapping[str, object] | None = field(default=None, repr=False)
     error: ToolExecutionError | None = None
-    schema_version: int = 1
+    schema_version: int = 2
 
 
 ToolFactPayload: TypeAlias = ToolCallFact | ToolAttemptStartedFact | ToolResultFact
@@ -179,4 +205,4 @@ class RunState:
     provider_continuations: tuple[ProviderContinuationFact, ...] = field(default=(), repr=False)
     provider_attempts: tuple[ProviderAttempt, ...] = field(default=(), repr=False)
     stop_request: RunStopRequest | None = None
-
+    provider_request_bindings: tuple[ProviderRequestBinding, ...] = field(default=(), repr=False)

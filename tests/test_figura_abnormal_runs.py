@@ -352,7 +352,7 @@ def test_v9_migration_preserves_facts_and_adds_empty_stop_controls(tmp_path):
     reopened = FiguraRunStore(tmp_path)
     assert reopened.read_run_state(session.session_id, run.run_id) == before
     with reopened.database.read() as connection:
-        assert connection.execute('PRAGMA user_version').fetchone()[0] == 10
+        assert connection.execute('PRAGMA user_version').fetchone()[0] == 11
         assert not connection.execute('SELECT * FROM run_stop_requests').fetchall()
         assert not connection.execute('PRAGMA foreign_key_check').fetchall()
 
@@ -367,8 +367,9 @@ def test_abnormal_outcome_limit_is_not_silently_trimmed(tmp_path, monkeypatch):
     state = co.read_run_state(session.session_id, run.run_id)
     co.interrupt_run(session.session_id, run.run_id, state.checkpoint.revision)
     next_run = _create_followup_run(co, session.session_id)
-    monkeypatch.setattr(validation, 'MAX_TOTAL_TEXT_BYTES', 100)
     factory = _FakeFactory([])
+    from figura.shared.payloads import ExecutionPayloadLimits
+    factory.client.payload_limits = ExecutionPayloadLimits(100)
     result = _agent(store, co, registry, factory).execute(session.session_id, next_run.run_id)
     assert result.run.status is RunStatus.FAILED
     assert not result.provider_attempts and not factory.client.requests

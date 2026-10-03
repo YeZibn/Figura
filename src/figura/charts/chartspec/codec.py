@@ -8,7 +8,6 @@ from collections.abc import Mapping
 from typing import Any
 
 from figura.shared.json_schema import (
-    MAX_OBJECT_PROPERTIES,
     MAX_VALUE_DEPTH,
     JsonValueError,
     SchemaIssue,
@@ -42,6 +41,9 @@ from .schema import (
 class _DuplicateKey(ValueError):
     pass
 
+
+# Domain protection for one ChartSpec object; independent of execution JSON.
+MAX_OBJECT_PROPERTIES = 256
 
 def _issue(
     code: str,

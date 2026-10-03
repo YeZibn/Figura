@@ -11,7 +11,7 @@ from figura.runtime.errors import RunError, RunErrorCode
 from figura.sources.models import PanelPoint
 from figura.sources.panels import FiguraPanelService
 
-from ..contracts import ReplayEffect, ToolContext, ToolDefinition, ToolFailure
+from ..contracts import ReplayEffect, ToolContext, ToolDefinition, ToolFailure, ToolOutcomeUnknown
 
 
 _LOAD_IMAGE_PARAMETERS = {
@@ -141,7 +141,7 @@ def image_tool_definitions(
         except RunError as error:
             if error.code in {RunErrorCode.INVALID_REQUEST, RunErrorCode.UNSUPPORTED_PAYLOAD}:
                 raise ToolFailure("invalid_region", "Panel 区域结构或资源范围不符合要求。") from None
-            raise ToolFailure("image_unavailable", "源图像当前无法读取。", retryable=True) from None
+            raise ToolOutcomeUnknown() from None
         return {
             "panels": [
                 {
