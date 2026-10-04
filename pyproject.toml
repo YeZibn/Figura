@@ -9,6 +9,7 @@ description = "Figura - agentic foundation for chart reading/generation"
 requires-python = ">=3.10"
 dependencies = [
     "openai>=2.54.0,<3",
+    "tiktoken>=0.13,<0.14",
     "python-dotenv>=1.0",
     "numpy>=1.24",
     "pillow>=10",

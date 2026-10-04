@@ -1,6 +1,6 @@
 # Agent：Run 决策与编排
 
-> 更新日期：2026-10-03。[返回总览](../figura-implementation-overview.md)。本篇说明 Agent 编排及其调用期派生运行态；Provider 与 Tool 的完整字段分别见[Provider](provider.md)和[Tool](tools.md)，附件和 Panel 持久模型见[Sources](sources.md)，Run 执行事实见[Run Runtime](runtime.md)，网页调用和公开投影见[Web 边界](web.md)。
+> 更新日期：2026-10-04。[返回总览](../figura-implementation-overview.md)。本篇说明 Agent 编排及其调用期派生运行态；Provider 与 Tool 的完整字段分别见[Provider](provider.md)和[Tool](tools.md)，附件和 Panel 持久模型见[Sources](sources.md)，Run 执行事实见[Run Runtime](runtime.md)，网页调用和公开投影见[Web 边界](web.md)。
 
 ## 1. 职责与边界
 
@@ -233,7 +233,7 @@ Sources 附件元数据在 Run 资源目录中的只读引用；图片字节仍�
 
 资源目录是调用期派生视图，不扩展 Runtime RunState，也没有独立持久化。完整历史仍来自同 Session 已提交 Run 事实；提示索引列出全部六类资源的类型化引用与精简名称/状态，不复制完整 OCR、测量、Figure 或 render JSON。原图仅在最新已提交工具批次成功 `load_image` 后回看；OCR/测量标注根据已提交结果临时重建；ChartRender PNG 在 Sources 读取并校验。跨 Session、目标 Run 前缀外、失败观察或缺失/损坏文件不能授予图像访问；Gateway 时间线仅允许读取同 Session 下成功且来源可解析的 OCR/测量观察图，且不保存重建图像。所有 Agent 请求所需图像与 Provider 限制在 attempt claim 前校验。代码：[AgentExecutor](../../src/figura/agent/executor.py)、[AgentRequestBuilder](../../src/figura/agent/request.py)、[资源合同](../../src/figura/agent/execution_resources.py)、[资源重建](../../src/figura/agent/execution_state.py)、[统一图片读取](../../src/figura/agent/execution_images.py)、[Run Dispatcher](../../src/figura/gateway/dispatcher.py)；完整合同见[run-execution-resources 主规格](../../openspec/figura/openspec/specs/run-execution-resources/spec.md)。
 
-当前工作树中的四份稳定提示资产已补充六类任务目标、按需证据选择、OCR/测量不确定性、四类图表的数据表达、Figure 装配与校正、渲染回看及面向用户的限制说明；模型/工具职责、三层请求结构和资源目录持久边界未变。[agent-react-execution 主规格](../../openspec/figura/openspec/specs/agent-react-execution/spec.md)规定三个有序 SYSTEM 指令层，并新增 task-directed evidence workflow requirement；`improve-figura-prompt-assets` 已归档且 delta 已同步。当前工作树中的提示资产和主规格修改尚未提交，归档状态不表示代码已发布。当前执行策略 change `add-durable-execution-policy-and-provider-retries` 已完成实现并同步规格，尚未归档。
+四份稳定提示资产已补充六类任务目标、按需证据选择、OCR/测量不确定性、四类图表的数据表达、Figure 装配与校正、渲染回看及面向用户的限制说明；模型/工具职责、三层请求结构和资源目录持久边界未变。[agent-react-execution 主规格](../../openspec/figura/openspec/specs/agent-react-execution/spec.md)规定三个有序 SYSTEM 指令层，并新增 task-directed evidence workflow requirement；`improve-figura-prompt-assets` 已归档且 delta 已同步。提示与重试相关实现均已包含在当前 Git 历史中；执行策略 change `2026-10-03-add-durable-execution-policy-and-provider-retries` 已归档。归档记录需求演进，不代表代码已发布。
 
 **规格状态：**Agent ReAct 与 Session Memory 主规格现已共同规定兼容源响应续接重放及合法异常尾部转换，旧的跨 Run 禁止段落已修正。部分图表与观察主规格仍使用旧分散资源字段，当前目录统一为 `resources`。完整差异见[总览](../figura-implementation-overview.md#规格与实现的已知差异)；本篇不将旧字段写作当前模型。
 

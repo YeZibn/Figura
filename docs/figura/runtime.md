@@ -1,6 +1,6 @@
 # Run Runtime：执行事实与恢复
 
-> 更新日期：2026-10-03。[返回总览](../figura-implementation-overview.md)。范围：当前 `src/figura/runtime/` 的工作树实现。这里的“事实”指已提交的执行内容；Checkpoint 是推进控制，事件是安全投影。完整字段表在第 4 节。
+> 更新日期：2026-10-04。[返回总览](../figura-implementation-overview.md)。范围：当前 `src/figura/runtime/` 的工作树实现。这里的“事实”指已提交的执行内容；Checkpoint 是推进控制，事件是安全投影。完整字段表在第 4 节。
 
 ## 1. 职责与边界
 
@@ -59,7 +59,7 @@ Runtime 按模型归属和事务职责保持中等粒度：[`runtime/models.py`]
 <a id="schema-migration"></a>
 ### SQLite schema v11 迁移
 
-当前版本为 **v10**：v10 增加独立停止请求表；v7 增加 `run_progress`；v8 引入 `session_deletion_scopes` 与仅允许 Session 整体删除的条件触发器；v9 允许 DeepSeek continuation 保存显式空字符串和 SQL NULL。新库直接建立当前表结构；已有 v1–v9 在 `BEGIN IMMEDIATE` 写锁内迁移，最后执行外键与完整性检查并提交 `user_version=10`。失败则回滚，未知未来版本拒绝读取。
+当前版本为 **v11**：v10 增加独立停止请求表；v11 增加持久 Provider 请求绑定与 attempt 关联字段，调整执行载荷的存储检查，并增加私有 `execution_payload_metadata` 读上限记录。v7 增加 `run_progress`；v8 引入 `session_deletion_scopes` 与仅允许 Session 整体删除的条件触发器；v9 允许 DeepSeek continuation 保存显式空字符串和 SQL NULL。新库直接建立当前表结构；已有 v1–v10 在 `BEGIN IMMEDIATE` 写锁内迁移，随后验证外键、SQLite 完整性和已存 RunState，并提交 `user_version=11`。失败则回滚，未知未来版本拒绝读取。
 
 - v1–v4 补建附件及 Panel 表；v5 只补建 Panel 表；既有 Sources 表与内容保留。
 - 实际迁移代码对 v1–v7 重建事件表，复制原事件身份、序号、payload 和时间，并恢复触发器；v7 也会重建，不能把“已是 v7”当作迁移已完成。
@@ -217,10 +217,11 @@ Runtime 拥有逻辑网络操作的不可变身份；Agent 从 Provider prepared
 | ProviderRequestBinding.asset_manifest | Mapping[str, object] | 必传 | 提示、Registry、Adapter 和有序图片身份/digest | Agent/ProviderRepository → run_provider_request_bindings.payload_json → Agent 重建/Runtime 校验；私有不可修订 |
 | ProviderRequestBinding.created_at | str | 必传 | 初次绑定的 UTC 时间 | Agent/ProviderRepository → run_provider_request_bindings.payload_json → Agent 重建/Runtime 校验；私有不可修订 |
 | ProviderRequestBinding.request_contract_version | int | 1 | 当前可重建 wire 合同版本 | Agent/ProviderRepository → run_provider_request_bindings.payload_json → Agent 重建/Runtime 校验；私有不可修订 |
-| ProviderRequestBinding.schema_version | int | 1 | 绑定 envelope 版本 | Agent/ProviderRepository → run_provider_request_bindings.payload_json → Agent 重建/Runtime 校验；私有不可修订 |
+| ProviderRequestBinding.schema_version | int | 1；Agent 新请求写2 | 绑定 envelope 版本；v1 保持原键与编码，v2 增加可空 estimate | Agent/ProviderRepository → run_provider_request_bindings.payload_json → Agent 重建/Runtime 校验；私有不可修订 |
 | ProviderRequestBinding.generation_only | bool | True | 仅生成请求可替代 unknown | Agent/ProviderRepository → run_provider_request_bindings.payload_json → Agent 重建/Runtime 校验；私有不可修订 |
 | ProviderRequestBinding.max_attempts | int | 4 | 固定首次加最多三次，不是 Run 总次数 | Agent/ProviderRepository → run_provider_request_bindings.payload_json → Agent 重建/Runtime 校验；私有不可修订 |
 | ProviderRequestBinding.retry_policy_version | int | 1 | 持久重试政策版本 | Agent/ProviderRepository → run_provider_request_bindings.payload_json → Agent 重建/Runtime 校验；私有不可修订 |
+| ProviderRequestBinding.context_estimate | ContextEstimate 或 None | None | v2 聚合估算快照；input_tokens 非负、context_window_tokens 正整数或 null、estimator_version 非空；v1 不编码此键 | prepare → 首次 claim 同事务存 JSON → Gateway 公开两个数字；重试/恢复不修改，旧记录不回填 |
 
 `options` 是只读 Mapping，精确包含下面五个字段；未知字段拒绝。它不沿用 ProviderOptions 的 schema_version 字段，绑定 envelope 自身拥有版本。`asset_manifest` 同样只读，不存路径、endpoint 原文或原图。
 
@@ -398,7 +399,7 @@ Run 唯一推进点和 CAS 修订。 **写入/构建者：**Runtime 提交仓储
 
 ### 停止、所有权与恢复事务
 
-SQLite 从 v9 升至 v10 只增加控制表和保护触发器；已有 Run 事实保持原样，旧 Run 读取为无停止请求。新数据中的终态码和控制事件不承诺能由旧二进制读取，回退需要升级前备份。schema v9 已有的 continuation 迁移规则继续保留。
+SQLite 从 v9 升至 v10 增加控制表和保护触发器；已有 Run 事实保持原样，旧 Run 读取为无停止请求。当前 schema v11 还包含持久 Provider 请求绑定、扩展的物理 attempt 合同和执行载荷读上限元数据，完整迁移见[持久重试和 schema v11](#持久重试和-schema-v11)。新数据中的终态码、控制事件及 v11 请求绑定不承诺能由旧二进制读取，回退需要升级前备份。schema v9 已有的 continuation 迁移规则继续保留。
 
 全任务 `RunExecutionOwnership` 使用 `.run-owner-locks` 中的非阻塞 OS 锁，动作锁仍位于 `.run-locks`。安全路径、目录权限和进程退出释放规则相同；顺序为 owner → action → SQLite。统一 Agent 入口全程持有 owner，内部 owned 路径避免重复获取；公开 interrupt/fail/complete、工具恢复入口、新 Run 创建和 Session 删除均协调 owner。锁忙只等待，不能提前宣告 handler 已退出。终态 owner 尚未释放时新 Run 创建仍会冲突；既有幂等重放可返回原 Run。
 

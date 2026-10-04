@@ -34,6 +34,7 @@ from .models import (
     ProviderResponse,
 )
 from .transport import CompletionTransport, OpenAISDKTransport
+from .token_estimation import ContextEstimate, cached_encoding, estimate_input
 from .validation import coerce_provider_id, fail, validate_request
 
 
@@ -50,6 +51,7 @@ class _PreparedProviderCall:
     request: ProviderRequest = field(repr=False)
     payload: Mapping[str, Any] = field(repr=False)
     descriptor: Mapping[str, Any] = field(repr=False)
+    context_estimate: ContextEstimate | None = None
 
     def __reduce__(self) -> object:
         raise TypeError("Prepared provider calls cannot be serialized")
@@ -72,9 +74,10 @@ class ProviderClient:
         self._policy = policy
         self._transport = transport
         self._preparation_token = object()
+        self._encoding = cached_encoding()
 
     @payload_scope
-    def prepare(self, request: ProviderRequest, *, frozen_options: bool = False, frozen_timeout_seconds: float | None = None) -> _PreparedProviderCall:
+    def prepare(self, request: ProviderRequest, *, frozen_options: bool = False, frozen_timeout_seconds: float | None = None, estimate_context: bool = True) -> _PreparedProviderCall:
         """Validate and build one provider payload without contacting the service."""
         validate_request(request, self.provider_id)
         if request.model_id != self.model_id:
@@ -124,7 +127,8 @@ class ProviderClient:
                 "thinking_mode": thinking, "reasoning_effort": effort, "timeout_seconds": timeout},
             "asset_manifest": manifest}
         encode_json(descriptor)
-        return _PreparedProviderCall(self._preparation_token, request, _freeze(payload), _freeze(descriptor))
+        estimate = estimate_input(payload, self._profile.context_window_tokens, self._encoding) if estimate_context else None
+        return _PreparedProviderCall(self._preparation_token, request, _freeze(payload), _freeze(descriptor), estimate)
 
     @payload_scope
     def dispatch(self, prepared: _PreparedProviderCall) -> ProviderResponse:
@@ -176,6 +180,7 @@ class ProviderFactory:
         self.payload_limits = payload_limits or ExecutionPayloadLimits.from_env()
         self._settings = settings or ProviderSettings.from_env()
         self._transport_factory = transport_factory or OpenAISDKTransport
+        cached_encoding()
 
     @classmethod
     def from_env(

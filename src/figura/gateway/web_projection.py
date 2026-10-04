@@ -161,6 +161,8 @@ def run_summary(
     activity: str | None = None,
 ) -> dict[str, object]:
     run = state.run
+    binding = max(state.provider_request_bindings, key=lambda item: item.base_record_sequence, default=None)
+    estimate = binding.context_estimate if binding else None
     return {
         "runId": run.run_id,
         "sessionId": run.session_id,
@@ -178,6 +180,10 @@ def run_summary(
         "stopRequestedAt": state.stop_request.requested_at if state.stop_request else None,
         "availableActions": ["stop"] if run.status.value == "running" and state.stop_request is None else [],
         "chartRenders": list(chart_renders),
+        "contextUsage": None if estimate is None else {
+            "inputTokens": estimate.input_tokens,
+            "contextWindowTokens": estimate.context_window_tokens,
+        },
     }
 
 

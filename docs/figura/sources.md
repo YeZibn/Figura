@@ -1,6 +1,6 @@
 # Sources：附件、Panel 与生成图像
 
-> 更新日期：2026-10-02。[返回总览](../figura-implementation-overview.md)。范围：当前 `src/figura/sources/` 中的附件与 Panel 生命周期、图像文件、ChartFigure 渲染 PNG 私有存储及授权读取。Sources 是 Session 附件和 Panel 元数据的共同 owner，也为生成图像提供受控文件存储；Agent 的 `RunExecutionState.resources` 是从 Runtime 与 Sources 重建的调用期类型化目录，完整字段归 [Agent](agent.md#4-runexecutionstate-资源合同与完整字段)。Agent 的 `RunExecutionImageReader` 经目录授权后调用 Sources 服务读取源图或私有 render PNG。Sources 不拥有 OCR 或测量结果；当前工作树中的 Tools 提供独立 OCR 和柱状图、折线图、散点图、饼图观察，并在相应证据门槛满足时输出标定坐标或扇区比例。通用 Evidence 模型和证据生命周期尚未实现，观察工具合同见 [Tools](tools.md#6-图像与测量工具合同)。
+> 更新日期：2026-10-04。[返回总览](../figura-implementation-overview.md)。范围：当前 `src/figura/sources/` 中的附件与 Panel 生命周期、图像文件、ChartFigure 渲染 PNG 私有存储及授权读取。Sources 是 Session 附件和 Panel 元数据的共同 owner，也为生成图像提供受控文件存储；Agent 的 `RunExecutionState.resources` 是从 Runtime 与 Sources 重建的调用期类型化目录，完整字段归 [Agent](agent.md#4-runexecutionstate-资源合同与完整字段)。Agent 的 `RunExecutionImageReader` 经目录授权后调用 Sources 服务读取源图或私有 render PNG。Sources 不拥有 OCR 或测量结果；当前工作树中的 Tools 提供独立 OCR 和柱状图、折线图、散点图、饼图观察，并在相应证据门槛满足时输出标定坐标或扇区比例。通用 Evidence 模型和证据生命周期尚未实现，观察工具合同见 [Tools](tools.md#6-图像与测量工具合同)。
 
 ## 1. 职责与边界
 
@@ -62,7 +62,7 @@ Session 所拥有的不可变分区记录。SQLite 保存六项元数据；`poin
 
 ## 4. 存储失败与访问边界
 
-- Sources 与 Runtime 使用同一个 `SqliteDatabase` 和 schema v9；表及事务初始化由 `storage/` 负责。迁移及 Session 删除授权触发器见 [Runtime schema 迁移说明](runtime.md#schema-migration)。附件和 Panel 行操作集中在 `SourcesRepository`，不再由 Runtime Store 代管附件 CRUD；整会话删除在共享连接内协作完成。
+- Sources 与 Runtime 使用同一个 `SqliteDatabase` 和 schema v11；表及事务初始化由 `storage/` 负责。迁移及 Session 删除授权触发器见 [Runtime schema 迁移说明](runtime.md#schema-migration)。附件和 Panel 行操作集中在 `SourcesRepository`，不再由 Runtime Store 代管附件 CRUD；整会话删除在共享连接内协作完成。
 - 附件内容在校验后安装到私有文件；Panel 内容为每个分区单独生成的 PNG。每个 Panel 最多 40,000,000 个源像素；单张 Panel PNG 不超过 `MAX_IMAGE_BYTES`，一批所有 PNG 合计不超过 `MAX_TOTAL_IMAGE_BYTES`，最多 32 个 Panel。Panel 文件在 SQLite 写事务内安装并登记，数据库失败时通过清理已安装文件补偿；这不是跨文件系统和 SQLite 的原子事务。启动时校验已登记内容并清理孤儿 PNG 和临时目录。
 - Panel 的坐标点数为 3–64，名称上限为 256 UTF-8 bytes。输入顺序、模型给出的边界点和重叠区域都按原提议保留；工具不判定分区语义、准确性、重叠是否合理或图表类型。
 - Panel 记录本身不证明其分割工具调用已成功提交。Agent 以 Runtime 成功 ToolResultFact 与 PanelRecord 的 Session、Run、ID、名称及来源附件字段匹配，决定是否可供当前 Run 使用或在 Web 列表显示。

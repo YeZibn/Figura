@@ -186,7 +186,7 @@ class _FakeClient:
         self.after_prepare = None
         self.before_dispatch = None
 
-    def prepare(self, request, *, frozen_options=False, frozen_timeout_seconds=None):
+    def prepare(self, request, *, frozen_options=False, frozen_timeout_seconds=None, estimate_context=True):
         self.prepared_requests.append(request)
         validate_request(request, self.provider_id)
         if request.model_id != self.model_id:
@@ -198,7 +198,7 @@ class _FakeClient:
             f"FIGURA_{self.provider_id.value.upper()}_BASE_URL": "https://provider.example.test/v1",
         }, transport_factory=lambda _profile: None)
         factory.payload_limits = self.payload_limits
-        prepared = factory.create(self.provider_id, self.model_id).prepare(request, frozen_options=frozen_options, frozen_timeout_seconds=frozen_timeout_seconds)
+        prepared = factory.create(self.provider_id, self.model_id).prepare(request, frozen_options=frozen_options, frozen_timeout_seconds=frozen_timeout_seconds, estimate_context=estimate_context)
         return prepared
 
     def dispatch(self, prepared):

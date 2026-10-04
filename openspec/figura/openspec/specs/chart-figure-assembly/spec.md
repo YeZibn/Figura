@@ -76,22 +76,28 @@ The complete submitted Figure SHALL remain available in the existing durable `To
 - **AND** each result has its own `(run_id, call_id)` reference
 
 ### Requirement: Expose accepted Figure summaries to later Agent actions
-Figura SHALL expose accepted Figures as a read-only `RunExecutionState.chart_figures` projection. Each item SHALL contain a `figure_ref` with `run_id` and `call_id`, `figure_digest`, Figure `title`, and an ordered `charts` summary whose items contain `chart_id`, `chart_type`, and chart `title`. The projection SHALL be rebuilt from same-Session Run tool facts and SHALL include successful committed assembly calls from earlier terminal Runs and the target Run, ordered by Run ordinal and tool-call position. It SHALL exclude failed calls, started attempts without committed results, and facts owned by another Session. It SHALL NOT truncate committed Figure summaries.
+Figura SHALL expose each committed assemble_chart_figure outcome in the target Run's read-only RunExecutionState.resources catalog as a typed chart_figure resource, following the shared run-execution-resources contract. A successful resource SHALL retain the complete accepted ChartFigure and its verified digest in typed resource content, keyed by a reference containing the resource kind, originating run_id, and call_id. A committed failed assembly SHALL remain queryable as a failed resource with its structured error, but SHALL NOT be treated as an accepted Figure. Resources SHALL be reconstructed only from eligible same-Session Run history and the target Run's committed prefix, and SHALL exclude started attempts without committed results and facts owned by another Session.
 
-Every Provider request SHALL include a text inventory of the projected accepted Figure references and summaries so the Agent can address an earlier Figure in a later action. The full Figure content SHALL remain in the ordinary persisted assistant tool-call history and SHALL NOT be duplicated into `RunExecutionState` or repeated in this inventory.
+Every Provider request SHALL include a compact text inventory projected from the resource catalog. For an accepted Figure, the inventory SHALL contain its typed reference, title, digest, and ordered chart summaries with chart_id, chart_type, and chart title. A failed assembly resource SHALL appear with its reference, failed outcome, and structured error, but SHALL NOT appear as an accepted Figure summary. The inventory SHALL NOT serialize the complete ChartFigure content; that content remains available through the typed resource content.
 
 #### Scenario: Include a Figure from an earlier Run
-- **WHEN** a target Run belongs to a Session with a successfully assembled Figure in an earlier terminal Run
-- **THEN** its `RunExecutionState.chart_figures` contains the earlier Run's Figure reference and ordered chart summary
-- **AND** the Provider request includes that summary in its Figure inventory
+- **WHEN** a target Run belongs to a Session with a successfully assembled Figure in an eligible earlier terminal Run
+- **THEN** its resource catalog contains the Figure's typed reference and complete accepted content
+- **AND** the Provider request includes the Figure's ordered summary
 
 #### Scenario: Include a Figure assembled in the target Run
-- **WHEN** the target Run has a successful committed `assemble_chart_figure` result
-- **THEN** the next `RunExecutionState` projection and Provider request include its reference and summary
+- **WHEN** the target Run has a successful committed assemble_chart_figure result in its authorized prefix
+- **THEN** the resource catalog contains its accepted Figure resource
+- **AND** the next Provider request includes its reference and summary
 
-#### Scenario: Exclude incomplete, failed, and cross-Session Figures
-- **WHEN** tool arguments exist without a committed successful assembly result, or a successful result belongs to another Session
-- **THEN** the target Run's Figure inventory omits that Figure
+#### Scenario: Keep a committed failed assembly queryable but unaccepted
+- **WHEN** an assembly call commits a structured failure
+- **THEN** the resource catalog retains its typed reference, failed outcome, and error
+- **AND** the Provider inventory does not present it as an accepted Figure
+
+#### Scenario: Exclude incomplete and cross-Session Figures
+- **WHEN** tool arguments exist without a committed result, or a Figure fact belongs to another Session or falls outside the target Run's authorized prefix
+- **THEN** the target Run's resource catalog and Provider inventory omit that Figure fact
 
 ### Requirement: Model-facing assembly guidance describes pie constraints
 The registered `assemble_chart_figure` tool description and relevant input-field descriptions SHALL explain that pie dataset points use `category` and `value`, that `series` and Cartesian `axes` must be absent or null, and that separate series intended as separate pies belong in distinct ChartFigure children. Guidance SHALL use the existing ChartSpec and ChartFigure fields and SHALL NOT add alternate schema fields, relax semantic validation, or silently repair invalid content.

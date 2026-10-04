@@ -5,6 +5,7 @@ import type { FiguraHealth, FiguraPanelDto, FiguraProviderId, FiguraToolTimeline
 import { validateImageFile } from './attachments'
 import { toUserMessage } from './domain/errors'
 import { createRunController, type RunController } from './domain/run/controller'
+import { selectContextRun } from './domain/figura/context'
 import { mergeEvents, type RunTimeline } from './domain/run/timeline'
 import type { Attachment, ConversationItem, Provider, RunState, Session, SessionData } from './types/protocol'
 import { AttachmentPanel, ConversationPanel, SessionSidebar } from './components/workspace'
@@ -516,6 +517,7 @@ export function FiguraApp() {
         showEvaluations={false}
       />
       <ConversationPanel
+        contextRun={selectContextRun(timelines.map((item) => item.summary), activeRunId)}
         data={data}
         timelines={timelines}
         pendingUser={pendingUser}

@@ -69,19 +69,19 @@ Figura SHALL store each rendered PNG in private managed storage, outside tool-re
 - **WHEN** a committed render references an image that is missing, invalid, or does not match its recorded SHA-256
 - **THEN** Figura returns a bounded storage or integrity failure and does not substitute another artifact
 ### Requirement: Project committed render outcomes into RunExecutionState
-`RunExecutionState` SHALL expose a read-only `chart_renders` tuple rebuilt from same-Session Run tool facts. It SHALL include committed `render_chart_figure` successes and failures only when the call references a Figure that is accepted in that Session. Each observation SHALL contain `run_id`, `call_id`, `attempt_id`, `figure_ref`, and `outcome`; a successful observation SHALL contain exactly one bounded `result` with `figure_digest`, `image_sha256`, `media_type`, `byte_count`, `width`, and `height`, while a failed observation SHALL contain exactly one structured `error`. Observations SHALL be ordered by Run ordinal and tool-call position. The projection SHALL exclude calls without a committed result, malformed or unresolved references, and facts from another Session. It SHALL NOT persist a second copy or truncate committed observations.
+Figura SHALL expose each committed render_chart_figure outcome in the target Run's read-only RunExecutionState.resources catalog as a typed chart_render resource, following the shared run-execution-resources contract. Its typed reference SHALL identify the originating run_id and call_id; its content SHALL retain attempt_id, the nullable typed Figure reference, and the committed outcome. A successful render resource SHALL be included only when its Figure reference resolves to an accepted Figure in the same Session and authorized Run prefix, and SHALL contain exactly one bounded result with figure_digest, image_sha256, media_type, byte_count, width, and height. A failed render resource SHALL retain exactly one structured error and any syntactically valid Figure reference; otherwise its Figure reference SHALL be null. Resources SHALL follow the catalog's deterministic order, exclude attempts without committed results and facts from another Session, and SHALL NOT create a second durable copy of render outcomes.
 
 #### Scenario: Include a committed successful render
-- **WHEN** a render call referencing an accepted same-Session Figure has a committed successful result
-- **THEN** `RunExecutionState.chart_renders` contains its call identity, Figure reference, outcome, and complete bounded result metadata
+- **WHEN** a render call references an accepted same-Session Figure in the authorized prefix and commits a successful result
+- **THEN** the resource catalog contains its typed reference, Figure reference, successful outcome, and complete bounded render metadata
 
-#### Scenario: Include a committed render failure for an accepted Figure
-- **WHEN** a render call references an accepted same-Session Figure and commits a structured failure
-- **THEN** `RunExecutionState.chart_renders` contains its call identity, Figure reference, failed outcome, and structured error without image metadata
+#### Scenario: Include a committed render failure
+- **WHEN** a render call commits a structured failure, including when its syntactically valid Figure reference is not accepted or resolvable
+- **THEN** the resource catalog contains its typed reference, failed outcome, and structured error without successful image metadata
 
 #### Scenario: Omit incomplete and unauthorized render calls
-- **WHEN** a render call has no committed result, references an unknown Figure, or belongs to another Session
-- **THEN** `RunExecutionState.chart_renders` contains no observation for that call
+- **WHEN** a render call has no committed result, or its facts belong to another Session or fall outside the target Run's authorized prefix
+- **THEN** the target Run's resource catalog contains no render resource for that call
 
 ### Requirement: Session deletion removes its private ChartFigure render files
 Figura SHALL remove the private render PNG for every durable render tool call belonging to a permanently deleted Session. The operation SHALL leave render files belonging to other Sessions unchanged. If Session deletion rolls back, staged render files SHALL be restored; if the database deletion commits, staged files SHALL be permanently removed or retained only in inaccessible private cleanup storage for startup reconciliation.

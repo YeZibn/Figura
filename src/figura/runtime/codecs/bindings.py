@@ -11,6 +11,7 @@ from types import MappingProxyType
 from figura.shared.payloads import decode_json, encode_json, PayloadError, payload_read_scope
 from ..records import ProviderRequestBinding
 from ..errors import RunError, RunErrorCode
+from figura.providers.token_estimation import ContextEstimate
 
 _DIGEST = re.compile(r"^[0-9a-f]{64}$")
 _OPTIONS = {"max_completion_tokens", "stream", "thinking_mode", "reasoning_effort", "timeout_seconds"}
@@ -19,7 +20,13 @@ _IMAGE = {"source_ref", "observation_kind", "media_type", "byte_count", "sha256"
 
 
 def binding_dict(binding: ProviderRequestBinding) -> dict:
-    return {item.name: getattr(binding, item.name) for item in fields(binding)}
+    value = {item.name: getattr(binding, item.name) for item in fields(binding) if item.name != "context_estimate"}
+    if binding.schema_version == 2:
+        estimate = binding.context_estimate
+        value["context_estimate"] = None if estimate is None else {
+            item.name: getattr(estimate, item.name) for item in fields(ContextEstimate)
+        }
+    return value
 
 
 def _digest(value: object) -> bool:
@@ -43,7 +50,18 @@ def validate_binding(binding: ProviderRequestBinding) -> None:
     if binding.provider_id not in {"qwen", "deepseek", "mimo"} or any(
         type(value) is not int or value < minimum for value, minimum in (
             (binding.base_record_sequence, 1), (binding.base_tool_sequence, 0))
-    ) or binding.schema_version != 1 or binding.request_contract_version != 1 or binding.retry_policy_version != 1 or binding.max_attempts != 4 or binding.generation_only is not True:
+    ) or binding.schema_version not in {1, 2} or binding.request_contract_version != 1 or binding.retry_policy_version != 1 or binding.max_attempts != 4 or binding.generation_only is not True:
+        raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
+    estimate = binding.context_estimate
+    if binding.schema_version == 1 and estimate is not None:
+        raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
+    if estimate is not None and (
+        not isinstance(estimate, ContextEstimate)
+        or type(estimate.input_tokens) is not int or estimate.input_tokens < 0
+        or (estimate.context_window_tokens is not None and (
+            type(estimate.context_window_tokens) is not int or estimate.context_window_tokens <= 0))
+        or not isinstance(estimate.estimator_version, str) or not estimate.estimator_version
+    ):
         raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
     if not _digest(binding.endpoint_binding) or not _digest(binding.request_fingerprint):
         raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
@@ -96,8 +114,18 @@ def _freeze(value):
 def decode_binding(raw: str) -> ProviderRequestBinding:
     try:
         value = decode_json(raw)
-        if not isinstance(value, dict) or set(value) != {item.name for item in fields(ProviderRequestBinding)}:
+        if not isinstance(value, dict):
             raise ValueError
+        keys = {item.name for item in fields(ProviderRequestBinding)}
+        if value.get("schema_version") == 1:
+            keys.remove("context_estimate")
+        if set(value) != keys:
+            raise ValueError
+        estimate = value.get("context_estimate")
+        if estimate is not None:
+            if not isinstance(estimate, dict) or set(estimate) != {item.name for item in fields(ContextEstimate)}:
+                raise ValueError
+            value["context_estimate"] = ContextEstimate(**estimate)
         value["options"] = _freeze(value["options"])
         value["asset_manifest"] = _freeze(value["asset_manifest"])
         binding = ProviderRequestBinding(**value)

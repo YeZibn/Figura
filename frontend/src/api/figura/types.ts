@@ -61,6 +61,7 @@ export type FiguraRunDto = {
   stopRequestedAt?: string | null
   availableActions?: Array<'stop'>
   chartRenders: FiguraChartRenderDto[]
+  contextUsage?: { inputTokens: number; contextWindowTokens: number | null } | null
 }
 export type FiguraSessionDataDto = {
   session: FiguraSessionDto
@@ -127,7 +128,7 @@ export type FiguraToolCallDetailDto = {
   source?: FiguraToolTimelineSourceDto | null
   observationAvailable?: boolean
 }
-export type FiguraRunHandleDto = Omit<FiguraRunDto, 'executionState' | 'chartRenders' | 'stopRequestedAt' | 'availableActions'>
+export type FiguraRunHandleDto = Omit<FiguraRunDto, 'executionState' | 'chartRenders' | 'stopRequestedAt' | 'availableActions' | 'contextUsage'>
 
 export type FiguraClient = {
   readonly baseUrl: string

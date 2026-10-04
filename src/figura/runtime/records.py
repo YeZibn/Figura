@@ -7,6 +7,7 @@ from types import MappingProxyType
 from typing import Mapping, TypeAlias
 
 from figura.providers.models import ProviderUsage
+from figura.providers.token_estimation import ContextEstimate
 from figura.sources.models import AttachmentMetadata
 from figura.tools.contracts import ReplayEffect, ToolExecutionError, ToolOutcome
 
@@ -101,6 +102,7 @@ class ProviderRequestBinding:
     generation_only: bool = True
     max_attempts: int = 4
     retry_policy_version: int = 1
+    context_estimate: ContextEstimate | None = None
 
 
 @dataclass(frozen=True)

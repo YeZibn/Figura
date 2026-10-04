@@ -31,6 +31,7 @@ class ProviderProfile:
     reasoning_effort: str | None
     configuration_error: ProviderFailureCode | None = None
     max_completion_tokens: int | None = None
+    context_window_tokens: int | None = None
 
     def availability(self) -> ProviderAvailability:
         reason = self.configuration_error
@@ -127,6 +128,13 @@ def _profile_from_env(
             configuration_error = ProviderFailureCode.INVALID_CONFIGURATION
         else:
             completion = int(raw_completion)
+    raw_capacity = environ.get(f"{prefix}_CONTEXT_WINDOW_TOKENS", "").strip()
+    capacity = None
+    try:
+        if raw_capacity.isascii() and raw_capacity.isdigit() and int(raw_capacity) > 0:
+            capacity = int(raw_capacity)
+    except ValueError:
+        pass
     return ProviderProfile(
         provider_id=provider_id,
         model_id=MODEL_IDS[provider_id],
@@ -137,4 +145,5 @@ def _profile_from_env(
         reasoning_effort=reasoning_effort,
         configuration_error=configuration_error,
         max_completion_tokens=completion,
+        context_window_tokens=capacity,
     )

@@ -223,7 +223,7 @@ class AgentExecutor:
 
         try:
             try:
-                prepared = client.prepare(request, frozen_options=True, frozen_timeout_seconds=binding.options["timeout_seconds"]) if binding else client.prepare(request)
+                prepared = client.prepare(request, frozen_options=True, frozen_timeout_seconds=binding.options["timeout_seconds"], estimate_context=False) if binding else client.prepare(request)
                 descriptor = prepared.descriptor
                 if binding:
                     if any(descriptor[key] != getattr(binding, key) for key in ("provider_id", "model_id", "endpoint_binding", "request_fingerprint")) or descriptor["asset_manifest"] != binding.asset_manifest:
@@ -232,6 +232,7 @@ class AgentExecutor:
                     binding = ProviderRequestBinding(operation_id=uuid.uuid4().hex, run_id=run_id,
                         base_record_sequence=state.checkpoint.last_committed_record_sequence,
                         base_tool_sequence=state.checkpoint.last_committed_tool_sequence,
+                        schema_version=2, context_estimate=getattr(prepared, "context_estimate", None),
                         created_at=datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z"), **descriptor)
             except ProviderCallError as error:
                 return self._fail_run(state, terminal_message=_preparation_failure_message(error))

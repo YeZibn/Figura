@@ -65,6 +65,8 @@ export type RunSummary = {
   stopRequestedAt?: string | null
   availableActions?: Array<'stop'>
   chartRenders?: ChartRenderSummary[]
+  ordinal?: number
+  contextUsage?: { inputTokens: number; contextWindowTokens: number | null } | null
 }
 
 export type RunHandle = {

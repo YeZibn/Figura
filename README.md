@@ -16,7 +16,10 @@ Figura 是一个本地图表分析工作区。用户在浏览器中创建会话�
 | 图表生成 | 从用户提供的数据或图像分析结果组装 `ChartFigure`，支持单图和多图画布，生成 PNG |
 | 会话工作区 | 创建、切换和删除会话，上传及预览附件，查看分区图像、分析回答与生成图，下载 PNG |
 | 过程查看 | 按 Run 展示工具时间线，按需展开参数与结果摘要，并查看成功 OCR／测量的观察图 |
-| 持久化与恢复 | SQLite 保存输入、模型与工具执行事实、checkpoint 和事件；后续 Run 重建同会话对话，Gateway 重启后按执行状态恢复 |
+| 停止与恢复 | 可请求协作停止；Gateway 启动和运行期间会恢复持久化 Run，未知执行结果不会被盲目重放 |
+| Provider 重试 | 对已确认且分类为临时的网络或服务失败自动重试；每个逻辑模型请求最多四次物理尝试，不设 Run 累计次数 |
+| 上下文占比 | 使用本地统一规则估算最近一次请求的输入 token；配置模型窗口后显示近似占比，只用于观察，不限制请求 |
+| 持久化与对话 | SQLite 保存输入、模型与工具执行事实、checkpoint 和事件；后续 Run 从同一会话的已提交事实重建对话 |
 | 模型接入 | 在网页中选择已配置的 Qwen、DeepSeek 或 MiMo；模型 ID 由后端固定 |
 
 测量工具返回的是候选观察。轴标定不足时会保留像素信息与警告，不能把这些结果直接当作精确数据。当前生成图经过结构和语义校验并可由 Agent 回看；独立的生成图验证、发布和新 Figura 评测链尚未实现。
@@ -62,7 +65,23 @@ Figura 只读取 `FIGURA_*` 模型配置。模板中的 `OPENAI_*`、`QWEN_*`、
 | DeepSeek | `deepseek-flash` | `FIGURA_DEEPSEEK_API_KEY` | `FIGURA_DEEPSEEK_BASE_URL`，默认 `https://api.deepseek.com` |
 | MiMo | `mimo-v2.6-flash` | `FIGURA_MIMO_API_KEY` | `FIGURA_MIMO_BASE_URL`，默认 `https://api.xiaomimimo.com/v1`；使用其他套餐时同时配置匹配的地址和 key |
 
-各 Provider 可设置 `FIGURA_<PROVIDER>_TIMEOUT_SECONDS` 和 `FIGURA_<PROVIDER>_THINKING_MODE`，默认分别为 `60` 和 `true`。Qwen、DeepSeek 还可配置 `REASONING_EFFORT`，具体取值见 [.env.example](.env.example)。网页按本地配置显示可用 Provider；这个检查不会验证远端连通性、额度或请求是否能成功。
+各 Provider 可设置 `FIGURA_<PROVIDER>_TIMEOUT_SECONDS` 和 `FIGURA_<PROVIDER>_THINKING_MODE`，默认分别为 `60` 和 `true`。还可按 Provider 设置 `FIGURA_<PROVIDER>_MAX_COMPLETION_TOKENS`；它只配置单次模型请求的输出上限，不形成 Run 累计预算。Qwen、DeepSeek 还可配置 `REASONING_EFFORT`，具体取值见 [.env.example](.env.example)。网页按本地配置显示可用 Provider；这个检查不会验证远端连通性、额度或请求是否能成功。
+
+#### 可选：显示上下文占比
+
+Figura 对所有 Provider 统一使用 `tiktoken/o200k_base` 估算最近一次模型请求的输入 token。准备编码缓存后重启服务：
+
+```bash
+conda run -n agent python -c "import tiktoken; tiktoken.get_encoding('o200k_base')"
+```
+
+此准备步骤首次需要下载公开编码资源，运行期估算不访问网络。默认使用系统临时目录中的 tiktoken 缓存；需要持久缓存时，在准备命令和 Gateway 环境中设置同一个 `TIKTOKEN_CACHE_DIR`。缓存缺失、损坏或被禁用时，模型调用仍继续，输入区显示“上下文待估算”；准备缓存后需重启服务。
+
+在 `.env` 中填写 `FIGURA_QWEN_CONTEXT_WINDOW_TOKENS`、`FIGURA_DEEPSEEK_CONTEXT_WINDOW_TOKENS` 或 `FIGURA_MIMO_CONTEXT_WINDOW_TOKENS`，值取实际模型服务合同中的正整数容量，即可显示占比。没有有效容量时只显示估算 token 数，不猜测模型窗口。
+
+计数包括实际发送的指令、工具定义、历史、工具参数/结果与回放 continuation。每次出现的图片按 1,024 tokens 近似，不计算 base64 文本。输入区的“上下文 ≈”对应最近请求；不累计多次调用，不计算草稿或正在生成的回复。点击指示器可查看数量、原请求模型与说明。重试复用同一估算，超过 100% 也不会在本地阻止发送。
+
+估算快照保存在 binding v2 JSON，旧 v1 历史可读取和重试，不回填。没有新增 SQL 表。升级前备份本地 Runtime 数据；产生 v2 binding 后，降级到只支持 v1 的代码需要恢复升级前备份。
 
 ### 3. 启动 Figura
 
@@ -158,11 +177,11 @@ Gateway 当前注册的工具版本为 `figura-web-v6`。
 
 ### 恢复边界
 
-Gateway 启动时发现持久化的 running Run，会交给相同 Agent 执行路径处理。已提交结果可以复用；未完成工具调用按其声明的可重放或幂等策略处理。
+Gateway 在启动和运行期间会扫描并恢复持久化的 running Run。已提交结果可以复用；安全且幂等的工具可按原调用身份恢复。
 
-如果模型请求已经记录为 started，但没有提交确定结果，恢复会以 `provider_outcome_unknown` 结束该 Run，不会猜测请求是否送达并再次发送。需要对账的工具 attempt 也不会盲目重放。因此，“可恢复”不保证每次异常都能继续完成任务。终态 Run 不会被重新打开，后续提问会创建新 Run。
+已确认的临时 Provider 失败会在同一个持久请求绑定下自动重试，最多四次物理尝试（含首次）；认证、额度耗尽、无效请求和无法分类的失败不会自动重试。没有确定响应的请求通常保持结果未知，不会盲目再次发送；只有满足严格条件的纯生成请求才可能在旧执行 owner 已退出后替换尝试。工具失败不会由通用工具层自动重复执行，模型可根据已知结果决定下一步。副作用不明的调用不会被盲目重放。
 
-当前网页没有显式中断、重试或手动恢复 Run 的操作。会话历史按完整消息重建，尚无自动摘要或裁剪；超过 Provider 请求限制时会明确失败。
+网页提供“停止分析”操作。它会记录协作停止请求，让当前已开始的步骤有机会提交结果，再由 Agent 在安全边界结束；如果正在运行的处理器没有返回，界面会继续显示等待停止。Figura 网页没有手动重试或重新打开终态 Run 的按钮；失败或中断后可在同一会话提交新消息。会话历史保留完整消息，尚无自动摘要或裁剪；上下文估算超过配置容量也不会在本地截断或拦截，请求仍可能被 Provider 拒绝。
 
 ## 配置与本地数据
 
@@ -175,6 +194,9 @@ Gateway 启动时发现持久化的 running Run，会交给相同 Agent 执行�
 | `FIGURA_WEB_ORIGINS` | 端口 `1421` 的本地 HTTP Origins | Gateway 浏览器来源白名单；启动器自动补入当前前端端口的 loopback Origins |
 | `FIGURA_CONDA_ENV` | `agent` | 启动器使用的 Conda 环境 |
 | `FIGURA_CONDA_EXECUTABLE` | `conda` | 启动器使用的 Conda 可执行程序 |
+| `FIGURA_<PROVIDER>_MAX_COMPLETION_TOKENS` | 未设置 | 单次请求输出 token 配置，不是 Run 总预算 |
+| `FIGURA_<PROVIDER>_CONTEXT_WINDOW_TOKENS` | 未设置 | 上下文占比的显示分母；没有有效值时只显示输入估算 |
+| `TIKTOKEN_CACHE_DIR` | 系统临时缓存 | 可选的 tokenizer 编码持久缓存目录 |
 
 启动器端口等选项从启动进程环境读取，可这样覆盖：
 
@@ -303,7 +325,7 @@ conda run -n agent python -c "import rapidocr"
 
 **重启后 Run 失败，或工具显示需要对账**
 
-先查看 Run 状态和安全错误摘要。已启动但结果未知的模型请求不会自动重发，需要对账的工具也不会被盲目执行；在终态后可提交新的消息。不要把 SSE 断开等同于任务已经停止。
+先查看 Run 状态和安全错误摘要。结果未知的模型请求不会无条件重发；只有可重建的纯生成请求在旧执行 owner 已退出且仍有尝试额度时才可能替换。需要对账的工具不会被盲目执行；在终态后可提交新消息。不要把 SSE 断开等同于任务已经停止。
 
 **生成图中文字显示为方框**
 
@@ -315,5 +337,5 @@ conda run -n agent python -c "import rapidocr"
 - [Agent](docs/figura/agent.md) · [Runtime](docs/figura/runtime.md) · [Memory](docs/figura/memory.md)：编排、恢复与对话投影。
 - [Tools](docs/figura/tools.md) · [Sources](docs/figura/sources.md) · [Charts](docs/figura/charts.md)：观察工具、来源管理与图表合同。
 - [Provider](docs/figura/provider.md) · [Web](docs/figura/web.md) · [Validation](docs/figura/validation.md)：模型、网页和共享校验边界；细节以当前代码与主规格为准。
-- [Figura 主规格](openspec/figura/openspec/specs/) · [变更归档](openspec/figura/openspec/changes/archive/)：当前行为合同与已完成变更。
+- [Figura 主规格](openspec/figura/openspec/specs/) · [已完成变更归档](openspec/figura/openspec/changes/archive/)：主规格记录当前需求；归档保留对应 change 的设计、delta 与任务历史。`openspec sync` 同步主规格后，仍需完成归档步骤。
 - [架构设计草案](docs/figura-architecture-design.md)：长期设计方向，其中尚未实现的能力以系统总览和当前代码为准。

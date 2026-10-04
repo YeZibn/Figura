@@ -7,16 +7,16 @@ Provides structured, source-bound pixel measurements for two-dimensional bar cha
 ## Requirements
 
 ### Requirement: Measure bars from an authorized Attachment or Panel
-Figura SHALL register a `measure_bars` tool accepting exactly `source_kind` (`attachment` or `panel`), an opaque `source_id`, and optional `observation_scope`; it SHALL reject additional arguments. For `attachment`, Figura SHALL resolve only an attachment in the target Run's `RunExecutionState.available_attachments`; for `panel`, it SHALL resolve only a Panel in `RunExecutionState.panels`. Figura SHALL verify ownership through the corresponding source service before reading image bytes. The tool SHALL analyze the complete selected source when scope is omitted, SHALL NOT require a preceding `load_image` call, and SHALL NOT accept a filesystem path, URL, or image bytes from the model.
+Figura SHALL register a `measure_bars` tool accepting exactly `source_kind` (`attachment` or `panel`), an opaque `source_id`, and optional `observation_scope`; it SHALL reject additional arguments. For `attachment`, Figura SHALL resolve only an attachment resource in the target Run's read-only `RunExecutionState.resources` catalog whose typed reference has kind `attachment` and the requested opaque ID; for `panel`, it SHALL resolve only a Panel resource whose typed reference has kind `panel` and the requested opaque ID. Figura SHALL verify ownership through the corresponding source service before reading image bytes. The tool SHALL analyze the complete selected source when scope is omitted, SHALL NOT require a preceding `load_image` call, and SHALL NOT accept a filesystem path, URL, or image bytes from the model.
 
 `observation_scope` SHALL be an object with no fields other than optional `include` and `exclude` arrays of polygons. Each supplied array SHALL contain 1 through 4 polygons; each polygon SHALL contain 3 through 32 points; each point SHALL be an integer `[x, y]` pair with both coordinates in the inclusive range `0..1000`, normalized to the selected source's width and height. When `include` is absent, the full source is included; when present, the included area is the union of its polygons. The union of `exclude` polygons SHALL be removed from the included area, and exclusions SHALL take precedence where polygons overlap. A supplied scope SHALL contain at least one `include` or `exclude` array. Figura SHALL apply the resulting effective area to bar geometry detection, OCR, and label association. All returned geometry SHALL remain in the selected source's pixel coordinate system; the observation scope SHALL NOT itself be treated as a calibrated plot area. A scope that produces no observable source pixels SHALL return a bounded structured tool failure. An invalid scope SHALL return a bounded structured tool failure and SHALL NOT fall back to unscoped measurement.
 
 #### Scenario: Measure an authorized Attachment
-- **WHEN** the model calls `measure_bars` with `source_kind: attachment` and an attachment ID in the target Run's available attachment inventory
+- **WHEN** the model calls `measure_bars` with `source_kind: attachment` and an attachment ID matching an attachment resource reference in the target Run's resource catalog
 - **THEN** Figura resolves that Attachment within the same Session and measures its image without exposing its local path or bytes in the tool result
 
 #### Scenario: Measure an authorized Panel
-- **WHEN** the model calls `measure_bars` with `source_kind: panel` and a Panel ID in `RunExecutionState.panels`
+- **WHEN** the model calls `measure_bars` with `source_kind: panel` and a Panel resource reference with the matching opaque ID in the target Run's resource catalog
 - **THEN** Figura resolves that Panel within the same Session and measures the independent Panel image
 
 #### Scenario: Reject a source outside the Run inventory

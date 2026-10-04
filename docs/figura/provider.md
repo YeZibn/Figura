@@ -1,6 +1,6 @@
 # Provider：模型请求与响应边界
 
-> 更新日期：2026-10-03。[返回总览](../figura-implementation-overview.md)。本篇拥有模型服务的调用期合同、配置、适配与规范化失败；持久 `ProviderAttempt` 和 `ProviderContinuationFact` 由[Run Runtime](runtime.md#4-完整模型字段)定义。
+> 更新日期：2026-10-04。[返回总览](../figura-implementation-overview.md)。本篇拥有模型服务的调用期合同、配置、适配与规范化失败；持久 `ProviderAttempt` 和 `ProviderContinuationFact` 由[Run Runtime](runtime.md#4-完整模型字段)定义。
 
 ## 1. 职责与边界
 
@@ -84,6 +84,21 @@ ProviderClient 私有的冻结调用封套，`repr=False` 且禁止序列化；�
 | `_PreparedProviderCall.request` | `ProviderRequest` | 必传；`repr=False` | 已通过校验的规范请求，供响应归一化使用 | ProviderClient.prepare → 私有内存 → dispatch/adapter；字段合同见本页，不另存副本 |
 | `_PreparedProviderCall.payload` | `Mapping[str, Any]` | 必传；`repr=False` | adapter 已准备的原生请求参数，可含图像和私有续接；作为本次 transport.create 的参数 | adapter.build_payload / prepare → 私有内存 → dispatch/transport；无公开或独立修订入口 |
 | `_PreparedProviderCall.descriptor` | `Mapping[str, Any]` | 必传；`repr=False` | 冻结的安全描述：provider/model、endpoint SHA-256、prepared payload（含 timeout）、POST/path 与 endpoint binding 的 canonical SHA-256、resolved options（包括冻结的 phase timeout）与完整 asset manifest | prepare → 私有内存 → Runtime binding；各持久字段见 [Runtime](runtime.md#providerrequestbinding)，不公开 |
+| `_PreparedProviderCall.context_estimate` | `ContextEstimate` 或 None | None | 独立输入估算；重试 prepare 跳过，不参与 descriptor 或 payload | prepare → 首次 Runtime binding；只公开数字 |
+
+### 本地上下文估算
+
+本地上下文估算使用实际 prepared payload 的 messages/tools 投影，统一采用 `tiktoken/o200k_base`；图片每次出现近似为 1,024 tokens，不分词 URL/base64。编码缓存初始化失败只禁用估算。该值不参与请求指纹、准入、输出预算或 Provider usage 校准。
+
+### ContextEstimate
+
+定义于 `providers/token_estimation.py`，prepare 写入；首次 claim 后由 Runtime binding 保存原快照，Gateway 仅公开两个聚合数字。
+
+| 完整字段路径 | 类型 | 构造默认 | 含义与约束 | 写入 → 权威 → 读取/公开 |
+|---|---|---|---|---|
+| ContextEstimate.input_tokens | int | 必传 | 非负输入估算，含文本结构与图像近似 | prepare → binding → Gateway inputTokens |
+| ContextEstimate.context_window_tokens | int 或 None | 必传 | 正整数容量或未知，不控制执行 | ProviderProfile → binding → Gateway contextWindowTokens |
+| ContextEstimate.estimator_version | str | tiktoken-o200k-v1 | 非空规则版本；调整计量规则时更换 | estimator → binding → 私有读取 |
 
 ### ProviderMessage
 
@@ -187,6 +202,7 @@ ProviderClient 私有的冻结调用封套，`repr=False` 且禁止序列化；�
 | ProviderProfile.configuration_error | ProviderFailureCode \| None | None | 配置校验失败码；可空 | ProviderSettings.from_env → 进程内，不入 Run → ProviderFactory；密钥与 endpoint 不公开 |
 
 | ProviderProfile.max_completion_tokens | int \| None | None | 每 Provider 可选默认输出 token 数，正整数；prepare 固定到本次 resolved options | 配置 → 进程内 profile → prepare；不直接公开 |
+| ProviderProfile.context_window_tokens | int 或 None | None | 模型显示容量；FIGURA_<PROVIDER>_CONTEXT_WINDOW_TOKENS 的有效正整数，无效或缺失为未知，不影响 availability | 配置 → prepare estimate → 首次 binding → 公开显示分母 |
 
 ### ProviderSettings
 

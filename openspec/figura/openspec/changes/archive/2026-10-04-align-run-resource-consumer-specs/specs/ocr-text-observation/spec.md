@@ -1,0 +1,24 @@
+## MODIFIED Requirements
+
+### Requirement: Extract text from an authorized Attachment or Panel
+Figura SHALL register an `extract_text` tool accepting exactly `source_kind` (`attachment` or `panel`), an opaque `source_id`, and optional `observation_scope`; it SHALL reject additional arguments. Figura SHALL resolve only an Attachment or Panel present in the target Run's read-only `RunExecutionState.resources` catalog whose typed reference kind and opaque ID match `source_kind` and `source_id`, and SHALL verify ownership through the corresponding source service before reading image bytes. The tool SHALL NOT require a preceding `load_image` call and SHALL NOT accept a filesystem path, URL, or image bytes from the model. For a readable source, it SHALL return `source_kind`, `source_id`, `image_size` (`width`, `height`), `coordinate_system` (`attachment_px` or `panel_px`), `available`, `truncated`, and `snippets`. Each snippet SHALL contain a stable result-local `snippet_id`, recognized `text`, source-pixel `bbox_px` as `[x, y, width, height]`, and bounded `confidence` in `[0, 1]`. The tool SHALL bound the result to at most 512 snippets and 128 characters per snippet text. `available` SHALL indicate whether OCR completed; a completed OCR pass with no recognized text SHALL return `available: true` and an empty `snippets` list. OCR unavailable or failed for a readable authorized source SHALL return `available: false` and no snippets. Source authorization or image-read failures SHALL use the bounded tool error contract.
+
+#### Scenario: Extract text from an authorized Attachment
+- **WHEN** the model calls `extract_text` with an Attachment ID matching an attachment resource reference in the target Run's resource catalog
+- **THEN** Figura runs OCR on that source and returns source-pixel snippet boxes without exposing local paths or image bytes
+
+#### Scenario: Extract text from an authorized Panel
+- **WHEN** the model calls `extract_text` with a Panel resource reference whose opaque ID matches source_id in the target Run's resource catalog
+- **THEN** Figura runs OCR on the independent Panel image and reports coordinates in the Panel pixel system
+
+#### Scenario: Return an empty observation when no text is recognized
+- **WHEN** OCR completes for a readable authorized source but recognizes no text
+- **THEN** the tool succeeds with `available: true`, `truncated: false`, and an empty `snippets` list
+
+#### Scenario: Report OCR unavailability without fabricating snippets
+- **WHEN** OCR cannot complete for a readable authorized source
+- **THEN** the tool succeeds with `available: false` and an empty `snippets` list
+
+#### Scenario: Reject an unavailable or cross-Session source
+- **WHEN** the model supplies an unknown, unreferenced, or cross-Session Attachment or Panel ID
+- **THEN** Figura returns a bounded structured tool failure and reads no image bytes

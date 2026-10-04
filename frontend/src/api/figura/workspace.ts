@@ -108,6 +108,8 @@ function mapRun(dto: FiguraRunDto): RunSummary {
     stopRequestedAt: dto.stopRequestedAt,
     availableActions: dto.availableActions,
     chartRenders: dto.chartRenders,
+    ordinal: dto.ordinal,
+    contextUsage: dto.contextUsage,
   }
 }
 

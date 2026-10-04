@@ -744,6 +744,14 @@
 
 .composer textarea::placeholder { color: #a0aca8; }
 
+.context-indicator { position: relative; margin-left: auto; font-weight: 400; color: var(--muted, #687b74); }
+.context-indicator summary { cursor: pointer; list-style: none; font-size: 12px; }
+.context-indicator summary::-webkit-details-marker { display: none; }
+.context-detail { position: absolute; right: 0; bottom: 24px; z-index: 5; width: min(300px, 70vw); padding: 12px; border: 1px solid #dde5e1; border-radius: 8px; background: #fff; box-shadow: 0 4px 16px #00000012; }
+.context-detail p { margin: 0; font-size: 12px; line-height: 1.6; }
+.context-meter { height: 4px; margin-top: 8px; background: #edf1ee; border-radius: 2px; overflow: hidden; }
+.context-meter span { display: block; height: 100%; background: #6a9b85; }
+
 .composer textarea:focus {
   border-color: #81b5ab;
   box-shadow: var(--focus);
