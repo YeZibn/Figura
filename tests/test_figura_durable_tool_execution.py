@@ -375,7 +375,7 @@ def _snapshot_run_rows(connection: sqlite3.Connection, *, session_id: str, run_i
     }
 
 
-def test_fresh_store_creates_schema_v11_attachment_and_execution_tables(tmp_path) -> None:
+def test_fresh_store_creates_schema_v12_context_attachment_and_execution_tables(tmp_path) -> None:
     store = FiguraRunStore(tmp_path)
 
     with sqlite3.connect(store.database_path) as connection:
@@ -402,7 +402,7 @@ def test_fresh_store_creates_schema_v11_attachment_and_execution_tables(tmp_path
             for row in connection.execute("PRAGMA table_info(attachments)")
         }
 
-    assert version == 11
+    assert version == 12
     assert quick_check == "ok"
     assert "run_provider_continuations" in tables
     assert "run_provider_attempts" in tables
@@ -451,7 +451,7 @@ def test_v6_migration_preserves_events_and_accepts_run_progress(tmp_path) -> Non
         foreign_key_violations = connection.execute("PRAGMA foreign_key_check").fetchall()
 
     assert migrated.events == before.events
-    assert version == 11
+    assert version == 12
     assert "run_progress" in event_schema
     assert quick_check == "ok"
     assert foreign_key_violations == []
@@ -901,7 +901,7 @@ def test_v1_migration_preserves_run_records_checkpoint_events_and_idempotency(tm
             )
         }
 
-    assert version == 11
+    assert version == 12
     assert quick_check == "ok"
     assert foreign_key_violations == []
     assert idempotency == ("legacy-session", "a" * 64, "b" * 64, "legacy-run")
@@ -956,7 +956,7 @@ def test_v2_migration_preserves_existing_run_facts_checkpoint_events_and_idempot
         foreign_key_violations = connection.execute("PRAGMA foreign_key_check").fetchall()
 
     state = store.read_run_state(session.session_id, run.run_id)
-    assert version == 11
+    assert version == 12
     assert quick_check == "ok"
     assert foreign_key_violations == []
     assert after == before
@@ -1014,7 +1014,7 @@ def test_v2_migration_failure_rolls_back_new_schema_and_can_retry(tmp_path) -> N
     store = FiguraRunStore(tmp_path)
     assert store.read_run_state(session.session_id, run.run_id).run.run_id == run.run_id
     with sqlite3.connect(database_path) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 11
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 12
 
 
 def test_v1_migration_rolls_back_schema_version_and_added_column_on_failure(tmp_path) -> None:

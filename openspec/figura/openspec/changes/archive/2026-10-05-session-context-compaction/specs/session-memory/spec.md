@@ -1,33 +1,4 @@
-# session-memory Specification
-
-## Purpose
-
-Provides a complete, ordered conversation projection across Runs in one Session so later model requests can continue the same conversation from Figura's durable execution facts.
-
-## Requirements
-
-### Requirement: Session history is reconstructed from earlier Runs in the same Session
-For a target Run, Figura SHALL derive Session history only from durable facts belonging to Runs with a lower ordinal in the target Run's Session. It SHALL order Runs by ascending ordinal and facts within a Run by their committed record and tool-fact order. The projection SHALL be read-only and SHALL NOT create a second persisted copy of message history.
-
-#### Scenario: Reconstruct earlier Runs in ordinal order
-- **WHEN** a Session contains multiple earlier terminal Runs and a target Run with a greater ordinal
-- **THEN** the projected history contains those earlier Runs in ascending ordinal order, regardless of their timestamps or database row order
-
-#### Scenario: Exclude other Sessions and later Runs
-- **WHEN** the database contains Runs from another Session or with an ordinal greater than the target Run
-- **THEN** neither Run contributes messages to the target Run's Session history
-
-#### Scenario: Reconstruct history when no earlier Run exists
-- **WHEN** the target Run is the first Run in its Session
-- **THEN** the projected Session history is empty and the Agent uses the target Run's own input as the first user message
-
-#### Scenario: Read history without duplicating durable messages
-- **WHEN** Figura reconstructs Session history
-- **THEN** it reads existing Run facts and writes no message, history, summary, or memory record
-
-#### Scenario: Encounter a nonterminal earlier Run
-- **WHEN** an earlier Run in the target Session is still running
-- **THEN** Figura does not produce a dispatchable Session history from a changing prefix and fails closed before a Provider attempt is claimed
+## MODIFIED Requirements
 
 ### Requirement: Projected messages preserve the complete committed conversation
 Figura SHALL reconstruct complete canonical history from durable Run facts, including each earlier Run input, committed assistant response, committed tool result, and validated abnormal-tail outcome context in deterministic order. Request assembly MAY replace eligible older closed interactions with a source-linked summary and retain a recent raw-history tail; it SHALL preserve the current Run input, required current Run prefix, complete tool-call/result batches, and provider continuation compatibility. A summary SHALL reference canonical source facts and SHALL NOT alter, delete, or stand in for them. Full canonical history SHALL remain available to authorized retrieval. A final-answer fact that references an existing response SHALL NOT create a duplicate message. The neutral Session history SHALL NOT contain provider-private continuation payloads. Provider request assembly MAY resolve a continuation from its exact source Run and response, but SHALL associate it only with that assistant response and SHALL preserve the continuation unchanged when the selected Provider and format are compatible.

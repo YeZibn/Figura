@@ -24,13 +24,19 @@ from .records import (
     ModelResponseFact,
     ProviderAttempt,
     ProviderRequestBinding,
+    ContextCompactionOperation,
     RunInput,
     RunState,
+    SessionContextCheckpoint,
     SessionSnapshot,
     ToolCallFact,
     ToolExecutionFact,
 )
 from .persistence.controls import RunControlRepository
+from .persistence.context import (
+    ContextCompactionOperationRepository,
+    SessionContextCheckpointRepository,
+)
 from .persistence.providers import ProviderRepository
 from .persistence.runs import RunRepository
 from .persistence.sessions import SessionRepository
@@ -48,6 +54,8 @@ class FiguraRunStore:
         self.data_root = self._database.data_root
         self.database_path = self._database.database_path
         self._sessions = SessionRepository(self._database)
+        self._context = SessionContextCheckpointRepository(self._database)
+        self._context_operations = ContextCompactionOperationRepository(self._database)
         self._runs = RunRepository(self._database)
         self._snapshots = SnapshotRepository(self._database, self._runs)
         self._providers = ProviderRepository(self._database, self._runs)
@@ -117,6 +125,40 @@ class FiguraRunStore:
 
     def read_session_snapshot(self, session_id: str) -> SessionSnapshot:
         return self._snapshots.read_session_snapshot(session_id)
+
+    def read_session_context_checkpoint(
+        self, session_id: str
+    ) -> SessionContextCheckpoint | None:
+        return self._context.read(session_id)
+
+    def replace_session_context_checkpoint(
+        self,
+        checkpoint: SessionContextCheckpoint,
+        *,
+        expected_revision: int,
+    ) -> SessionContextCheckpoint:
+        return self._context.replace(
+            checkpoint, expected_revision=expected_revision
+        )
+
+    def get_or_create_context_compaction_operation(self, **values) -> ContextCompactionOperation:
+        return self._context_operations.get_or_create(**values)
+
+    def bind_context_compaction_request(
+        self, operation_id: str, binding: dict[str, object]
+    ) -> ContextCompactionOperation:
+        return self._context_operations.bind_request(operation_id, binding)
+
+    def begin_context_compaction_attempt(self, operation_id: str) -> int:
+        return self._context_operations.begin_attempt(operation_id)
+
+    def read_context_compaction_operation(self, operation_id: str) -> ContextCompactionOperation:
+        return self._context_operations.read(operation_id)
+
+    def fallback_context_compaction_operation(
+        self, operation_id: str, failure_code: str | None
+    ) -> ContextCompactionOperation:
+        return self._context_operations.mark_fallback(operation_id, failure_code)
 
     def list_running_runs(self) -> tuple[Run, ...]:
         return self._runs.list_running_runs()

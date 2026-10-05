@@ -36,12 +36,14 @@ from .models import (
     TerminalCode,
 )
 from .records import (
+    ContextCompactionOperation,
     ExecutionRecord,
     ModelResponseFact,
     ProviderAttempt,
     ProviderRequestBinding,
     RunInput,
     RunState,
+    SessionContextCheckpoint,
     SessionSnapshot,
     ToolCallFact,
 )
@@ -91,6 +93,46 @@ class RunCoordinator:
 
     def read_session_snapshot(self, session_id: str) -> SessionSnapshot:
         return self._store.read_session_snapshot(session_id)
+
+    def read_session_context_checkpoint(
+        self, session_id: str
+    ) -> SessionContextCheckpoint | None:
+        return self._store.read_session_context_checkpoint(session_id)
+
+    def replace_session_context_checkpoint(
+        self,
+        checkpoint: SessionContextCheckpoint,
+        *,
+        expected_revision: int,
+    ) -> SessionContextCheckpoint:
+        return self._store.replace_session_context_checkpoint(
+            checkpoint, expected_revision=expected_revision
+        )
+
+    def get_or_create_context_compaction_operation(
+        self, **values
+    ) -> ContextCompactionOperation:
+        return self._store.get_or_create_context_compaction_operation(**values)
+
+    def bind_context_compaction_request(
+        self, operation_id: str, binding: dict[str, object]
+    ) -> ContextCompactionOperation:
+        return self._store.bind_context_compaction_request(operation_id, binding)
+
+    def begin_context_compaction_attempt(self, operation_id: str) -> int:
+        return self._store.begin_context_compaction_attempt(operation_id)
+
+    def read_context_compaction_operation(
+        self, operation_id: str
+    ) -> ContextCompactionOperation:
+        return self._store.read_context_compaction_operation(operation_id)
+
+    def fallback_context_compaction_operation(
+        self, operation_id: str, failure_code: str | None
+    ) -> ContextCompactionOperation:
+        return self._store.fallback_context_compaction_operation(
+            operation_id, failure_code
+        )
 
     def list_running_runs(self) -> tuple[Run, ...]:
         return self._store.list_running_runs()

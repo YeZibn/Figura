@@ -1,6 +1,6 @@
 # Provider：模型请求与响应边界
 
-> 更新日期：2026-10-04。[返回总览](../figura-implementation-overview.md)。本篇拥有模型服务的调用期合同、配置、适配与规范化失败；持久 `ProviderAttempt` 和 `ProviderContinuationFact` 由[Run Runtime](runtime.md#4-完整模型字段)定义。
+> 更新日期：2026-10-05。[返回总览](../figura-implementation-overview.md)。本篇拥有模型服务的调用期合同、配置、适配与规范化失败；持久 `ProviderAttempt` 和 `ProviderContinuationFact` 由[Run Runtime](runtime.md#4-完整模型字段)定义。
 
 ## 1. 职责与边界
 
@@ -9,7 +9,7 @@
 ## 2. 内部流转
 
 1. **可用性与选择**：`ProviderSettings` 为三个 allowlist provider 各保存一份 profile；Factory 对 provider/model、配置及能力进行检查，并可返回安全的 `ProviderAvailability`。Web Gateway 的 health 路由消费该值，只返回 provider ID、固定 model ID、配置是否可用和有界 reason code，不发起 Provider 网络请求；HTTP 字段定义见[Web 边界](web.md#4-web-dto-字段)。
-2. **本地准备**：Agent 组装 `ProviderRequest` 并创建固定 provider/model 的 client，然后调用 `prepare(request)`。该方法先校验消息、工具、图像和字节限制，再核对模型并执行 adapter 的 `build_payload`；DeepSeek thinking 工具历史的 continuation 要求也在此阶段检查。成功返回私有 `_PreparedProviderCall`，不发送网络请求，也不 claim attempt。图片字节、原生 payload 与续接内容仅留在调用期内存。
+2. **本地准备**：Agent 组装 `ProviderRequest` 并创建固定 provider/model 的 client，然后调用 `prepare(request)`。该方法先校验消息、工具、图像和字节限制，再核对模型并执行 adapter 的 `build_payload`；DeepSeek thinking 工具历史的 continuation 要求也在此阶段检查。它使用统一本地 tokenizer 估算真实输入，并从可选 `ProviderProfile.context_window_tokens` 附上显示分母。有效容量和估算只供 Agent 判断是否做上下文压缩，不作为准入或输出预算。成功返回私有 `_PreparedProviderCall`，不发送网络请求，也不 claim attempt。图片字节、原生 payload 与续接内容仅留在调用期内存。
 3. **领取并发送**：Agent 在锁内复查 checkpoint 并提交 ProviderAttempt claim，随后调用同一个 client 的 `dispatch(prepared)`。客户端校验 prepared 的来源 token，然后发送已经准备好的 payload 一次；不重新构造请求。其他 client 创建的 prepared 会被拒绝。Prepared 不可序列化、不持久化、不进入日志或公开 DTO。
 4. **响应**：adapter 将模型内容、工具调用、finish reason、usage 与可选 continuation 归一化。公开响应投影省略私有 continuation；Runtime 将其与已提交响应绑定为私有持久事实。Agent 后续可按精确来源响应重建兼容续接，详见[Memory 消费边界](memory.md#3-内部流转与失败边界)。
 5. **失败与释放**：配置、输入、远端与传输失败映射到有界 `ProviderFailure`；`outcome_known` 供 Runtime/Agent 区分确定失败与结果未知。本地 prepare 失败不产生 attempt；已领取后的明确/未知失败由 Runtime 提交。client 在调用结束或失败后关闭 transport；Provider 不自行重发已启动请求。
@@ -88,7 +88,7 @@ ProviderClient 私有的冻结调用封套，`repr=False` 且禁止序列化；�
 
 ### 本地上下文估算
 
-本地上下文估算使用实际 prepared payload 的 messages/tools 投影，统一采用 `tiktoken/o200k_base`；图片每次出现近似为 1,024 tokens，不分词 URL/base64。编码缓存初始化失败只禁用估算。该值不参与请求指纹、准入、输出预算或 Provider usage 校准。
+本地上下文估算使用实际 prepared payload 的 messages/tools 投影，统一采用 `tiktoken/o200k_base`；图片每次出现近似为 1,024 tokens，不分词 URL/base64。编码缓存初始化失败只禁用估算。该值不参与请求指纹、准入、输出预算或 Provider usage 校准。Agent 在 estimate 有值、context capacity 是正整数且比例达到约 80% 时，才可能发起一条额外摘要请求；此阈值策略由 [Agent](agent.md#上下文压缩与请求投影)拥有。容量缺失或估算失败时不自动压缩。摘要请求仍通过此 Provider 的 `prepare/dispatch`，其普通 Run `ProviderAttempt` 不会被摘要调用占用；摘要自身的 operation/retry 身份由 [Runtime](runtime.md#contextcompactionoperation)持久化。
 
 ### ContextEstimate
 

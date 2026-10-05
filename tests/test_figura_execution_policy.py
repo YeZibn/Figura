@@ -362,7 +362,7 @@ def test_concurrent_first_open_and_migration_has_consistent_schema(tmp_path):
         stores = list(pool.map(lambda _: FiguraRunStore(tmp_path), range(4)))
     for store in stores:
         with store.database.read() as connection:
-            assert connection.execute("PRAGMA user_version").fetchone()[0] == 11
+            assert connection.execute("PRAGMA user_version").fetchone()[0] == 12
             assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
 
 
@@ -495,7 +495,7 @@ def test_multiple_processes_first_open_share_one_atomic_migration(tmp_path):
     from concurrent.futures import ProcessPoolExecutor
     with ProcessPoolExecutor(3, mp_context=multiprocessing.get_context("spawn")) as pool:
         results = list(pool.map(_open_store_process, [str(tmp_path)] * 3))
-    assert results == [(11, [])] * 3
+    assert results == [(12, [])] * 3
 
 
 def test_multiple_retry_waiters_use_no_queue_capacity_and_ready_run_completes(tmp_path):

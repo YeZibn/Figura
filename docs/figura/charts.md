@@ -1,6 +1,6 @@
 # Charts：单图与画布内容模型
 
-> 更新日期：2026-10-02。[返回总览](../figura-implementation-overview.md)。范围：`src/figura/charts/` 负责 `ChartSpecData` 单图值、`ChartFigure` 多图画布值及纯 PNG 绘制。相关实现和后续生成布局修正均已归档；主规格的资源旧字段差异见[总览](../figura-implementation-overview.md#规格与实现的已知差异)。Charts 只负责从已校验 Figure 生成图像字节，不管理文件存储、运行事实或网页预览。
+> 更新日期：2026-10-05。[返回总览](../figura-implementation-overview.md)。范围：`src/figura/charts/` 负责 `ChartSpecData` 单图值、`ChartFigure` 多图画布值及纯 PNG 绘制。相关实现和后续生成布局修正均已归档；当前主规格与统一 RunExecutionState 资源引用结构一致，本轮未发现 Charts 领域的已知规格/实现差异。Charts 只负责从已校验 Figure 生成图像字节，不管理文件存储、运行事实或网页预览。
 
 ## 1. 职责与边界
 

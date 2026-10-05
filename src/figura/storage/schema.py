@@ -6,7 +6,7 @@ import sqlite3
 
 from figura.runtime.errors import RunError, RunErrorCode
 
-_SCHEMA_VERSION = 11
+_SCHEMA_VERSION = 12
 
 
 def _run_stream_events_table(table_name: str) -> str:
@@ -276,6 +276,48 @@ _PANEL_SCHEMA = (
         BEGIN SELECT RAISE(ABORT, 'immutable panel'); END""",
 )
 
+_SESSION_CONTEXT_SCHEMA = (
+    """CREATE TABLE IF NOT EXISTS session_context_checkpoints (
+        session_id TEXT PRIMARY KEY REFERENCES sessions(session_id) ON DELETE CASCADE,
+        revision INTEGER NOT NULL CHECK (revision > 0),
+        covered_run_id TEXT NOT NULL CHECK (length(CAST(covered_run_id AS BLOB)) BETWEEN 1 AND 128),
+        covered_run_ordinal INTEGER NOT NULL CHECK (covered_run_ordinal > 0),
+        covered_record_sequence INTEGER NOT NULL CHECK (covered_record_sequence > 0),
+        covered_tool_sequence INTEGER NOT NULL CHECK (covered_tool_sequence >= 0),
+        summary_contract_version INTEGER NOT NULL CHECK (summary_contract_version > 0),
+        summary_json TEXT NOT NULL CHECK (json_valid(summary_json) AND length(CAST(summary_json AS BLOB)) <= 524288),
+        source_refs_json TEXT NOT NULL CHECK (json_valid(source_refs_json) AND length(CAST(source_refs_json AS BLOB)) <= 262144),
+        compaction_operation_id TEXT NULL CHECK (compaction_operation_id IS NULL OR length(CAST(compaction_operation_id AS BLOB)) BETWEEN 1 AND 128),
+        updated_at TEXT NOT NULL
+    )""",
+    """CREATE TABLE IF NOT EXISTS session_context_compaction_operations (
+        operation_id TEXT PRIMARY KEY CHECK (length(CAST(operation_id AS BLOB)) BETWEEN 1 AND 128),
+        session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE RESTRICT,
+        target_run_id TEXT NOT NULL,
+        base_record_sequence INTEGER NOT NULL CHECK (base_record_sequence > 0),
+        base_tool_sequence INTEGER NOT NULL CHECK (base_tool_sequence >= 0),
+        input_checkpoint_revision INTEGER NOT NULL CHECK (input_checkpoint_revision >= 0),
+        covered_run_id TEXT NOT NULL CHECK (length(CAST(covered_run_id AS BLOB)) BETWEEN 1 AND 128),
+        covered_run_ordinal INTEGER NOT NULL CHECK (covered_run_ordinal > 0),
+        covered_record_sequence INTEGER NOT NULL CHECK (covered_record_sequence > 0),
+        covered_tool_sequence INTEGER NOT NULL CHECK (covered_tool_sequence >= 0),
+        status TEXT NOT NULL CHECK (status IN ('preparing', 'completed', 'fallback')),
+        request_binding_json TEXT NULL CHECK (request_binding_json IS NULL OR (json_valid(request_binding_json) AND length(CAST(request_binding_json AS BLOB)) <= 262144)),
+        attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+        result_checkpoint_revision INTEGER NULL CHECK (result_checkpoint_revision IS NULL OR result_checkpoint_revision > 0),
+        failure_code TEXT NULL CHECK (failure_code IS NULL OR length(CAST(failure_code AS BLOB)) <= 64),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY(target_run_id, session_id) REFERENCES runs(run_id, session_id) ON DELETE RESTRICT,
+        UNIQUE(target_run_id, base_record_sequence, base_tool_sequence),
+        CHECK (
+            (status = 'preparing' AND result_checkpoint_revision IS NULL)
+            OR (status = 'completed' AND result_checkpoint_revision IS NOT NULL AND failure_code IS NULL)
+            OR (status = 'fallback' AND result_checkpoint_revision IS NULL)
+        )
+    )""",
+)
+
 _SCHEMA = (
     *_CORE_SCHEMA,
     *_TOOL_SCHEMA,
@@ -457,7 +499,7 @@ def initialize_schema(connection: sqlite3.Connection) -> None:
         elif version == 3:
             for statement in _PROVIDER_ATTEMPT_SCHEMA:
                 connection.execute(statement)
-        elif version in {4, 5, 6, 7, 8, 9, 10}:
+        elif version in {4, 5, 6, 7, 8, 9, 10, 11}:
             pass
         else:
             raise RunError(RunErrorCode.UNSUPPORTED_VERSION)
@@ -491,7 +533,10 @@ def initialize_schema(connection: sqlite3.Connection) -> None:
             WHEN NOT EXISTS (SELECT 1 FROM session_deletion_scopes g JOIN runs r
                 ON r.session_id = g.session_id WHERE r.run_id = OLD.run_id)
             BEGIN SELECT RAISE(ABORT, 'immutable stop request'); END""")
-        _migrate_execution_policy(connection)
+        if version < 11:
+            _migrate_execution_policy(connection)
+        for statement in _SESSION_CONTEXT_SCHEMA:
+            connection.execute(statement)
         _validate_migration(connection)
         connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
         connection.commit()

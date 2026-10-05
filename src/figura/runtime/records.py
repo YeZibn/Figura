@@ -9,6 +9,7 @@ from typing import Mapping, TypeAlias
 from figura.providers.models import ProviderUsage
 from figura.providers.token_estimation import ContextEstimate
 from figura.sources.models import AttachmentMetadata
+from figura.shared.source_refs import HistorySourceRef
 from figura.tools.contracts import ReplayEffect, ToolExecutionError, ToolOutcome
 
 from .models import (
@@ -27,6 +28,46 @@ class SessionSnapshot:
     session: Session
     run_states: tuple[RunState, ...]
     attachments: tuple[AttachmentMetadata, ...]
+
+
+@dataclass(frozen=True)
+class SessionContextCheckpoint:
+    """Replaceable summary projection over an immutable Session history prefix."""
+
+    session_id: str
+    revision: int
+    covered_run_id: str
+    covered_run_ordinal: int
+    covered_record_sequence: int
+    covered_tool_sequence: int
+    summary_contract_version: int
+    summary: Mapping[str, object] = field(repr=False)
+    source_refs: tuple[HistorySourceRef, ...] = ()
+    updated_at: str = ""
+    compaction_operation_id: str | None = None
+
+
+@dataclass(frozen=True)
+class ContextCompactionOperation:
+    """Internal durable identity and retry binding for one summary request."""
+
+    operation_id: str
+    session_id: str
+    target_run_id: str
+    base_record_sequence: int
+    base_tool_sequence: int
+    input_checkpoint_revision: int
+    covered_run_id: str
+    covered_run_ordinal: int
+    covered_record_sequence: int
+    covered_tool_sequence: int
+    status: str
+    request_binding: Mapping[str, object] | None = field(default=None, repr=False)
+    attempt_count: int = 0
+    result_checkpoint_revision: int | None = None
+    failure_code: str | None = None
+    created_at: str = ""
+    updated_at: str = ""
 
 
 @dataclass(frozen=True)
@@ -103,6 +144,9 @@ class ProviderRequestBinding:
     max_attempts: int = 4
     retry_policy_version: int = 1
     context_estimate: ContextEstimate | None = None
+    context_projection: str = "full"
+    context_checkpoint_revision: int | None = None
+    context_compaction_operation_id: str | None = None
 
 
 @dataclass(frozen=True)

@@ -323,6 +323,10 @@ class RunRepository:
         connection.execute(
             "DELETE FROM run_idempotency WHERE session_id = ?", (session_id,)
         )
+        connection.execute(
+            "DELETE FROM session_context_compaction_operations WHERE session_id = ?",
+            (session_id,),
+        )
         for table in (
             "run_stop_requests",
             "run_provider_continuations",

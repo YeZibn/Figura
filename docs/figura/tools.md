@@ -1,14 +1,14 @@
 # Tool：能力定义与调用边界
 
-> 更新日期：2026-10-03。[返回总览](../figura-implementation-overview.md)。本篇拥有工具定义、注册、调用及结果合同；`ToolCallFact`、`ToolAttemptStartedFact`、`ToolResultFact` 是[Run Runtime](runtime.md#4-完整模型字段)所拥有的持久事实。
+> 更新日期：2026-10-05。[返回总览](../figura-implementation-overview.md)。本篇拥有工具定义、注册、调用及结果合同；`ToolCallFact`、`ToolAttemptStartedFact`、`ToolResultFact` 是[Run Runtime](runtime.md#4-完整模型字段)所拥有的持久事实。
 
 ## 1. 职责与边界
 
-`ToolRegistry` 保存有序、版本化的 `ToolDefinition`；`ToolRuntime` 解析和验证调用参数，运行同步 handler，验证有界成功结果或返回安全错误。`DurableToolExecutor` 属于 Run 执行边界，负责在调用前后提交事实。当前工作树 Gateway Registry 版本为 `figura-web-v6`，依次包含 `load_image`、`decompose_chart_image`、`extract_text`、四种测量工具、`assemble_chart_figure` 和 `render_chart_figure`。图像、OCR 和测量工具处理 Session 已授权 Attachment/Panel；画布组装工具接收 Charts 域的完整 ChartFigure 并核对测量引用；渲染工具只接收引用已接受 Figure 的 `(run_id, call_id)`。Registry v6 不保留 v5 unresolved-tool 兼容 executor；切换前，旧 v5 Run 必须到达终态。
+`ToolRegistry` 保存有序、版本化的 `ToolDefinition`；`ToolRuntime` 校验参数、运行同步 handler，并验证成功结果或返回安全错误。`DurableToolExecutor` 属于 Run 执行边界，负责在调用前后提交事实。当前工作树 Gateway Registry 为 `figura-web-v7`，按序注册 `load_image`、`decompose_chart_image`、`search_history`、`read_history`、`read_resource_image`、`extract_text`、四种测量工具、`assemble_chart_figure` 和 `render_chart_figure`。历史工具只读当前 Session 的授权前缀；历史图片只有显式请求才附加到下一模型请求。图像、OCR 与测量工具处理已授权 Attachment/Panel；画布组装工具接收 Charts 域的完整 ChartFigure 并核对测量引用；渲染工具只接收已接受 Figure 的 `(run_id, call_id)`。Registry v7 不保留 v6 unresolved-tool 兼容 executor；部署切换前应让旧版本 Run 到达终态。
 
 ## 2. 内部流转
 
-1. **注册**：Gateway 组装有序 `ToolDefinition`，检查名称唯一、参数与结果 JSON Schema、描述及总大小。当前工具按 `load_image`、`decompose_chart_image`、`extract_text`、`measure_bars`、`measure_lines`、`measure_scatter`、`measure_pie`、`assemble_chart_figure`、`render_chart_figure` 顺序注册；Registry 对外提供只读版本、定义顺序和按名查找。
+1. **注册**：Gateway 组装有序 `ToolDefinition`，检查名称唯一、参数与结果 JSON Schema、描述及总大小。当前 v7 工具顺序为 `load_image`、`decompose_chart_image`、`search_history`、`read_history`、`read_resource_image`、`extract_text`、`measure_bars`、`measure_lines`、`measure_scatter`、`measure_pie`、`assemble_chart_figure`、`render_chart_figure`；Registry 对外提供只读版本、定义顺序和按名查找。
 2. **模型投影**：Agent 把允许的工具定义映射为 Provider 的 `FunctionTool`；模型只见名称、说明与参数 Schema，不见 handler、结果 Schema 或本地上下文。
 3. **调用**：`ToolInvocation` 的 call ID、名称和 JSON 参数进入 `ToolRuntime`；解析拒绝重复键、无效数值与不符合 Schema 的内容。handler 只收到已验证参数及 `ToolContext`。
 4. **结果与恢复**：成功时结果必须是有界 JSON 对象；失败时返回 `ToolExecutionError`。图像读取、OCR、测量与 `assemble_chart_figure` 为 `replay_safe`；Panel 分割和 `render_chart_figure` 为 `idempotent_local_write`。组装工具不新建外部资源，只验证、摘要并通过既有 Runtime 工具事实保留 Figure；渲染工具把 PNG 安装到 Sources 私有文件区，ToolResultFact 只保存有界摘要。结果超出既有大小上限时整体拒绝，不静默截断或删减观测。`replay_effect` 决定不确定结果能否安全重放或必须显式协调；ToolRuntime 自身不拥有 Run checkpoint。
@@ -441,11 +441,76 @@ OCR 既为笛卡尔/Pie 测量提供轴刻度、标签与关联候选，也由 `
 | `chart_render_storage_failed` | Sources 无法写入或校验 PNG | 有界存储失败；仅 `STORAGE_ERROR` 标记可重试 |
 
 `render_chart_figure` 的 `replay_effect` 是 `idempotent_local_write`。文件可以先于 ToolResultFact 安装；在结果未成功提交时它仍是不可从 Agent/Web 读取的孤儿，重放同一调用会验证并复用原文件。工具不会用新内容覆盖损坏或冲突的既有文件。
-将 Registry 从 `figura-web-v5` 提升为 `figura-web-v6` 会使尚无结果的 v5 工具调用不能在 v6 下继续执行。部署切换前应先让 v5 Run 到达终态；该变更不添加 v5 兼容 executor。
+将 Registry 从 `figura-web-v6` 提升为 `figura-web-v7` 后，尚无结果的旧版本调用不能在 v7 下继续执行；部署切换前应让旧版本 Run 到达终态。v7 不添加 v6 兼容 executor。绘图的文字布局与百分比规则见[Charts 绘制边界](charts.md#5-png-绘制边界)；会话删除会清除其私有 Panel/render 文件，详见[Sources](sources.md#2-内部流转与不变量)。已配对完整结果的旧 Registry 调用仍可惰性投影到历史，不会因此重新执行。
 
-绘图的文字布局与百分比规则见[Charts 绘制边界](charts.md#5-png-绘制边界)；模型不新增样式字段。会话删除会清除其私有 Panel/render 文件，详见[Sources](sources.md#2-内部流转与不变量)。已配对完整结果的旧 Registry 调用可以惰性历史进入后续请求，不能因此在新 Registry 下重新执行；未完成调用继续拒绝。旧测量/组装/渲染主规格对 RunExecutionState 分散字段的残留见[总览差异](../figura-implementation-overview.md#规格与实现的已知差异)。
+## 9. Session 历史读取工具
 
-## 执行载荷与未知效果
+当前 v7 Registry 提供三个只读工具，可搜索当前 Run 的已闭合前缀与较早历史，再按需取得原始内容或图像；当前未闭合的调用批次不会进入搜索结果。它们的 `ToolContext.session_id` 与 `run_id` 由 DurableToolExecutor 注入，模型不能指定 Session，也不能越过当前 Run 已授权前缀。调用自身仍作为当前 Run 的普通工具事实审计；执行没有重放旧工具的副作用。Memory 拥有来源引用格式、搜索匹配及精确读取语义，见[来源引用](memory.md#historysourceref)和[历史检索边界](memory.md#搜索读取与历史图像边界)；Agent 拥有六类资源内容字段，见[资源合同](agent.md#4-runexecutionstate-资源合同与完整字段)。
+
+`search_history` 的输入对象只含下表属性且拒绝额外字段。查询使用本地文本匹配与分页，不访问未来 Run；默认页大小为 10，`page_size` 可设为 1–20。
+
+| 完整字段路径 | 类型与约束 | 含义 |
+|---|---|---|
+| `search_history.arguments.query` | string，必填，至少 1 字符 | 搜索短语；精确匹配和多词匹配规则由 Memory 定义 |
+| `search_history.arguments.page_size` | integer，可选，1–20 | 返回数量；省略时为 10 |
+| `search_history.arguments.cursor` | string，可选，非空 | 延续绑定相同 Session、目标 Run、查询和过滤器的分页 |
+| `search_history.arguments.run_id` | string，可选，非空 | 将搜索限制在授权前缀内的指定 Run |
+| `search_history.arguments.source_kind` | enum string，可选：`message`、`tool_result`、`resource`、`attachment`、`panel`、`ocr`、`measurement`、`chart_figure`、`chart_render` | 限定历史事实类型或具体资源类型 |
+
+`search_history.result` 是严格对象，所有字段必需。每条 match 的来源身份由 Memory 的引用合同定义。
+
+| 完整字段路径 | 类型与约束 | 含义 |
+|---|---|---|
+| `search_history.result.trust` | 固定字符串 `untrusted_history` | 提醒 Agent 把结果作为不可信历史数据 |
+| `search_history.result.query` | string | 原搜索词 |
+| `search_history.result.matches` | match object 数组 | 按 Memory 排序规则返回的短摘录与来源定位 |
+| `search_history.result.matches[].reference` | HistorySourceRef 或类型化资源引用 | 可交给 `read_history` 的来源键；字段形状由[Memory](memory.md#historysourceref)和[Agent](agent.md#引用联合类型与目录操作)拥有 |
+| `search_history.result.matches[].run_id` | string | 来源 Run 的 opaque ID |
+| `search_history.result.matches[].run_ordinal` | integer，至少 1 | Session 内 Run 序号 |
+| `search_history.result.matches[].source_kind` | enum string：`message`、`tool_result`、`resource` | 匹配类别 |
+| `search_history.result.matches[].resource_kind` | enum string，可选：`attachment`、`panel`、`ocr`、`measurement`、`chart_figure`、`chart_render` | `source_kind=resource` 时的具体 kind |
+| `search_history.result.matches[].role` | enum string，可选：`user`、`assistant` | message 来源的角色 |
+| `search_history.result.matches[].tool_name` | string，可选 | 工具结果来源的工具名 |
+| `search_history.result.matches[].outcome` | string，可选 | 工具结果或异常 outcome 的简要状态 |
+| `search_history.result.matches[].label` | string | 短来源标题 |
+| `search_history.result.matches[].excerpt` | string | 有界文本摘录；完整内容须用 `read_history` 读取 |
+| `search_history.result.next_cursor` | string 或 null | 后续页游标；无后续页时为 null |
+| `search_history.result.has_more` | boolean | 是否还有匹配项 |
+
+`read_history` 按历史查询、摘要或资源清单提供的引用读取已有事实，不执行旧工具。`selector` 可选且拒绝额外字段；field_path 使用 JSON Pointer。
+
+| 完整字段路径 | 类型与约束 | 含义 |
+|---|---|---|
+| `read_history.arguments.reference` | HistorySourceRef 或类型化资源引用，必填 | 精确定位 message、tool result 或资源；引用字段由其 owner 文档定义 |
+| `read_history.arguments.selector` | object，可选 | 可选内容选择器 |
+| `read_history.arguments.selector.field_path` | string，可选 | 以 JSON Pointer 选择结果字段 |
+| `read_history.arguments.selector.start` | integer，可选，≥0 | 对字符串或数组读取的起始偏移 |
+| `read_history.arguments.selector.end` | integer，可选，≥0 | 对字符串或数组读取的结束偏移 |
+| `read_history.result.trust` | 固定字符串 `untrusted_history` | 返回内容是不可信历史数据 |
+| `read_history.result.reference` | 原请求引用 | 实际读取的来源键 |
+| `read_history.result.run_id` | string 或 null | 来源 Run ID；资源引用按其类型/来源确定 |
+| `read_history.result.run_ordinal` | integer，至少 1 | 来源 Run 序号 |
+| `read_history.result.source_kind` | enum string：`message`、`tool_result`、`resource` | 返回内容类别 |
+| `read_history.result.status` | enum string，可选：`committed`、`unresolved` | 工具结果是已提交观察还是异常尾部未决项 |
+| `read_history.result.call_state` | enum string，可选：`not_started`、`outcome_unknown` | 未决调用状态；不代表工具已成功 |
+| `read_history.result.selected_field` | string，可选 | 实际选择的 JSON Pointer |
+| `read_history.result.content` | object、string、array 或 null | 被授权读取的原始历史内容或资源元数据；不补造缺失的结果 |
+
+`read_resource_image` 的结果 JSON 只含图像元数据；成功图像由 Agent 在该工具完成后的下一次 Provider 请求中附加，不放入工具结果或 Runtime facts。Attachment/Panel、成功 OCR/测量标注和成功 ChartRender 可读取；ChartFigure 必须先显式渲染，失败/未决资源不能产生图像。输入与结果对象均拒绝额外字段。
+
+| 完整字段路径 | 类型与约束 | 含义 |
+|---|---|---|
+| `read_resource_image.arguments.resource_ref` | 必填共享 Reference union | Schema 可表达 message、tool-result 和类型化资源引用；handler 仅解析图片资源，实际可读 kind 为 `attachment`、`panel`、`ocr`、`measurement`、`chart_render`。`chart_figure` 不含图像，须先调用渲染工具 |
+| `read_resource_image.result.trust` | 固定字符串 `untrusted_history` | 标记图像来源元数据的不可信性质 |
+| `read_resource_image.result.resource_ref` | 类型化资源引用 | 成功解析的图片来源 |
+| `read_resource_image.result.name` | 非空 string | 安全显示名或资源类型名 |
+| `read_resource_image.result.media_type` | enum string：`image/jpeg`、`image/png`、`image/gif`、`image/webp` | 已检查的图像媒体类型 |
+| `read_resource_image.result.width` | integer，1–100000 | 图像宽度 |
+| `read_resource_image.result.height` | integer，1–100000 | 图像高度 |
+
+三个定义的 `replay_effect` 均为 `replay_safe`。search/read/image resource handler 返回安全历史错误；授权范围或引用不可用映射为 `history_reference_unavailable`，无效参数映射为 `invalid_history_request`，其他读取错误映射为可重试的 `history_unavailable`。图像字节仅作为下一 Provider 请求输入，不会进入该工具的 JSON 结果。
+
+## 10. 执行载荷与未知效果
 
 Registry 完整 metadata/parameter Schema/result Schema 投影、参数、成功/失败 observation 和耐久 fact 分别使用共享 JSON guard。删除工具数量、描述、Schema、参数、结果和批次 arguments 的通用微上限；领域 Schema 中的 maxItems/maxLength 继续生效，安全错误 message 512 B、pointer 256 B 保留。调用 ID 原值跨 intent、start、result、history 和 Figure 引用保留。
 

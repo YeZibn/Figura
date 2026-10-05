@@ -1,40 +1,43 @@
 # Agent：Run 决策与编排
 
-> 更新日期：2026-10-04。[返回总览](../figura-implementation-overview.md)。本篇说明 Agent 编排及其调用期派生运行态；Provider 与 Tool 的完整字段分别见[Provider](provider.md)和[Tool](tools.md)，附件和 Panel 持久模型见[Sources](sources.md)，Run 执行事实见[Run Runtime](runtime.md)，网页调用和公开投影见[Web 边界](web.md)。
+> 更新日期：2026-10-05。[返回总览](../figura-implementation-overview.md)。本篇说明 Agent 编排及其调用期派生运行态；Provider 与 Tool 的完整字段分别见[Provider](provider.md)和[Tool](tools.md)，附件和 Panel 持久模型见[Sources](sources.md)，Run 执行事实与摘要检查点见[Run Runtime](runtime.md)，规范历史和来源检索见[Session Memory](memory.md)，网页调用和公开投影见[Web 边界](web.md)。
 
 ## 1. 职责与边界
 
-`AgentExecutor` 从当前 `RunState.checkpoint.next_action` 选择一步动作；`AgentRequestBuilder` 调用 Session Memory 投影，将同 Session 较早终态 Run 和当前 Run 的已提交前缀组装为完整 Provider 请求，并读取 Agent 所拥有的 `RunExecutionState` 资源目录。`RunExecutionStateService` 从 Runtime 的 Run 输入、工具调用/尝试/结果事实和 Sources 元数据重建附件、Panel、OCR、测量、ChartFigure 与 ChartRender 六类资源；目录仅有 `run_id`、有序 `resources` 两个字段，不持久化。工具结果的完整 JSON 仍位于普通 ToolMessage 历史，资源目录提供可寻址内容及精简索引。每次请求还由 Agent 生成三层有序 SYSTEM 指令：稳定规则、当前工具目录、目标 Run 资源目录；静态规则不混入用户/运行数据，动态层由其权威运行时对象重建，也不写入 Run 事实。图片读取由 `RunExecutionImageReader` 统一执行：先核对目标目录内的类型化引用，再由 Sources 解析授权附件、Panel 或已存 PNG；OCR/测量标注图在内存中重建，ChartFigure 本身要求显式调用渲染工具。Web Gateway 的只读时间线也复用资源目录与 ImageReader，为已成功且来源可解析的 OCR/测量调用按需返回观察图；图像在读取时重建，不另存文件。历史消息中的附件 ID 保留为文本引用，历史 Run 的图像不会自动重放。当前 Run 最新已提交工具批次中的成功 `load_image` 原图、OCR/测量标注图和 `render_chart_figure` PNG，会在紧接着的 Provider 请求中按调用顺序加入。兼容 Provider continuation 由请求边界按源响应重放，既不属于中性 Memory，也不混入 SYSTEM 层或助手正文。当前 Agent 执行本身是同步、非流式文本/图像 ReAct；Web Gateway 通过有界 `RunDispatcher` 异步调用 `execute_slice(session_id, run_id)`，HTTP handler 不运行模型请求。Agent 没有独立的持久模型。
+`AgentExecutor` 按当前 `RunState.checkpoint.next_action` 推进模型、工具和终结动作。`AgentRequestBuilder` 从 Run 事实重建规范 Session 历史、当前 Run 已提交前缀和 Agent 的完整 `RunExecutionState` 资源目录；若 Runtime 有 `SessionContextCheckpoint`，实际 Provider 请求会以摘要替代它覆盖的旧消息，同时保留当前 Run 输入、已提交前缀和较新的原始历史。目录仍完整包含授权前缀内的附件、Panel、OCR、测量、ChartFigure 与 ChartRender 六类资源，但 prompt 只投影相关的资源定位信息；完整资源内容仍可由类型化引用按需读取。容量已配置且请求估算达到当前约 80% 阈值时，Agent 才尝试摘要较早的完整 Run；摘要失败时该请求回退到完整历史，规范 Run 事实不变。历史消息、工具结果和图像分别经 `search_history`、`read_history`、`read_resource_image` 显式检索，历史工具不会重新执行。Runtime 持有摘要检查点与压缩操作状态，`RunExecutionState` 不负责保存摘要或筛选完整资源目录。
+
+Agent 每次组装三层或四层有序 SYSTEM 指令：稳定规则、当前工具目录、可选的来源关联摘要、最终的资源/执行状态索引。图片读取由 `RunExecutionImageReader` 统一执行：核对目标 Session 和资源引用，再由 Sources 解析授权附件、Panel 或已存 PNG；OCR/测量标注图在内存重建，ChartFigure 本身要求显式调用渲染工具。当前 Run 最新已提交工具批次中的成功 `load_image` 原图、OCR/测量标注图和 `render_chart_figure` PNG，会在紧接着的 Provider 请求中按调用顺序加入；历史图像只有显式调用读取工具才会附加到下一次请求。兼容 Provider continuation 由请求边界按源响应重放，不属于 Memory 消息或 SYSTEM 正文。Agent 执行是同步、非流式文本/图像 ReAct；Web Gateway 通过有界 `RunDispatcher` 异步调用 `execute_slice(session_id, run_id)`，HTTP handler 不直接请求模型。Agent 没有独立的持久模型。
 
 ```mermaid
 flowchart LR
-    Gateway[Web Gateway / RunDispatcher] -->|异步 execute(session_id, run_id)| Agent[AgentExecutor]
-    State[Runtime: RunState + Checkpoint] --> Agent[AgentExecutor]
-    Agent -->|读取较早的终态 RunState| State
+    Gateway[Web Gateway / RunDispatcher] -->|异步 execute_slice| Agent[AgentExecutor]
+    State[Runtime: RunState + Checkpoint] --> Agent
+    Agent -->|读取同 Session 较早 RunState| State
+    State -->|可选摘要检查点| Agent
     Agent --> Build[AgentRequestBuilder]
     Build --> Memory[Session Memory Projection]
-    Memory -->|所有历史和当前已提交消息| Build
-    State -->|当前 / 较早 RunState 与已提交工具事实| ImageState[RunExecutionStateService]
-    Sources[Sources: 附件元数据与 Panels] -->|资源元数据与授权读取| ImageState
-    ImageState -->|类型化资源目录| Build
-    Build -->|最新批次的图像资源引用| Reader[RunExecutionImageReader]
-    Gateway -->|授权读取成功 OCR / 测量观察图| Reader
-    Reader -->|经目录授权的源图与私有 PNG| Sources
-    Reader -->|校验后的调用期图像字节| Build
-    Reader -->|按需观察图 PNG| Gateway
-    Build -->|三层 SYSTEM 指令 + 完整历史 + 最新批次图像| Provider[Provider Boundary]
+    Memory -->|规范历史 + 当前已提交前缀| Build
+    Build -->|估算达阈值时生成摘要| Compact[上下文压缩]
+    Compact -->|额外摘要请求 / 有来源引用| Provider[Provider Boundary]
+    Compact -->|写入版本化检查点| State
+    State -->|Run 事实与 Sources 元数据| Catalog[RunExecutionStateService]
+    Sources[Sources: 附件 / Panel] --> Catalog
+    Catalog -->|完整类型化资源目录| Build
+    Build -->|三或四层 SYSTEM 指令 + 请求历史投影| Provider
+    Agent -->|search_history / read_history / read_resource_image| Tool[Tool Runtime]
+    Tool -->|只读已授权历史与资源| Memory
+    Tool -->|图片元数据结果 + 下一请求附图| Build
     Provider -->|ProviderResponse / Failure| Agent
-    Agent -->|extract_text / measure_* / assemble_chart_figure / render_chart_figure ToolInvocation| Tool[Tool Runtime]
-    Tool -->|ChartSpec / ChartFigure 校验与 ChartFigure 绘图| Charts[Charts]
-    Tool -->|ToolExecutionResult| Agent
-    Agent -->|提交事实和推进| State
+    Agent -->|图表工具调用| Tool
+    Tool --> Charts[Charts]
+    Tool -->|提交事实与结果| State
 ```
 
 ## 2. 内部流转
 
 1. **取得所有权并读取动作**：每个 execute_slice 在一个外部动作结束并提交稳定 checkpoint 后释放 Runtime RunExecutionOwnership；每步重读 RunState.stop_request，接受停止后在步骤边界 interrupted，已开始动作仍提交真实结果；只按 checkpoint 的 `action_kind` 推进 model、provider_retry、provider_attempt、tool_execution、tool_attempt 或 final。终态 Run 原样返回；无法取得 Run 锁时读取当前状态。
-2. **读取 Session 历史**：到达 model action 后，Agent 经 RunCoordinator/Store 读取目标 Run 之前的所有 RunState。Runtime 返回同一 SQLite 快照内按 ordinal 连续排列的先前 Run；先前 Run 未终结或历史腐坏时不返回可 dispatch 的请求；合法异常尾部由 Memory 投影。
-3. **投影并组装请求**：Session Memory 从较早 Run 的持久事实构建 `SessionHistory`，再投影当前 Run 输入和已提交前缀。`RunExecutionStateService` 按授权 Run 前缀重建统一类型化目录；附件按首次引用排序，Panel 仅在成功分割结果提交后出现，OCR/测量保留每次观察，Figure 保存完整已接受值，渲染保存安全元数据或错误。`AgentRequestBuilder` 把模型指令组装为三层：静态规则、当前注册工具目录、目标 Run 资源目录。资源提示列出各类资源的类型化引用与精简说明，不重复完整工具结果；动态资源值以 JSON 数据编码，明确作为不可信证据处理；闭合交互的完整结果由 ToolMessage 提供，合法异常尾部由 Memory outcome 提供。当前 Run 最新已提交工具批次需要回看的图像由 `RunExecutionImageReader` 按资源引用读取，成功 OCR/测量标注图在内存重建，ChartFigure 必须先经过显式渲染；历史 Run 图片不会自动重放。同时按 `(源 run_id, 源 response_record_id)` 索引私有 continuation，只给匹配当前 provider 的来源 assistant 附加原值；Memory 中不增加续接字段。已完整配对的旧 Registry 调用仅作为历史投影，不重新执行。Provider 限制与专属 payload 在 attempt claim 前通过 prepare 校验；超限时不裁剪。
+2. **读取规范历史**：到达 model action 后，Agent 经 RunCoordinator/Store 在一致快照中读取同 Session、较小 ordinal 的 RunState。Runtime 验证 ordinal 连续、先前 Run 已终结和历史完整性；合法异常尾部再由 Memory 转成有来源引用的 outcome。
+3. **投影、按需检索并组装请求**：Memory 从持久 Run 事实构建规范历史；默认请求携带全历史，已有 Runtime 摘要检查点则用其摘要替代覆盖范围并保留较新的 raw tail。Provider 先准备完整请求并估算；仅当有效容量已配置且比例达到约 80% 时，Agent 才选择最近 raw Run 之前的连续 completed Run 发起额外摘要请求。摘要按 message/tool result 来源引用校验后写入 Runtime 检查点；无可压缩 Run 时沿用已有 checkpoint（若无则使用完整历史）；估算不可用时不启动新摘要并保持当前投影。摘要失败则让本次请求回退完整历史，且不覆盖旧检查点。随后 Agent 重建 ordinary request。`RunExecutionStateService` 仍按授权前缀构造完整六类资源目录，提示层只投影相关的引用和状态；需要旧消息/结果时模型显式调用历史读取工具，需要图片时显式调用图片读取工具。工具读取只返回当前 Session 可访问内容，不重跑旧工具；历史内容、摘要与资源元数据均作为不可信数据。当前 Run 最新批次的原图与观察/渲染图仍按既有规则附加。continuation 只按源响应关联。Provider 限制与专属 payload 在 attempt claim 前通过 prepare 校验；超限时不裁剪。
 4. **模型动作**：组装请求后 Agent 创建 Provider client，调用 `prepare` 完成全量请求校验及 Provider 专属 payload 准备，成功后才在锁内复查 Run/checkpoint、由 Runtime claim attempt，再 `dispatch` 同一份 prepared payload。已知 prepare 失败由既有 `terminal_message` 保存白名单中文原因，terminal code 为 `execution_failed`，不创建 attempt、不发送网络请求；未识别异常使用通用失败文案。准备阶段的对象不持久化，client 最终关闭。响应交给 Runtime 提交；明确失败与未知结果分别处理，不自动重发已启动请求。
 5. **工具动作**：模型提出的工具调用按原顺序交给 DurableToolExecutor；它通过 ToolRuntime 执行并向 Runtime 追加尝试和结果事实。`assemble_chart_figure` 接受完整 Figure 输入，委托 Charts 校验，再以新鲜同 Session RunExecutionState 核对所有测量引用；任一引用未知、失败、未提交或跨 Session 时整体失败。`render_chart_figure` 只接受已接受的同 Session Figure 引用，通过 Charts 生成 PNG 并委托 Sources 按本次 Run/call 身份保存；通用 ToolResultFact 仅保存摘要。完整批次成功提交后，Agent 可在紧接的 Provider 请求中附加 PNG 图像；既有运行事实以外不再建独立 Figure 或渲染表。未知工具在 owner 释放后依据分类逐调用恢复；安全读/本地幂等写最多两次自动 replay，无可信核对 adapter 时安全失败。恢复一步后回到统一循环检查停止，不直接跑完整批次。
 6. **终结**：只有非空文本的 `stop` 响应成为最终答案；无效响应或确定性失败进入失败终态。正常 Run 不设累计 Provider、工具、token 或时间配额；每个网络操作最多 4 attempts，未知工具每逻辑调用最多 3 attempts。
@@ -43,19 +46,42 @@ flowchart LR
 
 初次模型请求在 prepare 后把 resolved options、endpoint digest、原生 wire digest 和图像 metadata/digest 绑定到当前 record/tool prefix。重试从同一前缀重建，使用冻结 options；endpoint、图像内容、工具合同或 wire 发生变化时拒绝发送。失败等待动作不进入 prompt。每个 slice 最多 dispatch 一次模型或 handler；原生 handler 未返回时继续持有 owner。同步 `execute` 是外层 driver，在 owner 外等待到期或停止并继续执行；Gateway 使用 slice 配合公平调度。
 
+### 上下文压缩与请求投影
+
+上下文估算只用于决定是否生成摘要，不是 Run 预算或请求准入限制。Provider 按实际准备请求估算输入；只有选中 Provider/model 配置了有效 `context_window_tokens`、估算可用且占比达到约 80% 时，Agent 才考虑额外摘要调用。容量未知或估算不可用时不新触发压缩；已有有效 checkpoint 仍可用于后续请求。当前阈值与配置字段由[Provider](provider.md#本地上下文估算)定义。
+
+`eligible_compaction_runs` 从上次覆盖 ordinal 之后选择连续的 completed 历史 Run，并保留最新的先前 Run 为 raw tail；当前 Run 的输入与已提交前缀始终保留。摘要请求使用当前选定 Provider/model，禁止工具调用，只接受符合 JSON 合同且每条摘要都引用授权 `MessageSourceRef` 或 `ToolResultSourceRef` 的文本结果。Run outcomes 与来源引用一并写入 Runtime 的 [`SessionContextCheckpoint`](runtime.md#sessioncontextcheckpoint)；压缩操作的请求绑定、尝试次数和状态由 [`ContextCompactionOperation`](runtime.md#contextcompactionoperation) 持有。摘要器请求文字要求尽量靠近约 50% 窗口占用；普通请求会重新准备和估算，但不会迭代删减或强制达到这个比例。
+
+摘要成功后，请求投影从摘要覆盖的 Run 起舍弃原始消息，保留更晚历史与当前 Run。摘要失败、输出无效、引用未授权或四次物理 attempt 耗尽时，当前请求按完整规范历史重建；已有 checkpoint 不被覆盖。Provider retry 会复用绑定中的 `full`、`checkpoint` 或 `fallback` 投影及对应 checkpoint revision，不在重试中另做决定。`RunExecutionState` 始终包含完整授权资源目录，它不是压缩存储；prompt 的资源索引只列出近期、摘要引用或当前上下文相关的定位信息。摘要本身及工具取回的历史内容均是不可信数据。
+
+历史按需读取由[Session Memory](memory.md#搜索读取与历史图像边界)定义来源引用、授权前缀和检索边界，由[Tools](tools.md#9-session-历史读取工具)定义模型可调用的参数与结果。模型可先用 `search_history` 获取短摘录和引用，再用 `read_history` 读取原始消息、工具结果或资源元数据；`read_resource_image` 仅将获准图像附加到下一次 Provider 请求。图片读取不会因摘要/资源索引出现就自动发生。
+
 ### 提示分层与代码职责
 
-当前工作树中，每次模型请求恰有三个有序 `InstructionBlock(SYSTEM)`。这些是 `ProviderRequest.instructions` 的调用期内容，不是 Memory 消息、Run 字段或持久 Prompt 模型。
+每次普通模型请求包含三层基础 `InstructionBlock(SYSTEM)`；使用摘要检查点时在工具目录之后、资源/执行索引之前增加摘要层，因此总数为三层或四层。这些是 `ProviderRequest.instructions` 的调用期内容，不是 Memory 消息、Run 字段或持久 Prompt 模型。
 
 | 顺序 | 来源 | 内容与边界 |
 |---|---|---|
-| 1. 稳定规则 | `agent/prompting/assets/agent.md`、`evidence.md`、`workflow.md`、`response.md`，由 `loader.py` 按固定顺序载入 | 当前工作树中的四份中文规则分别负责任务分类与职责、证据与不确定性、按目标选择观察并映射 ChartSpec/装配/绘制/回看、按任务类型组织回答；不包含本次用户输入、工具状态或资源值 |
-| 2. 当前工具目录 | 本次请求的 `ToolRegistry`，由 `tools.py` 投影 | 只列出同一 Registry 中按注册顺序排列的名称和描述；参数、必填项和值域以同请求 `ProviderRequest.tools` 的原生 Schema 为准 |
-| 3. Run 资源目录 | 本次请求所用的 `RunExecutionState`，由 `execution.py` 投影 | 用 JSON 索引 Attachment、Panel、OCR、Measurement、ChartFigure 和 ChartRender 的类型化引用与精简状态；闭合交互结果在对应 ToolMessage；另有 Memory 的 prior_run_outcomes 异常数据，不复制成原生 tool 消息 |
+| 1. 稳定规则 | `agent/prompting/assets/agent.md`、`evidence.md`、`workflow.md`、`response.md`，由 `loader.py` 按固定顺序载入 | 任务分类、证据与不确定性、工作流和回答规则；不包含本次用户输入、工具状态或资源值 |
+| 2. 当前工具目录 | 本次请求的 `ToolRegistry`，由 `tools.py` 投影 | 按注册顺序列工具名称和描述；参数以同请求 `ProviderRequest.tools` Schema 为准 |
+| 3. 可选摘要索引 | Runtime 的 `SessionContextCheckpoint`，由 `execution.py` 投影 | 自动摘要、覆盖边界、revision 和来源引用；全体内容作为不可信历史数据，必要时通过历史工具核对原始事实 |
+| 最后一层：资源/执行状态索引 | `RunExecutionState` 与 Memory 的异常 outcome，由 `execution.py` 投影 | 只列请求相关资源引用、精简状态和合法异常状态；不替代完整服务端资源目录或闭合 ToolMessage |
 
-资源目录里的文件名、标题、OCR 片段和工具观察均作为数据而非指令。工具目录说明也不能扩展或覆盖原生工具 Schema。三个指令块在每次请求重建，不保存到 Run facts；Provider 的 `InstructionBlock` 字段合同仍由[Provider 专题](provider.md#4-完整模型字段)拥有。
+目录中的文件名、标题、OCR 片段、摘要、检索结果和工具观察均为数据而非指令。工具目录说明不能扩展或覆盖原生工具 Schema。指令块每次按权威运行态重建，不写入 Run facts；Provider 的 `InstructionBlock` 字段合同由[Provider 专题](provider.md#4-完整模型字段)拥有。
 
-`observations.py` 负责与上述三层指令分开的最新已提交工具批次图像选择和 Provider 图像消息构造，并委托 `RunExecutionImageReader` 读取获准资源。`AgentRequestBuilder` 留作组合边界，负责组装 Memory 历史、三层指令与观察消息、Provider tools/options，请求构建器不负责最终 Provider 校验；`AgentExecutor` 在 attempt claim 前调用 ProviderClient.prepare。
+`observations.py` 负责与 SYSTEM 指令分开的图像观察选择和 Provider 图像消息构造。`AgentRequestBuilder` 组合规范历史/请求投影、资源索引、指令、观察图像、Provider tools/options，不负责最终 Provider 校验；`AgentExecutor` 在 attempt claim 前调用 `ProviderClient.prepare`。
+
+| 文件 | 职责 |
+|---|---|
+| [request.py](../../src/figura/agent/request.py) | 协调 Memory、Runtime checkpoint、完整资源目录、Registry、提示层、观察图像与源响应续接，组装 ProviderRequest |
+| [executor.py](../../src/figura/agent/executor.py) | 估算阈值判断、摘要请求与检查点复用；管理 prepare → checkpoint 复查 → attempt claim → dispatch/commit |
+| [context_compaction.py](../../src/figura/agent/context_compaction.py) | 选择可压缩 Run 并验证摘要 JSON 与来源引用 |
+| [prompting/loader.py](../../src/figura/agent/prompting/loader.py) 与 [assets](../../src/figura/agent/prompting/assets/) | 载入四份稳定中文 Markdown 规则 |
+| [prompting/tools.py](../../src/figura/agent/prompting/tools.py) | 从当前 ToolRegistry 生成工具名称/描述目录 |
+| [prompting/execution.py](../../src/figura/agent/prompting/execution.py) | 生成可选摘要指令与请求相关的资源/异常状态 JSON 索引 |
+| [prompting/observations.py](../../src/figura/agent/prompting/observations.py) | 选择当前 Run 上一完整工具批次的图像观察并构造 Provider 消息 |
+
+
 
 | 文件 | 职责 |
 |---|---|
@@ -71,7 +97,7 @@ flowchart LR
 | 输入或输出 | 合同 owner | Agent 的使用方式 |
 |---|---|---|
 | `RunState`、`ExecutionCheckpoint`、`RunInput` | [Run Runtime](runtime.md#4-完整模型字段) | 读取已提交事实和下一动作，不另建持久副本 |
-| `SessionHistory`、`UserMessage`、`AssistantMessage`、`ToolMessage`、`MemoryToolCall` | [Session Memory](memory.md#4-完整模型字段) | 消费从同 Session Run 事实重建的完整历史；Message 模型只在请求期间存在 |
+| `SessionHistory`、消息投影、来源引用与异常 outcome | [Session Memory](memory.md#4-完整模型字段) | 消费规范历史，并按 checkpoint 与检索合同构造请求投影；来源引用只定位原始 Runtime 事实 |
 | `AttachmentMetadata`、`PanelPoint`、`PanelRecord` | [Sources](sources.md#3-完整模型字段) | 读取 Session 资源；只有已提交分割结果关联的 Panel 才能进入清单 |
 | `RunExecutionState`、类型化引用与资源内容模型 | [本篇第 4 节](#4-runexecutionstate-资源合同与完整字段) | Agent 按 Runtime 已提交前缀与 Sources 资源重建调用期目录；字段和不变量由 Agent 拥有，嵌套值链接至 Sources、Tools、Charts owner |
 | `ChartSpecData`、`ChartFigure` 与布局模型 | [Charts](charts.md#4-完整模型字段) | Agent 暴露组装工具；内容字段与纯校验由 Charts 定义 |
@@ -79,7 +105,7 @@ flowchart LR
 | `ProviderRequest`、`ProviderResponse` | [Provider](provider.md#4-完整模型字段) | 组装请求、消费规范化结果；字段合同由 Provider 边界定义 |
 | `ToolDefinition`、`ToolInvocation`、`ToolExecutionResult` | [Tool](tools.md#4-完整模型字段) | 投影可用工具、提交调用、消费结果 |
 
-资源目录与内容均为 Agent 派生状态 dataclass，只在调用期重建，不是独立持久事实。Runtime 仍拥有 Run 生命周期、完整工具调用/尝试/结果事实；Sources 拥有附件/Panel 元数据和图像文件。网页创建 Run 后由 Gateway Dispatcher 调度。当前工作树 Gateway Registry 为 `figura-web-v6`，包含 `assemble_chart_figure` 与 `render_chart_figure`；Chart rendering change 已归档。资源模型详见本篇第 4 节与[run-execution-resources 主规格](../../openspec/figura/openspec/specs/run-execution-resources/spec.md)。完整输入、输出和引用限制分别见[画布组装工具合同](tools.md#7-图表画布组装工具)和[图表渲染工具合同](tools.md#8-图表渲染工具)。
+资源目录与内容均为 Agent 派生状态 dataclass，只在调用期重建，不是独立持久事实。Runtime 仍拥有 Run 生命周期、完整工具调用/尝试/结果事实；Sources 拥有附件/Panel 元数据和图像文件。网页创建 Run 后由 Gateway Dispatcher 调度。当前工作树 Gateway Registry 为 `figura-web-v7`，在原有图像、OCR、测量及画布工具上加入三种历史读取工具；其中历史图像显式加入下一 Provider 请求。资源模型详见本篇第 4 节与[run-execution-resources 主规格](../../openspec/figura/openspec/specs/run-execution-resources/spec.md)。画布、渲染及历史读取工具的完整输入/输出分别见[画布组装](tools.md#7-图表画布组装工具)、[图表渲染](tools.md#8-图表渲染工具)和[Session 历史读取](tools.md#9-session-历史读取工具)。
 
 ## 4. RunExecutionState 资源合同与完整字段
 
@@ -225,16 +251,16 @@ Sources 附件元数据在 Run 资源目录中的只读引用；图片字节仍�
 | 无结果的 Provider attempt，原 owner 已退出 | 保存旧 unknown；有 generation-only 请求绑定则按到期策略生成新的 attempt，legacy 无绑定则终结 | 无响应时只有原输入及 RunHistoryOutcome，不发明助手答案 |
 | 无结果的 Tool attempt，原 Registry 可用且 replay_safe 或 idempotent_local_write | 每步最多恢复一个调用；初次加最多两次自动 replay，共 3 次，幂等写沿原 key | 成功提交后可继续；耗尽或不满足恢复条件则保留真实异常前缀 |
 | reconcile_required 且无可信核对适配器 | tool_outcome_unknown；不再次调用 handler | 不把未知效果表示为回滚或成功 |
-| 较早 failed/interrupted Run 的合法不完整末尾批次 | Memory 将整个批次转成 source-linked outcome，Agent 仅放进第三层 SYSTEM JSON | 观察恰出现一次；不发送悬空原生 tool call/result，不重放该批次 continuation |
+| 较早 failed/interrupted Run 的合法不完整末尾批次 | Memory 将整个批次转成 source-linked outcome，Agent 仅放进最终资源/执行状态 SYSTEM JSON | 观察恰出现一次；不发送悬空原生 tool call/result，不重放该批次 continuation |
 
 这里的后续对话是创建同 Session 的新 Run 使用旧事实，不是网页 retry/resume 原 Run。调用 ID 保持原 opaque 值；跨 Provider 不转换闭合原生历史或伪造所需续接，仍可能在 prepare 阶段拒绝。字段权威定义分别见 [Runtime 控制与事实](runtime.md#4-完整模型字段)、[Memory outcome](memory.md#合法异常尾部投影)和 [Web 状态](web.md#协作停止与客户端生命周期)。
 
 ## 5. 不变量、状态与依据
 
-资源目录是调用期派生视图，不扩展 Runtime RunState，也没有独立持久化。完整历史仍来自同 Session 已提交 Run 事实；提示索引列出全部六类资源的类型化引用与精简名称/状态，不复制完整 OCR、测量、Figure 或 render JSON。原图仅在最新已提交工具批次成功 `load_image` 后回看；OCR/测量标注根据已提交结果临时重建；ChartRender PNG 在 Sources 读取并校验。跨 Session、目标 Run 前缀外、失败观察或缺失/损坏文件不能授予图像访问；Gateway 时间线仅允许读取同 Session 下成功且来源可解析的 OCR/测量观察图，且不保存重建图像。所有 Agent 请求所需图像与 Provider 限制在 attempt claim 前校验。代码：[AgentExecutor](../../src/figura/agent/executor.py)、[AgentRequestBuilder](../../src/figura/agent/request.py)、[资源合同](../../src/figura/agent/execution_resources.py)、[资源重建](../../src/figura/agent/execution_state.py)、[统一图片读取](../../src/figura/agent/execution_images.py)、[Run Dispatcher](../../src/figura/gateway/dispatcher.py)；完整合同见[run-execution-resources 主规格](../../openspec/figura/openspec/specs/run-execution-resources/spec.md)。
+资源目录是调用期派生视图，不扩展 Runtime RunState，也没有独立持久化。规范历史仍来自同 Session 已提交 Run 事实；普通请求可用摘要替代已覆盖消息，提示索引只列出与当前投影相关的类型化资源引用和精简状态，不复制完整 OCR、测量、Figure 或 render JSON。原图仅在最新已提交工具批次成功 `load_image` 后回看；OCR/测量标注根据已提交结果临时重建；ChartRender PNG 在 Sources 读取并校验。跨 Session、目标 Run 前缀外、失败观察或缺失/损坏文件不能授予图像访问；Gateway 时间线仅允许读取同 Session 下成功且来源可解析的 OCR/测量观察图，且不保存重建图像。所有 Agent 请求所需图像与 Provider 限制在 attempt claim 前校验。代码：[AgentExecutor](../../src/figura/agent/executor.py)、[AgentRequestBuilder](../../src/figura/agent/request.py)、[资源合同](../../src/figura/agent/execution_resources.py)、[资源重建](../../src/figura/agent/execution_state.py)、[统一图片读取](../../src/figura/agent/execution_images.py)、[Run Dispatcher](../../src/figura/gateway/dispatcher.py)；完整合同见[run-execution-resources 主规格](../../openspec/figura/openspec/specs/run-execution-resources/spec.md)。
 
-四份稳定提示资产已补充六类任务目标、按需证据选择、OCR/测量不确定性、四类图表的数据表达、Figure 装配与校正、渲染回看及面向用户的限制说明；模型/工具职责、三层请求结构和资源目录持久边界未变。[agent-react-execution 主规格](../../openspec/figura/openspec/specs/agent-react-execution/spec.md)规定三个有序 SYSTEM 指令层，并新增 task-directed evidence workflow requirement；`improve-figura-prompt-assets` 已归档且 delta 已同步。提示与重试相关实现均已包含在当前 Git 历史中；执行策略 change `2026-10-03-add-durable-execution-policy-and-provider-retries` 已归档。归档记录需求演进，不代表代码已发布。
+四份稳定提示资产已补充六类任务目标、按需证据选择、OCR/测量不确定性、四类图表的数据表达、Figure 装配与校正、渲染回看及面向用户的限制说明；模型/工具职责和 RunExecutionState 的权威字段归属未变。[agent-react-execution 主规格](../../openspec/figura/openspec/specs/agent-react-execution/spec.md)规定稳定规则、工具目录与执行/资源索引三类基础 SYSTEM 层；启用摘要时，来源关联摘要位于资源/执行索引之前。`improve-figura-prompt-assets` 与执行策略 change 均已归档。归档记录需求演进，不代表代码已发布。
 
-**规格状态：**Agent ReAct 与 Session Memory 主规格现已共同规定兼容源响应续接重放及合法异常尾部转换，旧的跨 Run 禁止段落已修正。部分图表与观察主规格仍使用旧分散资源字段，当前目录统一为 `resources`。完整差异见[总览](../figura-implementation-overview.md#规格与实现的已知差异)；本篇不将旧字段写作当前模型。
+**规格状态：**Agent ReAct、Session Memory、上下文压缩、历史检索和统一资源目录主规格已核对；截至 2026-10-05，本次检查未发现已知规格/实现差异。主规格修改与新增实现仍可能处于未提交工作树；归档 change 不代表代码已提交或发布。
 
-协作停止、工具恢复预算和固定失败码为当前工作树实现，对应 change 已归档，主规格已同步。所有控制字段由 [Runtime](runtime.md#runstoprequest) 拥有；异常意图/观察完整字段由 [Memory](memory.md#合法异常尾部投影) 拥有。第三层 `prior_run_outcomes` 是不可信数据，不能覆盖静态规则、证明未知调用成功或要求自动重试。请求保留全部历史，按共享 JSON 载荷与真实 Provider 能力检查；超限不裁剪。unexpected 退出按最新 checkpoint 处理；完整性/存储错误保持拒绝执行。线程 handler 不返回时停止仍等待，未实现进程强杀。
+协作停止、工具恢复策略和终态字段由 [Runtime](runtime.md#4-完整模型字段) 拥有；异常意图/观察字段由 [Memory](memory.md#合法异常尾部投影) 拥有。最终 SYSTEM 指令中的 `prior_run_outcomes`、摘要以及检索结果都是不可信数据，不能覆盖系统规则、证明未知调用成功或要求自动重试。当前请求按 prepare 与 Provider 实际能力校验，容量估算只触发可选摘要；摘要不修改 Run 事实，失败时回退完整历史。unexpected 退出按最新 checkpoint 处理；完整性/存储错误仍拒绝执行。停止不会强杀尚未返回的同步 handler。

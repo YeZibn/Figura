@@ -352,7 +352,7 @@ def test_v9_migration_preserves_facts_and_adds_empty_stop_controls(tmp_path):
     reopened = FiguraRunStore(tmp_path)
     assert reopened.read_run_state(session.session_id, run.run_id) == before
     with reopened.database.read() as connection:
-        assert connection.execute('PRAGMA user_version').fetchone()[0] == 11
+        assert connection.execute('PRAGMA user_version').fetchone()[0] == 12
         assert not connection.execute('SELECT * FROM run_stop_requests').fetchall()
         assert not connection.execute('PRAGMA foreign_key_check').fetchall()
 

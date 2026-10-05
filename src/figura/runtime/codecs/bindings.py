@@ -20,8 +20,18 @@ _IMAGE = {"source_ref", "observation_kind", "media_type", "byte_count", "sha256"
 
 
 def binding_dict(binding: ProviderRequestBinding) -> dict:
-    value = {item.name: getattr(binding, item.name) for item in fields(binding) if item.name != "context_estimate"}
-    if binding.schema_version == 2:
+    compatibility_fields = {
+        "context_projection",
+        "context_checkpoint_revision",
+        "context_compaction_operation_id",
+    }
+    value = {
+        item.name: getattr(binding, item.name)
+        for item in fields(binding)
+        if item.name != "context_estimate"
+        and (binding.schema_version >= 3 or item.name not in compatibility_fields)
+    }
+    if binding.schema_version in {2, 3}:
         estimate = binding.context_estimate
         value["context_estimate"] = None if estimate is None else {
             item.name: getattr(estimate, item.name) for item in fields(ContextEstimate)
@@ -50,8 +60,38 @@ def validate_binding(binding: ProviderRequestBinding) -> None:
     if binding.provider_id not in {"qwen", "deepseek", "mimo"} or any(
         type(value) is not int or value < minimum for value, minimum in (
             (binding.base_record_sequence, 1), (binding.base_tool_sequence, 0))
-    ) or binding.schema_version not in {1, 2} or binding.request_contract_version != 1 or binding.retry_policy_version != 1 or binding.max_attempts != 4 or binding.generation_only is not True:
+    ) or binding.schema_version not in {1, 2, 3} or binding.request_contract_version != 1 or binding.retry_policy_version != 1 or binding.max_attempts != 4 or binding.generation_only is not True:
         raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
+    if binding.schema_version < 3:
+        if (
+            binding.context_projection != "full"
+            or binding.context_checkpoint_revision is not None
+            or binding.context_compaction_operation_id is not None
+        ):
+            raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
+    else:
+        if binding.context_projection not in {"full", "checkpoint", "fallback"}:
+            raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
+        if binding.context_projection == "checkpoint":
+            if (
+                type(binding.context_checkpoint_revision) is not int
+                or binding.context_checkpoint_revision < 1
+                or not isinstance(binding.context_compaction_operation_id, str)
+                or not binding.context_compaction_operation_id
+            ):
+                raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
+        elif binding.context_projection == "fallback":
+            if (
+                binding.context_checkpoint_revision is not None
+                or not isinstance(binding.context_compaction_operation_id, str)
+                or not binding.context_compaction_operation_id
+            ):
+                raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
+        elif (
+            binding.context_checkpoint_revision is not None
+            or binding.context_compaction_operation_id is not None
+        ):
+            raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
     estimate = binding.context_estimate
     if binding.schema_version == 1 and estimate is not None:
         raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
@@ -117,10 +157,21 @@ def decode_binding(raw: str) -> ProviderRequestBinding:
         if not isinstance(value, dict):
             raise ValueError
         keys = {item.name for item in fields(ProviderRequestBinding)}
-        if value.get("schema_version") == 1:
+        schema_version = value.get("schema_version")
+        if schema_version == 1:
             keys.remove("context_estimate")
+        if schema_version in {1, 2}:
+            keys.difference_update({
+                "context_projection",
+                "context_checkpoint_revision",
+                "context_compaction_operation_id",
+            })
         if set(value) != keys:
             raise ValueError
+        if schema_version in {1, 2}:
+            value["context_projection"] = "full"
+            value["context_checkpoint_revision"] = None
+            value["context_compaction_operation_id"] = None
         estimate = value.get("context_estimate")
         if estimate is not None:
             if not isinstance(estimate, dict) or set(estimate) != {item.name for item in fields(ContextEstimate)}:

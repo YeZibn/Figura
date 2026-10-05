@@ -15,6 +15,7 @@ from figura.gateway.dispatcher import RunDispatcher
 from figura.gateway.session_deletion import FiguraSessionDeletion
 from figura.agent.execution_images import RunExecutionImageReader
 from figura.agent.execution_state import RunExecutionStateService
+from figura.memory.retrieval import SessionHistorySearch
 from figura.providers import ProviderFactory
 from figura.runtime.coordinator import RunCoordinator
 from figura.runtime.store import FiguraRunStore
@@ -29,6 +30,7 @@ from figura.tools.implementations.measure_pie import measure_pie_definition
 from figura.tools.implementations.measure_scatter import measure_scatter_definition
 from figura.tools.implementations.assemble_chart_figure import assemble_chart_figure_definition
 from figura.tools.implementations.render_chart_figure import render_chart_figure_definition
+from figura.tools.implementations.history import history_tool_definitions, historical_image_tool_definition
 
 
 def create_application(
@@ -62,10 +64,13 @@ def create_application(
     )
     execution_state = RunExecutionStateService(coordinator, panel_service)
     execution_images = RunExecutionImageReader(attachment_service, panel_service, chart_renders)
+    history = SessionHistorySearch(coordinator, execution_state)
     registry = ToolRegistry(
-        "figura-web-v6",
+        "figura-web-v7",
         (
             *image_tool_definitions(execution_state.for_run, execution_images, panel_service),
+            *history_tool_definitions(history),
+            historical_image_tool_definition(history, execution_images),
             extract_text_definition(execution_state.for_run, execution_images),
             measure_bars_definition(execution_state.for_run, execution_images),
             measure_lines_definition(execution_state.for_run, execution_images),

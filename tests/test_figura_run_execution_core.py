@@ -224,7 +224,7 @@ def test_v4_migration_adds_attachment_table_without_changing_run_state(tmp_path)
     after = migrated_store.read_run_state(session.session_id, run.run_id)
 
     with sqlite3.connect(store.database_path) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 11
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 12
         assert connection.execute("PRAGMA quick_check").fetchone()[0] == "ok"
         assert connection.execute(
             "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'attachments'"
@@ -259,7 +259,7 @@ def test_v5_migration_preserves_attachments_and_adds_panels(tmp_path) -> None:
     after = migrated_store.read_run_state(session.session_id, run.run_id)
 
     with sqlite3.connect(store.database_path) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 11
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 12
         assert connection.execute("PRAGMA quick_check").fetchone()[0] == "ok"
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
         assert connection.execute(
@@ -298,7 +298,7 @@ def test_v7_migration_adds_scoped_deletion_without_changing_run_facts(tmp_path) 
     after = migrated_store.read_run_state(session.session_id, run.run_id)
 
     with sqlite3.connect(store.database_path) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 11
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 12
         assert connection.execute(
             "SELECT session_id FROM session_deletion_scopes"
         ).fetchall() == []
@@ -1197,7 +1197,7 @@ def test_schema9_preserves_explicit_deepseek_values_and_schema8_history(tmp_path
     assert new_state.provider_continuations[0].reasoning_content == reasoning
     assert 'private text' not in repr(new_state)
     with sqlite3.connect(store.database_path) as connection:
-        assert connection.execute('PRAGMA user_version').fetchone()[0] == 11
+        assert connection.execute('PRAGMA user_version').fetchone()[0] == 12
         assert connection.execute('PRAGMA foreign_key_check').fetchall() == []
         with pytest.raises(sqlite3.IntegrityError):
             connection.execute('DELETE FROM run_provider_continuations')

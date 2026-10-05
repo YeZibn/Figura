@@ -72,12 +72,12 @@ Figura 只读取 `FIGURA_*` 模型配置。模板中的 `OPENAI_*`、`QWEN_*`、
 Figura 对所有 Provider 统一使用 `tiktoken/o200k_base` 估算最近一次模型请求的输入 token。准备编码缓存后重启服务：
 
 ```bash
-conda run -n agent python -c "import tiktoken; tiktoken.get_encoding('o200k_base')"
+conda run -n agent python -c "from dotenv import load_dotenv; load_dotenv('.env', override=False); import tiktoken; tiktoken.get_encoding('o200k_base')"
 ```
 
-此准备步骤首次需要下载公开编码资源，运行期估算不访问网络。默认使用系统临时目录中的 tiktoken 缓存；需要持久缓存时，在准备命令和 Gateway 环境中设置同一个 `TIKTOKEN_CACHE_DIR`。缓存缺失、损坏或被禁用时，模型调用仍继续，输入区显示“上下文待估算”；准备缓存后需重启服务。
+此准备步骤首次需要下载公开编码资源，运行期估算不访问网络。`.env.example` 将 `TIKTOKEN_CACHE_DIR` 配置为 `${HOME}/.cache/figura/tiktoken` 持久目录；准备命令读取项目 `.env` 后会使用同一路径。未配置时仍回退到系统临时目录。缓存缺失、损坏或被禁用时，模型调用仍继续，输入区显示“上下文待估算”；准备缓存后需重启服务。
 
-在 `.env` 中填写 `FIGURA_QWEN_CONTEXT_WINDOW_TOKENS`、`FIGURA_DEEPSEEK_CONTEXT_WINDOW_TOKENS` 或 `FIGURA_MIMO_CONTEXT_WINDOW_TOKENS`，值取实际模型服务合同中的正整数容量，即可显示占比。没有有效容量时只显示估算 token 数，不猜测模型窗口。
+`.env.example` 已为当前固定的 Qwen、DeepSeek、MiMo 模型填写 1,000,000 tokens 的上下文容量；对应依据见 [Qwen 模型信息](https://help.aliyun.com/zh/model-studio/qwen3-8-flash)、[DeepSeek 模型与价格](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/) 和 [MiMo 模型列表](https://mimo.mi.com/docs/zh-CN/quick-start/summary/model)。若使用不同模型部署或服务合同，需按实际容量调整对应的 `FIGURA_<PROVIDER>_CONTEXT_WINDOW_TOKENS`。没有有效容量时只显示估算 token 数，不猜测模型窗口。
 
 计数包括实际发送的指令、工具定义、历史、工具参数/结果与回放 continuation。每次出现的图片按 1,024 tokens 近似，不计算 base64 文本。输入区的“上下文 ≈”对应最近请求；不累计多次调用，不计算草稿或正在生成的回复。点击指示器可查看数量、原请求模型与说明。重试复用同一估算，超过 100% 也不会在本地阻止发送。
 
@@ -195,8 +195,8 @@ Gateway 在启动和运行期间会扫描并恢复持久化的 running Run。已
 | `FIGURA_CONDA_ENV` | `agent` | 启动器使用的 Conda 环境 |
 | `FIGURA_CONDA_EXECUTABLE` | `conda` | 启动器使用的 Conda 可执行程序 |
 | `FIGURA_<PROVIDER>_MAX_COMPLETION_TOKENS` | 未设置 | 单次请求输出 token 配置，不是 Run 总预算 |
-| `FIGURA_<PROVIDER>_CONTEXT_WINDOW_TOKENS` | 未设置 | 上下文占比的显示分母；没有有效值时只显示输入估算 |
-| `TIKTOKEN_CACHE_DIR` | 系统临时缓存 | 可选的 tokenizer 编码持久缓存目录 |
+| `FIGURA_<PROVIDER>_CONTEXT_WINDOW_TOKENS` | 未设置 | 上下文占比的显示分母；`.env.example` 为当前固定模型设置 1,000,000 |
+| `TIKTOKEN_CACHE_DIR` | 系统临时缓存 | tokenizer 编码缓存目录；`.env.example` 配置为 `${HOME}/.cache/figura/tiktoken` |
 
 启动器端口等选项从启动进程环境读取，可这样覆盖：
 

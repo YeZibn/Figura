@@ -4,7 +4,7 @@
 
 ## 1. 职责与边界
 
-Local Gateway 是 Python 进程内的 HTTP/SSE 边界，不是第二套 Session 或 Run 存储。`bootstrap.py` 负责组装并注入 Runtime、Sources、Agent、Provider 与 Tools；`gateway/application.py` 负责 HTTP 请求处理和安全投影。它把 JSON/图片请求交给 Runtime、Sources、Agent 图像读取器与 ProviderFactory，再把有限的 Session、Run、事件、附件、已提交 Panel、ChartFigure 渲染摘要和 Run 工具时间线 DTO 返回给浏览器。Run 创建持久化后由有界 Dispatcher 异步提交给既有 Agent；Gateway handler 不直接请求模型。当前工作树 Gateway Registry 为 `figura-web-v6`，已支持 `render_chart_figure`；PNG 和成功 OCR/测量观察图通过只读内容路由懒加载，测量与渲染仍没有独立前端操作 API。工具时间线是基于 Runtime 已提交 ToolCall、Attempt、Result 事实构造的只读投影，不增加持久表或执行控制入口。
+Local Gateway 是 Python 进程内的 HTTP/SSE 边界，不是第二套 Session 或 Run 存储。`bootstrap.py` 负责组装并注入 Runtime、Sources、Agent、Provider 与 Tools；`gateway/application.py` 负责 HTTP 请求处理和安全投影。它把 JSON/图片请求交给 Runtime、Sources、Agent 图像读取器与 ProviderFactory，再把有限的 Session、Run、事件、附件、已提交 Panel、ChartFigure 渲染摘要和 Run 工具时间线 DTO 返回给浏览器。Run 创建持久化后由有界 Dispatcher 异步提交给既有 Agent；Gateway handler 不直接请求模型。当前工作树 Gateway Registry 为 `figura-web-v7`，支持历史搜索/读取工具、`render_chart_figure` 与只读内容路由；PNG 和成功 OCR/测量观察图通过只读内容路由懒加载，测量与渲染仍没有独立前端操作 API。工具时间线是基于 Runtime 已提交 ToolCall、Attempt、Result 事实构造的只读投影，不增加持久表或执行控制入口。
 
 React Figura mode 通过 `FiguraClient` 负责 HTTP/SSE，再由 `FiguraWorkspaceApi` 映射到现有工作区协议和共享组件。React 组件不直接访问 Gateway；ChartAgent 与 Mock client 模式仍由其原有客户端提供。此边界目前是本地网页接入，没有 Tauri shell 接入。
 

@@ -122,6 +122,39 @@ def test_binding_versions_preserve_legacy_encoding_and_validate_estimates(tmp_pa
             decode_binding(json.dumps(value))
 
 
+def test_binding_v3_pins_checkpoint_or_fallback_context_projection(tmp_path):
+    store, coordinator, session, run = _app(tmp_path)
+    agent = _agent(store, coordinator, _registry(), _FakeFactory([]))
+    initial = coordinator.read_run_state(session.session_id, run.run_id)
+    base = replace(_binding(agent, initial), schema_version=3)
+    for binding in (
+        replace(
+            base,
+            context_projection="checkpoint",
+            context_checkpoint_revision=2,
+            context_compaction_operation_id="compact-op",
+        ),
+        replace(
+            base,
+            context_projection="fallback",
+            context_compaction_operation_id="compact-op",
+        ),
+    ):
+        assert decode_binding(encode_binding(binding)) == binding
+    for binding in (
+        replace(base, context_projection="checkpoint"),
+        replace(base, context_projection="fallback"),
+        replace(base, context_projection="other"),
+        replace(
+            base,
+            context_projection="full",
+            context_checkpoint_revision=1,
+        ),
+    ):
+        with pytest.raises(RunError):
+            encode_binding(binding)
+
+
 def test_retry_and_restart_keep_original_estimate(tmp_path, monkeypatch, encoding):
     monkeypatch.setattr("figura.runtime.persistence.providers.retry_deadline", lambda *_: "2000-01-01T00:00:00Z")
     store, coordinator, session, run = _app(tmp_path)
@@ -129,7 +162,7 @@ def test_retry_and_restart_keep_original_estimate(tmp_path, monkeypatch, encodin
     agent = _agent(store, coordinator, _registry(), factory)
     waiting = agent.execute_slice(session.session_id, run.run_id)
     binding = waiting.provider_request_bindings[0]
-    assert binding.schema_version == 2 and binding.context_estimate.input_tokens > 0
+    assert binding.schema_version == 3 and binding.context_estimate.input_tokens > 0
     assert FiguraRunStore(tmp_path).read_run_state(session.session_id, run.run_id).provider_request_bindings == (binding,)
     monkeypatch.setattr("figura.providers.client.estimate_input", lambda *_: pytest.fail("retry re-estimated input"))
     finished = agent.execute(session.session_id, run.run_id)

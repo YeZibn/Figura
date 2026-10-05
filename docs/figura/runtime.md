@@ -1,10 +1,10 @@
 # Run Runtime：执行事实与恢复
 
-> 更新日期：2026-10-04。[返回总览](../figura-implementation-overview.md)。范围：当前 `src/figura/runtime/` 的工作树实现。这里的“事实”指已提交的执行内容；Checkpoint 是推进控制，事件是安全投影。完整字段表在第 4 节。
+> 更新日期：2026-10-05。[返回总览](../figura-implementation-overview.md)。范围：当前 `src/figura/runtime/` 的工作树实现。这里的“事实”指已提交的执行内容；Checkpoint 是推进控制，事件是安全投影。Session 上下文摘要只是一份可替换的派生检查点，完整历史事实仍保留。完整字段表在第 4 节。
 
 ## 1. 职责与边界
 
-RunCoordinator 校验并推进 Session/Run；`FiguraRunStore` 是 Runtime 仓储的组合入口；DurableToolExecutor 记录工具尝试与结果。同一 Session 同时最多有一个 running Run。Runtime 向 Agent 提供同一 Session 中目标 Run 之前的终态 RunState 一致快照，供[Session Memory](memory.md)和[Agent 资源目录](agent.md#4-runexecutionstate-资源合同与完整字段)只读投影；也向本地 Gateway 提供 Session 列表聚合、Session 全量读取快照和 running Run 恢复列表。Agent 只能通过协调入口推进 Run，不能绕过 Checkpoint 直接更新执行历史。Provider 凭据、图片字节、调用期请求和 Memory 消息投影不进入 Run 事实。附件与 Panel 元数据由[Sources](sources.md)管理；OCR、四类测量、ChartFigure 和 ChartRender 的完整调用/结果继续使用通用 `ToolCallFact`、`ToolAttemptStartedFact` 与 `ToolResultFact`。Agent 的 `RunExecutionStateService` 从这些已提交事实及 Sources 元数据重建包含六种资源类型的调用期目录；它不增加 Runtime 字段、fact kind、Figure 表或渲染表。完整 OCR/测量结果仍在 ToolResultFact 与 Memory ToolMessage 中；ChartFigure 从成功调用参数和配对结果重建；PNG 字节由 Sources 保存，渲染摘要从成功结果重建。字段与读取规则见[Agent 资源目录](agent.md#4-runexecutionstate-资源合同与完整字段)。`RunStreamEvent` 保存生命周期事件和安全进度标记；`run_progress` 与事实提交、Checkpoint 推进处于同一事务，Gateway 用它触发工具时间线刷新，不把工具 payload 复制到 SSE。公开投影见[网页端边界](web.md)。
+RunCoordinator 校验并推进 Session/Run；`FiguraRunStore` 是 Runtime 仓储的组合入口；DurableToolExecutor 记录工具尝试与结果。同一 Session 同时最多有一个 running Run。Runtime 向 Agent 提供目标 Run 前的终态 RunState 一致快照，供[Session Memory](memory.md)构造规范对话，并从专属表提供 `SessionContextCheckpoint` 与摘要操作状态。摘要只缩减 Provider 请求投影，不修改 Run、消息或工具事实。Runtime 也向 Gateway 提供 Session 列表聚合、Session 全量读取快照和 running Run 恢复列表。Agent 只能通过协调入口推进 Run，不能绕过 Checkpoint 直接更新执行历史。Provider 凭据、图片字节、调用期普通请求和 Memory 消息投影不进入 Run 事实；压缩请求 binding 是独立操作表内的安全描述，不含原始 payload/凭据。附件与 Panel 元数据由[Sources](sources.md)管理；OCR、四类测量、ChartFigure 和 ChartRender 的完整调用/结果继续使用通用 `ToolCallFact`、`ToolAttemptStartedFact` 与 `ToolResultFact`。Agent 的 `RunExecutionStateService` 从这些已提交事实及 Sources 元数据重建包含六种资源类型的调用期目录；它不增加 RunState 字段、fact kind、Figure 表或渲染表。完整 OCR/测量结果仍在 ToolResultFact 与 Memory ToolMessage 中；ChartFigure 从成功调用参数和配对结果重建；PNG 字节由 Sources 保存，渲染摘要从成功结果重建。完整目录和按需历史读取的归属见[Agent](agent.md#4-runexecutionstate-资源合同与完整字段)与[Memory](memory.md)。`RunStreamEvent` 保存生命周期事件和安全进度标记；`run_progress` 与事实提交、Checkpoint 推进处于同一事务，Gateway 用它触发工具时间线刷新，不把工具 payload 复制到 SSE。公开投影见[网页端边界](web.md)。
 
 ```mermaid
 flowchart LR
@@ -13,20 +13,23 @@ flowchart LR
     Store --> SessionRepo[SessionRepository]
     Store --> RunRepo[RunRepository]
     Store --> SnapshotRepo[SnapshotRepository]
+    Store --> ContextRepo[SessionContextCheckpointRepository / ContextCompactionOperationRepository]
     Store --> ProviderRepo[ProviderRepository]
     Store --> ToolRepo[ToolRepository]
     Store --> TransitionRepo[RunTransitionRepository]
     SessionRepo --> Database[storage.SqliteDatabase]
     RunRepo --> Database
     SnapshotRepo --> Database
+    ContextRepo --> Database
     ProviderRepo --> Database
     ToolRepo --> Database
     TransitionRepo --> Database
     SourceRepo[SourcesRepository] --> Database
-    Database --> SQLite[(one SQLite file / schema v11)]
+    Database --> SQLite[(one SQLite file / schema v12)]
     RunRepo --> Run[(Run and initial input)]
     RunRepo --> State[RunState hydration]
     SnapshotRepo -->|Session / prior Run snapshots| Store
+    ContextRepo -->|来源校验摘要检查点 / 稳定压缩操作状态| Store
     SessionRepo -->|SessionListEntry aggregate| Gateway[Figura Gateway]
     SnapshotRepo -->|SessionSnapshot read snapshot| Gateway
     RunRepo -->|ordered running Runs| Gateway
@@ -54,21 +57,21 @@ flowchart LR
     State --> Agent[AgentExecutor]
 ```
 
-Runtime 按模型归属和事务职责保持中等粒度：[`runtime/models.py`](../../src/figura/runtime/models.py) 定义 Session/Run、Checkpoint 和枚举；[`runtime/records.py`](../../src/figura/runtime/records.py) 定义持久事实及 Run/Session 读取视图；[`runtime/validation.py`](../../src/figura/runtime/validation.py) 校验 Run 状态不变量，[`runtime/record_validation.py`](../../src/figura/runtime/record_validation.py) 校验持久事实字段和限制。共享 [`storage/database.py`](../../src/figura/storage/database.py) 管理 SQLite 连接和读写事务，[`storage/schema.py`](../../src/figura/storage/schema.py) 管理 schema v11。
+Runtime 按模型归属和事务职责保持中等粒度：[`runtime/models.py`](../../src/figura/runtime/models.py) 定义 Session/Run、Checkpoint 和枚举；[`runtime/records.py`](../../src/figura/runtime/records.py) 定义持久事实及 Run/Session 读取视图；[`runtime/validation.py`](../../src/figura/runtime/validation.py) 校验 Run 状态不变量，[`runtime/record_validation.py`](../../src/figura/runtime/record_validation.py) 校验持久事实字段和限制。共享 [`storage/database.py`](../../src/figura/storage/database.py) 管理 SQLite 连接和读写事务，[`storage/schema.py`](../../src/figura/storage/schema.py) 管理 schema v12。
 
 <a id="schema-migration"></a>
-### SQLite schema v11 迁移
+### SQLite schema v12 迁移
 
-当前版本为 **v11**：v10 增加独立停止请求表；v11 增加持久 Provider 请求绑定与 attempt 关联字段，调整执行载荷的存储检查，并增加私有 `execution_payload_metadata` 读上限记录。v7 增加 `run_progress`；v8 引入 `session_deletion_scopes` 与仅允许 Session 整体删除的条件触发器；v9 允许 DeepSeek continuation 保存显式空字符串和 SQL NULL。新库直接建立当前表结构；已有 v1–v10 在 `BEGIN IMMEDIATE` 写锁内迁移，随后验证外键、SQLite 完整性和已存 RunState，并提交 `user_version=11`。失败则回滚，未知未来版本拒绝读取。
+当前版本为 **v12**：v12 新增 `session_context_checkpoints` 和 `session_context_compaction_operations`，分别保存每 Session 当前有效的派生摘要及一次摘要请求的稳定身份/重试状态。v10 增加独立停止请求表；v11 增加持久 Provider 请求绑定与 attempt 关联字段，调整执行载荷的存储检查，并增加私有 `execution_payload_metadata` 读上限记录。v7 增加 `run_progress`；v8 引入 `session_deletion_scopes` 与仅允许 Session 整体删除的条件触发器；v9 允许 DeepSeek continuation 保存显式空字符串和 SQL NULL。新库直接建立当前表结构；已有 v1–v11 在 `BEGIN IMMEDIATE` 写锁内迁移，随后验证外键、SQLite 完整性和已存 RunState，并提交 `user_version=12`。失败则回滚，未知未来版本拒绝读取。
 
 - v1–v4 补建附件及 Panel 表；v5 只补建 Panel 表；既有 Sources 表与内容保留。
 - 实际迁移代码对 v1–v7 重建事件表，复制原事件身份、序号、payload 和时间，并恢复触发器；v7 也会重建，不能把“已是 v7”当作迁移已完成。
 - v3–v8 重建 continuation 表以放宽 DeepSeek 空/null 值约束，保留既有值、ID 和响应关联；更早版本直接建立当前 continuation 表。不为缺失历史推理伪造 payload。
 - 删除 scope 表及六类条件删除触发器在升级路径统一安装；普通事实更新仍被禁止。scope 只在整会话删除事务内建立并移除，不是持久垃圾队列。
 
-迁移不改变 Run 终态、checkpoint 或已提交内容，也不创建补偿模型响应。版本合同以 [`schema.py`](../../src/figura/storage/schema.py) 为准；当前表结构和空/null 续接不适合直接交给旧版本解释。
+v12 的上下文表以 Session 为授权边界，不把摘要混入 Run 事实或现有 Checkpoint。检查点替换使用 `expected_revision` CAS；来源引用在同一 Session、覆盖 ordinal 和已提交 record/tool 序号内核对。压缩操作唯一绑定目标 Run 与其当前 record/tool 前缀，并冻结摘要请求描述及 retry count。迁移不改变 Run 终态、Checkpoint 或已提交内容，也不创建补偿模型响应。版本合同以 [`schema.py`](../../src/figura/storage/schema.py) 为准；当前表结构和 continuation 合同不适合直接交给旧版本解释。
 
-持久化按提交边界拆分：[`sessions.py`](../../src/figura/runtime/persistence/sessions.py) 写 Session 与列表聚合；[`runs.py`](../../src/figura/runtime/persistence/runs.py) 创建 Run、幂等映射并读取 RunState；[`snapshots.py`](../../src/figura/runtime/persistence/snapshots.py) 在一致读事务中加载完整 Session 和先前 Run 快照；[`providers.py`](../../src/figura/runtime/persistence/providers.py) 提交 Provider attempt/响应/continuation；[`tools.py`](../../src/figura/runtime/persistence/tools.py) 提交工具调用、attempt 和结果；[`run_transitions.py`](../../src/figura/runtime/persistence/run_transitions.py) 提交完成及失败/中断终态；[`controls.py`](../../src/figura/runtime/persistence/controls.py) 独立提交停止请求与通知。`mappers.py` 负责 SQLite 行映射，`runtime/codecs/` 按 record、tool fact 和 event payload 分组。
+持久化按提交边界拆分：[`sessions.py`](../../src/figura/runtime/persistence/sessions.py) 写 Session 与列表聚合；[`runs.py`](../../src/figura/runtime/persistence/runs.py) 创建 Run、幂等映射并读取 RunState；[`snapshots.py`](../../src/figura/runtime/persistence/snapshots.py) 在一致读事务中加载完整 Session 和先前 Run 快照；[`context.py`](../../src/figura/runtime/persistence/context.py) 校验并替换 Session 摘要检查点、冻结压缩请求绑定、计数 attempt 并记录 fallback/completion；[`providers.py`](../../src/figura/runtime/persistence/providers.py) 提交 Provider attempt/响应/continuation；[`tools.py`](../../src/figura/runtime/persistence/tools.py) 提交工具调用、attempt 和结果；[`run_transitions.py`](../../src/figura/runtime/persistence/run_transitions.py) 提交完成及失败/中断终态；[`controls.py`](../../src/figura/runtime/persistence/controls.py) 独立提交停止请求与通知。`mappers.py` 负责 SQLite 行映射，`runtime/codecs/` 按 record、tool fact 和 event payload 分组。
 
 Sources 的附件与 Panel 元数据由 [`SourcesRepository`](../../src/figura/sources/repository.py) 管理，并与 Runtime 共用同一数据库；图像文件由 Sources 自己管理。Run 创建时的附件归属校验仍在 Run 创建写事务内执行。Agent 的 `RunExecutionStateService` 从 Runtime 快照、已提交工具事实与 Sources 资源重建统一派生目录，见[Agent 资源目录](agent.md#4-runexecutionstate-资源合同与完整字段)。`FiguraRunStore` 保留为 Runtime 的组成入口并委托各仓储，不负责文件操作或 Source CRUD。
 
@@ -82,6 +85,12 @@ Sources 的附件与 Panel 元数据由 [`SourcesRepository`](../../src/figura/s
 6. **终结与恢复**：Checkpoint 的 `revision` 用于拒绝过期推进；`next_action` 指明 model、provider_retry、provider_attempt、tool_execution、tool_attempt 或 final。`RunTransitionRepository` 提交 `FinalAnswerFact` 或失败/中断状态，并写安全终态事件。Gateway 启动及周期扫描时通过 `RunRepository.list_running_runs` 按 Session ID、ordinal 稳定排序发现 running Run，并通过有界 Dispatcher 交给既有 Agent 恢复路径。`RunRepository` 从 SQLite 重建 `RunState`；事件、历史展示和未来评测从已提交事实投影，不反向成为权威状态。
 
 7. **接受停止**：`RunControlRepository.request_stop` 在独立写事务核对 Session 归属、Run 状态与已有请求。首次 running 请求写 `RunStopRequest` 和唯一进度通知，重复请求返回原对象，终态不新增请求；checkpoint revision 不变。Agent 与动作 claim/completion 读取该控制事实决定是否继续；HTTP 接受不等于动作已经退出。完整竞态与恢复规则见[停止、所有权与恢复事务](#停止所有权与恢复事务)。
+
+### Session 摘要检查点与压缩操作
+
+普通 Run 的 Provider request binding 会固化本次使用的 context projection、摘要 revision 和压缩 operation ID，确保暂时失败后的请求重建仍指向同一摘要版本。摘要生成本身不消耗普通 Run 的 `ProviderAttempt`，但它作为同一次 Agent model action 内的独立 Provider 请求拥有稳定 `ContextCompactionOperation`：先绑定已 prepare 的安全 descriptor，再递增 dispatch attempt。临时 Provider 失败按既有 retry policy 重发同一已准备摘要请求，最多四次；永久失败、响应不合约、source reference 未授权或达到次数后置为 fallback。
+
+摘要成功时，Context Repository 在检查同 Session 归属、covered Run 已终结、来源 record/tool sequence 不越界及 expected revision 后，原子写入/替换 checkpoint，并将 operation 标为 completed。旧检查点被替换而不是追加成多版本摘要；它引用的 canonical facts 不变。失败时只把 operation 标为 fallback，已有检查点不变；当前普通请求回退到未压缩历史。Session 删除通过同一授权删除聚合清除两张上下文表。该过程不发 SSE，不改变 Run 的工具/记录游标，也不形成独立历史消息。
 
 ### Session 整体删除的提交边界
 
@@ -102,7 +111,7 @@ Runtime 提供较早 Run 的一致读取，不负责将其转成消息。`Sessio
 
 以下字段表按当前 Python dataclass 的全部声明字段列出。表内“默认”是构造默认值；`—` 表示构造时必传，不代表值在业务上可任意为空。时间是存储的 UTC 文本。每个模型小节的写入/权威/读取边界适用于其全部字段，字段行再注明例外。
 
-字段表中的写入者按实际负责 SQLite 提交的 Repository 标注；RunCoordinator 与 DurableToolExecutor 是调用入口，`FiguraRunStore` 只组合并委托仓储。Session 与列表聚合对应 `SessionRepository`；Run、初始输入、幂等查找和 RunState hydration 对应 `RunRepository`；SessionSnapshot 与先前 Run 快照对应 `SnapshotRepository`；Provider 尝试、响应及同响应提交的工具调用意图对应 `ProviderRepository`；独立工具调用追加、attempt 和结果对应 `ToolRepository`；终态事实与事件对应 `RunTransitionRepository`。`AttachmentMetadata` 由 Sources 持久化；`SessionSnapshot.attachments` 是 SnapshotRepository 从 Sources 表读取的值。以下字段按当前 schema v11 与代码列出；跨 Run 续接重放只读取源事实，不把源 continuation 写到新 Run。Session 整体删除是不可变事实禁止单独删除的受控例外。
+字段表中的写入者按实际负责 SQLite 提交的 Repository 标注；RunCoordinator 与 DurableToolExecutor 是调用入口，`FiguraRunStore` 只组合并委托仓储。Session 与列表聚合对应 `SessionRepository`；Run、初始输入、幂等查找和 RunState hydration 对应 `RunRepository`；SessionSnapshot 与先前 Run 快照对应 `SnapshotRepository`；Session 上下文摘要检查点和压缩操作对应 `SessionContextCheckpointRepository` 与 `ContextCompactionOperationRepository`；Provider 尝试、响应及同响应提交的工具调用意图对应 `ProviderRepository`；独立工具调用追加、attempt 和结果对应 `ToolRepository`；终态事实与事件对应 `RunTransitionRepository`。`AttachmentMetadata` 由 Sources 持久化；`SessionSnapshot.attachments` 是 SnapshotRepository 从 Sources 表读取的值。以下字段按当前 schema v12 与代码列出；跨 Run 续接重放只读取源事实，不把源 continuation 写到新 Run。Session 整体删除是不可变事实禁止单独删除的受控例外。
 
 ## 4. 完整模型字段
 
@@ -217,11 +226,14 @@ Runtime 拥有逻辑网络操作的不可变身份；Agent 从 Provider prepared
 | ProviderRequestBinding.asset_manifest | Mapping[str, object] | 必传 | 提示、Registry、Adapter 和有序图片身份/digest | Agent/ProviderRepository → run_provider_request_bindings.payload_json → Agent 重建/Runtime 校验；私有不可修订 |
 | ProviderRequestBinding.created_at | str | 必传 | 初次绑定的 UTC 时间 | Agent/ProviderRepository → run_provider_request_bindings.payload_json → Agent 重建/Runtime 校验；私有不可修订 |
 | ProviderRequestBinding.request_contract_version | int | 1 | 当前可重建 wire 合同版本 | Agent/ProviderRepository → run_provider_request_bindings.payload_json → Agent 重建/Runtime 校验；私有不可修订 |
-| ProviderRequestBinding.schema_version | int | 1；Agent 新请求写2 | 绑定 envelope 版本；v1 保持原键与编码，v2 增加可空 estimate | Agent/ProviderRepository → run_provider_request_bindings.payload_json → Agent 重建/Runtime 校验；私有不可修订 |
+| ProviderRequestBinding.schema_version | int | 1；新请求写3 | 绑定 envelope 版本；v1 无 estimate，v2 增加 estimate，v3 增加 context projection/checkpoint/operation 绑定 | Agent/ProviderRepository → run_provider_request_bindings.payload_json → Agent 重建/Runtime 校验；私有不可修订 |
 | ProviderRequestBinding.generation_only | bool | True | 仅生成请求可替代 unknown | Agent/ProviderRepository → run_provider_request_bindings.payload_json → Agent 重建/Runtime 校验；私有不可修订 |
 | ProviderRequestBinding.max_attempts | int | 4 | 固定首次加最多三次，不是 Run 总次数 | Agent/ProviderRepository → run_provider_request_bindings.payload_json → Agent 重建/Runtime 校验；私有不可修订 |
 | ProviderRequestBinding.retry_policy_version | int | 1 | 持久重试政策版本 | Agent/ProviderRepository → run_provider_request_bindings.payload_json → Agent 重建/Runtime 校验；私有不可修订 |
-| ProviderRequestBinding.context_estimate | ContextEstimate 或 None | None | v2 聚合估算快照；input_tokens 非负、context_window_tokens 正整数或 null、estimator_version 非空；v1 不编码此键 | prepare → 首次 claim 同事务存 JSON → Gateway 公开两个数字；重试/恢复不修改，旧记录不回填 |
+| ProviderRequestBinding.context_estimate | ContextEstimate 或 None | None | v2+ 聚合估算快照；input_tokens 非负、容量正整数或 null、estimator_version 非空；v1 不编码此键 | prepare → 首次 claim 同事务存 JSON → Gateway 公开两个数字；重试/恢复不修改，旧记录不回填 |
+| ProviderRequestBinding.context_projection | str | full | v3 请求历史投影：`full`、`checkpoint` 或 `fallback`；旧版本解码为 `full` | Agent → 私有 binding → provider retry/recovery 重建相同上下文投影；不公开 |
+| ProviderRequestBinding.context_checkpoint_revision | int 或 None | None | `checkpoint` 投影要求正版本；`full`/`fallback` 必须为空 | Agent → 私有 binding → 精确读取并核对 SessionContextCheckpoint；不公开 |
+| ProviderRequestBinding.context_compaction_operation_id | str 或 None | None | 指向生成摘要或确认 fallback 的压缩操作；`checkpoint`/`fallback` 必须有值，`full` 必须为空 | Agent → 私有 binding → Runtime 核对操作状态；不公开 |
 
 `options` 是只读 Mapping，精确包含下面五个字段；未知字段拒绝。它不沿用 ProviderOptions 的 schema_version 字段，绑定 envelope 自身拥有版本。`asset_manifest` 同样只读，不存路径、endpoint 原文或原图。
 
@@ -244,6 +256,48 @@ Runtime 拥有逻辑网络操作的不可变身份；Agent 从 Provider prepared
 | ProviderRequestBinding.asset_manifest.images[].sha256 | SHA-256 | Provider 对真实图像取 digest → binding → 重建比较 |
 
 
+
+### SessionContextCheckpoint
+
+一个 Session 当前可用的派生摘要快照，覆盖某个完整 Run 前缀。它通过 revision CAS 替换，不是新消息或权威历史；摘要与来源始终可以沿引用返回原 Run 事实。**写入/构建者：**Agent 生成并由 `SessionContextCheckpointRepository` 校验/提交。**权威位置：**`session_context_checkpoints` 表。**读取：**Agent 请求组装；不进入 Web DTO 或 RunState。来源只允许同一 Session 中不超过覆盖位置的 message/tool result 引用。[定义](../../src/figura/runtime/records.py)。
+
+| 完整字段路径 | 类型 | 构造默认 | 含义与约束 | 写入 → 权威 → 读取/公开 |
+|---|---|---|---|---|
+| SessionContextCheckpoint.session_id | str | 必传 | 摘要所属 Session | Agent/Context Repository → `session_context_checkpoints.session_id` → Agent；不公开为独立对象 |
+| SessionContextCheckpoint.revision | int | 必传 | 每次成功替换递增；写入时必须等于 expected revision + 1 | Context Repository CAS → 表 revision → Agent 固定请求投影；不公开 |
+| SessionContextCheckpoint.covered_run_id | str | 必传 | 覆盖前缀的末尾 Run | Agent → 表 → 来源与历史裁剪边界核验；不公开 |
+| SessionContextCheckpoint.covered_run_ordinal | int | 必传 | 被覆盖 Run 的 Session ordinal；必须小于目标 Run | Agent → 表 → AgentRequestBuilder 裁剪被摘要覆盖的旧消息/outcome；不公开 |
+| SessionContextCheckpoint.covered_record_sequence | int | 必传 | 覆盖 Run 已提交记录游标；正数且不超过 Run Checkpoint | Agent → 表 → Context Repository 来源前缀校验；不公开 |
+| SessionContextCheckpoint.covered_tool_sequence | int | 必传 | 覆盖 Run 已提交工具事实游标；非负且不超过 Run Checkpoint | Agent → 表 → Context Repository 来源前缀校验；不公开 |
+| SessionContextCheckpoint.summary_contract_version | int | 必传 | 摘要对象合同版本；当前为 1 | Agent → 表 → Agent 校验与 prompt 投影；不公开为独立 DTO |
+| SessionContextCheckpoint.summary | Mapping[str, object] | 必传；`repr=False` | 深度冻结 JSON 摘要；序列化上限 512 KiB；文本为不可信历史数据 | Agent 摘要验证 → `summary_json` → Agent prompt/检索；不进入规范消息或公开 API |
+| SessionContextCheckpoint.source_refs | tuple[HistorySourceRef, ...] | () | 按稳定顺序去重；持久有效值须非空，只能是 message/tool_result；编码上限 256 KiB | Agent → `source_refs_json` → 精简资源提示与历史检索；完整引用字段归[Memory](memory.md#4-完整模型字段) |
+| SessionContextCheckpoint.updated_at | str | 空字符串 | 替换成功时由 Repository 覆盖为 UTC 时间 | Repository → 表 → 内部读取；不公开 |
+| SessionContextCheckpoint.compaction_operation_id | str 或 None | None | 生成该 revision 的摘要操作；提交时操作必须处于 preparing | Agent/Context Repository → 表 → retry binding 核对；不公开 |
+
+### ContextCompactionOperation
+
+一次摘要生成请求的可恢复身份、输入前缀和有限重试状态。状态为 `preparing`、`completed` 或 `fallback`；失败只固定 fallback 原因，不覆盖上次有效摘要。Agent 对摘要 Provider 请求最多 dispatch 四次。**写入/构建者：**Agent 与 `ContextCompactionOperationRepository`。**权威位置：**`session_context_compaction_operations` 表。**读取：**Agent；不公开。[定义](../../src/figura/runtime/records.py)。
+
+| 完整字段路径 | 类型 | 构造默认 | 含义与约束 | 写入 → 权威 → 读取/公开 |
+|---|---|---|---|---|
+| ContextCompactionOperation.operation_id | str | 必传 | 压缩操作 opaque ID | Context Repository → 表主键 → Agent/request binding；不公开 |
+| ContextCompactionOperation.session_id | str | 必传 | 操作所属 Session | Agent → 表 → 同 Session 校验；不公开 |
+| ContextCompactionOperation.target_run_id | str | 必传 | 触发并拥有当前活动前缀的 Run | Agent → 表/FK → Agent 恢复；不公开 |
+| ContextCompactionOperation.base_record_sequence | int | 必传 | 创建操作时目标 Run 的记录前缀 | Agent → 表唯一键 → 防止跨前缀复用操作；不公开 |
+| ContextCompactionOperation.base_tool_sequence | int | 必传 | 创建操作时目标 Run 的工具事实前缀 | Agent → 表唯一键 → 防止跨前缀复用操作；不公开 |
+| ContextCompactionOperation.input_checkpoint_revision | int | 必传 | 创建摘要时上一检查点版本；无旧检查点为 0 | Agent → 表 → 提交 CAS 与恢复校验；不公开 |
+| ContextCompactionOperation.covered_run_id | str | 必传 | 本次摘要覆盖区间末尾 Run | Agent → 表 → 来源与覆盖范围校验；不公开 |
+| ContextCompactionOperation.covered_run_ordinal | int | 必传 | 覆盖末尾 Run 的 Session 顺序 | Agent → 表 → 不能越过目标 Run；不公开 |
+| ContextCompactionOperation.covered_record_sequence | int | 必传 | 覆盖末尾 Run 的已提交 record 游标 | Agent → 表 → Context Repository 前缀核验；不公开 |
+| ContextCompactionOperation.covered_tool_sequence | int | 必传 | 覆盖末尾 Run 的已提交 tool 游标 | Agent → 表 → Context Repository 前缀核验；不公开 |
+| ContextCompactionOperation.status | str | 必传 | `preparing` / `completed` / `fallback` 生命周期状态 | Context Repository → 表 → Agent 重试/恢复；不公开 |
+| ContextCompactionOperation.request_binding | Mapping[str, object] 或 None | None；`repr=False` | 准备后的安全 descriptor 和摘要合同版本；最多 256 KiB，不含原文、凭据或图片 payload | Agent prepare → Context Repository → 重试时重建并比较 descriptor；不公开 |
+| ContextCompactionOperation.attempt_count | int | 0 | 已开始的摘要 Provider dispatch 次数；达到 4 次后 Agent fallback | Context Repository → 表 → Agent 重试策略；不公开 |
+| ContextCompactionOperation.result_checkpoint_revision | int 或 None | None | 成功摘要生成后的 SessionContextCheckpoint revision；completed 时必有 | Context Repository 与摘要检查点同事务写入 → 表 → Agent 核对；不公开 |
+| ContextCompactionOperation.failure_code | str 或 None | None | fallback 的安全原因码，UTF-8 最多 64 字节；成功时为空 | Context Repository → 表 → Agent fallback 核验；不公开 |
+| ContextCompactionOperation.created_at | str | 空字符串 | 创建时的 UTC 时间 | Context Repository → 表 → 内部生命周期读取；不公开 |
+| ContextCompactionOperation.updated_at | str | 空字符串 | 最近状态变更时的 UTC 时间 | Context Repository → 表 → 内部生命周期读取；不公开 |
 
 ### ProviderAttempt
 
@@ -399,7 +453,7 @@ Run 唯一推进点和 CAS 修订。 **写入/构建者：**Runtime 提交仓储
 
 ### 停止、所有权与恢复事务
 
-SQLite 从 v9 升至 v10 增加控制表和保护触发器；已有 Run 事实保持原样，旧 Run 读取为无停止请求。当前 schema v11 还包含持久 Provider 请求绑定、扩展的物理 attempt 合同和执行载荷读上限元数据，完整迁移见[持久重试和 schema v11](#持久重试和-schema-v11)。新数据中的终态码、控制事件及 v11 请求绑定不承诺能由旧二进制读取，回退需要升级前备份。schema v9 已有的 continuation 迁移规则继续保留。
+SQLite 从 v9 升至 v10 增加控制表和保护触发器；已有 Run 事实保持原样，旧 Run 读取为无停止请求。schema v11 增加持久 Provider 请求绑定、扩展物理 attempt 合同和执行载荷读上限元数据；schema v12 再增加 Session 上下文检查点与压缩操作表。v11 详情见[持久重试和 schema v11](#持久重试和-schema-v11)。新数据中的控制事件、Provider bindings 与摘要表不承诺由旧二进制读取，回退需要升级前备份。schema v9 已有的 continuation 迁移规则继续保留。
 
 全任务 `RunExecutionOwnership` 使用 `.run-owner-locks` 中的非阻塞 OS 锁，动作锁仍位于 `.run-locks`。安全路径、目录权限和进程退出释放规则相同；顺序为 owner → action → SQLite。统一 Agent 入口全程持有 owner，内部 owned 路径避免重复获取；公开 interrupt/fail/complete、工具恢复入口、新 Run 创建和 Session 删除均协调 owner。锁忙只等待，不能提前宣告 handler 已退出。终态 owner 尚未释放时新 Run 创建仍会冲突；既有幂等重放可返回原 Run。
 
@@ -443,7 +497,7 @@ Provider claim、初始/replay tool claim 和 completion 在写事务内检查�
 - `ProviderAttemptStatus`：`started`、`response_committed`、`known_failure`、`outcome_unknown`。`ToolFactKind`：`tool_call`、`tool_attempt_started`、`tool_result`。`EventKind`：`run_created`、`run_progress`、`run_completed`、`run_failed`、`run_interrupted`。
 - `TerminalCode`：`execution_failed`、`invalid_response`、`storage_error`、`interrupted`、`provider_outcome_unknown`、`tool_outcome_unknown`、`tool_recovery_unavailable`、`tool_recovery_exhausted`。创建幂等映射是 `RunRepository` 的内部存储合同，不存在同名 dataclass；不能把它当成 `RunInput` 的另一个字段。
 - `PREPARATION_MESSAGES` 是固定安全文案映射：`missing_deepseek_continuation`、`invalid_request`、`unsupported_capability`、`invalid_configuration`、`configuration_missing`。Agent 在 prepare 失败时只选用白名单文案；Runtime 只允许 `execution_failed` 携带这些覆盖文本，读写双方均校验，不保存原始 Provider 错误或私有续接引用。
-- 代码：[核心模型](../../src/figura/runtime/models.py)、[持久事实与快照模型](../../src/figura/runtime/records.py)、[运行状态校验](../../src/figura/runtime/validation.py)、[持久记录校验](../../src/figura/runtime/record_validation.py)、[Runtime 组合入口](../../src/figura/runtime/store.py)、[SQLite 连接与事务](../../src/figura/storage/database.py)、[SQLite schema](../../src/figura/storage/schema.py)、[Session Repository](../../src/figura/runtime/persistence/sessions.py)、[Run Repository](../../src/figura/runtime/persistence/runs.py)、[Snapshot Repository](../../src/figura/runtime/persistence/snapshots.py)、[Provider Repository](../../src/figura/runtime/persistence/providers.py)、[Tool Repository](../../src/figura/runtime/persistence/tools.py)、[终态 Repository](../../src/figura/runtime/persistence/run_transitions.py)、[工具执行](../../src/figura/runtime/tool_execution.py)。主规格：[Run 核心](../../openspec/figura/openspec/specs/run-execution-core/spec.md)、[Session Memory](../../openspec/figura/openspec/specs/session-memory/spec.md)、[Agent ReAct](../../openspec/figura/openspec/specs/agent-react-execution/spec.md)、[耐久工具执行](../../openspec/figura/openspec/specs/durable-tool-execution/spec.md)、[Provider continuation](../../openspec/figura/openspec/specs/provider-continuation-persistence/spec.md)。
+- 代码：[核心模型](../../src/figura/runtime/models.py)、[持久事实与快照模型](../../src/figura/runtime/records.py)、[运行状态校验](../../src/figura/runtime/validation.py)、[持久记录校验](../../src/figura/runtime/record_validation.py)、[Runtime 组合入口](../../src/figura/runtime/store.py)、[SQLite 连接与事务](../../src/figura/storage/database.py)、[SQLite schema](../../src/figura/storage/schema.py)、[Session Repository](../../src/figura/runtime/persistence/sessions.py)、[Run Repository](../../src/figura/runtime/persistence/runs.py)、[Snapshot Repository](../../src/figura/runtime/persistence/snapshots.py)、[上下文持久化 Repository](../../src/figura/runtime/persistence/context.py)、[Provider Repository](../../src/figura/runtime/persistence/providers.py)、[Tool Repository](../../src/figura/runtime/persistence/tools.py)、[终态 Repository](../../src/figura/runtime/persistence/run_transitions.py)、[工具执行](../../src/figura/runtime/tool_execution.py)。主规格：[Run 核心](../../openspec/figura/openspec/specs/run-execution-core/spec.md)、[Session Memory](../../openspec/figura/openspec/specs/session-memory/spec.md)、[上下文压缩](../../openspec/figura/openspec/specs/session-context-compaction/spec.md)、[历史检索](../../openspec/figura/openspec/specs/session-context-retrieval/spec.md)、[Agent ReAct](../../openspec/figura/openspec/specs/agent-react-execution/spec.md)、[耐久工具执行](../../openspec/figura/openspec/specs/durable-tool-execution/spec.md)、[Provider continuation](../../openspec/figura/openspec/specs/provider-continuation-persistence/spec.md)。
 
 ## 持久重试和 schema v11
 
@@ -453,4 +507,4 @@ schema 10→11 在 SQLite writer lock 下原子重建 record、tool fact、conti
 
 新版 writers：RunInput2、ModelResponse3、FinalAnswer2、ToolCall/Started/Result2、continuation envelope2、checkpoint2；Provider 私有 continuation format 仍是1。旧 decoder 保留旧合同且原值不变。`execution_payload_metadata` 的 `singleton=1`、`read_ceiling` 是存储内部合同：成功写事务把 ceiling 单调提高到当时配置；读取只使用 max(当前写 guard, 已记录 ceiling)，降低配置不会损坏既有大事实。此 metadata 不公开，读取快照不修改它。
 
-升级前停服务并用 SQLite backup API 保存完整数据库，连同 Sources 私有文件保留；不要仅复制运行中的主数据库文件而遗漏 WAL。升级后旧 runtime 不支持 schema11；回退需要恢复同一次备份中的数据库与文件。迁移或校验失败保留旧数据库，修复原因再打开。
+升级前停服务并用 SQLite backup API 保存完整数据库，连同 Sources 私有文件保留；不要仅复制运行中的主数据库文件而遗漏 WAL。升级到 schema12 后，旧 runtime 无法读取新数据库；回退需要恢复同一次备份中的数据库与文件。迁移或校验失败保留旧数据库，修复原因再打开。

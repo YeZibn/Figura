@@ -3,16 +3,18 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
+from collections.abc import Mapping
 from dataclasses import replace
 import time
 import uuid
 from datetime import datetime, timezone
 from figura.providers.models import ProviderOptions
-from figura.shared.payloads import payload_scope
+from figura.shared.payloads import payload_scope, encode_json
 
 from figura.runtime.models import PREPARATION_MESSAGES
 from figura.providers import ProviderFactory, ProviderResponse
 from figura.providers.errors import ProviderCallError, ProviderFailureCode
+from figura.providers.retries import retry_deadline
 from figura.runtime.coordinator import RunCoordinator
 from figura.runtime.errors import RunError, RunErrorCode
 from figura.runtime.persistence.controls import RunStopRequested
@@ -21,9 +23,11 @@ from figura.runtime.records import (
     ModelResponseFact,
     RunState,
     ProviderRequestBinding,
+    SessionContextCheckpoint,
     ToolAttemptStartedFact,
     ToolCallFact,
 )
+from .context_compaction import eligible_compaction_runs, validate_summary_response
 from figura.runtime.tool_execution import DurableToolExecutor
 from figura.runtime.run_lock import PerRunExecutionLock, RunExecutionOwnership, RunExecutionLockUnavailable
 
@@ -208,11 +212,39 @@ class AgentExecutor:
                 return self._fail_run(state)
         try:
             prior_run_states = self._coordinator.read_prior_run_states(session_id, run_id)
-            request = self._requests.build(
-                state, self._tools.registry, prior_run_states
-            )
-            if binding:
-                request = replace(request, options=ProviderOptions(**{key: value for key, value in binding.options.items() if key != "timeout_seconds"}))
+            context_projection = "full"
+            context_checkpoint_revision = None
+            context_compaction_operation_id = None
+            if binding is not None:
+                context_checkpoint = self._checkpoint_for_binding(binding, session_id)
+                request = self._requests.build(
+                    state,
+                    self._tools.registry,
+                    prior_run_states,
+                    context_checkpoint=context_checkpoint,
+                )
+                request = replace(
+                    request,
+                    options=ProviderOptions(**{
+                        key: value for key, value in binding.options.items()
+                        if key != "timeout_seconds"
+                    }),
+                )
+                context_projection = binding.context_projection
+                context_checkpoint_revision = binding.context_checkpoint_revision
+                context_compaction_operation_id = binding.context_compaction_operation_id
+            else:
+                context_checkpoint = self._coordinator.read_session_context_checkpoint(session_id)
+                request = self._requests.build(
+                    state,
+                    self._tools.registry,
+                    prior_run_states,
+                    context_checkpoint=context_checkpoint,
+                )
+                if context_checkpoint is not None:
+                    context_projection = "checkpoint"
+                    context_checkpoint_revision = context_checkpoint.revision
+                    context_compaction_operation_id = context_checkpoint.compaction_operation_id
         except RunError:
             return self._fail_run(state)
 
@@ -223,7 +255,49 @@ class AgentExecutor:
 
         try:
             try:
-                prepared = client.prepare(request, frozen_options=True, frozen_timeout_seconds=binding.options["timeout_seconds"], estimate_context=False) if binding else client.prepare(request)
+                if binding is not None:
+                    prepared = client.prepare(
+                        request,
+                        frozen_options=True,
+                        frozen_timeout_seconds=binding.options["timeout_seconds"],
+                        estimate_context=False,
+                    )
+                else:
+                    prepared = client.prepare(request)
+                    estimate = getattr(prepared, "context_estimate", None)
+                    if (
+                        estimate is not None
+                        and estimate.context_window_tokens is not None
+                        and estimate.input_tokens / estimate.context_window_tokens >= 0.8
+                    ):
+                        (
+                            context_checkpoint,
+                            context_projection,
+                            context_compaction_operation_id,
+                        ) = self._compact_context_if_possible(
+                            client,
+                            state,
+                            prior_run_states,
+                            context_checkpoint,
+                        )
+                        context_checkpoint_revision = (
+                            context_checkpoint.revision
+                            if context_projection == "checkpoint" and context_checkpoint is not None
+                            else None
+                        )
+                        request = self._requests.build(
+                            state,
+                            self._tools.registry,
+                            prior_run_states,
+                            context_checkpoint=(
+                                context_checkpoint
+                                if context_projection == "checkpoint"
+                                else None
+                            ),
+                        )
+                        prepared = client.prepare(request)
+                        if context_projection == "checkpoint":
+                            context_checkpoint_revision = context_checkpoint.revision
                 descriptor = prepared.descriptor
                 if binding:
                     if any(descriptor[key] != getattr(binding, key) for key in ("provider_id", "model_id", "endpoint_binding", "request_fingerprint")) or descriptor["asset_manifest"] != binding.asset_manifest:
@@ -232,15 +306,25 @@ class AgentExecutor:
                     binding = ProviderRequestBinding(operation_id=uuid.uuid4().hex, run_id=run_id,
                         base_record_sequence=state.checkpoint.last_committed_record_sequence,
                         base_tool_sequence=state.checkpoint.last_committed_tool_sequence,
-                        schema_version=2, context_estimate=getattr(prepared, "context_estimate", None),
+                        schema_version=3, context_estimate=getattr(prepared, "context_estimate", None),
+                        context_projection=context_projection,
+                        context_checkpoint_revision=context_checkpoint_revision,
+                        context_compaction_operation_id=context_compaction_operation_id,
                         created_at=datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z"), **descriptor)
             except ProviderCallError as error:
                 return self._fail_run(state, terminal_message=_preparation_failure_message(error))
+            except RunStopRequested:
+                raise
             except Exception:
                 return self._fail_run(state)
 
             with self._lock.acquire(run_id):
                 current = self._coordinator.read_run_state(session_id, run_id)
+                if current.stop_request is not None:
+                    self._coordinator._interrupt_owned_run(
+                        session_id, run_id, current.checkpoint.revision,
+                    )
+                    return self._coordinator.read_run_state(session_id, run_id)
                 if (
                     current.run.status is not RunStatus.RUNNING
                     or current.checkpoint.revision != state.checkpoint.revision
@@ -316,6 +400,233 @@ class AgentExecutor:
                     close()
                 except Exception:
                     pass
+
+    def _checkpoint_for_binding(
+        self, binding: ProviderRequestBinding, session_id: str
+    ) -> SessionContextCheckpoint | None:
+        if binding.schema_version < 3 or binding.context_projection in {"full", "fallback"}:
+            if binding.context_projection == "fallback":
+                operation = self._coordinator.read_context_compaction_operation(
+                    binding.context_compaction_operation_id
+                )
+                if operation.status != "fallback":
+                    raise RunError(RunErrorCode.INTEGRITY_ERROR)
+            return None
+        if binding.context_projection != "checkpoint":
+            raise RunError(RunErrorCode.INTEGRITY_ERROR)
+        checkpoint = self._coordinator.read_session_context_checkpoint(session_id)
+        if (
+            checkpoint is None
+            or checkpoint.revision != binding.context_checkpoint_revision
+            or checkpoint.compaction_operation_id != binding.context_compaction_operation_id
+        ):
+            raise RunError(RunErrorCode.INTEGRITY_ERROR)
+        operation = self._coordinator.read_context_compaction_operation(
+            binding.context_compaction_operation_id
+        )
+        if (
+            operation.status != "completed"
+            or operation.result_checkpoint_revision != checkpoint.revision
+        ):
+            raise RunError(RunErrorCode.INTEGRITY_ERROR)
+        return checkpoint
+
+    def _compact_context_if_possible(
+        self,
+        client,
+        state: RunState,
+        prior_run_states: tuple[RunState, ...],
+        previous_checkpoint: SessionContextCheckpoint | None,
+    ) -> tuple[SessionContextCheckpoint | None, str, str | None]:
+        checkpoint_ordinal = (
+            previous_checkpoint.covered_run_ordinal if previous_checkpoint else 0
+        )
+        selected_runs = eligible_compaction_runs(prior_run_states, checkpoint_ordinal)
+        if not selected_runs:
+            return (
+                previous_checkpoint,
+                "checkpoint" if previous_checkpoint is not None else "full",
+                previous_checkpoint.compaction_operation_id if previous_checkpoint else None,
+            )
+
+        covered = selected_runs[-1]
+        operation = self._coordinator.get_or_create_context_compaction_operation(
+            session_id=state.run.session_id,
+            target_run_id=state.run.run_id,
+            base_record_sequence=state.checkpoint.last_committed_record_sequence,
+            base_tool_sequence=state.checkpoint.last_committed_tool_sequence,
+            input_checkpoint_revision=(previous_checkpoint.revision if previous_checkpoint else 0),
+            covered_run_id=covered.run.run_id,
+            covered_run_ordinal=covered.run.ordinal,
+            covered_record_sequence=covered.checkpoint.last_committed_record_sequence,
+            covered_tool_sequence=covered.checkpoint.last_committed_tool_sequence,
+        )
+        if operation.status == "completed":
+            checkpoint = self._coordinator.read_session_context_checkpoint(state.run.session_id)
+            if (
+                checkpoint is None
+                or checkpoint.compaction_operation_id != operation.operation_id
+                or checkpoint.revision != operation.result_checkpoint_revision
+            ):
+                raise RunError(RunErrorCode.INTEGRITY_ERROR)
+            return checkpoint, "checkpoint", operation.operation_id
+        if operation.status == "fallback":
+            return None, "fallback", operation.operation_id
+        if operation.status != "preparing":
+            raise RunError(RunErrorCode.INTEGRITY_ERROR)
+
+        try:
+            summary_request, allowed_refs = self._requests.build_summary_request(
+                state, selected_runs, previous_checkpoint
+            )
+        except (TypeError, ValueError):
+            self._coordinator.fallback_context_compaction_operation(
+                operation.operation_id, "invalid_summary_input"
+            )
+            return None, "fallback", operation.operation_id
+
+        request_binding = operation.request_binding
+        try:
+            if request_binding is None:
+                prepared = client.prepare(summary_request)
+                descriptor = prepared.descriptor
+                request_binding = {
+                    "descriptor": dict(descriptor),
+                    "summary_contract_version": 1,
+                }
+                operation = self._coordinator.bind_context_compaction_request(
+                    operation.operation_id, request_binding
+                )
+            else:
+                descriptor = request_binding.get("descriptor")
+                if not isinstance(descriptor, Mapping):
+                    raise ValueError("invalid saved summary request binding")
+                options = descriptor.get("options")
+                if not isinstance(options, Mapping):
+                    raise ValueError("invalid saved summary options")
+                frozen_request = replace(
+                    summary_request,
+                    options=ProviderOptions(**{
+                        key: value for key, value in options.items()
+                        if key != "timeout_seconds"
+                    }),
+                )
+                prepared = client.prepare(
+                    frozen_request,
+                    frozen_options=True,
+                    frozen_timeout_seconds=options["timeout_seconds"],
+                    estimate_context=False,
+                )
+                if encode_json(prepared.descriptor) != encode_json(descriptor):
+                    raise ValueError("summary request identity changed")
+        except ProviderCallError as error:
+            self._coordinator.fallback_context_compaction_operation(
+                operation.operation_id, error.failure.failure_code.value
+            )
+            return None, "fallback", operation.operation_id
+        except (TypeError, ValueError, KeyError):
+            self._coordinator.fallback_context_compaction_operation(
+                operation.operation_id, "summary_binding_mismatch"
+            )
+            return None, "fallback", operation.operation_id
+
+        while True:
+            latest = self._coordinator.read_run_state(
+                state.run.session_id, state.run.run_id
+            )
+            if latest.stop_request is not None:
+                raise RunStopRequested()
+            operation = self._coordinator.read_context_compaction_operation(
+                operation.operation_id
+            )
+            if operation.attempt_count >= 4:
+                self._coordinator.fallback_context_compaction_operation(
+                    operation.operation_id, "summary_attempts_exhausted"
+                )
+                return None, "fallback", operation.operation_id
+            attempt_number = self._coordinator.begin_context_compaction_attempt(
+                operation.operation_id
+            )
+            try:
+                response = client.dispatch(prepared)
+            except ProviderCallError as error:
+                if error.failure.transient and attempt_number < 4:
+                    due = datetime.fromisoformat(
+                        retry_deadline(attempt_number, error.failure.retry_after_seconds).replace(
+                            "Z", "+00:00"
+                        )
+                    )
+                    while datetime.now(timezone.utc) < due:
+                        latest = self._coordinator.read_run_state(
+                            state.run.session_id, state.run.run_id
+                        )
+                        if latest.stop_request is not None:
+                            raise RunStopRequested()
+                        time.sleep(min(0.1, max(0.0, (due - datetime.now(timezone.utc)).total_seconds())))
+                    continue
+                self._coordinator.fallback_context_compaction_operation(
+                    operation.operation_id, error.failure.failure_code.value
+                )
+                return None, "fallback", operation.operation_id
+            except Exception:
+                self._coordinator.fallback_context_compaction_operation(
+                    operation.operation_id, "summary_transport_error"
+                )
+                return None, "fallback", operation.operation_id
+
+            try:
+                summary, summary_refs = validate_summary_response(
+                    response,
+                    provider_id=state.run.provider,
+                    model_id=state.run.model,
+                    allowed_refs=allowed_refs,
+                    selected_runs=selected_runs,
+                )
+            except (TypeError, ValueError):
+                self._coordinator.fallback_context_compaction_operation(
+                    operation.operation_id, "invalid_summary_response"
+                )
+                return None, "fallback", operation.operation_id
+
+            if previous_checkpoint is not None:
+                prior_outcomes = previous_checkpoint.summary.get("run_outcomes", ())
+                if isinstance(prior_outcomes, (tuple, list)):
+                    summary["run_outcomes"] = [*prior_outcomes, *summary["run_outcomes"]]
+
+            source_refs = tuple(dict.fromkeys((
+                *(previous_checkpoint.source_refs if previous_checkpoint else ()),
+                *summary_refs,
+            )))
+            checkpoint = SessionContextCheckpoint(
+                session_id=state.run.session_id,
+                revision=(previous_checkpoint.revision + 1 if previous_checkpoint else 1),
+                covered_run_id=covered.run.run_id,
+                covered_run_ordinal=covered.run.ordinal,
+                covered_record_sequence=covered.checkpoint.last_committed_record_sequence,
+                covered_tool_sequence=covered.checkpoint.last_committed_tool_sequence,
+                summary_contract_version=1,
+                summary=summary,
+                source_refs=source_refs,
+                compaction_operation_id=operation.operation_id,
+            )
+            latest = self._coordinator.read_run_state(
+                state.run.session_id, state.run.run_id
+            )
+            if latest.stop_request is not None:
+                raise RunStopRequested()
+            try:
+                checkpoint = self._coordinator.replace_session_context_checkpoint(
+                    checkpoint,
+                    expected_revision=(previous_checkpoint.revision if previous_checkpoint else 0),
+                )
+            except RunError as error:
+                if error.code is RunErrorCode.UNSUPPORTED_PAYLOAD:
+                    self._coordinator.fallback_context_compaction_operation(
+                        operation.operation_id, "invalid_summary_checkpoint"
+                    )
+                    return None, "fallback", operation.operation_id
+                raise
+            return checkpoint, "checkpoint", operation.operation_id
 
     def _execute_tool_action(self, state: RunState) -> RunState:
         action = state.checkpoint.next_action
