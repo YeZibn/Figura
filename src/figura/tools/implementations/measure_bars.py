@@ -141,8 +141,8 @@ def measure_bars_definition(
     return ToolDefinition(
         name="measure_bars",
         description=(
-            "测量指定附件或 Panel 中的二维柱状图，返回图像像素坐标下的柱体几何、基线、相对长度和置信度。"
-            "使用 observation_scope 包含或排除图像区域；省略时分析完整来源。警告和不确定结果由你判断，不会自动重试。"
+            "观察授权 Attachment 或 Panel 中的二维柱图，返回柱体几何、方向／模式、基线、类别／系列、像素长度、相对比例及置信度。"
+            "有效坐标轴校准后才有图表数值，缺失值为空；可选 observation_scope，保留基线与刻度。按 status、字段和警告判断，成功批次提供标注图，警告不触发自动失败重试。"
         ),
         parameters_schema=SOURCE_PARAMETERS,
         result_schema=MEASURE_BARS_RESULT_SCHEMA,

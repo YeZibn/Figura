@@ -18,7 +18,9 @@ def render_measurement_overlay(
     try:
         with Image.open(BytesIO(image_bytes)) as source:
             source.load()
-            image = source.convert("RGB")
+            rgba = source.convert("RGBA")
+            background = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
+            image = Image.alpha_composite(background, rgba).convert("RGB")
     except (OSError, ValueError, SyntaxError, Image.DecompressionBombWarning, Image.DecompressionBombError):
         raise ValueError("measurement source cannot be decoded") from None
     expected_size = result.get("image_size")

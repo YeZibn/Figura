@@ -24,7 +24,14 @@ def decode_scoped_image(
     try:
         with Image.open(BytesIO(image_bytes)) as image:
             image.load()
-            rgb = np.asarray(image.convert("RGB"))
+            rgba = image.convert("RGBA")
+            alpha = np.asarray(rgba.getchannel("A"))
+            visible = alpha > 0
+            if bool(np.all(alpha == 255)):
+                rgb = np.asarray(image.convert("RGB"))
+            else:
+                background = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
+                rgb = np.asarray(Image.alpha_composite(background, rgba).convert("RGB"))
     except (
         OSError,
         ValueError,
@@ -35,8 +42,15 @@ def decode_scoped_image(
         raise ValueError("image cannot be decoded") from None
 
     if observation_scope is None:
-        return rgb, None
-    mask = build_observation_mask(observation_scope, rgb.shape[1], rgb.shape[0])
+        if not bool(np.any(visible)):
+            raise ValueError("image contains no visible source pixels")
+        if bool(np.all(visible)):
+            return rgb, None
+        mask = visible
+    else:
+        mask = build_observation_mask(observation_scope, rgb.shape[1], rgb.shape[0]) & visible
+        if not bool(np.any(mask)):
+            raise ObservationScopeError("observation_scope selects no visible source pixels")
     scoped_rgb = rgb.copy()
     scoped_rgb[~mask] = (255, 255, 255)
     return scoped_rgb, mask

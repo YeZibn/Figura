@@ -13,6 +13,20 @@ from figura.shared.source_refs import (
 )
 
 
+_SUMMARY_FIELDS = (
+    "current_goal",
+    "constraints",
+    "decisions",
+    "facts",
+    "progress",
+    "open_questions",
+    "resources",
+    "proposals",
+)
+_PROGRESS_FIELDS = ("completed", "in_progress", "pending", "blocked")
+_SUMMARY_ITEM_FIELDS = {"text", "source_refs"}
+
+
 def eligible_compaction_runs(
     prior_run_states: tuple[RunState, ...],
     checkpoint_ordinal: int,
@@ -57,28 +71,27 @@ def validate_summary_response(
         value = json.loads(response.assistant_content, object_pairs_hook=_unique_object)
     except (TypeError, ValueError, json.JSONDecodeError):
         raise ValueError("summary response is not valid JSON") from None
-    if not isinstance(value, dict) or set(value) != {"items"} or not isinstance(value["items"], list):
+    if not isinstance(value, dict) or set(value) != set(_SUMMARY_FIELDS):
         raise ValueError("summary response has an invalid top-level contract")
+    progress = value["progress"]
+    if not isinstance(progress, dict) or set(progress) != set(_PROGRESS_FIELDS):
+        raise ValueError("summary response has an invalid progress contract")
 
     authorized = set(allowed_refs)
-    items: list[dict[str, object]] = []
     used_refs: list[HistorySourceRef] = []
-    for item in value["items"]:
-        if not isinstance(item, dict) or set(item) != {"text", "source_refs"}:
-            raise ValueError("summary item has an invalid shape")
-        text = item["text"]
-        refs_value = item["source_refs"]
-        if not isinstance(text, str) or not text.strip() or not isinstance(refs_value, list) or not refs_value:
-            raise ValueError("summary item must contain text and source references")
-        refs: list[HistorySourceRef] = []
-        for raw_ref in refs_value:
-            ref = source_ref_from_dict(raw_ref)
-            if ref not in authorized or ref in refs:
-                raise ValueError("summary item references an unauthorized or duplicate source")
-            refs.append(ref)
-            if ref not in used_refs:
-                used_refs.append(ref)
-        items.append({"text": text.strip(), "source_refs": [ref.to_dict() for ref in refs]})
+    normalized: dict[str, object] = {}
+    for field in _SUMMARY_FIELDS:
+        if field == "progress":
+            normalized[field] = {
+                status: _validate_summary_items(
+                    progress[status], authorized, used_refs
+                )
+                for status in _PROGRESS_FIELDS
+            }
+            continue
+        normalized[field] = _validate_summary_items(
+            value[field], authorized, used_refs
+        )
 
     run_outcomes: list[dict[str, object]] = []
     for state in selected_runs:
@@ -96,10 +109,42 @@ def validate_summary_response(
             used_refs.append(input_ref)
     summary = {
         "trust": "untrusted_history",
-        "items": items,
+        **normalized,
         "run_outcomes": run_outcomes,
     }
     return summary, tuple(used_refs)
+
+
+def _validate_summary_items(
+    value: object,
+    authorized: set[HistorySourceRef],
+    used_refs: list[HistorySourceRef],
+) -> list[dict[str, object]]:
+    if not isinstance(value, list):
+        raise ValueError("summary section must be a list")
+    items: list[dict[str, object]] = []
+    for item in value:
+        if not isinstance(item, dict) or set(item) != _SUMMARY_ITEM_FIELDS:
+            raise ValueError("summary item has an invalid shape")
+        text = item["text"]
+        refs_value = item["source_refs"]
+        if (
+            not isinstance(text, str)
+            or not text.strip()
+            or not isinstance(refs_value, list)
+            or not refs_value
+        ):
+            raise ValueError("summary item must contain text and source references")
+        refs: list[HistorySourceRef] = []
+        for raw_ref in refs_value:
+            ref = source_ref_from_dict(raw_ref)
+            if ref not in authorized or ref in refs:
+                raise ValueError("summary item references an unauthorized or duplicate source")
+            refs.append(ref)
+            if ref not in used_refs:
+                used_refs.append(ref)
+        items.append({"text": text.strip(), "source_refs": [ref.to_dict() for ref in refs]})
+    return items
 
 
 def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:

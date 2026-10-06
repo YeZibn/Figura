@@ -1054,9 +1054,10 @@ def test_missing_historical_attachment_is_not_read_without_explicit_load(tmp_pat
     )
 
 
-def test_historical_resolved_tool_registry_mismatch_is_kept_as_inert_history(tmp_path) -> None:
+@pytest.mark.parametrize("old_version,new_version", [("registry-v1", "registry-v2"), ("figura-web-v7", "figura-web-v8")])
+def test_historical_resolved_tool_registry_mismatch_is_kept_as_inert_history(tmp_path, old_version, new_version) -> None:
     store, coordinator, session, prior = _app(tmp_path)
-    historical_registry = _registry()
+    historical_registry = ToolRegistry(old_version, _registry().definitions)
     call_response = _response(
         content="执行历史检查。",
         reason=FinishReason.TOOL_CALLS,
@@ -1080,7 +1081,7 @@ def test_historical_resolved_tool_registry_mismatch_is_kept_as_inert_history(tmp
         session.session_id, prior.run_id, completed_prior.checkpoint.revision
     )
     current = _create_followup_run(coordinator, session.session_id)
-    current_registry = ToolRegistry("registry-v2", historical_registry.definitions)
+    current_registry = ToolRegistry(new_version, historical_registry.definitions)
     factory = _FakeFactory([_response()])
 
     state = _agent(store, coordinator, current_registry, factory).execute(
@@ -1101,9 +1102,10 @@ def test_historical_resolved_tool_registry_mismatch_is_kept_as_inert_history(tmp
     )
 
 
-def test_unresolved_old_registry_call_is_not_executed_under_the_new_registry(tmp_path) -> None:
+@pytest.mark.parametrize("old_version,new_version", [("registry-v1", "registry-v2"), ("figura-web-v7", "figura-web-v8")])
+def test_unresolved_old_registry_call_is_not_executed_under_the_new_registry(tmp_path, old_version, new_version) -> None:
     store, coordinator, session, run = _app(tmp_path)
-    old_registry = _registry()
+    old_registry = ToolRegistry(old_version, _registry().definitions)
     _commit_tool_response(
         coordinator,
         session.session_id,
@@ -1115,7 +1117,7 @@ def test_unresolved_old_registry_call_is_not_executed_under_the_new_registry(tmp
             calls=(ProviderToolCall("old-pending", "inspect", '{"value":1}'),),
         ),
     )
-    active_registry = ToolRegistry("registry-v2", old_registry.definitions)
+    active_registry = ToolRegistry(new_version, old_registry.definitions)
     factory = _FakeFactory([_response()])
 
     state = _agent(store, coordinator, active_registry, factory).execute(

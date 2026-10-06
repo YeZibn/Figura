@@ -1,10 +1,12 @@
 # Figura 系统总览
 
-> 更新日期：2026-10-05。范围：新 Figura 的当前工作树 `src/figura/`。代码、主规格、归档记录、活动 change、目标设计和旧 `chartagent` 分别标记。本文是入口；组件内部流程与完整字段见按领域划分的专题文档。
+> 更新日期：2026-10-06。范围：新 Figura 的当前工作树 `src/figura/`。代码、主规格、归档记录、活动 change、目标设计和旧 `chartagent` 分别标记。本文是入口；组件内部流程与完整字段见按领域划分的专题文档。
 
 ## 1. 一眼看懂 Figura
 
-Figura 接收用户文本和图像，创建可恢复的 Run，让 Agent 调用模型与工具。一个 Session 中后续 Run 从持久事实重建完整规范历史；容量已配置且本地估算达到阈值时，模型请求可使用有来源引用的旧历史摘要和近期原始尾部，摘要不会替代或删除原事实。模型也可通过历史工具按引用搜索、读取旧消息、工具结果、资源元数据，或显式加载历史图像。**当前工作树已有内部 ReAct、跨 Run 对话投影、按上下文占比触发的旧历史压缩、来源可追溯的摘要、历史按需检索与图像读取、图像加载与 Panel 分割、独立 OCR、四类图表测量、ChartFigure 组装与 PNG 渲染工具，以及最近模型请求的本地上下文估算；网页已有协作停止、工具时间线、整会话删除、所有成功生成图的大图查看和 PNG 下载。**普通模型请求由 Agent 提供稳定规则、当前工具目录、可选历史摘要与资源/异常状态索引；规范会话消息与按需图像仍单独组装。稳定提示规则按用户目标选择证据和动作，并说明观察、图表构建与答复边界；详细规则见 [Agent 专题](figura/agent.md#提示分层与代码职责)。Agent 将目标 Run 已提交前缀、较早终态 Run 的事实与 Sources 元数据重建为调用期 `RunExecutionState` 完整资源目录；只有近期历史、摘要来源或当前动作相关的资源定位信息进入提示，其余内容仍可通过历史工具读取。目录不持久化；完整工具输入/结果仍来自 Runtime 通用工具事实，图片文件由 Sources 管理。估算只提供占比并触发可选压缩，不是请求准入或 Run 输出预算。通用证据生命周期、生成图验证、发布与评测链尚未实现。仓库中的 `src/chartagent/` 是旧系统，不能把其能力画作新 Figura 的已运行组件。
+Figura 接收用户文本和图像，创建可恢复的 Run，让 Agent 调用模型与工具。一个 Session 中后续 Run 从持久事实重建完整规范历史；容量已配置且本地估算达到阈值时，模型请求可使用有来源引用的旧历史摘要和近期原始尾部，摘要不会替代或删除原事实。模型也可通过历史工具按引用搜索、读取旧消息、工具结果、资源元数据，或显式加载历史图像。**当前工作树已有内部 ReAct、跨 Run 对话投影、按上下文占比触发的旧历史压缩、来源可追溯的摘要、历史按需检索与图像读取、图像加载与 Panel 分割、独立 OCR、四类图表测量、ChartFigure 组装与 PNG 渲染工具，以及最近模型请求的本地上下文估算；网页已有协作停止、工具时间线、整会话删除、所有成功生成图的大图查看和 PNG 下载。**普通模型请求由 Agent 提供稳定规则、当前工具目录、可选历史摘要与资源/异常状态索引；规范会话消息与按需图像仍单独组装。普通稳定规则仍按四份资产的原顺序加载，额外摘要请求独立读取 `compaction.md`；工具字段解释在原生 Schema，透明像素按白底合成并排除全透明内容。稳定规则按用户目标选择证据和动作，并说明观察、图表构建与答复边界；详细规则见 [Agent 专题](figura/agent.md#提示分层与代码职责)。Agent 将目标 Run 已提交前缀、较早终态 Run 的事实与 Sources 元数据重建为调用期 `RunExecutionState` 完整资源目录；只有近期历史、摘要来源或当前动作相关的资源定位信息进入提示，其余内容仍可通过历史工具读取。目录不持久化；完整工具输入/结果仍来自 Runtime 通用工具事实，图片文件由 Sources 管理。估算只提供占比并触发可选压缩，不是请求准入或 Run 输出预算。通用证据生命周期、生成图验证、发布与评测链尚未实现。仓库中的 `src/chartagent/` 是旧系统，不能把其能力画作新 Figura 的已运行组件。
+
+当前新生成的历史摘要采用字段化分层合同，将目标、约束、决定、事实、进度状态、问题、资源和未接受提议分别保存；每项保留授权来源引用。已有 checkpoint 可继续读取；下一次压缩时按来源整理为完整分层摘要，不增加数据库字段。
 
 ```mermaid
 flowchart LR
@@ -62,7 +64,7 @@ flowchart LR
 | Agent | 按 checkpoint 组装请求、决定是否请求压缩、协调模型与工具、提交结果与终态；从 Run 事实和 Sources 元数据重建类型化资源目录 | 当前工作树已实现 ReAct、摘要生成调用、历史/资源提示投影、源响应续接重放与 prepare→claim→dispatch；压缩失败沿完整历史路径 fallback | [Agent 编排与资源目录](figura/agent.md) |
 | Memory | 从同 Session 的 Run 事实构建规范历史、异常终态与来源引用；提供只读搜索、完整内容读取和资源元数据定位 | 当前工作树实现来源可寻址历史检索；摘要检查点由 Runtime 持久化，Memory 不另存历史副本 | [Memory](figura/memory.md) |
 | Provider | 选择固定 provider/model，归一化请求、响应和安全失败；估算实际输入、上下文容量和网络故障分类 | 已实现 Qwen、DeepSeek、MiMo；容量是可选配置；估算可参与 Agent 阈值判断；重试由 Agent/Runtime 协作完成 | [Provider](figura/provider.md) |
-| Tools | 版本化定义、参数/结果校验及 handler；执行事实归 Runtime | 当前工作树 `figura-web-v7` 新增 `search_history`、`read_history`、`read_resource_image`，并提供 Figure 组装/渲染；历史读取不执行旧工具 | [Tools](figura/tools.md) |
+| Tools | 版本化定义、参数/结果校验及 handler；执行事实归 Runtime | 当前工作树 `figura-web-v8` 保留 12 个工具，补齐工具/参数语义，收窄历史图像引用并统一透明像素观察；历史读取不执行旧工具 | [Tools](figura/tools.md) |
 | Shared / Validation | 被多个能力复用的 JSON Schema 校验与图像大小限制 | 当前已实现 | [Validation](figura/validation.md) |
 | Storage | 一份 SQLite 的连接、事务和 schema 初始化；由 Runtime 与 Sources 共用 | 当前已实现 | [Runtime](figura/runtime.md)、[Sources](figura/sources.md) |
 | Web | 本地 Gateway、Session/Run/Panel/ChartFigure 渲染内容与工具时间线只读 HTTP API、安全历史投影和 SSE；前端经 Figura client 复用工作区 UI | 当前工作树已实现协作停止、周期恢复调度、活动状态补读、会话删除与图片/工具时间线；详情与观察图按需读取 | [Web](figura/web.md) |
@@ -87,7 +89,7 @@ flowchart LR
 
 | 目标能力 | 新 Figura 当前状态 | 需要明确的合同 |
 |---|---|---|
-| 图像文字与图表测量 | 当前工作树 `figura-web-v7` 注册 `extract_text` 和四类 `measure_*`；五种工具均可选传入临时多边形观察范围。OCR 与测量完整结果仍保存在通用 Run 工具事实，并由 Agent 资源目录分别索引为 `ocr`、`measurement`；相关 change 已归档且主规格已同步 | 尚无通用 `EvidenceRef`、Agent 显式选证与证据生命周期；候选观察不会自动成为图表事实 |
+| 图像文字与图表测量 | 当前工作树 `figura-web-v8` 注册 `extract_text` 和四类 `measure_*`；五种工具均可选传入临时多边形观察范围。OCR 与测量完整结果仍保存在通用 Run 工具事实，并由 Agent 资源目录分别索引为 `ocr`、`measurement`；透明像素解码与可见区域规则已实现，主规格已同步 | 尚无通用 `EvidenceRef`、Agent 显式选证与证据生命周期；候选观察不会自动成为图表事实 |
 | 独立图表对象与来源 | 当前 `ChartFigure` 完整 JSON 可随成功 assembly 工具事实跨 Run 保留；尚无独立 ChartFigure 表、修改版本或证据对象 | 是否增加可编辑图表实体、来源绑定和通用证据生命周期 |
 | 生成图、验证与发布 | 当前工作树已有 ChartFigure→PNG 绘制、Sources 私有文件保存、Agent 当前批次图像回看及 Web 预览；Chart rendering 主规格已同步且 change 已归档。尚无图表验证或发布服务 | 验证结果、ChartSpec/来源绑定、幂等发布身份 |
 | Evaluation | 尚无新 Figura 评测适配 | 从权威 Run 事实生成诊断，避免另建在线事实来源 |
@@ -107,13 +109,13 @@ flowchart LR
     Runtime[Run 执行事实] -.-> Eval[Evaluation 诊断]
 ```
 
-附件与 Panel 目前属于同一个 Sources 能力；渲染 PNG 是按 Run/调用身份保存的私有文件，不新增 Source metadata 模型。模型字段见[Sources](figura/sources.md)，完整资源目录合同见[Agent](figura/agent.md#4-runexecutionstate-资源合同与完整字段)，工具输入输出见[Tools](figura/tools.md#6-图像与测量工具合同)。观察、Figure assembly、渲染、统一资源目录和分层提示相关 change（包括 `improve-figura-prompt-assets`）均已归档，相关主规格已同步。测量引用标识成功工具调用，不证明 ChartSpec 数据值正确；旧 `src/chartagent/` 的身份、字段和存储不能直接视作新 Figura 合同。
+附件与 Panel 目前属于同一个 Sources 能力；渲染 PNG 是按 Run/调用身份保存的私有文件，不新增 Source metadata 模型。模型字段见[Sources](figura/sources.md)，完整资源目录合同见[Agent](figura/agent.md#4-runexecutionstate-资源合同与完整字段)，工具输入输出见[Tools](figura/tools.md#6-图像与测量工具合同)。此前已完成的观察、Figure assembly、渲染、统一资源目录和分层提示 change（包括 `improve-figura-prompt-assets`）以及本次提示润色与透明解码均已归档且主规格已同步。测量引用标识成功工具调用，不证明 ChartSpec 数据值正确；旧 `src/chartagent/` 的身份、字段和存储不能直接视作新 Figura 合同。
 
 ## 5. 阅读与状态规则
 
 查**完整字段**时，从组件表进入该合同的 owner 专题；跨领域使用者只链接并解释消费方式。专题边界由模型的语义、权威 owner、生命周期和不变量决定，后续出现独立领域时增建子文档，不能按调用链强行合并。嵌套值、联合 payload、枚举和字段来源在所属专题展开。查长期完整产品构想时，参阅[Figura 架构设计草案](figura-architecture-design.md)，其中未实现部分不自动成为当前合同。
 
-当前主规格位于 `openspec/figura/openspec/specs/`。截至 2026-10-05，Figura store 没有活动 change；`session-context-compaction` 已归档至 `openspec/figura/openspec/changes/archive/2026-10-05-session-context-compaction/`，其压缩、检索、Memory 和本地估算 delta 已与主规格核对一致。其他已完成 change 也保存在 archive。`openspec sync` 更新主规格但不会自动归档 change；归档前应核对 delta 与主规格。归档不代表代码已提交或发布；当前工作树的实现与主规格修改仍可能未提交。旧系统代码与规格分别位于 `src/chartagent/` 和 `openspec/chartagent/`，只在迁移或兼容性分析中对照。
+当前主规格位于 `openspec/figura/openspec/specs/`。截至 2026-10-06，本次提示润色、独立摘要资产、工具 Schema 说明与透明像素观察已在当前工作树实现；五份 delta 已与主规格逐项核对并归档至[变更记录](../openspec/figura/openspec/changes/archive/2026-10-06-refine-figura-prompts-and-tool-guidance/design.md)。此前上下文压缩与检索 change 也已归档并同步主规格。归档记录需求演进，不代表代码已提交或发布；实现与主规格修改仍可能处于未提交工作树。旧系统代码与规格分别位于 `src/chartagent/` 和 `openspec/chartagent/`，只在迁移或兼容性分析中对照。
 
 
 当前实现已接通协作停止、异常历史续用、上下文压缩和渐进式历史读取：Web 保存停止请求，Agent 在 Run owner 保护下完成当前动作并在边界收尾；Gateway 周期扫描补偿无人执行的 running Run。Memory 将合法异常尾部转为来源可寻址的 outcome。摘要覆盖的旧消息仍保留规范事实，可由历史工具搜索并精确读取；历史图像需显式请求，不能仅凭目录自动加载。新增字段和读取合同见 [Runtime](figura/runtime.md)、[Memory](figura/memory.md)、[Agent](figura/agent.md)与[Tools](figura/tools.md)。
@@ -122,6 +124,7 @@ flowchart LR
 
 ### 规格与实现的已知差异
 
-截至 2026-10-05，本轮核对的上下文压缩、来源检索和统一资源目录主规格均与当前实现相符。柱状测量、OCR、画布组装和渲染规格已使用统一 RunExecutionState 合同；本轮未发现仍需列出的已知规格差异。新代码实现和主规格更改目前属于当前工作树，归档 change 不表示这些修改已提交或发布。
+截至 2026-10-06，本次 Agent 执行、图像观察解码、上下文压缩、历史取回与工具运行时的五份 delta 均已同步并归档；本轮核对未发现这些合同与当前工作树实现之间的已知差异。工作树状态不表示代码已提交或发布。
 
-本轮归档 `session-context-compaction`，并按当前工作树与主规格补齐上下文摘要、检索工具、Runtime 检查点和容量估算的文档映射。文档检查不代表应用回归测试通过，也不表示改动已提交或发布。
+
+本轮提示、检索、压缩、工具与图像观察合同分别见 [Agent ReAct](../openspec/figura/openspec/specs/agent-react-execution/spec.md)、[历史检索](../openspec/figura/openspec/specs/session-context-retrieval/spec.md)、[上下文压缩](../openspec/figura/openspec/specs/session-context-compaction/spec.md)、[工具运行时](../openspec/figura/openspec/specs/tool-runtime/spec.md)和[图像观察解码](../openspec/figura/openspec/specs/image-observation-decoding/spec.md)主规格。结构与回归测试不证明真实模型遵循效果。

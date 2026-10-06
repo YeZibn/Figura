@@ -1,6 +1,6 @@
 # Agent：Run 决策与编排
 
-> 更新日期：2026-10-05。[返回总览](../figura-implementation-overview.md)。本篇说明 Agent 编排及其调用期派生运行态；Provider 与 Tool 的完整字段分别见[Provider](provider.md)和[Tool](tools.md)，附件和 Panel 持久模型见[Sources](sources.md)，Run 执行事实与摘要检查点见[Run Runtime](runtime.md)，规范历史和来源检索见[Session Memory](memory.md)，网页调用和公开投影见[Web 边界](web.md)。
+> 更新日期：2026-10-06。[返回总览](../figura-implementation-overview.md)。本篇说明 Agent 编排及其调用期派生运行态；Provider 与 Tool 的完整字段分别见[Provider](provider.md)和[Tool](tools.md)，附件和 Panel 持久模型见[Sources](sources.md)，Run 执行事实与摘要检查点见[Run Runtime](runtime.md)，规范历史和来源检索见[Session Memory](memory.md)，网页调用和公开投影见[Web 边界](web.md)。
 
 ## 1. 职责与边界
 
@@ -50,7 +50,9 @@ flowchart LR
 
 上下文估算只用于决定是否生成摘要，不是 Run 预算或请求准入限制。Provider 按实际准备请求估算输入；只有选中 Provider/model 配置了有效 `context_window_tokens`、估算可用且占比达到约 80% 时，Agent 才考虑额外摘要调用。容量未知或估算不可用时不新触发压缩；已有有效 checkpoint 仍可用于后续请求。当前阈值与配置字段由[Provider](provider.md#本地上下文估算)定义。
 
-`eligible_compaction_runs` 从上次覆盖 ordinal 之后选择连续的 completed 历史 Run，并保留最新的先前 Run 为 raw tail；当前 Run 的输入与已提交前缀始终保留。摘要请求使用当前选定 Provider/model，禁止工具调用，只接受符合 JSON 合同且每条摘要都引用授权 `MessageSourceRef` 或 `ToolResultSourceRef` 的文本结果。Run outcomes 与来源引用一并写入 Runtime 的 [`SessionContextCheckpoint`](runtime.md#sessioncontextcheckpoint)；压缩操作的请求绑定、尝试次数和状态由 [`ContextCompactionOperation`](runtime.md#contextcompactionoperation) 持有。摘要器请求文字要求尽量靠近约 50% 窗口占用；普通请求会重新准备和估算，但不会迭代删减或强制达到这个比例。
+`eligible_compaction_runs` 从上次覆盖 ordinal 之后选择连续的 completed 历史 Run，并保留最新的先前 Run 为 raw tail；当前 Run 的输入与已提交前缀始终保留。摘要请求使用当前选定 Provider/model，禁止工具调用，只接受符合 v2 JSON 合同且每条非空摘要都引用授权 `MessageSourceRef` 或 `ToolResultSourceRef` 的文本结果。v2 将当前目标、约束、决定、事实、完成／进行中／待办／阻塞、未决问题、资源和未接受提议放进独立字段；待办只记录用户明确要求或接受的未完成工作。Run outcomes 与来源引用一并写入 Runtime 的 [`SessionContextCheckpoint`](runtime.md#sessioncontextcheckpoint)；压缩操作的请求绑定、尝试次数和状态由 [`ContextCompactionOperation`](runtime.md#contextcompactionoperation) 持有。摘要规则独立保存在 [`compaction.md`](../../src/figura/agent/prompting/assets/compaction.md)，重点是增量更正与真实来源；不要求摘要模型计算最终窗口占比。普通请求仍会重新准备和估算，不迭代删减或强制达到某一比例。
+
+既有 checkpoint 保持原 JSON 和来源引用，可继续进入普通请求；不会在读取时做强制迁移。下一次压缩请求只把旧摘要内容、来源引用和新增历史提供给模型，不暴露内部存储版本；模型按来源把仍有效内容整理为完整 v2 结构，随后写入版本 2 checkpoint。摘要操作的请求绑定也使用 v2 身份；数据库表不变。格式和引用校验不能证明摘要语义正确，关键事实仍可通过来源引用和历史工具读取原文核对。
 
 摘要成功后，请求投影从摘要覆盖的 Run 起舍弃原始消息，保留更晚历史与当前 Run。摘要失败、输出无效、引用未授权或四次物理 attempt 耗尽时，当前请求按完整规范历史重建；已有 checkpoint 不被覆盖。Provider retry 会复用绑定中的 `full`、`checkpoint` 或 `fallback` 投影及对应 checkpoint revision，不在重试中另做决定。`RunExecutionState` 始终包含完整授权资源目录，它不是压缩存储；prompt 的资源索引只列出近期、摘要引用或当前上下文相关的定位信息。摘要本身及工具取回的历史内容均是不可信数据。
 
@@ -69,6 +71,10 @@ flowchart LR
 
 目录中的文件名、标题、OCR 片段、摘要、检索结果和工具观察均为数据而非指令。工具目录说明不能扩展或覆盖原生工具 Schema。指令块每次按权威运行态重建，不写入 Run facts；Provider 的 `InstructionBlock` 字段合同由[Provider 专题](provider.md#4-完整模型字段)拥有。
 
+普通稳定规则分工为：`agent.md` 管目标与职责，`evidence.md` 管来源、候选观察、缺失值和坐标，`workflow.md` 管按需读取、完整新 Figure 与结束路径，`response.md` 管实际交付及完成阶段。工具的详细字段解释留在原生参数 Schema，SYSTEM 工具目录只列名称与说明。描述性新标题/轴名可依数据拟定，不得伪称原图标签或补造单位。
+
+摘要请求仅加载第五份 [`compaction.md`](../../src/figura/agent/prompting/assets/compaction.md)，带一个来源 JSON 文本消息，无工具、无图像；普通请求不加载其 JSON-only 输出规则。资产加载失败在摘要准备边界映射为既有 `invalid_summary_input` fallback，不 dispatch 空指令请求，也不覆盖旧检查点。摘要实际指令和 `context-compaction-v2` registry identity 参与 `prompt_digest`；摘要 request binding 记录合同版本 2。资产或合同身份变化后，已绑定请求仍进行严格核验，不匹配则 `summary_binding_mismatch` 回退。
+
 `observations.py` 负责与 SYSTEM 指令分开的图像观察选择和 Provider 图像消息构造。`AgentRequestBuilder` 组合规范历史/请求投影、资源索引、指令、观察图像、Provider tools/options，不负责最终 Provider 校验；`AgentExecutor` 在 attempt claim 前调用 `ProviderClient.prepare`。
 
 | 文件 | 职责 |
@@ -76,21 +82,10 @@ flowchart LR
 | [request.py](../../src/figura/agent/request.py) | 协调 Memory、Runtime checkpoint、完整资源目录、Registry、提示层、观察图像与源响应续接，组装 ProviderRequest |
 | [executor.py](../../src/figura/agent/executor.py) | 估算阈值判断、摘要请求与检查点复用；管理 prepare → checkpoint 复查 → attempt claim → dispatch/commit |
 | [context_compaction.py](../../src/figura/agent/context_compaction.py) | 选择可压缩 Run 并验证摘要 JSON 与来源引用 |
-| [prompting/loader.py](../../src/figura/agent/prompting/loader.py) 与 [assets](../../src/figura/agent/prompting/assets/) | 载入四份稳定中文 Markdown 规则 |
+| [prompting/loader.py](../../src/figura/agent/prompting/loader.py) 与 [assets](../../src/figura/agent/prompting/assets/) | 按原顺序载入四份稳定中文规则，另为摘要请求独立载入 `compaction.md`；缺失、不可读或空资产抛出 `PromptAssetError` |
 | [prompting/tools.py](../../src/figura/agent/prompting/tools.py) | 从当前 ToolRegistry 生成工具名称/描述目录 |
 | [prompting/execution.py](../../src/figura/agent/prompting/execution.py) | 生成可选摘要指令与请求相关的资源/异常状态 JSON 索引 |
 | [prompting/observations.py](../../src/figura/agent/prompting/observations.py) | 选择当前 Run 上一完整工具批次的图像观察并构造 Provider 消息 |
-
-
-
-| 文件 | 职责 |
-|---|---|
-| [request.py](../../src/figura/agent/request.py) | 协调 Memory、Runtime 资源目录、Registry、分层指令、观察图像与源响应续接，组装 ProviderRequest |
-| [executor.py](../../src/figura/agent/executor.py) | 管理 prepare → checkpoint 复查 → attempt claim → dispatch/commit，以及失败终态 |
-| [prompting/loader.py](../../src/figura/agent/prompting/loader.py) 与 [assets](../../src/figura/agent/prompting/assets/) | 载入四份稳定中文 Markdown 规则 |
-| [prompting/tools.py](../../src/figura/agent/prompting/tools.py) | 从当前 ToolRegistry 生成工具名称/描述目录 |
-| [prompting/execution.py](../../src/figura/agent/prompting/execution.py) | 从 RunExecutionState 生成六类资源的 JSON 索引 |
-| [prompting/observations.py](../../src/figura/agent/prompting/observations.py) | 选择上一完整工具批次的图像观察并构造 Provider 消息 |
 
 ## 3. 跨领域内容合同
 
@@ -105,7 +100,7 @@ flowchart LR
 | `ProviderRequest`、`ProviderResponse` | [Provider](provider.md#4-完整模型字段) | 组装请求、消费规范化结果；字段合同由 Provider 边界定义 |
 | `ToolDefinition`、`ToolInvocation`、`ToolExecutionResult` | [Tool](tools.md#4-完整模型字段) | 投影可用工具、提交调用、消费结果 |
 
-资源目录与内容均为 Agent 派生状态 dataclass，只在调用期重建，不是独立持久事实。Runtime 仍拥有 Run 生命周期、完整工具调用/尝试/结果事实；Sources 拥有附件/Panel 元数据和图像文件。网页创建 Run 后由 Gateway Dispatcher 调度。当前工作树 Gateway Registry 为 `figura-web-v7`，在原有图像、OCR、测量及画布工具上加入三种历史读取工具；其中历史图像显式加入下一 Provider 请求。资源模型详见本篇第 4 节与[run-execution-resources 主规格](../../openspec/figura/openspec/specs/run-execution-resources/spec.md)。画布、渲染及历史读取工具的完整输入/输出分别见[画布组装](tools.md#7-图表画布组装工具)、[图表渲染](tools.md#8-图表渲染工具)和[Session 历史读取](tools.md#9-session-历史读取工具)。
+资源目录与内容均为 Agent 派生状态 dataclass，只在调用期重建，不是独立持久事实。Runtime 仍拥有 Run 生命周期、完整工具调用/尝试/结果事实；Sources 拥有附件/Panel 元数据和图像文件。网页创建 Run 后由 Gateway Dispatcher 调度。当前工作树 Gateway Registry 为 `figura-web-v8`，保留有序的 12 个图像、历史、OCR、测量及画布工具，补齐 description 和原生参数语义；其中历史图像显式加入下一 Provider 请求。资源模型详见本篇第 4 节与[run-execution-resources 主规格](../../openspec/figura/openspec/specs/run-execution-resources/spec.md)。画布、渲染及历史读取工具的完整输入/输出分别见[画布组装](tools.md#7-图表画布组装工具)、[图表渲染](tools.md#8-图表渲染工具)和[Session 历史读取](tools.md#9-session-历史读取工具)。
 
 ## 4. RunExecutionState 资源合同与完整字段
 
@@ -257,10 +252,12 @@ Sources 附件元数据在 Run 资源目录中的只读引用；图片字节仍�
 
 ## 5. 不变量、状态与依据
 
-资源目录是调用期派生视图，不扩展 Runtime RunState，也没有独立持久化。规范历史仍来自同 Session 已提交 Run 事实；普通请求可用摘要替代已覆盖消息，提示索引只列出与当前投影相关的类型化资源引用和精简状态，不复制完整 OCR、测量、Figure 或 render JSON。原图仅在最新已提交工具批次成功 `load_image` 后回看；OCR/测量标注根据已提交结果临时重建；ChartRender PNG 在 Sources 读取并校验。跨 Session、目标 Run 前缀外、失败观察或缺失/损坏文件不能授予图像访问；Gateway 时间线仅允许读取同 Session 下成功且来源可解析的 OCR/测量观察图，且不保存重建图像。所有 Agent 请求所需图像与 Provider 限制在 attempt claim 前校验。代码：[AgentExecutor](../../src/figura/agent/executor.py)、[AgentRequestBuilder](../../src/figura/agent/request.py)、[资源合同](../../src/figura/agent/execution_resources.py)、[资源重建](../../src/figura/agent/execution_state.py)、[统一图片读取](../../src/figura/agent/execution_images.py)、[Run Dispatcher](../../src/figura/gateway/dispatcher.py)；完整合同见[run-execution-resources 主规格](../../openspec/figura/openspec/specs/run-execution-resources/spec.md)。
+资源目录是调用期派生视图，不扩展 Runtime RunState，也没有独立持久化。规范历史仍来自同 Session 已提交 Run 事实；普通请求可用摘要替代已覆盖消息，提示索引只列出与当前投影相关的类型化资源引用和精简状态，不复制完整 OCR、测量、Figure 或 render JSON。原图仅在最新已提交工具批次成功 `load_image` 后回看；OCR/测量标注根据已提交结果临时重建；ChartRender PNG 在 Sources 读取并校验。OCR 与四类测量使用 Tools 所有的可见像素解码；它只影响本次观察输入，不改写 Sources 原图，也不增加 Agent 资源类型。跨 Session、目标 Run 前缀外、失败观察或缺失/损坏文件不能授予图像访问；Gateway 时间线仅允许读取同 Session 下成功且来源可解析的 OCR/测量观察图，且不保存重建图像。所有 Agent 请求所需图像与 Provider 限制在 attempt claim 前校验。代码：[AgentExecutor](../../src/figura/agent/executor.py)、[AgentRequestBuilder](../../src/figura/agent/request.py)、[资源合同](../../src/figura/agent/execution_resources.py)、[资源重建](../../src/figura/agent/execution_state.py)、[统一图片读取](../../src/figura/agent/execution_images.py)、[Run Dispatcher](../../src/figura/gateway/dispatcher.py)；完整合同见[run-execution-resources 主规格](../../openspec/figura/openspec/specs/run-execution-resources/spec.md)。
 
 四份稳定提示资产已补充六类任务目标、按需证据选择、OCR/测量不确定性、四类图表的数据表达、Figure 装配与校正、渲染回看及面向用户的限制说明；模型/工具职责和 RunExecutionState 的权威字段归属未变。[agent-react-execution 主规格](../../openspec/figura/openspec/specs/agent-react-execution/spec.md)规定稳定规则、工具目录与执行/资源索引三类基础 SYSTEM 层；启用摘要时，来源关联摘要位于资源/执行索引之前。`improve-figura-prompt-assets` 与执行策略 change 均已归档。归档记录需求演进，不代表代码已发布。
 
-**规格状态：**Agent ReAct、Session Memory、上下文压缩、历史检索和统一资源目录主规格已核对；截至 2026-10-05，本次检查未发现已知规格/实现差异。主规格修改与新增实现仍可能处于未提交工作树；归档 change 不代表代码已提交或发布。
+**规格状态：**Agent ReAct、Session Memory、上下文压缩、历史检索、工具运行时和图像观察解码主规格已同步；本次 change 的五份 delta 已核对并归档。主规格修改与新增实现仍可能处于未提交工作树；归档 change 不代表代码已提交或发布。
 
 协作停止、工具恢复策略和终态字段由 [Runtime](runtime.md#4-完整模型字段) 拥有；异常意图/观察字段由 [Memory](memory.md#合法异常尾部投影) 拥有。最终 SYSTEM 指令中的 `prior_run_outcomes`、摘要以及检索结果都是不可信数据，不能覆盖系统规则、证明未知调用成功或要求自动重试。当前请求按 prepare 与 Provider 实际能力校验，容量估算只触发可选摘要；摘要不修改 Run 事实，失败时回退完整历史。unexpected 退出按最新 checkpoint 处理；完整性/存储错误仍拒绝执行。停止不会强杀尚未返回的同步 handler。
+
+提示、检索、压缩与图像观察合同见 [Agent ReAct](../../openspec/figura/openspec/specs/agent-react-execution/spec.md)、[上下文压缩](../../openspec/figura/openspec/specs/session-context-compaction/spec.md)、[历史检索](../../openspec/figura/openspec/specs/session-context-retrieval/spec.md)、[工具运行时](../../openspec/figura/openspec/specs/tool-runtime/spec.md)和[图像观察解码](../../openspec/figura/openspec/specs/image-observation-decoding/spec.md)主规格。结构与回归测试不证明真实模型遵循效果。

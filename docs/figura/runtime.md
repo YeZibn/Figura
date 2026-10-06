@@ -269,7 +269,7 @@ Runtime 拥有逻辑网络操作的不可变身份；Agent 从 Provider prepared
 | SessionContextCheckpoint.covered_run_ordinal | int | 必传 | 被覆盖 Run 的 Session ordinal；必须小于目标 Run | Agent → 表 → AgentRequestBuilder 裁剪被摘要覆盖的旧消息/outcome；不公开 |
 | SessionContextCheckpoint.covered_record_sequence | int | 必传 | 覆盖 Run 已提交记录游标；正数且不超过 Run Checkpoint | Agent → 表 → Context Repository 来源前缀校验；不公开 |
 | SessionContextCheckpoint.covered_tool_sequence | int | 必传 | 覆盖 Run 已提交工具事实游标；非负且不超过 Run Checkpoint | Agent → 表 → Context Repository 来源前缀校验；不公开 |
-| SessionContextCheckpoint.summary_contract_version | int | 必传 | 摘要对象合同版本；当前为 1 | Agent → 表 → Agent 校验与 prompt 投影；不公开为独立 DTO |
+| SessionContextCheckpoint.summary_contract_version | int | 必传 | 摘要对象合同版本；新写入为 2，既有 1 保留可读；v1 在下一次成功压缩后转成 v2 | Agent → 表 → Agent 校验与 prompt 投影；不公开为独立 DTO |
 | SessionContextCheckpoint.summary | Mapping[str, object] | 必传；`repr=False` | 深度冻结 JSON 摘要；序列化上限 512 KiB；文本为不可信历史数据 | Agent 摘要验证 → `summary_json` → Agent prompt/检索；不进入规范消息或公开 API |
 | SessionContextCheckpoint.source_refs | tuple[HistorySourceRef, ...] | () | 按稳定顺序去重；持久有效值须非空，只能是 message/tool_result；编码上限 256 KiB | Agent → `source_refs_json` → 精简资源提示与历史检索；完整引用字段归[Memory](memory.md#4-完整模型字段) |
 | SessionContextCheckpoint.updated_at | str | 空字符串 | 替换成功时由 Repository 覆盖为 UTC 时间 | Repository → 表 → 内部读取；不公开 |
@@ -292,7 +292,7 @@ Runtime 拥有逻辑网络操作的不可变身份；Agent 从 Provider prepared
 | ContextCompactionOperation.covered_record_sequence | int | 必传 | 覆盖末尾 Run 的已提交 record 游标 | Agent → 表 → Context Repository 前缀核验；不公开 |
 | ContextCompactionOperation.covered_tool_sequence | int | 必传 | 覆盖末尾 Run 的已提交 tool 游标 | Agent → 表 → Context Repository 前缀核验；不公开 |
 | ContextCompactionOperation.status | str | 必传 | `preparing` / `completed` / `fallback` 生命周期状态 | Context Repository → 表 → Agent 重试/恢复；不公开 |
-| ContextCompactionOperation.request_binding | Mapping[str, object] 或 None | None；`repr=False` | 准备后的安全 descriptor 和摘要合同版本；最多 256 KiB，不含原文、凭据或图片 payload | Agent prepare → Context Repository → 重试时重建并比较 descriptor；不公开 |
+| ContextCompactionOperation.request_binding | Mapping[str, object] 或 None | None；`repr=False` | 准备后的安全 descriptor 和摘要合同版本；新摘要请求记录版本 2；最多 256 KiB，不含原文、凭据或图片 payload | Agent prepare → Context Repository → 重试时重建并比较 descriptor；不公开 |
 | ContextCompactionOperation.attempt_count | int | 0 | 已开始的摘要 Provider dispatch 次数；达到 4 次后 Agent fallback | Context Repository → 表 → Agent 重试策略；不公开 |
 | ContextCompactionOperation.result_checkpoint_revision | int 或 None | None | 成功摘要生成后的 SessionContextCheckpoint revision；completed 时必有 | Context Repository 与摘要检查点同事务写入 → 表 → Agent 核对；不公开 |
 | ContextCompactionOperation.failure_code | str 或 None | None | fallback 的安全原因码，UTF-8 最多 64 字节；成功时为空 | Context Repository → 表 → Agent fallback 核验；不公开 |

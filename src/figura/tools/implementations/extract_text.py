@@ -113,9 +113,8 @@ def extract_text_definition(
     return ToolDefinition(
         name="extract_text",
         description=(
-            "从指定 Attachment 或 Panel 提取有界 OCR 文字片段、像素框与置信度。"
-            "可用 observation_scope 限定文字观察区域；OCR 可能为空或识别错误，"
-            "应结合图像证据判断。"
+            "从授权 Attachment 或 Panel 提取候选 OCR 文本、原来源像素框 [x,y,width,height] 与置信度。"
+            "available 表示 OCR 是否可用，空 snippets 不证明无文字，truncated 表示可能不完整。可选 observation_scope；整框跨出有效范围的候选会被丢弃，成功批次提供标注图回看。"
         ),
         parameters_schema=SOURCE_PARAMETERS,
         result_schema=EXTRACT_TEXT_RESULT_SCHEMA,

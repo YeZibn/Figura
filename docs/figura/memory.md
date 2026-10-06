@@ -1,6 +1,6 @@
 # Memory：规范历史与按需读取
 
-> 更新日期：2026-10-05。[返回系统总览](../figura-implementation-overview.md)。依据：当前 `src/figura/memory/` 与 `src/figura/agent/` 工作树实现，以及 [Session Memory](../../openspec/figura/openspec/specs/session-memory/spec.md)和[历史检索](../../openspec/figura/openspec/specs/session-context-retrieval/spec.md)主规格。规范消息和结果仍是 Runtime Run 事实的临时投影；摘要检查点由 Runtime 持久化。
+> 更新日期：2026-10-06。[返回系统总览](../figura-implementation-overview.md)。依据：当前 `src/figura/memory/` 与 `src/figura/agent/` 工作树实现，以及 [Session Memory](../../openspec/figura/openspec/specs/session-memory/spec.md)和[历史检索](../../openspec/figura/openspec/specs/session-context-retrieval/spec.md)主规格。规范消息和结果仍是 Runtime Run 事实的临时投影；摘要检查点由 Runtime 持久化。
 
 ## 1. 职责与边界
 
@@ -49,9 +49,9 @@ Runtime 在一个 SQLite 读快照内读取目标 Run 的所有较早 ordinal，
 
 `SessionHistorySearch.search` 对当前 Session 的历史 User/Assistant 消息、已提交 ToolResult、合法异常尾部和六类资源元数据做本地文本匹配，不使用向量索引。查询按 Unicode 文本 `casefold` 后匹配完整短语，或在多词查询中要求所有词均出现；排序优先匹配强度，其次较新的 Run ordinal，再按稳定收集顺序。默认每页 10 条，允许 1–20 条；摘录最多 240 字符。`source_kind` 可限于 `message`、`tool_result`、`resource` 或具体资源 kind；`run_id` 必须属于当前授权前缀。返回值含 `untrusted_history`、原查询、matches、`next_cursor` 与 `has_more`。游标绑定 session、target run、query/filter digest 和 offset，不能用于更换搜索条件或授权边界。
 
-来源引用有 message、tool result 和资源三组。Message source ref 以 `(run_id, record_id)` 精确定位输入/助手响应；tool result ref 以 `(run_id, call_id)` 定位已提交成功/失败结果，也可定位合法异常尾部中的 `not_started`/`outcome_unknown` 未决调用。resource ref 使用 Agent 定义的 `(kind,id)` 或 `(kind,run_id,call_id)` 类型化引用。读取默认返回选中内容；可选 `selector.field_path` 按 JSON Pointer 选择字段，也可对字符串/数组使用 `start/end` 切片。缺失结果绝不补造观察；不在范围或不合法的引用返回有界失败。
+来源引用有 message、tool result 和资源三组。Message source ref 以 `(run_id, record_id)` 精确定位输入/助手响应；tool result ref 以 `(run_id, call_id)` 定位已提交成功/失败结果，也可定位合法异常尾部中的 `not_started`/`outcome_unknown` 未决调用。resource ref 使用 Agent 定义的 `(kind,id)` 或 `(kind,run_id,call_id)` 类型化引用。省略 selector 时完整读取原消息、工具结果/错误或结构化资源内容；ChartFigure 的 `content.figure` 是完整值，修改前可直接按已有引用读取，不必先搜索或重放旧工具。`selector.field_path` 从返回 `content` 根开始按 JSON Pointer 选字段（例如 `/figure`、`/result` 或消息的 `/content`）；随后可对字符串/数组使用 0-based `start/end` 切片，起点包含、终点排除，省略分别为开始和末尾；对象切片失败。缺失结果绝不补造观察；不在范围或不合法的引用返回有界失败。
 
-历史图片独立走 `read_resource_image`。可读取 Attachment、Panel、成功 OCR/测量标注和成功 ChartRender；沿既有 Sources/Agent integrity 与 session 权限检查加载，附在下一次 Provider 请求中。ChartFigure 不隐式绘图，失败/未决资源不产生图片。图片字节不进入搜索结果或检索 JSON，不因摘要引用或 resource locator 自动发送。工具自身的 `ToolDefinition` 与 JSON Schema 字段见[Tools](tools.md#9-session-历史读取工具)，六类资源内容字段见[Agent](agent.md#4-runexecutionstate-资源合同与完整字段)。
+历史图片独立走 `read_resource_image`。可读取 Attachment、Panel、成功 OCR/测量标注和成功 ChartRender；沿既有 Sources/Agent integrity 与 session 权限检查加载，附在下一次 Provider 请求中。图像工具使用专用引用 Schema，消息、tool_result 和 ChartFigure 在 handler 前即被拒绝；search/read 仍接受通用来源引用。ChartFigure 不隐式绘图，失败/未决资源不产生图片。图片字节不进入搜索结果或检索 JSON，不因摘要引用或 resource locator 自动发送。工具自身的 `ToolDefinition` 与 JSON Schema 字段见[Tools](tools.md#9-session-历史读取工具)，六类资源内容字段见[Agent](agent.md#4-runexecutionstate-资源合同与完整字段)。
 
 ## 4. 完整模型字段
 
@@ -178,3 +178,5 @@ Runtime 在一个 SQLite 读快照内读取目标 Run 的所有较早 ordinal，
 **规格状态：**Session Memory、Agent ReAct、Session Context Compaction 与 Session Context Retrieval 主规格均已同步；压缩 checkpoint 由 Runtime 保存，canonical history 不裁剪，历史工具只读且按来源引用受限。跨 Provider 历史转换与调用 ID 重映射仍未实现；不兼容 continuation 继续在请求准备阶段拒绝。
 
 代码：[Session Memory 模型](../../src/figura/memory/models.py)、[来源引用](../../src/figura/shared/source_refs.py)、[历史检索](../../src/figura/memory/retrieval.py)、[投影器](../../src/figura/memory/projector.py)、[Agent 请求构建](../../src/figura/agent/request.py)、[历史 Run 快照读取](../../src/figura/runtime/persistence/snapshots.py)。规格：[Session Memory](../../openspec/figura/openspec/specs/session-memory/spec.md)、[上下文压缩](../../openspec/figura/openspec/specs/session-context-compaction/spec.md)、[历史检索](../../openspec/figura/openspec/specs/session-context-retrieval/spec.md)、[Agent ReAct](../../openspec/figura/openspec/specs/agent-react-execution/spec.md)、[Run 核心](../../openspec/figura/openspec/specs/run-execution-core/spec.md)。
+
+历史搜索、精确读取与摘要来源行为见 [Session Memory](../../openspec/figura/openspec/specs/session-memory/spec.md)、[历史检索](../../openspec/figura/openspec/specs/session-context-retrieval/spec.md)和[上下文压缩](../../openspec/figura/openspec/specs/session-context-compaction/spec.md)主规格。检索结果与摘要仍是不可信历史数据。

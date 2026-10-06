@@ -530,12 +530,105 @@ def test_historical_image_tool_supports_panel_annotations_and_chart_render():
 
     definition = historical_image_tool_definition(History(), ImageReader())
     context = ToolContext("current-run", "session-1", "history-image-call")
+    from figura.tools import ToolInvocation, ToolRuntime
+    import json
+    runtime = ToolRuntime(ToolRegistry("image-ref-tests", (definition,)))
     for ref, _content, expected_name, expected_media_type in refs_and_contents:
-        result = definition.handler(
-            context,
-            {"resource_ref": resource_ref_to_dict(ref)},
-        )
+        invocation = ToolInvocation(context.call_id, definition.name, json.dumps({"resource_ref": resource_ref_to_dict(ref)}))
+        execution_result = runtime.invoke(invocation, context)
+        assert execution_result.outcome is ToolOutcome.SUCCEEDED
+        result = execution_result.result
         assert result["trust"] == "untrusted_history"
         assert result["name"] == expected_name
         assert result["media_type"] == expected_media_type
         assert (result["width"], result["height"]) == (16, 9)
+
+
+@pytest.mark.parametrize("reference", [
+    {"kind": "message", "run_id": "run", "record_id": "record"},
+    {"kind": "tool_result", "run_id": "run", "call_id": "call"},
+    {"kind": "chart_figure", "run_id": "run", "call_id": "call"},
+])
+def test_historical_image_rejects_non_image_refs_before_handler(reference):
+    import json
+    from figura.tools import ToolInvocation, ToolRuntime
+
+    calls = []
+
+    class History:
+        def image_resource(self, *_args):
+            calls.append("handler")
+            raise AssertionError("must not reach handler")
+
+    definition = historical_image_tool_definition(History(), None)
+    runtime = ToolRuntime(ToolRegistry("image-ref-tests", (definition,)))
+    result = runtime.invoke(
+        ToolInvocation("call", definition.name, json.dumps({"resource_ref": reference})),
+        ToolContext("run", "session", "call"),
+    )
+    assert result.error.code == "invalid_arguments"
+    assert calls == []
+
+
+def test_complete_v7_figure_remains_readable_and_projectable_with_v8_registry(tmp_path):
+    import json
+    from figura.tools.implementations.assemble_chart_figure import assemble_chart_figure_definition
+    from tests.test_figura_prompting import _figure
+
+    store, coordinator, history, image_reader, execution = _app(tmp_path)
+    session = coordinator.create_session()
+    source = _create_run(coordinator, session.session_id, "figure-source", "制作完整图")
+    figure = _figure().to_dict()
+    definition = assemble_chart_figure_definition(execution.for_run)
+    old_registry = ToolRegistry("figura-web-v7", (definition,))
+    _commit_response(coordinator, session.session_id, source.run_id, ProviderResponse(
+        ProviderId.QWEN, MODEL_IDS[ProviderId.QWEN], "制作图表。",
+        (ProviderToolCall("figure-call", definition.name, json.dumps(figure)),), FinishReason.TOOL_CALLS,
+    ), registry_version=old_registry.version)
+    DurableToolExecutor(store, old_registry).execute_pending(session.session_id, source.run_id)
+    completed = _complete_text(coordinator, session.session_id, source.run_id)
+    target = _create_run(coordinator, session.session_id, "figure-target", "修改历史图")
+    ref = {"kind": "chart_figure", "run_id": source.run_id, "call_id": "figure-call"}
+    full = history.read(session.session_id, target.run_id, ref)
+    assert full["content"]["figure"] == figure
+    selected = history.read(session.session_id, target.run_id, ref, selector={"field_path": "/figure"})
+    assert selected["content"] == figure
+    charts = history.read(session.session_id, target.run_id, ref, selector={
+        "field_path": "/figure/charts", "start": 0, "end": 1,
+    })
+    assert charts["content"] == figure["charts"]
+    empty = history.read(session.session_id, target.run_id, ref, selector={
+        "field_path": "/figure/charts", "start": 1, "end": 1,
+    })
+    assert empty["content"] == []
+    with pytest.raises(RunError) as error:
+        history.read(session.session_id, target.run_id, ref, selector={"field_path": "/figure", "start": 0})
+    assert error.value.code is RunErrorCode.UNSUPPORTED_PAYLOAD
+    tool_ref = {"kind": "tool_result", "run_id": source.run_id, "call_id": "figure-call"}
+    raw = history.read(session.session_id, target.run_id, tool_ref)
+    assert raw["status"] == "committed"
+    assert history.read(session.session_id, target.run_id, tool_ref, selector={"field_path": "/result"})["content"] == raw["content"]["result"]
+    target_state = coordinator.read_run_state(session.session_id, target.run_id)
+    request = AgentRequestBuilder(execution, image_reader).build(
+        target_state, ToolRegistry("figura-web-v8", (definition,)),
+        coordinator.read_prior_run_states(session.session_id, target.run_id),
+    )
+    assert any(message.tool_call_id == "figure-call" for message in request.messages)
+    assert store.read_run_state(session.session_id, source.run_id) == completed
+
+
+def test_history_string_slice_and_cursor_require_original_filters(tmp_path):
+    _store, coordinator, history, _images, _execution = _app(tmp_path)
+    session = coordinator.create_session()
+    source = _create_run(coordinator, session.session_id, "slice-source", "预算历史输入")
+    _complete_text(coordinator, session.session_id, source.run_id)
+    target = _create_run(coordinator, session.session_id, "slice-target", "读取历史")
+    page = history.search(session.session_id, target.run_id, "预算", page_size=1, source_kind="message")
+    ref = page["matches"][0]["reference"]
+    assert history.read(session.session_id, target.run_id, ref, selector={
+        "field_path": "/content", "start": 1, "end": 3,
+    })["content"] == "算历"
+    for options in [{"query": "历史", "source_kind": "message"}, {"query": "预算", "source_kind": "tool_result"}]:
+        with pytest.raises(RunError) as error:
+            history.search(session.session_id, target.run_id, cursor=page["next_cursor"], **options)
+        assert error.value.code is RunErrorCode.INVALID_REQUEST

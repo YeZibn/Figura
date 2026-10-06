@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from figura.agent.execution_resources import (
     AttachmentContent,
     ChartFigureContent,
@@ -210,3 +212,63 @@ def test_execution_instruction_handles_empty_catalog_and_escapes_resource_text()
     assert payload["resources"][0]["filename"] == filename
     assert filename not in instruction.content
     assert "\\n" in instruction.content
+
+
+def test_compaction_asset_loads_independently_from_ordinary_instructions() -> None:
+    from importlib.resources import files
+    from figura.agent.prompting.loader import build_compaction_instruction
+
+    asset = files("figura.agent.prompting").joinpath("assets", "compaction.md").read_text(encoding="utf-8")
+    instruction = build_compaction_instruction()
+    assert instruction.role is InstructionRole.SYSTEM
+    assert instruction.content == asset.strip()
+    assert instruction.content not in build_static_instruction().content
+
+
+@pytest.mark.parametrize("content", [None, " \n\t "])
+def test_missing_or_empty_compaction_asset_has_explicit_load_error(monkeypatch, content) -> None:
+    from figura.agent.prompting import loader
+
+    class Asset:
+        def joinpath(self, *_parts):
+            return self
+
+        def read_text(self, **_kwargs):
+            if content is None:
+                raise FileNotFoundError("private filesystem detail")
+            return content
+
+    monkeypatch.setattr(loader.resources, "files", lambda _package: Asset())
+    with pytest.raises(loader.PromptAssetError) as error:
+        loader.build_compaction_instruction()
+    assert "compaction.md" in str(error.value)
+    assert "private filesystem detail" not in str(error.value)
+
+
+def test_all_gateway_tool_guidance_survives_native_provider_projection(tmp_path) -> None:
+    from figura.bootstrap import create_application
+    from figura.tools.provider import project_provider_tools
+    from figura.shared.json_schema import normalize_json_value
+
+    app = create_application(tmp_path)
+    try:
+        registry = app.dispatcher._executor._tools.registry
+        projected = project_provider_tools(registry)
+        directory = _payload(build_tool_instruction(registry))["tools"]
+        assert registry.version == "figura-web-v8"
+        assert [tool.name for tool in projected] == [
+            "load_image", "decompose_chart_image", "search_history", "read_history",
+            "read_resource_image", "extract_text", "measure_bars", "measure_lines",
+            "measure_scatter", "measure_pie", "assemble_chart_figure", "render_chart_figure",
+        ]
+        for tool, definition, entry in zip(projected, registry, directory, strict=True):
+            assert tool.description == definition.description == entry["description"]
+            assert tool.name == entry["name"]
+            assert normalize_json_value(tool.parameters) == normalize_json_value(definition.parameters_schema)
+        by_name = {tool.name: normalize_json_value(tool.parameters) for tool in projected}
+        assert by_name["extract_text"]["properties"]["observation_scope"]["description"]
+        assert by_name["read_history"]["properties"]["selector"]["properties"]["field_path"]["description"]
+        figure = by_name["assemble_chart_figure"]["properties"]
+        assert figure["charts"]["items"]["properties"]["chart_spec"]["properties"]["dataset"]["description"]
+    finally:
+        app.dispatcher.close()

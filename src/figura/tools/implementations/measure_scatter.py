@@ -86,8 +86,8 @@ def measure_scatter_definition(
     return ToolDefinition(
         name="measure_scatter",
         description=(
-            "测量指定附件或 Panel 中的二维散点图，返回源图像像素坐标下的可见点、系列及坐标轴观察。"
-            "使用 observation_scope 包含或排除图像区域；省略时分析完整来源。重叠、遮挡或密集标记会作为不确定标记。"
+            "观察授权 Attachment 或 Panel 中的二维散点，返回原来源像素可见点、系列、坐标轴及有效校准后的 x/y 值，未校准值为空。"
+            "合并、遮挡、密集和重叠会有不确定标记，不能恢复完全隐藏的点或把检测点数当作真实样本数。可选 observation_scope；成功批次提供标注图。"
         ),
         parameters_schema=SOURCE_PARAMETERS,
         result_schema=MEASURE_SCATTER_RESULT_SCHEMA,

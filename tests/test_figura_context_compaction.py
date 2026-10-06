@@ -62,9 +62,31 @@ def _set_capacity_and_estimates(monkeypatch, values, *, capacity=100):
 
 def _summary_response(state, summary="已确认需要对比销售趋势和地区差异"):
     ref = MessageSourceRef(state.run.run_id, state.run.input_record_id)
-    return _response(content=json.dumps({
-        "items": [{"text": summary, "source_refs": [ref.to_dict()]}]
-    }, ensure_ascii=False))
+    return _response(content=json.dumps(_summary_v2({
+        "text": summary,
+        "source_refs": [ref.to_dict()],
+    }), ensure_ascii=False))
+
+
+def _summary_v2(fact=None):
+    value = {
+        "current_goal": [],
+        "constraints": [],
+        "decisions": [],
+        "facts": [],
+        "progress": {
+            "completed": [],
+            "in_progress": [],
+            "pending": [],
+            "blocked": [],
+        },
+        "open_questions": [],
+        "resources": [],
+        "proposals": [],
+    }
+    if fact is not None:
+        value["facts"].append(fact)
+    return value
 
 
 def test_threshold_compacts_oldest_closed_run_and_reestimates_request(tmp_path, monkeypatch):
@@ -90,6 +112,9 @@ def test_threshold_compacts_oldest_closed_run_and_reestimates_request(tmp_path, 
     assert len(summary_request.messages) == 1
     assert operation.status == "completed" and operation.attempt_count == 1
     assert checkpoint is not None and checkpoint.covered_run_id == first.run_id
+    assert checkpoint.summary_contract_version == 2
+    assert checkpoint.summary["facts"][0]["text"] == "已确认需要对比销售趋势和地区差异"
+    assert operation.request_binding["summary_contract_version"] == 2
     assert state.provider_request_bindings[0].context_projection == "checkpoint"
     assert state.provider_request_bindings[0].context_checkpoint_revision == checkpoint.revision
     assert state.provider_request_bindings[0].context_estimate == ContextEstimate(45, 100)
@@ -166,7 +191,8 @@ def test_invalid_summary_falls_back_to_full_history_and_pins_fallback(tmp_path, 
     assert first.run_id != target.run_id
 
 
-def test_invalid_incremental_summary_keeps_previous_checkpoint_unchanged(tmp_path, monkeypatch):
+@pytest.mark.parametrize("missing_asset", [False, True])
+def test_invalid_incremental_summary_keeps_previous_checkpoint_unchanged(tmp_path, monkeypatch, missing_asset):
     store, coordinator, _unused_session, _unused_run = _app(tmp_path)
     session, first, _second, target = _history_with_target(coordinator)
     first_state = coordinator.read_run_state(session.session_id, first.run_id)
@@ -186,10 +212,12 @@ def test_invalid_incremental_summary_keeps_previous_checkpoint_unchanged(tmp_pat
         coordinator, session.session_id, key="incremental-target", text="追加背景后继续"
     )
     _set_capacity_and_estimates(monkeypatch, [90, 80, 90])
-    second_factory = _FakeFactory([
-        _response(content="invalid summary"),
-        _response(content="完整历史下的回答"),
-    ])
+    if missing_asset:
+        _break_compaction_asset(monkeypatch)
+    second_factory = _FakeFactory(
+        ([] if missing_asset else [_response(content="invalid summary")])
+        + [_response(content="完整历史下的回答")]
+    )
     result = _agent(store, coordinator, _registry(), second_factory).execute_slice(
         session.session_id, next_target.run_id
     )
@@ -201,9 +229,16 @@ def test_invalid_incremental_summary_keeps_previous_checkpoint_unchanged(tmp_pat
         ensure_ascii=False,
     )
     assert "第一轮：分析销售趋势" in full_request_text
+    if missing_asset:
+        assert len(second_factory.client.requests) == 1
+        operation = coordinator.read_context_compaction_operation(
+            result.provider_request_bindings[0].context_compaction_operation_id
+        )
+        assert operation.failure_code == "invalid_summary_input"
 
 
-def test_interrupted_summary_reuses_saved_request_identity_after_restart(tmp_path, monkeypatch):
+@pytest.mark.parametrize("changed_asset", [False, True])
+def test_interrupted_summary_reuses_saved_request_identity_after_restart(tmp_path, monkeypatch, changed_asset):
     store, coordinator, _unused_session, _unused_run = _app(tmp_path)
     session, first, _second, target = _history_with_target(coordinator)
     first_state = coordinator.read_run_state(session.session_id, first.run_id)
@@ -236,7 +271,13 @@ def test_interrupted_summary_reuses_saved_request_identity_after_restart(tmp_pat
 
     reopened = FiguraRunStore(tmp_path)
     restarted_coordinator = RunCoordinator(reopened, coordinator._provider_factory)
-    restarted_factory = _FakeFactory([_summary_response(first_state), _response(content="完成")])
+    if changed_asset:
+        from figura.agent.prompting import loader
+        original = loader._load_asset
+        monkeypatch.setattr(loader, "_load_asset", lambda asset: original(asset) + "\n新增摘要指导" if asset == "compaction.md" else original(asset))
+    restarted_factory = _FakeFactory(
+        ([] if changed_asset else [_summary_response(first_state)]) + [_response(content="完成")]
+    )
     result = _agent(reopened, restarted_coordinator, _registry(), restarted_factory).execute_slice(
         session.session_id, target.run_id
     )
@@ -244,10 +285,173 @@ def test_interrupted_summary_reuses_saved_request_identity_after_restart(tmp_pat
         operation_id.operation_id
     )
 
-    assert resumed_operation.status == "completed"
-    assert resumed_operation.attempt_count == 2
     assert resumed_operation.request_binding == original_binding
-    assert result.provider_request_bindings[0].context_projection == "checkpoint"
+    if changed_asset:
+        assert resumed_operation.status == "fallback"
+        assert resumed_operation.failure_code == "summary_binding_mismatch"
+        assert resumed_operation.attempt_count == 1
+        assert result.provider_request_bindings[0].context_projection == "fallback"
+        assert coordinator.read_session_context_checkpoint(session.session_id) is None
+        assert len(restarted_factory.client.requests) == 1
+    else:
+        assert resumed_operation.status == "completed"
+        assert resumed_operation.attempt_count == 2
+        assert result.provider_request_bindings[0].context_projection == "checkpoint"
+
+
+def _break_compaction_asset(monkeypatch):
+    from figura.agent.prompting import loader
+    original = loader._load_asset
+
+    def load(asset):
+        if asset == "compaction.md":
+            raise loader.PromptAssetError("compaction.md unavailable")
+        return original(asset)
+
+    monkeypatch.setattr(loader, "_load_asset", load)
+
+
+def test_unavailable_compaction_asset_falls_back_without_summary_dispatch(tmp_path, monkeypatch):
+    store, coordinator, _session, _run = _app(tmp_path)
+    session, _first, _second, target = _history_with_target(coordinator)
+    _set_capacity_and_estimates(monkeypatch, [90, 80, 90])
+    _break_compaction_asset(monkeypatch)
+    factory = _FakeFactory([_response(content="完整历史回答")])
+    state = _agent(store, coordinator, _registry(), factory).execute_slice(session.session_id, target.run_id)
+    binding = state.provider_request_bindings[0]
+    operation = coordinator.read_context_compaction_operation(binding.context_compaction_operation_id)
+    assert operation.failure_code == "invalid_summary_input"
+    assert operation.attempt_count == 0 and operation.request_binding is None
+    assert len(factory.client.requests) == 1
+    assert coordinator.read_session_context_checkpoint(session.session_id) is None
+
+
+def test_compaction_asset_change_updates_request_prompt_digest(tmp_path, monkeypatch):
+    from figura.agent.prompting import loader
+
+    _store, coordinator, _session, _run = _app(tmp_path)
+    session, first, _second, target = _history_with_target(coordinator)
+    current = coordinator.read_run_state(session.session_id, target.run_id)
+    sources = (coordinator.read_run_state(session.session_id, first.run_id),)
+    builder = _agent(_store, coordinator, _registry(), _FakeFactory([]))._requests
+    before, refs = builder.build_summary_request(current, sources, None)
+    assert "previous_summary_contract_version" not in json.loads(before.messages[0].content)
+    assert before.asset_contract["registry_version"] == "context-compaction-v2"
+    original = loader._load_asset
+    monkeypatch.setattr(loader, "_load_asset", lambda asset: original(asset) + "\n新增摘要指导")
+    after, new_refs = builder.build_summary_request(current, sources, None)
+    assert before.asset_contract["prompt_digest"] != after.asset_contract["prompt_digest"]
+    assert before.messages == after.messages and refs == new_refs
+    assert before.tools == after.tools == ()
+    assert isinstance(before.messages[0].content, str)
+
+
+@pytest.mark.parametrize("citation", ["message", "tool_result", "duplicate", "foreign", "empty"])
+def test_summary_contract_authorizes_both_citation_shapes(tmp_path, citation):
+    from figura.agent.context_compaction import validate_summary_response
+    from figura.shared.source_refs import ToolResultSourceRef
+
+    _store, coordinator, session, first = _app(tmp_path)
+    source = coordinator.read_run_state(session.session_id, first.run_id)
+    message = MessageSourceRef(first.run_id, source.run.input_record_id)
+    tool = ToolResultSourceRef(first.run_id, "authorized-call")
+    citations = {
+        "message": [message.to_dict()], "tool_result": [tool.to_dict()],
+        "duplicate": [tool.to_dict(), tool.to_dict()],
+        "foreign": [ToolResultSourceRef("foreign-run", "foreign-call").to_dict()], "empty": [],
+    }[citation]
+    value = _summary_v2({"text": "事实摘要", "source_refs": citations})
+    response = _response(content=json.dumps(value))
+    arguments = dict(provider_id=ProviderId.QWEN.value, model_id=MODEL_IDS[ProviderId.QWEN],
+        allowed_refs=(message, tool), selected_runs=(source,))
+    if citation in {"duplicate", "foreign", "empty"}:
+        with pytest.raises(ValueError):
+            validate_summary_response(response, **arguments)
+    else:
+        summary, refs = validate_summary_response(response, **arguments)
+        assert summary["facts"][0]["source_refs"] == citations
+        assert summary["trust"] == "untrusted_history"
+        assert message in refs
+
+
+def test_summary_v2_keeps_goal_and_user_accepted_progress_in_separate_fields(tmp_path):
+    from figura.agent.context_compaction import validate_summary_response
+
+    _store, coordinator, session, first = _app(tmp_path)
+    source = coordinator.read_run_state(session.session_id, first.run_id)
+    ref = MessageSourceRef(first.run_id, source.run.input_record_id).to_dict()
+    value = _summary_v2()
+    value["current_goal"] = [{"text": "完成地区对比", "source_refs": [ref]}]
+    value["progress"]["pending"] = [{"text": "补充地区对比", "source_refs": [ref]}]
+    value["proposals"] = [{"text": "可以补充季节性分析", "source_refs": [ref]}]
+    summary, _refs = validate_summary_response(
+        _response(content=json.dumps(value)),
+        provider_id=ProviderId.QWEN.value,
+        model_id=MODEL_IDS[ProviderId.QWEN],
+        allowed_refs=(MessageSourceRef(first.run_id, source.run.input_record_id),),
+        selected_runs=(source,),
+    )
+
+    assert summary["current_goal"][0]["text"] == "完成地区对比"
+    assert summary["progress"]["pending"][0]["text"] == "补充地区对比"
+    assert summary["proposals"][0]["text"] == "可以补充季节性分析"
+    assert "run_outcomes" in summary
+
+
+@pytest.mark.parametrize(
+    "mutation", ["missing_field", "extra_field", "invalid_progress", "item_extra_field"]
+)
+def test_summary_v2_rejects_incomplete_or_unexpected_fields(tmp_path, mutation):
+    from figura.agent.context_compaction import validate_summary_response
+
+    _store, coordinator, session, first = _app(tmp_path)
+    source = coordinator.read_run_state(session.session_id, first.run_id)
+    ref = MessageSourceRef(first.run_id, source.run.input_record_id).to_dict()
+    value = _summary_v2()
+    if mutation == "missing_field":
+        del value["facts"]
+    elif mutation == "extra_field":
+        value["summary_contract_version"] = 2
+    elif mutation == "invalid_progress":
+        del value["progress"]["blocked"]
+    else:
+        value["facts"] = [{"text": "摘要", "source_refs": [ref], "status": "fact"}]
+    with pytest.raises(ValueError):
+        validate_summary_response(
+            _response(content=json.dumps(value)),
+            provider_id=ProviderId.QWEN.value,
+            model_id=MODEL_IDS[ProviderId.QWEN],
+            allowed_refs=(MessageSourceRef(first.run_id, source.run.input_record_id),),
+            selected_runs=(source,),
+        )
+
+
+def test_incremental_summary_request_keeps_prior_summary_and_new_source_identity(tmp_path):
+    store, coordinator, _session, _run = _app(tmp_path)
+    session, first, second, target = _history_with_target(coordinator)
+    old_state = coordinator.read_run_state(session.session_id, first.run_id)
+    new_state = coordinator.read_run_state(session.session_id, second.run_id)
+    old_ref = MessageSourceRef(first.run_id, first.input_record_id)
+    previous = SessionContextCheckpoint(
+        session_id=session.session_id, revision=1, covered_run_id=first.run_id,
+        covered_run_ordinal=first.ordinal,
+        covered_record_sequence=old_state.checkpoint.last_committed_record_sequence,
+        covered_tool_sequence=old_state.checkpoint.last_committed_tool_sequence,
+        summary_contract_version=1,
+        summary={"items": [{"text": "旧摘要", "source_refs": [old_ref.to_dict()]}], "run_outcomes": []},
+        source_refs=(old_ref,),
+    )
+    builder = _agent(store, coordinator, _registry(), _FakeFactory([]))._requests
+    request, allowed_refs = builder.build_summary_request(
+        coordinator.read_run_state(session.session_id, target.run_id), (new_state,), previous,
+    )
+    payload = json.loads(request.messages[0].content)
+    assert "previous_summary_contract_version" not in payload
+    assert payload["previous_source_refs"] == [old_ref.to_dict()]
+    assert payload["previous_summary"]["items"][0]["text"] == "旧摘要"
+    assert [run["run_id"] for run in payload["source_runs"]] == [second.run_id]
+    assert old_ref in allowed_refs
+    assert MessageSourceRef(second.run_id, second.input_record_id) in allowed_refs
 
 
 def test_transient_summary_failure_retries_the_same_internal_provider_request(tmp_path, monkeypatch):
@@ -287,8 +491,9 @@ def test_transient_summary_failure_retries_the_same_internal_provider_request(tm
     assert len(result.provider_attempts) == 1
 
 
+@pytest.mark.parametrize("registry_changed", [False, True])
 def test_ordinary_provider_retry_reuses_compaction_checkpoint_without_new_summary(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, registry_changed
 ):
     import figura.runtime.persistence.providers as provider_persistence
 
@@ -321,24 +526,32 @@ def test_ordinary_provider_retry_reuses_compaction_checkpoint_without_new_summar
     reopened = FiguraRunStore(tmp_path)
     restarted_coordinator = RunCoordinator(reopened, coordinator._provider_factory)
     retry_factory = _FakeFactory([_response(content="重试完成")])
-    completed = _agent(reopened, restarted_coordinator, _registry(), retry_factory).execute(
+    from figura.tools import ToolRegistry
+    retry_registry = ToolRegistry("figura-web-v8", _registry().definitions) if registry_changed else _registry()
+    completed = _agent(reopened, restarted_coordinator, retry_registry, retry_factory).execute(
         session.session_id, target.run_id
     )
 
-    assert completed.run.status is RunStatus.COMPLETED, {
-        "terminal_code": completed.run.terminal_code,
-        "attempts": [(item.status.value, item.failure_code) for item in completed.provider_attempts],
-        "prepared": len(retry_factory.client.prepared_requests),
-        "dispatched": len(retry_factory.client.requests),
-    }
-    assert completed.provider_request_bindings == (binding,)
-    assert len(retry_factory.client.requests) == 1
-    assert any("自动摘要" in item.content for item in retry_factory.client.requests[0].instructions)
-    operation = restarted_coordinator.read_context_compaction_operation(
-        binding.context_compaction_operation_id
-    )
-    assert operation.attempt_count == 1
-
+    if registry_changed:
+        assert completed.run.status is RunStatus.FAILED
+        assert completed.provider_request_bindings == (binding,)
+        assert retry_factory.client.requests == []
+        operation = restarted_coordinator.read_context_compaction_operation(binding.context_compaction_operation_id)
+        assert operation.attempt_count == 1
+    else:
+        assert completed.run.status is RunStatus.COMPLETED, {
+            "terminal_code": completed.run.terminal_code,
+            "attempts": [(item.status.value, item.failure_code) for item in completed.provider_attempts],
+            "prepared": len(retry_factory.client.prepared_requests),
+            "dispatched": len(retry_factory.client.requests),
+        }
+        assert completed.provider_request_bindings == (binding,)
+        assert len(retry_factory.client.requests) == 1
+        assert any("自动摘要" in item.content for item in retry_factory.client.requests[0].instructions)
+        operation = restarted_coordinator.read_context_compaction_operation(
+            binding.context_compaction_operation_id
+        )
+        assert operation.attempt_count == 1
 
 def test_prompt_resource_directory_is_compact_while_server_catalog_stays_complete(tmp_path):
     from tests.test_figura_agent_executor import _execution_inventory

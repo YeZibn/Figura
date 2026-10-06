@@ -492,12 +492,14 @@ class AgentExecutor:
                 descriptor = prepared.descriptor
                 request_binding = {
                     "descriptor": dict(descriptor),
-                    "summary_contract_version": 1,
+                    "summary_contract_version": 2,
                 }
                 operation = self._coordinator.bind_context_compaction_request(
                     operation.operation_id, request_binding
                 )
             else:
+                if request_binding.get("summary_contract_version") != 2:
+                    raise ValueError("saved summary contract version changed")
                 descriptor = request_binding.get("descriptor")
                 if not isinstance(descriptor, Mapping):
                     raise ValueError("invalid saved summary request binding")
@@ -604,7 +606,7 @@ class AgentExecutor:
                 covered_run_ordinal=covered.run.ordinal,
                 covered_record_sequence=covered.checkpoint.last_committed_record_sequence,
                 covered_tool_sequence=covered.checkpoint.last_committed_tool_sequence,
-                summary_contract_version=1,
+                summary_contract_version=2,
                 summary=summary,
                 source_refs=source_refs,
                 compaction_operation_id=operation.operation_id,

@@ -17,8 +17,8 @@ from ..contracts import ReplayEffect, ToolContext, ToolDefinition, ToolFailure, 
 _LOAD_IMAGE_PARAMETERS = {
     "type": "object",
     "properties": {
-        "source_kind": {"type": "string", "enum": ["attachment", "panel"]},
-        "source_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "source_kind": {"description": "已授权原图类型；Panel 是独立裁图。", "type": "string", "enum": ["attachment", "panel"]},
+        "source_id": {"description": "复制资源索引中的 attachment 或 panel ID，不从文件路径构造。", "type": "string", "minLength": 1, "maxLength": 128},
     },
     "required": ["source_kind", "source_id"],
     "additionalProperties": False,
@@ -36,6 +36,7 @@ _LOAD_IMAGE_RESULT = {
     "additionalProperties": False,
 }
 _POINT_SCHEMA = {
+    "description": "原附件多边形顶点；左上为原点，x 向右、y 向下，分别按图像宽高归一化至 0–1000。",
     "type": "object",
     "properties": {
         "x": {"type": "integer", "minimum": 0, "maximum": 1000},
@@ -47,8 +48,8 @@ _POINT_SCHEMA = {
 _PANEL_INPUT_SCHEMA = {
     "type": "object",
     "properties": {
-        "name": {"type": "string", "minLength": 1, "maxLength": 256},
-        "points": {"type": "array", "items": _POINT_SCHEMA, "minItems": 3, "maxItems": 64},
+        "name": {"description": "便于后续辨认的区域名称，不表示边界已被工具审核。", "type": "string", "minLength": 1, "maxLength": 256},
+        "points": {"description": "沿边界排列的多边形顶点；区域外透明，裁图后的坐标相对 Panel 本身。", "type": "array", "items": _POINT_SCHEMA, "minItems": 3, "maxItems": 64},
     },
     "required": ["name", "points"],
     "additionalProperties": False,
@@ -56,8 +57,8 @@ _PANEL_INPUT_SCHEMA = {
 _DECOMPOSE_PARAMETERS = {
     "type": "object",
     "properties": {
-        "attachment_id": {"type": "string", "minLength": 1, "maxLength": 128},
-        "panels": {"type": "array", "items": _PANEL_INPUT_SCHEMA, "minItems": 1, "maxItems": 32},
+        "attachment_id": {"description": "当前 Session 授权的原附件 ID；应先观察原附件确定边界。", "type": "string", "minLength": 1, "maxLength": 128},
+        "panels": {"description": "各独立区域按此顺序返回；不会自动将新 Panel 图像附加到模型请求。", "type": "array", "items": _PANEL_INPUT_SCHEMA, "minItems": 1, "maxItems": 32},
     },
     "required": ["attachment_id", "panels"],
     "additionalProperties": False,
@@ -156,7 +157,7 @@ def image_tool_definitions(
     return (
         ToolDefinition(
             name="load_image",
-            description="按附件或 Panel ID 读取图像。结果只返回名称和尺寸；图像内容会附加到下一次模型请求。",
+            description="读取当前 Session 已授权的 Attachment 或 Panel 原图，用于观察布局、颜色或视觉内容。结果返回来源、名称和尺寸，图像附加到下一次模型请求；需要其他历史图像资源时用 read_resource_image。",
             parameters_schema=_LOAD_IMAGE_PARAMETERS,
             result_schema=_LOAD_IMAGE_RESULT,
             replay_effect=ReplayEffect.REPLAY_SAFE,
@@ -165,9 +166,8 @@ def image_tool_definitions(
         ToolDefinition(
             name="decompose_chart_image",
             description=(
-                "将附件图像按模型提供的多边形区域切成独立 Panel PNG，范围由你根据图像提出。"
-                "坐标按原图宽高归一化到 0–1000；区域外像素透明。系统只做执行所需的结构和资源校验，"
-                "不判断或修正区域的语义边界。"
+                "依据你先前对附件图像的观察，将提出的多边形切为独立 Panel PNG；按输入顺序返回 Panel 引用。"
+                "坐标相对原附件归一化到 0–1000，区域外透明；工具不确认或修正语义边界，也不自动加载新图。后续操作使用 Panel 自身坐标。"
             ),
             parameters_schema=_DECOMPOSE_PARAMETERS,
             result_schema=DECOMPOSE_RESULT_SCHEMA,

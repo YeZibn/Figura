@@ -66,7 +66,7 @@ def create_application(
     execution_images = RunExecutionImageReader(attachment_service, panel_service, chart_renders)
     history = SessionHistorySearch(coordinator, execution_state)
     registry = ToolRegistry(
-        "figura-web-v7",
+        "figura-web-v8",
         (
             *image_tool_definitions(execution_state.for_run, execution_images, panel_service),
             *history_tool_definitions(history),

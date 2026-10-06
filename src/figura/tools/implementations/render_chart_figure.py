@@ -25,6 +25,7 @@ _PARAMETERS_SCHEMA = {
     "type": "object",
     "properties": {
         "figure_ref": {
+            "description": "嵌套传入装配结果的 figure_ref；run_id 和 call_id 标识当前 Session 已接受的成功装配，不是渲染调用或 chart_id。",
             "type": "object",
             "properties": {
                 "run_id": {"type": "string", "minLength": 1, "maxLength": 128},
@@ -129,9 +130,8 @@ def render_chart_figure_definition(
     return ToolDefinition(
         name="render_chart_figure",
         description=(
-            "将同一 Session 中已接受的 ChartFigure 绘制为一个 PNG 画布。"
-            "只传入 Figure 的 run_id 与 call_id；返回图像摘要，图像会附加到下一次模型请求供你观察。"
-            "渲染成功表示图像已生成，不表示图表内容已审核或确认正确。"
+            "将同 Session 已接受的 Figure 绘制为 PNG；传入装配结果的嵌套 figure_ref（含 run_id、call_id）。"
+            "返回图像摘要，PNG 附加到下一次模型请求供你观察。修改内容需先装配新 Figure；渲染成功表示图像生成，不表示数据正确或已审核。"
         ),
         parameters_schema=_PARAMETERS_SCHEMA,
         result_schema=_RESULT_SCHEMA,

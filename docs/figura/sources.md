@@ -1,12 +1,14 @@
 # Sources：附件、Panel 与生成图像
 
-> 更新日期：2026-10-04。[返回总览](../figura-implementation-overview.md)。范围：当前 `src/figura/sources/` 中的附件与 Panel 生命周期、图像文件、ChartFigure 渲染 PNG 私有存储及授权读取。Sources 是 Session 附件和 Panel 元数据的共同 owner，也为生成图像提供受控文件存储；Agent 的 `RunExecutionState.resources` 是从 Runtime 与 Sources 重建的调用期类型化目录，完整字段归 [Agent](agent.md#4-runexecutionstate-资源合同与完整字段)。Agent 的 `RunExecutionImageReader` 经目录授权后调用 Sources 服务读取源图或私有 render PNG。Sources 不拥有 OCR 或测量结果；当前工作树中的 Tools 提供独立 OCR 和柱状图、折线图、散点图、饼图观察，并在相应证据门槛满足时输出标定坐标或扇区比例。通用 Evidence 模型和证据生命周期尚未实现，观察工具合同见 [Tools](tools.md#6-图像与测量工具合同)。
+> 更新日期：2026-10-06。[返回总览](../figura-implementation-overview.md)。范围：当前 `src/figura/sources/` 中的附件与 Panel 生命周期、图像文件、ChartFigure 渲染 PNG 私有存储及授权读取。Sources 是 Session 附件和 Panel 元数据的共同 owner，也为生成图像提供受控文件存储；Agent 的 `RunExecutionState.resources` 是从 Runtime 与 Sources 重建的调用期类型化目录，完整字段归 [Agent](agent.md#4-runexecutionstate-资源合同与完整字段)。Agent 的 `RunExecutionImageReader` 经目录授权后调用 Sources 服务读取源图或私有 render PNG。Sources 不拥有 OCR 或测量结果；当前工作树中的 Tools 提供独立 OCR 和柱状图、折线图、散点图、饼图观察，并在相应证据门槛满足时输出标定坐标或扇区比例。通用 Evidence 模型和证据生命周期尚未实现，观察工具合同见 [Tools](tools.md#6-图像与测量工具合同)。
 
 ## 1. 职责与边界
 
 Sources 管理两种有不同身份和生命周期的图像资源：用户上传的 `AttachmentMetadata`，以及从附件分割出的 `PanelRecord`。`SourcesRepository` 将两类元数据写入同一个 Figura SQLite 数据库；附件与 Panel 服务分别负责内容验证、私有文件操作、图像读取和分割。数据库连接、事务和 schema 由共享 [Storage](../../src/figura/storage/) 使用的基础设施提供。
 
 附件字节位于私有 `attachments/` 文件，Panel 字节位于私有 `panels/` 文件，ChartFigure 渲染 PNG 位于私有 `chart-renders/` 文件区。Panel 的所有图像都是独立 PNG；多边形外区域透明。渲染文件由独立 `FiguraChartRenderService` 管理，不对应 SourcesRepository 记录或新的业务模型。文件路径、图像字节、图像尺寸和是否已在 Agent 清单中可用都不是 `PanelRecord` 字段。公开 DTO 属于 [Web](web.md#4-web-dto-字段)，Provider 请求期的 `ImageBlock` 属于 [Provider](provider.md#4-完整模型字段)。
+
+Panel PNG 的透明外区可能仍保留源 RGB，但这些颜色不属于可见证据。Tools 的共享 [观察解码](../../src/figura/tools/measurements/observation_scope.py) 将图像按白底合成，完全透明像素排除、半透明像素保留合成色，并与本次 scope 相交；标注反馈底图也作白底 alpha 合成，不改写私有文件、尺寸或坐标。OCR 整框跨出有效区域即舍弃，几何只能分析保留下来的部分。解码与错误合同归 [Tools](tools.md#6-图像与测量工具合同)，Sources 仍负责原 PNG 的存储与读取。
 
 Runtime 创建 Run 时只接受附件 ID，并在 Run 创建事务内检查附件归属；Runtime 不执行附件 CRUD 或文件管理。Panel 在 `SourcesRepository` 中保存后，也不因此自动对 Agent 或 Web 可见：Agent 根据 Run 中已提交成功的 `decompose_chart_image` 结果重建可用 Panel 清单。
 
@@ -73,3 +75,5 @@ Session 所拥有的不可变分区记录。SQLite 保存六项元数据；`poin
 ## 5. 代码与规格依据
 
 代码：[模型](../../src/figura/sources/models.py)、[Sources Repository](../../src/figura/sources/repository.py)、[附件服务](../../src/figura/sources/attachments.py)、[Panel 服务](../../src/figura/sources/panels.py)、[图像处理](../../src/figura/sources/imaging.py)、[私有文件工具](../../src/figura/sources/storage.py)、[ChartFigure PNG 存储](../../src/figura/sources/chart_renders.py)、[SQLite schema](../../src/figura/storage/schema.py)、[Run 附件归属校验](../../src/figura/runtime/persistence/runs.py)、[资源目录重建](../../src/figura/agent/execution_state.py)、[统一图片读取](../../src/figura/agent/execution_images.py)、[图像工具](../../src/figura/tools/implementations/image.py)。主规格：[图片附件存储](../../openspec/figura/openspec/specs/image-attachment-storage/spec.md)、[Panel 图像观察](../../openspec/figura/openspec/specs/panel-image-observation/spec.md)、[Web Gateway](../../openspec/figura/openspec/specs/figura-web-gateway/spec.md)。
+
+附件、Panel 文件与授权边界见 [图片附件存储](../../openspec/figura/openspec/specs/image-attachment-storage/spec.md)、[Panel 图像观察](../../openspec/figura/openspec/specs/panel-image-observation/spec.md)和 [Web Gateway](../../openspec/figura/openspec/specs/figura-web-gateway/spec.md)主规格。透明像素与观察范围如何作用于 OCR/测量输入由 [图像观察解码](../../openspec/figura/openspec/specs/image-observation-decoding/spec.md)定义；来源文件本身不被改写。

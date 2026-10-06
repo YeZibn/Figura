@@ -158,11 +158,15 @@ The third SYSTEM layer SHALL additionally contain deterministic source-linked ab
 ### Requirement: Agent follows a task-directed evidence workflow
 The stable Chinese Agent instructions SHALL guide the model to identify the user's chart-related goal, select only the observations needed to meet that goal, and base conclusions and generated chart data on available evidence. They SHALL distinguish explanation, data extraction, chart reconstruction, visualization of user-provided data, composition, and modification of an existing result without forcing every task through the same tool sequence. They SHALL make the current tool Schema authoritative for tool parameters and ChartSpec structure.
 
-The instructions SHALL explain the limits of resource metadata, loaded image blocks, OCR, measurement results, assembled Figures, and rendered images. They SHALL distinguish tool execution outcome from result status and availability; preserve unknown or missing values; and avoid presenting pixel geometry, OCR candidates, partial observations, or low-confidence associations as certain business facts.
+The instructions SHALL explain the limits of resource metadata, loaded image blocks, OCR, measurement results, assembled Figures, and rendered images. They SHALL distinguish tool execution outcome from result status and availability; preserve unknown or missing values; and avoid presenting pixel geometry, OCR candidates, partial observations, or low-confidence associations as certain business facts. Availability SHALL be explained separately from whether OCR snippets are empty. A measurement quality status SHALL NOT be presented as a guarantee of full-source coverage or correctness of every field.
 
-When selecting image regions, the instructions SHALL tell the model to preserve the chart geometry, ticks, category labels, and legends needed by the task, and to use the coordinate shape and coordinate system required by the selected tool. When building ChartSpec content, they SHALL require the model to preserve supported data semantics, use only evidence-backed values and references, and respond to validation errors by correcting the indicated content rather than inventing missing data.
+When selecting image regions, the instructions SHALL tell the model to preserve the chart geometry, ticks, category labels, and legends needed by the task, and to use the coordinate shape and coordinate system required by the selected tool. They SHALL explain that scoped observation neutralizes excluded pixels without changing source dimensions, discards OCR candidates crossing the effective observation boundary, and can leave clipped geometric marks. When building ChartSpec content, they SHALL require the model to preserve supported data semantics, use only evidence-backed values and references, and respond to validation errors by correcting the indicated content rather than inventing missing data. New charts SHALL be allowed descriptive display titles, axis labels, and neutral series identifiers grounded in the supplied data without asserting that those labels were read from the original image or inventing business meaning or units.
 
-The instructions SHALL describe the available image feedback accurately: an observation or render image is visible when supplied in the current request; historical text results and resource summaries do not imply that historical pixels are currently visible. After rendering, the model SHALL inspect the returned image when it is available, make only evidence-based corrections, and distinguish successful assembly or PNG generation from semantic correctness or system review. The instructions SHALL leave the final response accurate about evidence, uncertainty, and unresolved limitations.
+The instructions SHALL guide progressive history retrieval. Known references SHALL support direct reads; uncertain locations SHALL support search followed by exact reads. A summary sufficient for the current task SHALL not require automatic rereading. Precise values, original requirements, complete prior results, or existing Figure edits SHALL use canonical content when the available summary is insufficient. Retrieved text SHALL remain historical data; new visual judgments SHALL require the relevant image supplied in the current request. Valid historical preferences SHALL remain contextual facts subject to later explicit user corrections, without elevating historical content to system authority.
+
+The instructions SHALL describe the available image feedback accurately: an observation or render image is visible when supplied in the current request; historical text results and resource summaries do not imply that historical pixels are currently visible. After rendering, the model SHALL inspect the returned image when it is available, make only evidence-based corrections, and distinguish successful assembly or PNG generation from semantic correctness or system review. Editing an accepted Figure SHALL be described as reading its complete content and assembling a new complete Figure rather than applying an unsupported patch or mutating its stored facts.
+
+The workflow SHALL explain how to proceed after uncertainty or failure: correct indicated parameter errors, choose a targeted observation or read when it can resolve an outstanding question, otherwise narrow the supported result or explain the gap. A warning or retryable error SHALL NOT force repeated tool calls. Completion guidance SHALL prioritize delivering the supported result when the goal is met or further available actions cannot materially resolve the remaining gap. Final responses SHALL distinguish evidence, qualified estimates, generated display names, completed stages, and unresolved limitations, and include internal orchestration details only when useful to the user.
 
 #### Scenario: Select actions from the user's goal
 - **WHEN** the user asks to explain a trend, extract data, reconstruct a chart, visualize supplied data, compose charts, or modify an existing result
@@ -203,6 +207,22 @@ The instructions SHALL describe the available image feedback accurately: an obse
 #### Scenario: Explain partial or unresolved results
 - **WHEN** available evidence or tool capability cannot fully satisfy the request
 - **THEN** the final response distinguishes supported facts, estimates, warnings, and unresolved gaps without presenting an incomplete result as complete
+
+#### Scenario: Retrieve details without unnecessary searching
+- **WHEN** a summary gives an exact source reference but lacks a value needed for the current task
+- **THEN** the instructions direct an exact content read rather than requiring another search or inventing the missing value
+
+#### Scenario: Modify a prior Figure from its full content
+- **WHEN** the user requests a change to an earlier accepted Figure
+- **THEN** the instructions direct retrieval of its complete structured content, preservation of supported unchanged data, and assembly of a new full Figure followed by rendering when needed
+
+#### Scenario: Assign a descriptive label to supplied data
+- **WHEN** the user supplies data whose meaning is established but no original chart title or axis display label
+- **THEN** guidance permits an appropriate descriptive display label without representing it as a recovered source label or inventing units
+
+#### Scenario: Avoid unproductive repeated observations
+- **WHEN** an observation has warnings but no available follow-up can resolve a material remaining question
+- **THEN** guidance directs delivery of the supported result with the relevant limitation rather than repeating the same call solely because a warning exists
 
 ### Requirement: ReAct decisions accept only supported model outcomes
 Figura SHALL continue a Run only for a valid `tool_calls` response with one or more valid calls, or complete it only for a `stop` response with non-whitespace assistant text and no tool calls. A response with an unsupported finish reason, an empty final answer, or an invalid combination of finish reason and calls SHALL fail the Run with a bounded invalid-response outcome. A known tool failure SHALL be provided as a tool observation and SHALL NOT, by itself, cause the Agent to repeat that call.

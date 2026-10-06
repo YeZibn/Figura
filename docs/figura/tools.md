@@ -1,15 +1,15 @@
 # Tool：能力定义与调用边界
 
-> 更新日期：2026-10-05。[返回总览](../figura-implementation-overview.md)。本篇拥有工具定义、注册、调用及结果合同；`ToolCallFact`、`ToolAttemptStartedFact`、`ToolResultFact` 是[Run Runtime](runtime.md#4-完整模型字段)所拥有的持久事实。
+> 更新日期：2026-10-06。[返回总览](../figura-implementation-overview.md)。本篇拥有工具定义、注册、调用及结果合同；`ToolCallFact`、`ToolAttemptStartedFact`、`ToolResultFact` 是[Run Runtime](runtime.md#4-完整模型字段)所拥有的持久事实。
 
 ## 1. 职责与边界
 
-`ToolRegistry` 保存有序、版本化的 `ToolDefinition`；`ToolRuntime` 校验参数、运行同步 handler，并验证成功结果或返回安全错误。`DurableToolExecutor` 属于 Run 执行边界，负责在调用前后提交事实。当前工作树 Gateway Registry 为 `figura-web-v7`，按序注册 `load_image`、`decompose_chart_image`、`search_history`、`read_history`、`read_resource_image`、`extract_text`、四种测量工具、`assemble_chart_figure` 和 `render_chart_figure`。历史工具只读当前 Session 的授权前缀；历史图片只有显式请求才附加到下一模型请求。图像、OCR 与测量工具处理已授权 Attachment/Panel；画布组装工具接收 Charts 域的完整 ChartFigure 并核对测量引用；渲染工具只接收已接受 Figure 的 `(run_id, call_id)`。Registry v7 不保留 v6 unresolved-tool 兼容 executor；部署切换前应让旧版本 Run 到达终态。
+`ToolRegistry` 保存有序、版本化的 `ToolDefinition`；`ToolRuntime` 校验参数、运行同步 handler，并验证成功结果或返回安全错误。`DurableToolExecutor` 属于 Run 执行边界，负责在调用前后提交事实。当前工作树 Gateway Registry 为 `figura-web-v8`，按序注册 `load_image`、`decompose_chart_image`、`search_history`、`read_history`、`read_resource_image`、`extract_text`、四种测量工具、`assemble_chart_figure` 和 `render_chart_figure`。历史工具只读当前 Session 的授权前缀；历史图片只有显式请求才附加到下一模型请求。图像、OCR 与测量工具处理已授权 Attachment/Panel；画布组装工具接收 Charts 域的完整 ChartFigure 并核对测量引用；渲染工具只接收已接受 Figure 的 `(run_id, call_id)`。Registry v8 不保留 v7 或更早版本的 unresolved-tool 兼容 executor；部署切换前应让旧版本 Run 到达终态。
 
 ## 2. 内部流转
 
-1. **注册**：Gateway 组装有序 `ToolDefinition`，检查名称唯一、参数与结果 JSON Schema、描述及总大小。当前 v7 工具顺序为 `load_image`、`decompose_chart_image`、`search_history`、`read_history`、`read_resource_image`、`extract_text`、`measure_bars`、`measure_lines`、`measure_scatter`、`measure_pie`、`assemble_chart_figure`、`render_chart_figure`；Registry 对外提供只读版本、定义顺序和按名查找。
-2. **模型投影**：Agent 把允许的工具定义映射为 Provider 的 `FunctionTool`；模型只见名称、说明与参数 Schema，不见 handler、结果 Schema 或本地上下文。
+1. **注册**：Gateway 组装有序 `ToolDefinition`，检查名称唯一、参数与结果 JSON Schema、描述及总大小。当前 v8 工具顺序为 `load_image`、`decompose_chart_image`、`search_history`、`read_history`、`read_resource_image`、`extract_text`、`measure_bars`、`measure_lines`、`measure_scatter`、`measure_pie`、`assemble_chart_figure`、`render_chart_figure`；Registry 对外提供只读版本、定义顺序和按名查找。
+2. **模型投影**：Agent 把允许的工具定义映射为 Provider 的 `FunctionTool`；模型只见名称、说明与参数 Schema，不见 handler、结果 Schema 或本地上下文。全部 12 个定义已有工具级 description；原生参数的 description 说明来源引用、坐标点形状、历史局部读取和图表数据语义，并在 Provider 投影中保留。SYSTEM 目录与同一 Registry 同序，但不重复整份 Schema。
 3. **调用**：`ToolInvocation` 的 call ID、名称和 JSON 参数进入 `ToolRuntime`；解析拒绝重复键、无效数值与不符合 Schema 的内容。handler 只收到已验证参数及 `ToolContext`。
 4. **结果与恢复**：成功时结果必须是有界 JSON 对象；失败时返回 `ToolExecutionError`。图像读取、OCR、测量与 `assemble_chart_figure` 为 `replay_safe`；Panel 分割和 `render_chart_figure` 为 `idempotent_local_write`。组装工具不新建外部资源，只验证、摘要并通过既有 Runtime 工具事实保留 Figure；渲染工具把 PNG 安装到 Sources 私有文件区，ToolResultFact 只保存有界摘要。结果超出既有大小上限时整体拒绝，不静默截断或删减观测。`replay_effect` 决定不确定结果能否安全重放或必须显式协调；ToolRuntime 自身不拥有 Run checkpoint。
 
@@ -155,13 +155,13 @@ OCR 既为笛卡尔/Pie 测量提供轴刻度、标签与关联候选，也由 `
 |---|---|---|---|
 | SOURCE_PARAMETERS.source_kind | string，枚举 attachment、panel | 选择来源服务 | Provider 模型 → ToolCallFact / ToolInvocation → 来源解析器 |
 | SOURCE_PARAMETERS.source_id | string，长度 1–128 | 选定来源的不透明 ID，必须命中 RunExecutionState 授权清单 | Provider 模型 → ToolCallFact / ToolInvocation → 来源解析器；未授权时不读字节 |
-| SOURCE_PARAMETERS.observation_scope | 对象，可选；仅允许 include、exclude | 对图像指定本次调用期观察范围；省略时观察完整来源 | Provider 模型 → ToolCallFact.arguments_json / ToolInvocation → handler 校验 → 像素 mask；成功提交后由 Agent 资源目录的 OCR/MeasurementContent 重建保留范围，无独立 scope 存储 |
+| SOURCE_PARAMETERS.observation_scope | 对象，可选；仅允许 include、exclude | 对图像指定本次调用期观察范围；省略时观察来源可见像素 | Provider 模型 → ToolCallFact.arguments_json / ToolInvocation → handler 校验 → 像素 mask；成功提交后由 Agent 资源目录的 OCR/MeasurementContent 重建保留范围，无独立 scope 存储 |
 | OBSERVATION_SCOPE.include | Polygon 数组，可选；若存在为 1–4 个 Polygon | 多个包含区域的并集；未提供 include 时默认包含全图 | Provider 模型 → ToolCallFact.arguments_json → 范围解析器 |
 | OBSERVATION_SCOPE.exclude | Polygon 数组，可选；若存在为 1–4 个 Polygon | 多个排除区域的并集；与 include 重叠时排除优先 | Provider 模型 → ToolCallFact.arguments_json → 范围解析器 |
 | OBSERVATION_SCOPE.include[] / OBSERVATION_SCOPE.exclude[] | `ScopePoint[]`；每个 Polygon 含 3–32 个点 | 一个闭合观察多边形；坐标按所选来源图像宽高归一化到 0–1000 | Provider 模型 → ToolCallFact.arguments_json → 原尺寸 mask 构造器 |
 | OBSERVATION_SCOPE.include[][] / OBSERVATION_SCOPE.exclude[][] | 整数二元组 `[x, y]`；每项 0–1000 | 一个归一化顶点；额外维度、浮点数和越界值拒绝 | Provider 模型 → ToolCallFact.arguments_json → 原尺寸 mask 构造器 |
 
-范围对象本身若同时缺少 `include` 与 `exclude`、包含未知字段、数组/点数越界或结果掩码不含任何像素，工具返回有界结构化失败，不会回退到全图分析。每个顶点按原始图像尺寸栅格化；处理保留原图尺寸且不裁剪缩放，输出框和几何继续使用完整 Attachment/Panel 坐标。掩码外像素不作为几何、OCR 或标签关联证据；OCR 文字框必须完整落在有效区域内才会保留。
+范围对象本身若同时缺少 `include` 与 `exclude`、包含未知字段、数组/点数越界或结果掩码不含任何像素，工具返回有界结构化失败，不会回退到全图分析。每个顶点按原始图像尺寸栅格化；处理保留原图尺寸且不裁剪缩放，输出框和几何继续使用完整 Attachment/Panel 坐标。共享 `decode_scoped_image` 先按白底合成 alpha，再将 alpha>0 的固有可见范围与 include 并集减 exclude 并集相交；完全透明像素中的隐藏 RGB 不参与检测，半透明像素采用合成颜色。标注反馈底图也按白底合成 alpha，避免重新显示隐藏 RGB，但保留 scope 外原有可见上下文。不透明且未传 scope 时保留原 RGB 数据。显式 scope 无有效可见像素时返回 `invalid_observation_scope`，未传 scope 的全透明图返回 `image_unavailable`，两者均不调用检测器。掩码外像素不作为几何、OCR 或标签关联证据；OCR 文字框必须完整落在有效区域内才会保留。
 
 #### extract_text 结果字段
 
@@ -441,11 +441,11 @@ OCR 既为笛卡尔/Pie 测量提供轴刻度、标签与关联候选，也由 `
 | `chart_render_storage_failed` | Sources 无法写入或校验 PNG | 有界存储失败；仅 `STORAGE_ERROR` 标记可重试 |
 
 `render_chart_figure` 的 `replay_effect` 是 `idempotent_local_write`。文件可以先于 ToolResultFact 安装；在结果未成功提交时它仍是不可从 Agent/Web 读取的孤儿，重放同一调用会验证并复用原文件。工具不会用新内容覆盖损坏或冲突的既有文件。
-将 Registry 从 `figura-web-v6` 提升为 `figura-web-v7` 后，尚无结果的旧版本调用不能在 v7 下继续执行；部署切换前应让旧版本 Run 到达终态。v7 不添加 v6 兼容 executor。绘图的文字布局与百分比规则见[Charts 绘制边界](charts.md#5-png-绘制边界)；会话删除会清除其私有 Panel/render 文件，详见[Sources](sources.md#2-内部流转与不变量)。已配对完整结果的旧 Registry 调用仍可惰性投影到历史，不会因此重新执行。
+本轮 Registry 从 `figura-web-v7` 提升为 `figura-web-v8`：工具输入语义和透明观察行为变更，尚无结果的旧版本调用不能在 v8 下继续执行；部署切换前应让旧版本 Run 到达终态。v8 不添加旧版本兼容 executor。绘图的文字布局与百分比规则见[Charts 绘制边界](charts.md#5-png-绘制边界)；会话删除会清除其私有 Panel/render 文件，详见[Sources](sources.md#2-内部流转与不变量)。已配对完整结果的旧 Registry 调用仍可惰性投影到历史，不会因此重新执行。
 
 ## 9. Session 历史读取工具
 
-当前 v7 Registry 提供三个只读工具，可搜索当前 Run 的已闭合前缀与较早历史，再按需取得原始内容或图像；当前未闭合的调用批次不会进入搜索结果。它们的 `ToolContext.session_id` 与 `run_id` 由 DurableToolExecutor 注入，模型不能指定 Session，也不能越过当前 Run 已授权前缀。调用自身仍作为当前 Run 的普通工具事实审计；执行没有重放旧工具的副作用。Memory 拥有来源引用格式、搜索匹配及精确读取语义，见[来源引用](memory.md#historysourceref)和[历史检索边界](memory.md#搜索读取与历史图像边界)；Agent 拥有六类资源内容字段，见[资源合同](agent.md#4-runexecutionstate-资源合同与完整字段)。
+当前 v8 Registry 提供三个只读工具，可搜索当前 Run 的已闭合前缀与较早历史，再按需取得原始内容或图像；当前未闭合的调用批次不会进入搜索结果。它们的 `ToolContext.session_id` 与 `run_id` 由 DurableToolExecutor 注入，模型不能指定 Session，也不能越过当前 Run 已授权前缀。调用自身仍作为当前 Run 的普通工具事实审计；执行没有重放旧工具的副作用。Memory 拥有来源引用格式、搜索匹配及精确读取语义，见[来源引用](memory.md#historysourceref)和[历史检索边界](memory.md#搜索读取与历史图像边界)；Agent 拥有六类资源内容字段，见[资源合同](agent.md#4-runexecutionstate-资源合同与完整字段)。
 
 `search_history` 的输入对象只含下表属性且拒绝额外字段。查询使用本地文本匹配与分页，不访问未来 Run；默认页大小为 10，`page_size` 可设为 1–20。
 
@@ -477,15 +477,15 @@ OCR 既为笛卡尔/Pie 测量提供轴刻度、标签与关联候选，也由 `
 | `search_history.result.next_cursor` | string 或 null | 后续页游标；无后续页时为 null |
 | `search_history.result.has_more` | boolean | 是否还有匹配项 |
 
-`read_history` 按历史查询、摘要或资源清单提供的引用读取已有事实，不执行旧工具。`selector` 可选且拒绝额外字段；field_path 使用 JSON Pointer。
+`read_history` 按历史查询、摘要或资源清单提供的引用读取已有事实，不执行旧工具。省略 selector 返回原消息、工具结果/错误或完整资源内容；`chart_figure` 的 content 含完整 Figure，可读回后装配新的完整 Figure。`selector` 可选且拒绝额外字段；field_path 从返回 `content` 根开始使用 JSON Pointer（例如 `/figure` 或 `/result`），选择后才对字符串/数组切片；对象不支持切片。
 
 | 完整字段路径 | 类型与约束 | 含义 |
 |---|---|---|
 | `read_history.arguments.reference` | HistorySourceRef 或类型化资源引用，必填 | 精确定位 message、tool result 或资源；引用字段由其 owner 文档定义 |
 | `read_history.arguments.selector` | object，可选 | 可选内容选择器 |
-| `read_history.arguments.selector.field_path` | string，可选 | 以 JSON Pointer 选择结果字段 |
-| `read_history.arguments.selector.start` | integer，可选，≥0 | 对字符串或数组读取的起始偏移 |
-| `read_history.arguments.selector.end` | integer，可选，≥0 | 对字符串或数组读取的结束偏移 |
+| `read_history.arguments.selector.field_path` | string，可选 | 从 content 根开始的 JSON Pointer；空字符串选择完整 content |
+| `read_history.arguments.selector.start` | integer，可选，≥0 | 字符串/数组的 0-based 起始偏移，包含；省略为 0 |
+| `read_history.arguments.selector.end` | integer，可选，≥0 | 字符串/数组的结束偏移，不包含；省略到末尾 |
 | `read_history.result.trust` | 固定字符串 `untrusted_history` | 返回内容是不可信历史数据 |
 | `read_history.result.reference` | 原请求引用 | 实际读取的来源键 |
 | `read_history.result.run_id` | string 或 null | 来源 Run ID；资源引用按其类型/来源确定 |
@@ -500,18 +500,20 @@ OCR 既为笛卡尔/Pie 测量提供轴刻度、标签与关联候选，也由 `
 
 | 完整字段路径 | 类型与约束 | 含义 |
 |---|---|---|
-| `read_resource_image.arguments.resource_ref` | 必填共享 Reference union | Schema 可表达 message、tool-result 和类型化资源引用；handler 仅解析图片资源，实际可读 kind 为 `attachment`、`panel`、`ocr`、`measurement`、`chart_render`。`chart_figure` 不含图像，须先调用渲染工具 |
+| `read_resource_image.arguments.resource_ref` | 必填专用 Image Reference union | 仅允许 `attachment`/`panel`（`kind,id`）和 `ocr`/`measurement`/`chart_render`（`kind,run_id,call_id`）；message、tool_result、chart_figure 在 handler 前以 `invalid_arguments` 拒绝。ChartFigure 先渲染或读取已有 ChartRender |
 | `read_resource_image.result.trust` | 固定字符串 `untrusted_history` | 标记图像来源元数据的不可信性质 |
-| `read_resource_image.result.resource_ref` | 类型化资源引用 | 成功解析的图片来源 |
+| `read_resource_image.result.resource_ref` | 同输入的专用 Image Reference union | 成功解析的图片来源 |
 | `read_resource_image.result.name` | 非空 string | 安全显示名或资源类型名 |
 | `read_resource_image.result.media_type` | enum string：`image/jpeg`、`image/png`、`image/gif`、`image/webp` | 已检查的图像媒体类型 |
 | `read_resource_image.result.width` | integer，1–100000 | 图像宽度 |
 | `read_resource_image.result.height` | integer，1–100000 | 图像高度 |
 
-三个定义的 `replay_effect` 均为 `replay_safe`。search/read/image resource handler 返回安全历史错误；授权范围或引用不可用映射为 `history_reference_unavailable`，无效参数映射为 `invalid_history_request`，其他读取错误映射为可重试的 `history_unavailable`。图像字节仅作为下一 Provider 请求输入，不会进入该工具的 JSON 结果。
+三个定义的 `replay_effect` 均为 `replay_safe`。search/read/image resource handler 返回安全历史错误；授权范围或引用不可用映射为 `history_reference_unavailable`，Schema 入参拒绝为 `invalid_arguments`，handler 内无效查询映射为 `invalid_history_request`，其他读取错误映射为可重试的 `history_unavailable`。图像字节仅作为下一 Provider 请求输入，不会进入该工具的 JSON 结果。
 
 ## 10. 执行载荷与未知效果
 
 Registry 完整 metadata/parameter Schema/result Schema 投影、参数、成功/失败 observation 和耐久 fact 分别使用共享 JSON guard。删除工具数量、描述、Schema、参数、结果和批次 arguments 的通用微上限；领域 Schema 中的 maxItems/maxLength 继续生效，安全错误 message 512 B、pointer 256 B 保留。调用 ID 原值跨 intent、start、result、history 和 Figure 引用保留。
 
 已知 ToolFailure 或参数校验失败只提交一次 failed observation，`retryable=True` 由模型解读；模型的新决策使用新 call ID。未知的部分写入通过 `ToolOutcomeUnknown` 传播，不产生伪造 failed result。Panel 分割与 PNG 保存的无法确认存储异常采用这一分支；按原 replay_effect 和稳定 SHA-256 `[run_id, call_id]` 键恢复。存储 claim 入口强制每逻辑调用最多三次尝试。CancellationSignal 读取持久停止状态；读取失败传播并拒绝执行。尚在 native handler 内的动作保留 owner，真实返回后可保存结果再停止。
+
+工具执行、历史读取与图像观察边界见 [Tool Runtime](../../openspec/figura/openspec/specs/tool-runtime/spec.md)、[历史检索](../../openspec/figura/openspec/specs/session-context-retrieval/spec.md)和[图像观察解码](../../openspec/figura/openspec/specs/image-observation-decoding/spec.md)主规格。结构与回归测试不证明真实模型遵循效果。

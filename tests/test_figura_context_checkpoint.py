@@ -77,6 +77,7 @@ def test_context_checkpoint_round_trips_after_restart_and_rejects_stale_replace(
     )
     restarted = FiguraRunStore(tmp_path)
     assert restarted.read_session_context_checkpoint(session.session_id) == first
+    assert first.summary_contract_version == 1
 
     with pytest.raises(RunError) as error:
         restarted.replace_session_context_checkpoint(

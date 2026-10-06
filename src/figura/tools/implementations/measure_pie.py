@@ -136,9 +136,9 @@ def measure_pie_definition(
     return ToolDefinition(
         name="measure_pie",
         description=(
-            "测量指定附件或 Panel 中的二维圆形饼图，返回像素坐标下的圆心、半径、扇区角度、"
-            "有证据支持的比例、颜色、OCR 标签及置信度。使用 observation_scope 限定观察区域。"
-            "不支持甜甜圈、爆炸、椭圆、透视或 3D 饼图；警告不会自动触发重试。"
+            "观察授权 Attachment 或 Panel 中的二维圆形饼图，返回原来源像素圆心／半径、扇区角度、有支持的比例、颜色、OCR 标签与置信度。"
+            "比例不提供未知绝对总量，局部覆盖不代表完整构成；可选 observation_scope。"
+            "不支持甜甜圈、爆炸、椭圆、透视或 3D 饼图；成功批次提供标注图，警告不触发自动失败重试。"
         ),
         parameters_schema=SOURCE_PARAMETERS,
         result_schema=MEASURE_PIE_RESULT_SCHEMA,

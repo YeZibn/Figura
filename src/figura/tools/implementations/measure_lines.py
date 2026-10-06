@@ -86,8 +86,8 @@ def measure_lines_definition(
     return ToolDefinition(
         name="measure_lines",
         description=(
-            "测量指定附件或 Panel 中的二维折线图，返回源图像像素坐标下的分段轨迹、可见采样点、坐标轴观察和置信度。"
-            "使用 observation_scope 包含或排除图像区域；省略时分析完整来源。未标定坐标保留为空，警告由你判断。"
+            "观察授权 Attachment 或 Panel 中的二维折线，返回原来源像素分段轨迹、采样点、系列与坐标轴观察。"
+            "points 来自 marker 或 axis_tick_sample，不代表全部原始数据点；有效校准后才有 x/y 值。可选 observation_scope，截断会留下片段；成功批次提供标注图，按字段和警告判断。"
         ),
         parameters_schema=SOURCE_PARAMETERS,
         result_schema=MEASURE_LINES_RESULT_SCHEMA,

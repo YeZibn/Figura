@@ -1,6 +1,7 @@
 """Provider-facing JSON Schema fragments shared by image observation tools."""
 
 _SCOPE_POINT = {
+    "description": "归一化顶点 [x, y]，不是 {x,y} 对象；左上为原点，x 向右、y 向下。",
     "type": "array",
     "items": {"type": "integer", "minimum": 0, "maximum": 1000},
     "minItems": 2,
@@ -15,10 +16,11 @@ _SCOPE_POLYGON = {
 }
 
 OBSERVATION_SCOPE = {
+    "description": "可选局部观察范围，相对选定 Attachment 或 Panel 本身归一化至 0–1000；必须提供 include 或 exclude，保留原尺寸和像素坐标。范围与 alpha>0 的可见区域相交；无有效像素时失败。",
     "type": "object",
     "properties": {
-        "include": {"type": "array", "items": _SCOPE_POLYGON, "minItems": 1, "maxItems": 4},
-        "exclude": {"type": "array", "items": _SCOPE_POLYGON, "minItems": 1, "maxItems": 4},
+        "include": {"description": "多个多边形取并集；省略时包含全图，仍排除透明像素。", "type": "array", "items": _SCOPE_POLYGON, "minItems": 1, "maxItems": 4},
+        "exclude": {"description": "多个多边形取并集后从 include 扣除；排除优先，区域外白底中和。OCR 必须整框位于有效范围，几何检测可能得到片段。", "type": "array", "items": _SCOPE_POLYGON, "minItems": 1, "maxItems": 4},
     },
     "additionalProperties": False,
 }
@@ -26,8 +28,8 @@ OBSERVATION_SCOPE = {
 SOURCE_PARAMETERS = {
     "type": "object",
     "properties": {
-        "source_kind": {"type": "string", "enum": ["attachment", "panel"]},
-        "source_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "source_kind": {"description": "选择已授权原附件或独立 Panel；范围与输出坐标都相对这个来源。", "type": "string", "enum": ["attachment", "panel"]},
+        "source_id": {"description": "资源索引中的真实来源 ID，不是工具 call_id 或本地路径。", "type": "string", "minLength": 1, "maxLength": 128},
         "observation_scope": OBSERVATION_SCOPE,
     },
     "required": ["source_kind", "source_id"],

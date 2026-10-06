@@ -307,7 +307,8 @@ def test_v4_observation_registry_uses_one_scope_contract_without_legacy_aliases(
     assert registry.get("extract_pie_slices") is None
 
 
-def test_extract_text_accepts_authorized_panel_images(tmp_path, monkeypatch) -> None:
+@pytest.mark.parametrize("triangle", [False, True])
+def test_extract_text_accepts_authorized_panel_images(tmp_path, monkeypatch, triangle) -> None:
     store, coordinator, session, run, attachments, panels, state, attachment = _setup(
         tmp_path, _image_bytes(Image.new("RGB", (100, 80), "white"))
     )
@@ -317,10 +318,13 @@ def test_extract_text_accepts_authorized_panel_images(tmp_path, monkeypatch) -> 
     )
     args = json.dumps({
         "attachment_id": attachment.attachment_id,
-        "panels": [{"name": "主图", "points": [
-            {"x": 0, "y": 0}, {"x": 1000, "y": 0},
-            {"x": 1000, "y": 1000}, {"x": 0, "y": 1000},
-        ]}],
+        "panels": [{"name": "主图", "points": (
+            [{"x": 0, "y": 0}, {"x": 1000, "y": 0}, {"x": 0, "y": 1000}]
+            if triangle else [
+                {"x": 0, "y": 0}, {"x": 1000, "y": 0},
+                {"x": 1000, "y": 1000}, {"x": 0, "y": 1000},
+            ]
+        )}],
     })
     call = ProviderToolCall("panel-call", "decompose_chart_image", args)
     current = coordinator.read_run_state(session.session_id, run.run_id)
@@ -341,9 +345,13 @@ def test_extract_text_accepts_authorized_panel_images(tmp_path, monkeypatch) -> 
     ).execute_pending(session.session_id, run.run_id)
     panel_id = state.for_run(session.session_id, run.run_id).list("panel")[0].ref.id
     monkeypatch.setattr(ocr_module, "_engine", lambda _image: SimpleNamespace(
-        boxes=[[(8, 9), (28, 9), (28, 21), (8, 21)]],
-        txts=["Panel label"],
-        scores=[0.88],
+        boxes=[
+            [(8, 9), (28, 9), (28, 21), (8, 21)],
+            [(42, 30), (65, 30), (65, 50), (42, 50)],
+            [(80, 65), (90, 65), (90, 75), (80, 75)],
+        ],
+        txts=["Panel label", "crosses transparent boundary", "transparent"],
+        scores=[0.88, 0.9, 0.9],
     ))
     runtime = ToolRuntime(ToolRegistry(
         "panel-ocr-tests",
@@ -355,6 +363,74 @@ def test_extract_text_accepts_authorized_panel_images(tmp_path, monkeypatch) -> 
     assert result.outcome is ToolOutcome.SUCCEEDED
     assert result.result["coordinate_system"] == "panel_px"
     assert result.result["snippets"][0]["bbox_px"] == (8, 9, 20, 12)
+    assert len(result.result["snippets"]) == (1 if triangle else 3)
+
+
+_OBSERVATION_FACTORIES = (
+    extract_text_definition, measure_bars_definition, measure_lines_definition,
+    measure_scatter_definition, measure_pie_definition,
+)
+
+
+@pytest.mark.parametrize("factory", _OBSERVATION_FACTORIES, ids=lambda factory: factory.__name__)
+def test_all_observation_adapters_neutralize_panel_crop_before_detection(tmp_path, monkeypatch, factory):
+    from figura.sources.imaging import crop_panel
+    from figura.sources.models import PanelPoint
+    from figura.tools.measurements.observation_scope import decode_scoped_image
+
+    crop = crop_panel(_image_bytes(Image.new("RGB", (100, 80), (220, 30, 40))), (
+        PanelPoint(0, 0), PanelPoint(1000, 0), PanelPoint(0, 1000),
+    ))
+    _store, _coordinator, session, run, attachments, panels, state, attachment = _setup(tmp_path, crop)
+    definition = factory(state.for_run, make_execution_image_reader(attachments, panels))
+    observed = []
+
+    def engine(rgb):
+        observed.append(rgb.copy())
+        return SimpleNamespace(boxes=[], txts=[], scores=[])
+
+    monkeypatch.setattr(ocr_module, "_engine", engine)
+    result = _invoke(ToolRuntime(ToolRegistry("alpha-tests", (definition,))), definition.name, {
+        "source_kind": "attachment", "source_id": attachment.attachment_id,
+    }, run.run_id, session.session_id)
+    assert result.outcome is ToolOutcome.SUCCEEDED
+    assert result.result["image_size"] == {"width": 100, "height": 80}
+    expected, _mask = decode_scoped_image(crop)
+    assert observed
+    for rgb in observed:
+        np.testing.assert_array_equal(rgb, expected)
+        assert tuple(rgb[79, 99]) == (255, 255, 255)
+
+
+@pytest.mark.parametrize("factory", _OBSERVATION_FACTORIES, ids=lambda factory: factory.__name__)
+@pytest.mark.parametrize("scope", [None, {"include": [[[0, 0], [1000, 0], [0, 1000]]]}])
+def test_all_observation_adapters_reject_invisible_input_before_detectors(tmp_path, monkeypatch, factory, scope):
+    import importlib
+
+    _store, _coordinator, session, run, attachments, panels, state, attachment = _setup(
+        tmp_path, _image_bytes(Image.new("RGBA", (100, 80), (220, 30, 40, 0))),
+    )
+    definition = factory(state.for_run, make_execution_image_reader(attachments, panels))
+    detected = []
+
+    def detect(*_args, **_kwargs):
+        detected.append(True)
+        raise AssertionError("must not reach detector")
+
+    # Geometric adapters decode before invoking their OCR/geometry stages.
+    module = importlib.import_module("figura.tools.measurements." + {
+        "extract_text": "ocr", "measure_bars": "bars", "measure_lines": "lines",
+        "measure_scatter": "scatter", "measure_pie": "pie",
+    }[definition.name])
+    monkeypatch.setattr(module, "recognize_text", detect)
+    monkeypatch.setattr(ocr_module, "_engine", detect)
+    arguments = {"source_kind": "attachment", "source_id": attachment.attachment_id}
+    if scope is not None:
+        arguments["observation_scope"] = scope
+    result = _invoke(ToolRuntime(ToolRegistry("invisible-tests", (definition,))), definition.name,
+        arguments, run.run_id, session.session_id)
+    assert result.error.code == ("image_unavailable" if scope is None else "invalid_observation_scope")
+    assert detected == []
 
 
 def test_pie_sector_ratio_gate_requires_full_coverage_and_boundary_support() -> None:
