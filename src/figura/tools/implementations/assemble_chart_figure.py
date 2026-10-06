@@ -59,9 +59,7 @@ _RESULT_SCHEMA = {
     "additionalProperties": False,
 }
 
-_MEASUREMENT_TOOLS = frozenset(
-    {"measure_bars", "measure_lines", "measure_scatter", "measure_pie"}
-)
+_MEASUREMENT_TOOLS = frozenset({"measure_chart"})
 
 
 def assemble_chart_figure_definition(
@@ -143,8 +141,8 @@ def assemble_chart_figure_definition(
         name="assemble_chart_figure",
         description=(
             "将 1–4 个完整有效的 ChartSpec 按顺序装配为新的 Figure，返回 figure_ref、摘要与 digest，不绘制图像。"
-            "修改已有 Figure 时读取其完整内容后提交完整新 Figure。measurement_refs 仅引用实际采用的同 Session 成功测量，校验不证明数据真值。"
-            "pie 使用 category/value、不提供 series、axes 为 null；各图表数据语义见原生参数 Schema。"
+            "修改已有 Figure 时读取其完整内容后提交完整新 Figure。measurement_refs 只能引用当前授权历史中实际采用的成功 measure_chart 观察；校验不证明数据真值。"
+            "十类 ChartSpec 均使用各自原生数据与坐标结构，字段语义见参数 Schema。"
         ),
         parameters_schema=CHART_FIGURE_SCHEMA,
         result_schema=_RESULT_SCHEMA,

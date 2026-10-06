@@ -6,8 +6,14 @@ import pytest
 from PIL import Image, ImageDraw
 
 import figura.tools.measurements.bars as bar_sensor
-from figura.tools.measurements.bars import measure_bar_image
+from figura.tools.measurements.bars import measure_bar_pixels
+from figura.tools.measurements.observation_scope import decode_scoped_image
 from figura.tools.measurements.ocr import OCRObservation, OCRSnippet
+
+
+def _measure_bar(content: bytes, observation_scope=None):
+    rgb, mask = decode_scoped_image(content, observation_scope)
+    return measure_bar_pixels(rgb, mask)
 
 
 def _png(draw_chart, size: tuple[int, int] = (300, 200)) -> bytes:
@@ -26,7 +32,7 @@ def _vertical_chart(draw: ImageDraw.ImageDraw) -> None:
 
 
 def test_measures_vertical_bars_in_source_pixel_coordinates() -> None:
-    result = measure_bar_image(_png(_vertical_chart))
+    result = _measure_bar(_png(_vertical_chart))
 
     assert result["image_size"] == {"width": 300, "height": 200}
     assert result["status"] == "partial"
@@ -43,7 +49,7 @@ def test_measures_vertical_bars_in_source_pixel_coordinates() -> None:
 
 
 def test_bar_observation_scope_filters_geometry_without_changing_coordinates() -> None:
-    result = measure_bar_image(
+    result = _measure_bar(
         _png(_vertical_chart),
         {"include": [[[100, 150], [650, 150], [650, 1000], [100, 1000]]]},
     )
@@ -59,7 +65,7 @@ def test_measures_horizontal_bars_and_finds_the_vertical_baseline() -> None:
         draw_context.rectangle((41, 85, 240, 109), fill="#3366cc")
         draw_context.rectangle((41, 135, 120, 159), fill="#3366cc")
 
-    result = measure_bar_image(_png(draw))
+    result = _measure_bar(_png(draw))
 
     assert result["status"] == "partial"
     assert result["orientation"] == "horizontal"
@@ -79,8 +85,8 @@ def test_distinguishes_grouped_and_stacked_bar_modes() -> None:
         draw.rectangle((95, 110, 145, 179), fill="#cc4433")
         draw.rectangle((95, 50, 145, 109), fill="#3366cc")
 
-    grouped_result = measure_bar_image(_png(grouped))
-    stacked_result = measure_bar_image(_png(stacked))
+    grouped_result = _measure_bar(_png(grouped))
+    stacked_result = _measure_bar(_png(stacked))
 
     assert grouped_result["bar_mode"] == "grouped"
     assert [bar["category_index"] for bar in grouped_result["bars"]] == [1, 1, 2, 2]
@@ -97,7 +103,7 @@ def test_reports_oblique_baseline_orientation() -> None:
         draw_context.polygon(((130, 75), (165, 75), (165, 161), (130, 165)), fill="#3366cc")
         draw_context.polygon(((205, 110), (240, 110), (240, 153), (205, 156)), fill="#3366cc")
 
-    result = measure_bar_image(_png(draw))
+    result = _measure_bar(_png(draw))
 
     assert result["status"] == "partial"
     assert result["orientation"] == "oblique"
@@ -111,8 +117,8 @@ def test_keeps_geometry_when_baseline_is_missing_or_unsupported() -> None:
     def perspective(draw: ImageDraw.ImageDraw) -> None:
         draw.polygon(((110, 55), (139, 55), (165, 165), (85, 165)), fill="#3366cc")
 
-    uncertain = measure_bar_image(single_bar)
-    unsupported = measure_bar_image(_png(perspective))
+    uncertain = _measure_bar(single_bar)
+    unsupported = _measure_bar(_png(perspective))
 
     assert uncertain["status"] == "partial"
     assert uncertain["baseline"] is None
@@ -125,7 +131,7 @@ def test_keeps_geometry_when_baseline_is_missing_or_unsupported() -> None:
 def test_nulls_measurements_when_baseline_confidence_is_uncertain(monkeypatch) -> None:
     monkeypatch.setattr(bar_sensor, "_fit_baseline", lambda *_args: {"confidence": 0.55})
 
-    result = measure_bar_image(_png(_vertical_chart))
+    result = _measure_bar(_png(_vertical_chart))
 
     assert result["status"] == "partial"
     assert result["baseline"] is None
@@ -134,7 +140,7 @@ def test_nulls_measurements_when_baseline_confidence_is_uncertain(monkeypatch) -
 
 
 def test_returns_empty_observation_for_readable_image_without_bars() -> None:
-    result = measure_bar_image(_png(lambda draw: draw.text((80, 80), "no chart", fill="black")))
+    result = _measure_bar(_png(lambda draw: draw.text((80, 80), "no chart", fill="black")))
 
     assert result["status"] == "no_evidence"
     assert result["bars"] == []
@@ -158,7 +164,7 @@ def test_calibrates_bar_values_and_associates_category_ticks(monkeypatch) -> Non
     )
     monkeypatch.setattr(bar_sensor, "recognize_text", lambda _image: OCRObservation(snippets, True))
 
-    result = measure_bar_image(_png(draw))
+    result = _measure_bar(_png(draw))
 
     assert result["status"] == "measured"
     assert result["axes"]["y"]["calibration"]["calibrated"] is True

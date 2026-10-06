@@ -50,17 +50,17 @@ from figura.tools.implementations.render_chart_figure import render_chart_figure
 
 def _figure(title: str, chart_id: str = "sales") -> dict[str, object]:
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "title": title,
         "layout": {"columns": 1},
         "charts": [
             {
                 "chart_id": chart_id,
                 "chart_spec": {
-                    "schema_version": 1,
+                    "schema_version": 2,
                     "metadata": {"chart_type": "pie", "title": f"{title} chart"},
-                    "axes": None,
-                    "dataset": [{"category": "A", "value": 1}],
+                    "coordinate_system": {"kind": "none"},
+                    "dataset": {"slices": [{"id": "a", "label": "A", "value": 1}]},
                 },
             }
         ],
@@ -82,7 +82,7 @@ def _setup(tmp_path):
     execution_state = RunExecutionStateService(coordinator, panels)
     renders = FiguraChartRenderService(store.data_root)
     registry = ToolRegistry(
-        "figura-web-v6",
+        "figura-web-v9",
         (
             assemble_chart_figure_definition(execution_state.for_run),
             render_chart_figure_definition(execution_state.for_run, renders),
@@ -601,12 +601,12 @@ def test_render_tool_rejects_foreign_figure_and_typed_resource_rejects_digest_mi
         ChartFigureResult(accepted.content.result.figure, "0" * 64)
 
 
-def test_completed_v5_tool_call_stays_inert_under_v6_registry(tmp_path) -> None:
+def test_completed_v8_tool_call_stays_inert_under_v9_registry(tmp_path) -> None:
     store, coordinator, _attachments, execution_state, current_registry = _setup(tmp_path)
     session = coordinator.create_session()
     run = _create_run(coordinator, session.session_id, "old-registry-run")
     prior_registry = ToolRegistry(
-        "figura-web-v5",
+        "figura-web-v8",
         (assemble_chart_figure_definition(execution_state.for_run),),
     )
     _commit_calls(
@@ -624,7 +624,7 @@ def test_completed_v5_tool_call_stays_inert_under_v6_registry(tmp_path) -> None:
         session.session_id, run.run_id
     )
 
-    assert current_registry.version == "figura-web-v6"
+    assert current_registry.version == "figura-web-v9"
     assert replayed.checkpoint.revision == completed.checkpoint.revision
     assert replayed.tool_facts == completed.tool_facts
 

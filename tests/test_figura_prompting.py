@@ -24,30 +24,11 @@ from figura.charts.chartfigure import chart_figure_digest, parse_chart_figure
 from figura.providers import InstructionRole
 from figura.tools import ReplayEffect, ToolDefinition, ToolOutcome, ToolRegistry
 from figura.tools.contracts import ToolExecutionError
+from tests.figura_fixtures import bar_chart_figure, measurement_result
 
 
 def _figure():
-    return parse_chart_figure(
-        {
-            "schema_version": 1,
-            "title": "Sales",
-            "layout": {"columns": 1},
-            "charts": [
-                {
-                    "chart_id": "revenue",
-                    "chart_spec": {
-                        "schema_version": 1,
-                        "metadata": {"chart_type": "bar", "title": "Revenue"},
-                        "axes": {
-                            "x": {"label": "Quarter"},
-                            "y": {"label": "Value"},
-                        },
-                        "dataset": [{"category": "Q1", "value": 10}],
-                    },
-                }
-            ],
-        }
-    )
+    return parse_chart_figure(bar_chart_figure())
 
 
 def _payload(instruction) -> dict[str, object]:
@@ -127,11 +108,11 @@ def test_execution_instruction_projects_all_resource_kinds_and_cross_run_refs() 
             ToolResourceRef("measurement", "run-1", "measure-call"),
             MeasurementContent(
                 "attempt-measure",
-                "measure_bars",
+                "measure_chart",
                 panel_ref,
                 None,
                 ToolOutcome.SUCCEEDED,
-                {"status": "partial", "bars": [{"id": "B1"}], "series": []},
+                measurement_result(source_kind="panel", source_id="panel-old", status="partial"),
             ),
         ),
         ExecutionResource(
@@ -182,9 +163,10 @@ def test_execution_instruction_projects_all_resource_kinds_and_cross_run_refs() 
     assert projected[2]["available"] is True
     assert projected[2]["snippet_count"] == 1
     assert projected[3]["status"] == "partial"
-    assert projected[3]["candidate_counts"] == {"bars": 1, "series": 0}
+    assert projected[3]["chart_type"] == "bar"
+    assert projected[3]["candidate_counts"] == {"bars": 0}
     assert projected[4]["charts"] == [
-        {"chart_id": "revenue", "chart_type": "bar", "title": "Revenue"}
+        {"chart_id": "sales", "chart_type": "bar", "title": "Sales"}
     ]
     assert projected[5]["figure_ref"] == {
         "kind": "chart_figure",
@@ -255,11 +237,10 @@ def test_all_gateway_tool_guidance_survives_native_provider_projection(tmp_path)
         registry = app.dispatcher._executor._tools.registry
         projected = project_provider_tools(registry)
         directory = _payload(build_tool_instruction(registry))["tools"]
-        assert registry.version == "figura-web-v8"
+        assert registry.version == "figura-web-v9"
         assert [tool.name for tool in projected] == [
             "load_image", "decompose_chart_image", "search_history", "read_history",
-            "read_resource_image", "extract_text", "measure_bars", "measure_lines",
-            "measure_scatter", "measure_pie", "assemble_chart_figure", "render_chart_figure",
+            "read_resource_image", "extract_text", "measure_chart", "assemble_chart_figure", "render_chart_figure",
         ]
         for tool, definition, entry in zip(projected, registry, directory, strict=True):
             assert tool.description == definition.description == entry["description"]
@@ -269,6 +250,9 @@ def test_all_gateway_tool_guidance_survives_native_provider_projection(tmp_path)
         assert by_name["extract_text"]["properties"]["observation_scope"]["description"]
         assert by_name["read_history"]["properties"]["selector"]["properties"]["field_path"]["description"]
         figure = by_name["assemble_chart_figure"]["properties"]
-        assert figure["charts"]["items"]["properties"]["chart_spec"]["properties"]["dataset"]["description"]
+        chart_spec = figure["charts"]["items"]["properties"]["chart_spec"]["properties"]
+        assert tuple(chart_spec["metadata"]["properties"]["chart_type"]["enum"]) == (
+            "bar", "line", "scatter", "pie", "area", "histogram", "box_plot", "radar", "heatmap", "treemap"
+        )
     finally:
         app.dispatcher.close()

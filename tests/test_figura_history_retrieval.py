@@ -49,6 +49,7 @@ from figura.shared.source_refs import MessageSourceRef, ToolResultSourceRef
 from figura.sources.repository import SourcesRepository
 from figura.tools import ReplayEffect, ToolDefinition, ToolFailure, ToolOutcome, ToolRegistry
 from figura.tools.contracts import ToolContext
+from tests.figura_fixtures import measurement_result
 
 
 def _app(tmp_path):
@@ -487,10 +488,11 @@ def test_historical_image_tool_supports_panel_annotations_and_chart_render():
         (
             ToolResourceRef("measurement", "source-run", "measure-call"),
             MeasurementContent(
-                "attempt-measure", "measure_bars", attachment_ref, None,
-                ToolOutcome.SUCCEEDED, {"bars": []},
+                "attempt-measure", "measure_chart", attachment_ref, None,
+                ToolOutcome.SUCCEEDED,
+                measurement_result(source_id="attachment-source"),
             ),
-            "measure_bars annotation",
+            "measure_chart annotation",
             "image/png",
         ),
         (
@@ -610,7 +612,7 @@ def test_complete_v7_figure_remains_readable_and_projectable_with_v8_registry(tm
     assert history.read(session.session_id, target.run_id, tool_ref, selector={"field_path": "/result"})["content"] == raw["content"]["result"]
     target_state = coordinator.read_run_state(session.session_id, target.run_id)
     request = AgentRequestBuilder(execution, image_reader).build(
-        target_state, ToolRegistry("figura-web-v8", (definition,)),
+        target_state, ToolRegistry("figura-web-v9", (definition,)),
         coordinator.read_prior_run_states(session.session_id, target.run_id),
     )
     assert any(message.tool_call_id == "figure-call" for message in request.messages)

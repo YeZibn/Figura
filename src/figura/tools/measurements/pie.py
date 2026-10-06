@@ -9,7 +9,6 @@ from typing import Any
 import numpy as np
 
 from .ocr import OCRSnippet, recognize_text
-from .observation_scope import decode_scoped_image
 
 _ANGLE_SAMPLES = 720
 _RADII = (0.58, 0.70, 0.82, 0.91, 0.97)
@@ -18,12 +17,8 @@ _MIN_RATIO_COVERAGE = 0.80
 _MIN_RATIO_SUPPORT = 0.56
 
 
-def measure_pie_image(
-    image_bytes: bytes,
-    observation_scope: Mapping[str, Any] | None = None,
-) -> dict[str, Any]:
-    """Measure visible sector geometry while preserving source-pixel coordinates."""
-    rgb, observation_mask = decode_scoped_image(image_bytes, observation_scope)
+def measure_pie_pixels(rgb: np.ndarray, observation_mask: np.ndarray | None = None) -> dict[str, Any]:
+    """Measure an already decoded, scope-masked RGB source without shifting its coordinates."""
     height, width = rgb.shape[:2]
     ocr = recognize_text(rgb, observation_mask) if observation_mask is not None else recognize_text(rgb)
     palette = _palette(rgb)
@@ -36,7 +31,7 @@ def measure_pie_image(
     if region is None:
         warnings.append("no reliable circular pie geometry was detected")
         return _result(width, height, "no_evidence", None, [], (0.0, 0.0, 0.0, 0.0), warnings)
-    if region["shape"] != "circle":
+    if region["shape"] == "unsupported":
         warnings.append(region["warning"])
         return _result(
             width,
@@ -194,7 +189,17 @@ def _find_region(
         if aspect_ratio > 1.18 and not scope_clipped:
             shape, warning = "unsupported", "elliptical or perspective pie geometry is unsupported"
         elif center_observed and center_support < 0.12 and colored_coverage >= 0.20 and not scope_clipped:
-            shape, warning = "unsupported", "donut or exploded pie geometry is unsupported"
+            inner_radius = _estimate_inner_radius_px(
+                rgb,
+                (center_x, center_y),
+                radius,
+                observation_mask,
+                palette=palette,
+            )
+            if inner_radius is None:
+                shape, warning = "unsupported", "exploded pie geometry is unsupported"
+            else:
+                shape, warning = "donut", ""
         candidates.append({
             "shape": shape,
             "warning": warning,
@@ -204,6 +209,45 @@ def _find_region(
             "area": sum(item["area"] for item in nearby),
         })
     return max(candidates, key=lambda item: (item["confidence"], item["area"])) if candidates else None
+
+
+def _estimate_inner_radius_px(
+    rgb: np.ndarray,
+    center_px: Sequence[float],
+    outer_radius_px: float,
+    observation_mask: np.ndarray | None,
+    *,
+    palette: Sequence[Sequence[int]] | None = None,
+) -> float | None:
+    """Estimate a visible central hole only when several rings support a donut annulus."""
+    colors = list(palette) if palette is not None else _palette(rgb)
+    if not colors or outer_radius_px <= 0:
+        return None
+    center_x, center_y = float(center_px[0]), float(center_px[1])
+    fractions = np.arange(0.04, 0.66, 0.025)
+    angles = np.arange(0, 360, 4, dtype=float) * (np.pi / 180.0)
+    scores: list[float] = []
+    for fraction in fractions:
+        xs = np.clip(np.rint(center_x + outer_radius_px * fraction * np.cos(angles)).astype(int), 0, rgb.shape[1] - 1)
+        ys = np.clip(np.rint(center_y + outer_radius_px * fraction * np.sin(angles)).astype(int), 0, rgb.shape[0] - 1)
+        visible = np.ones(len(xs), dtype=bool) if observation_mask is None else observation_mask[ys, xs]
+        if int(np.count_nonzero(visible)) < len(xs) * 0.35:
+            scores.append(0.0)
+            continue
+        selected = rgb[ys[visible], xs[visible]]
+        scores.append(float(np.mean(_is_palette_pixel(selected[:, None, :], colors))))
+
+    first_supported: int | None = None
+    for index in range(1, len(scores) - 2):
+        if scores[index] >= 0.58 and scores[index + 1] >= 0.58 and scores[index + 2] >= 0.58:
+            first_supported = index
+            break
+    if first_supported is None or fractions[first_supported] < 0.16:
+        return None
+    preceding = scores[:first_supported]
+    if preceding and max(preceding) >= 0.45:
+        return None
+    return round(float(fractions[first_supported - 1] * outer_radius_px), 3)
 
 
 def _components(mask: np.ndarray, min_area: int) -> list[dict[str, Any]]:

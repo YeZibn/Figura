@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 
 import pytest
 
@@ -19,27 +20,84 @@ from figura.charts.chartfigure import (
     validate_chart_figure,
 )
 from figura.charts.chartfigure.limits import MAX_CHART_FIGURE_BYTES
-from figura.charts.chartspec import ChartMetadata, ChartSpecData, ChartType
+from figura.charts.chartspec import ChartSpecData
 from figura.shared.json_schema import validate_schema_definition
 
 
 def _chart_spec(chart_type: str) -> dict[str, object]:
-    axes = None if chart_type == "pie" else {
-        "x": {"label": "X"},
-        "y": {"label": "Y"},
+    if chart_type in {"bar", "box_plot"}:
+        coordinate: dict[str, object] = {
+            "kind": "cartesian",
+            "x_axis": {"kind": "categorical"},
+            "y_axis": {"kind": "numeric"},
+        }
+    elif chart_type in {"line", "scatter", "area", "histogram"}:
+        coordinate = {
+            "kind": "cartesian",
+            "x_axis": {"kind": "numeric"},
+            "y_axis": {"kind": "numeric"},
+        }
+    elif chart_type == "radar":
+        coordinate = {"kind": "polar", "value_range": {"min": 0, "max": 10}}
+    elif chart_type == "heatmap":
+        coordinate = {"kind": "matrix"}
+    elif chart_type == "treemap":
+        coordinate = {"kind": "hierarchical"}
+    else:
+        coordinate = {"kind": "none"}
+
+    datasets: dict[str, dict[str, object]] = {
+        "bar": {
+            "orientation": "vertical",
+            "mode": "grouped",
+            "categories": [{"id": "q1", "label": "Q1"}, {"id": "q2", "label": "Q2"}],
+            "series": [{"id": "revenue", "label": "Revenue", "values": [12, 18]}],
+        },
+        "line": {
+            "series": [{"id": "actual", "label": "Actual", "points": [{"x": 1, "y": 2}, {"x": 2, "y": 3}]}]
+        },
+        "scatter": {
+            "series": [{"id": "sample", "label": "Sample", "points": [{"x": 1, "y": 2}, {"x": 2, "y": 4}]}]
+        },
+        "pie": {"slices": [{"id": "north", "label": "North", "value": 2}, {"id": "south", "label": "South", "value": 3}]},
+        "area": {
+            "stacking": "none",
+            "series": [{"id": "actual", "label": "Actual", "points": [{"x": 1, "y": 2}, {"x": 2, "y": None}]}],
+        },
+        "histogram": {"measure": "count", "bins": [{"start": 0, "end": 1, "value": 4}, {"start": 1, "end": 2, "value": 6}]},
+        "box_plot": {
+            "orientation": "vertical",
+            "groups": [{"id": "control", "label": "Control", "lower_whisker": 1, "q1": 2, "median": 3, "q3": 4, "upper_whisker": 5}],
+        },
+        "radar": {
+            "dimensions": [{"id": "speed", "label": "Speed"}, {"id": "quality", "label": "Quality"}, {"id": "cost", "label": "Cost"}],
+            "series": [{"id": "product", "label": "Product", "values": [8, 7, 6]}],
+        },
+        "heatmap": {
+            "x_categories": [{"id": "x1", "label": "X1"}, {"id": "x2", "label": "X2"}],
+            "y_categories": [{"id": "y1", "label": "Y1"}],
+            "values": [[1.5, None]],
+        },
+        "treemap": {
+            "root_id": "root",
+            "nodes": [
+                {"id": "root", "parent_id": None, "label": "All"},
+                {"id": "a", "parent_id": "root", "label": "A", "value": 2},
+                {"id": "b", "parent_id": "root", "label": "B", "value": 3},
+            ],
+        },
     }
-    point = {"category": "A", "value": 2} if chart_type in {"bar", "pie"} else {"x": 1, "y": 2}
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "metadata": {"chart_type": chart_type, "title": chart_type.title()},
-        "axes": axes,
-        "dataset": [point],
+        "coordinate_system": coordinate,
+        "dataset": datasets[chart_type],
     }
 
 
 def _figure(charts: list[dict[str, object]] | None = None) -> dict[str, object]:
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "title": "Sales",
         "layout": {"columns": 2},
         "charts": charts if charts is not None else [
@@ -90,14 +148,11 @@ def test_figure_round_trip_defaults_and_preserves_chart_and_reference_order() ->
 
 def test_canonical_figure_serialization_and_digest_ignore_object_key_order() -> None:
     first = parse_chart_figure_json(json.dumps(_figure(), separators=(",", ":")))
-    second = parse_chart_figure_json(
-        '{"charts":[{"measurement_refs":[{"call_id":"call-1","run_id":"run-1"}],'
-        '"chart_spec":{"dataset":[{"value":2,"category":"A"}],"axes":{"y":{"label":"Y"},'
-        '"x":{"label":"X"}},"metadata":{"title":"Bar","chart_type":"bar"},"schema_version":1},'
-        '"chart_id":"revenue"},{"chart_spec":{"dataset":[{"y":2,"x":1}],"axes":{"y":{"label":"Y"},'
-        '"x":{"label":"X"}},"metadata":{"title":"Line","chart_type":"line"},"schema_version":1},'
-        '"chart_id":"trend"}],"layout":{"columns":2},"title":"Sales","schema_version":1}'
-    )
+    reversed_keys = {
+        key: value
+        for key, value in reversed(list(_figure().items()))
+    }
+    second = parse_chart_figure_json(json.dumps(reversed_keys, separators=(",", ":")))
 
     assert serialize_chart_figure(first) == serialize_chart_figure(second)
     assert chart_figure_digest(first) == chart_figure_digest(second)
@@ -105,11 +160,27 @@ def test_canonical_figure_serialization_and_digest_ignore_object_key_order() -> 
 
 
 @pytest.mark.parametrize(
+    "chart_type",
+    ["bar", "line", "scatter", "pie", "area", "histogram", "box_plot", "radar", "heatmap", "treemap"],
+)
+def test_figure_accepts_each_v2_chart_family(chart_type: str) -> None:
+    figure = parse_chart_figure(
+        {
+            "schema_version": 2,
+            "layout": {"columns": 1},
+            "charts": [{"chart_id": chart_type, "chart_spec": _chart_spec(chart_type)}],
+        }
+    )
+
+    assert figure.charts[0].chart_spec.metadata.chart_type.value == chart_type
+
+
+@pytest.mark.parametrize(
     ("raw", "code", "path"),
     [
         ({**_figure(), "unexpected": True}, "additional_property", "/unexpected"),
         ({**_figure(), "schema_version": True}, "invalid_schema_version", "/schema_version"),
-        ({**_figure(), "schema_version": 1.0}, "invalid_schema_version", "/schema_version"),
+        ({**_figure(), "schema_version": 2.0}, "invalid_schema_version", "/schema_version"),
         ({**_figure(), "layout": {"columns": 1.0}}, "invalid_columns", "/layout/columns"),
         ({**_figure(), "layout": {"columns": True}}, "invalid_columns", "/layout/columns"),
         (_figure([{"chart_id": "contains space", "chart_spec": _chart_spec("bar")}]), "pattern", "/charts/0/chart_id"),
@@ -126,13 +197,11 @@ def test_parser_rejects_invalid_figure_shapes(raw: dict[str, object], code: str,
 
 def test_json_parser_rejects_duplicate_keys_and_non_finite_values() -> None:
     with pytest.raises(ChartFigureParseError) as duplicate:
-        parse_chart_figure_json('{"schema_version":1,"schema_version":1,"layout":{"columns":1},"charts":[]}')
+        parse_chart_figure_json('{"schema_version":2,"schema_version":2,"layout":{"columns":1},"charts":[]}')
     with pytest.raises(ChartFigureParseError) as non_finite:
-        parse_chart_figure_json(
-            '{"schema_version":1,"layout":{"columns":1},"charts":[{"chart_id":"pie",'
-            '"chart_spec":{"schema_version":1,"metadata":{"chart_type":"pie"},"axes":null,'
-            '"dataset":[{"category":"A","value":NaN}]}}]}'
-        )
+        raw = _figure([{"chart_id": "pie", "chart_spec": _chart_spec("pie")}])
+        raw["charts"][0]["chart_spec"]["dataset"]["slices"][0]["value"] = float("nan")
+        parse_chart_figure_json(json.dumps(raw))
 
     assert duplicate.value.issue.code == "duplicate_key"
     assert non_finite.value.issue.code == "non_finite_number"
@@ -143,11 +212,9 @@ def test_figure_schema_is_supported() -> None:
 
 
 def test_semantic_validation_checks_layout_unique_ids_measurement_refs_and_nested_chart_spec() -> None:
-    invalid_bar = ChartSpecData(
-        ChartMetadata(ChartType.BAR),
-        None,
-        (ChartSpecData.from_dict(_chart_spec("line")).dataset[0],),
-    )
+    bar_spec = ChartSpecData.from_dict(_chart_spec("bar"))
+    line_spec = ChartSpecData.from_dict(_chart_spec("line"))
+    invalid_bar = replace(bar_spec, dataset=line_spec.dataset)
     figure = ChartFigure(
         layout=FigureLayout(columns=2),
         charts=(
@@ -171,26 +238,43 @@ def test_semantic_validation_checks_layout_unique_ids_measurement_refs_and_neste
     assert any(path.startswith("/charts/0/chart_spec") for path in issue_paths)
 
 
-def test_figure_validation_rejects_columns_exceeding_chart_count() -> None:
-    figure = parse_chart_figure(
-        {
-            "schema_version": 1,
-            "layout": {"columns": 2},
-            "charts": [{"chart_id": "one", "chart_spec": _chart_spec("pie")}],
-        }
-    )
+def test_parser_rejects_columns_exceeding_chart_count() -> None:
+    with pytest.raises(ChartFigureParseError) as error:
+        parse_chart_figure(
+            {
+                "schema_version": 2,
+                "layout": {"columns": 2},
+                "charts": [{"chart_id": "one", "chart_spec": _chart_spec("pie")}],
+            }
+        )
 
-    assert any(issue.code == "columns_exceed_charts" for issue in validate_chart_figure(figure))
+    assert error.value.issue.code == "columns_exceed_charts"
+
+
+def test_parser_rejects_v1_figure_and_v1_child_chart_spec() -> None:
+    old_figure = _figure()
+    old_figure["schema_version"] = 1
+    with pytest.raises(ChartFigureParseError) as figure_error:
+        parse_chart_figure(old_figure)
+
+    old_child = _figure([{"chart_id": "bar", "chart_spec": {**_chart_spec("bar"), "schema_version": 1}}])
+    with pytest.raises(ChartFigureParseError) as chart_error:
+        parse_chart_figure(old_child)
+
+    assert figure_error.value.issue.code == "unsupported_schema_version"
+    assert chart_error.value.issue.code == "unsupported_schema_version"
 
 
 def test_parser_and_serializer_enforce_the_figure_content_limit() -> None:
     large_chart = _chart_spec("pie")
-    large_chart["dataset"] = [
-        {"category": f"category-{index}-{'x' * 140}", "value": index + 1}
-        for index in range(512)
-    ]
+    large_chart["dataset"] = {
+        "slices": [
+            {"id": f"category-{index}", "label": f"category-{index}-{'x' * 140}", "value": index + 1}
+            for index in range(512)
+        ]
+    }
     oversized = {
-        "schema_version": 1,
+        "schema_version": 2,
         "layout": {"columns": 1},
         "charts": [{"chart_id": "large", "chart_spec": large_chart}],
     }

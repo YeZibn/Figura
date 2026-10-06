@@ -23,6 +23,7 @@ from .errors import (
 from .limits import MAX_CHART_FIGURE_BYTES
 from .models import ChartFigure, ChartFigureItem, FigureLayout, MeasurementRef
 from .schema import CHART_FIGURE_SCHEMA
+from .validation import validate_chart_figure
 
 
 class _DuplicateKey(ValueError):
@@ -124,9 +125,9 @@ def parse_chart_figure(value: object) -> ChartFigure:
             child_issue = getattr(error, "issue", None)
             child_path = getattr(child_issue, "field_path", "")
             _fail(
-                "invalid_chart_spec",
+                getattr(child_issue, "code", "invalid_chart_spec"),
                 f"{chart_path}/chart_spec{child_path}",
-                "嵌套 ChartSpecData 无法解析。",
+                getattr(child_issue, "message", "嵌套 ChartSpecData 无法解析。"),
             )
         references = tuple(
             MeasurementRef(run_id=reference["run_id"], call_id=reference["call_id"])
@@ -140,12 +141,17 @@ def parse_chart_figure(value: object) -> ChartFigure:
             )
         )
 
-    return ChartFigure(
+    figure = ChartFigure(
         schema_version=normalized["schema_version"],
         title=normalized.get("title", ""),
         layout=FigureLayout(columns=normalized["layout"]["columns"]),
         charts=tuple(parsed_charts),
     )
+    issues = validate_chart_figure(figure)
+    if issues:
+        issue = issues[0]
+        _fail(issue.code, issue.field_path, issue.message)
+    return figure
 
 
 def serialize_chart_figure(value: ChartFigure) -> str:

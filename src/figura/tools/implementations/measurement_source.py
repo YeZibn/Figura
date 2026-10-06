@@ -20,6 +20,8 @@ class MeasurementSource:
     name: str
     coordinate_system: Literal["attachment_px", "panel_px"]
     image_bytes: bytes
+    width: int
+    height: int
 
 
 def resolve_measurement_source(
@@ -48,9 +50,9 @@ def resolve_measurement_source(
         coordinate_system = "panel_px"
 
     try:
-        image_bytes, _width, _height = image_reader.read_source(session_id, state, ref)
+        image_bytes, width, height = image_reader.read_source(session_id, state, ref)
     except RunError:
         raise ToolFailure("image_unavailable", "图像内容当前无法用于测量。", retryable=True)
     if not image_bytes:
         raise ToolFailure("image_unavailable", "图像内容当前无法用于测量。", retryable=True)
-    return MeasurementSource(source_kind, source_id, name, coordinate_system, image_bytes)
+    return MeasurementSource(source_kind, source_id, name, coordinate_system, image_bytes, width, height)

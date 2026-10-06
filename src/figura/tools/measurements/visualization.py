@@ -1,8 +1,8 @@
-"""Deterministic, transient image annotations for committed measurements."""
+"""Deterministic, transient image annotations for committed observations."""
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from io import BytesIO
 from math import cos, radians, sin
 
@@ -14,7 +14,7 @@ def render_measurement_overlay(
     result: Mapping[str, object],
     tool_name: str,
 ) -> bytes:
-    """Draw committed geometry and status labels without changing the source."""
+    """Draw committed v2 geometry and status labels without changing the source."""
     try:
         with Image.open(BytesIO(image_bytes)) as source:
             source.load()
@@ -24,141 +24,196 @@ def render_measurement_overlay(
     except (OSError, ValueError, SyntaxError, Image.DecompressionBombWarning, Image.DecompressionBombError):
         raise ValueError("measurement source cannot be decoded") from None
     expected_size = result.get("image_size")
-    if not isinstance(expected_size, Mapping) or expected_size.get("width") != image.width or expected_size.get("height") != image.height:
+    if (
+        not isinstance(expected_size, Mapping)
+        or expected_size.get("width") != image.width
+        or expected_size.get("height") != image.height
+    ):
         raise ValueError("measurement image size does not match its authorized source")
 
     draw = ImageDraw.Draw(image)
     status = result.get("status", "unknown")
     warnings = result.get("warnings", [])
     warning = warnings[0] if isinstance(warnings, (list, tuple)) and warnings and isinstance(warnings[0], str) else ""
-    banner = f"{tool_name} | {status}"
+    if tool_name == "measure_chart":
+        chart_type = result.get("chart_type")
+        banner = f"measure_chart | {chart_type or 'unknown'} | {status}"
+    elif tool_name == "extract_text":
+        banner = f"{tool_name} | {status}"
+    else:
+        raise ValueError("unsupported observation tool")
     if warning:
         banner = f"{banner} | {warning[:96]}"
     draw.rectangle((0, 0, image.width, 22), fill="#17202a")
     draw.text((6, 5), banner, fill="#ffffff")
 
-    if tool_name == "measure_bars":
-        _draw_bars(draw, result)
-    elif tool_name == "measure_lines":
-        _draw_lines(draw, result)
-    elif tool_name == "measure_scatter":
-        _draw_scatter(draw, result)
-    elif tool_name == "measure_pie":
-        _draw_pie(draw, result)
-    elif tool_name == "extract_text":
-        _draw_text(draw, result)
+    if tool_name == "measure_chart":
+        observations = result.get("observations")
+        chart_type = result.get("chart_type")
+        if not isinstance(observations, Mapping) or not isinstance(chart_type, str):
+            raise ValueError("measurement observation family is invalid")
+        _draw_family(draw, chart_type, observations)
     else:
-        raise ValueError("unsupported observation tool")
+        _draw_text(draw, result)
 
     output = BytesIO()
     image.save(output, format="PNG", optimize=True)
     return output.getvalue()
 
 
-def _draw_bars(draw: ImageDraw.ImageDraw, result: Mapping[str, object]) -> None:
-    baseline = result.get("baseline")
-    if isinstance(baseline, Mapping):
-        _draw_polyline(draw, baseline.get("points_px"), "#f5b041", 2)
-    bars = result.get("bars", [])
-    if not isinstance(bars, (list, tuple)):
-        return
-    for item in bars:
-        if not isinstance(item, Mapping):
-            continue
-        geometry = item.get("geometry")
-        if not isinstance(geometry, Mapping):
-            continue
-        polygon = geometry.get("polygon_px")
+def _draw_family(draw: ImageDraw.ImageDraw, chart_type: str, observations: Mapping[str, object]) -> None:
+    if chart_type == "bar":
+        _draw_bars(draw, observations)
+    elif chart_type == "line":
+        for series in _records(observations.get("series")):
+            color = _color(series.get("color"))
+            for segment in _records_or_points(series.get("segments_px")):
+                _draw_polyline(draw, segment, color, 3)
+            for point in _records(series.get("points")):
+                _draw_point(draw, point.get("position_px"), color, 5)
+    elif chart_type == "scatter":
+        for series in _records(observations.get("series")):
+            color = _color(series.get("color"))
+            for point in _records(series.get("points")):
+                _draw_point(draw, point.get("center_px"), color, max(4, round(_number(point.get("radius_px")) or 0)))
+    elif chart_type == "pie":
+        _draw_pie(draw, observations)
+    elif chart_type == "area":
+        for series in _records(observations.get("series")):
+            color = _color(series.get("color"))
+            for segment in _records(series.get("segments")):
+                upper = segment.get("upper_boundary_px")
+                lower = segment.get("lower_boundary_px")
+                if isinstance(upper, (tuple, list)):
+                    _draw_polyline(draw, upper, color, 3)
+                if isinstance(lower, (tuple, list)):
+                    _draw_polyline(draw, lower, color, 3)
+                    _draw_joined_outline(draw, upper, lower, color)
+    elif chart_type == "histogram":
+        for item in _records(observations.get("bins")):
+            _draw_rect(draw, item.get("bounds_px"), "#00a6fb", label=None)
+    elif chart_type == "box_plot":
+        _draw_box_plots(draw, observations)
+    elif chart_type == "radar":
+        for series in _records(observations.get("series")):
+            vertices = [item.get("position_px") for item in _records(series.get("vertices"))]
+            _draw_polyline(draw, vertices, _color(series.get("color")), 3, close=True)
+    elif chart_type == "heatmap":
+        for cell in _records(observations.get("cells")):
+            _draw_rect(draw, cell.get("bounds_px"), _color(cell.get("color"), "#00a6fb"), fill=True)
+    elif chart_type == "treemap":
+        for node in _records(observations.get("nodes")):
+            _draw_rect(draw, node.get("bounds_px"), "#00a6fb", label=node.get("label") or node.get("id"))
+    else:
+        raise ValueError("unsupported measurement chart family")
+
+
+def _draw_bars(draw: ImageDraw.ImageDraw, observations: Mapping[str, object]) -> None:
+    _draw_polyline(draw, observations.get("baseline_px"), "#f5a623", 2)
+    for item in _records(observations.get("bars")):
+        polygon = item.get("polygon_px")
         _draw_polyline(draw, polygon, "#00a6fb", 3, close=True)
-        bbox = geometry.get("bbox_px")
-        if isinstance(bbox, (list, tuple)) and len(bbox) == 4:
-            x, y, width, height = (int(value) for value in bbox)
-            draw.text((x, max(23, y - 13)), f"bar {item.get('id')}", fill="#063970")
+        bounds = item.get("bounds_px")
+        if isinstance(bounds, Mapping):
+            x, y = bounds.get("x"), bounds.get("y")
+            if _number(x) is not None and _number(y) is not None:
+                draw.text((int(x), max(23, int(y) - 13)), str(item.get("id", "bar")), fill="#063970")
 
 
-def _draw_lines(draw: ImageDraw.ImageDraw, result: Mapping[str, object]) -> None:
-    for series in _series(result):
-        color = _color(series.get("color"))
-        traces = series.get("trace", [])
-        if isinstance(traces, (list, tuple)):
-            for trace in traces:
-                _draw_polyline(draw, trace, color, 3)
-        points = series.get("points", [])
-        if isinstance(points, (list, tuple)):
-            for point in points:
-                if isinstance(point, Mapping):
-                    _draw_point(draw, point.get("position_px"), color, 5)
-
-
-def _draw_scatter(draw: ImageDraw.ImageDraw, result: Mapping[str, object]) -> None:
-    for series in _series(result):
-        color = _color(series.get("color"))
-        points = series.get("points", [])
-        if not isinstance(points, (list, tuple)):
-            continue
-        for point in points:
-            if not isinstance(point, Mapping):
-                continue
-            position = point.get("position_px")
-            radius = point.get("radius_px")
-            _draw_point(draw, position, color, max(4, round(float(radius or 0))))
-
-
-def _draw_pie(draw: ImageDraw.ImageDraw, result: Mapping[str, object]) -> None:
-    region = result.get("plot_region")
-    if not isinstance(region, Mapping):
+def _draw_pie(draw: ImageDraw.ImageDraw, observations: Mapping[str, object]) -> None:
+    center = observations.get("center_px")
+    radius = _number(observations.get("outer_radius_px"))
+    if not _valid_point(center) or radius is None:
         return
-    center, radius = region.get("center_px"), region.get("radius_px")
-    if not isinstance(center, (list, tuple)) or len(center) != 2 or not isinstance(radius, (int, float)):
-        return
-    cx, cy = (float(value) for value in center)
-    radius = float(radius)
-    draw.ellipse(
-        (round(cx - radius), round(cy - radius), round(cx + radius), round(cy + radius)),
-        outline="#ff8c00",
-        width=3,
-    )
-    sectors = result.get("sectors", [])
-    if not isinstance(sectors, (list, tuple)):
-        return
-    for sector in sectors:
-        if not isinstance(sector, Mapping):
+    cx, cy = _xy(center)
+    outer = float(radius)
+    inner = _number(observations.get("inner_radius_px")) or 0.0
+    draw.ellipse((round(cx - outer), round(cy - outer), round(cx + outer), round(cy + outer)), outline="#ff8c00", width=3)
+    if inner > 0:
+        draw.ellipse((round(cx - inner), round(cy - inner), round(cx + inner), round(cy + inner)), outline="#ff8c00", width=3)
+    for sector in _records(observations.get("sectors")):
+        start = _number(sector.get("start_angle_deg"))
+        sweep = _number(sector.get("sweep_angle_deg"))
+        if start is None or sweep is None:
             continue
-        start, sweep = sector.get("start_angle_deg"), sector.get("sweep_angle_deg")
-        if not isinstance(start, (int, float)) or not isinstance(sweep, (int, float)):
-            continue
-        for angle in (float(start), float(start) + float(sweep)):
+        for angle in (start, start + sweep):
             theta = radians(angle)
-            point = (round(cx + radius * sin(theta)), round(cy - radius * cos(theta)))
-            draw.line((round(cx), round(cy), *point), fill="#ff8c00", width=3)
-        middle = radians(float(start) + float(sweep) / 2.0)
-        label_point = (
-            round(cx + radius * 0.68 * sin(middle)),
-            round(cy - radius * 0.68 * cos(middle)),
-        )
-        draw.text(label_point, f"{sector.get('id')}", fill="#17202a")
+            inner_point = (round(cx + inner * sin(theta)), round(cy - inner * cos(theta)))
+            outer_point = (round(cx + outer * sin(theta)), round(cy - outer * cos(theta)))
+            draw.line((*inner_point, *outer_point), fill="#ff8c00", width=3)
+
+
+def _draw_box_plots(draw: ImageDraw.ImageDraw, observations: Mapping[str, object]) -> None:
+    orientation = observations.get("orientation")
+    horizontal = orientation == "horizontal"
+    for group in _records(observations.get("groups")):
+        _draw_rect(draw, group.get("bounds_px"), "#00a6fb", label=None)
+        sequence = [
+            group.get("lower_whisker_px"),
+            group.get("q1_px"),
+            group.get("median_px"),
+            group.get("q3_px"),
+            group.get("upper_whisker_px"),
+        ]
+        usable = [point for point in sequence if _valid_point(point)]
+        _draw_polyline(draw, usable, "#b041ff", 3)
+        bounds = group.get("bounds_px")
+        cap = min(8.0, max(3.0, (_number(bounds.get("width" if horizontal else "height")) or 8.0) * 0.2)) if isinstance(bounds, Mapping) else 6.0
+        for point in (group.get("lower_whisker_px"), group.get("upper_whisker_px")):
+            if not _valid_point(point):
+                continue
+            x, y = _xy(point)
+            endpoints = ((x, y - cap), (x, y + cap)) if not horizontal else ((x - cap, y), (x + cap, y))
+            draw.line((*endpoints[0], *endpoints[1]), fill="#b041ff", width=3)
+        for outlier in _records(group.get("outliers")):
+            _draw_point(draw, outlier.get("position_px"), "#ff595e", 4)
 
 
 def _draw_text(draw: ImageDraw.ImageDraw, result: Mapping[str, object]) -> None:
-    snippets = result.get("snippets", [])
-    if not isinstance(snippets, (list, tuple)):
-        return
-    for snippet in snippets:
-        if not isinstance(snippet, Mapping):
-            continue
+    for snippet in _records(result.get("snippets")):
         bbox = snippet.get("bbox_px")
-        if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+        rect = _rect(bbox)
+        if rect is None:
             continue
-        x, y, width, height = (int(value) for value in bbox)
+        x, y, width, height = rect
         draw.rectangle((x, y, x + width, y + height), outline="#ff8c00", width=2)
         text = snippet.get("text")
         if isinstance(text, str):
             draw.text((x, max(23, y - 13)), f"{snippet.get('snippet_id')}: {text[:32]}", fill="#17202a")
 
 
-def _series(result: Mapping[str, object]) -> list[Mapping[str, object]]:
-    value = result.get("series", [])
-    return [item for item in value if isinstance(item, Mapping)] if isinstance(value, (list, tuple)) else []
+def _draw_rect(
+    draw: ImageDraw.ImageDraw,
+    value: object,
+    color: str,
+    *,
+    label: object = None,
+    fill: bool = False,
+) -> None:
+    rect = _rect(value)
+    if rect is None:
+        return
+    x, y, width, height = rect
+    box = (x, y, x + width, y + height)
+    draw.rectangle(box, outline=color, width=3, fill=color if fill else None)
+    if isinstance(label, str) and label:
+        draw.text((x + 3, y + 3), label[:32], fill="#17202a")
+
+
+def _rect(value: object) -> tuple[int, int, int, int] | None:
+    if not isinstance(value, Mapping):
+        return None
+    parts = tuple(_number(value.get(key)) for key in ("x", "y", "width", "height"))
+    if any(part is None for part in parts):
+        return None
+    return tuple(int(round(part)) for part in parts if part is not None)  # type: ignore[return-value]
+
+
+def _draw_joined_outline(draw: ImageDraw.ImageDraw, upper: object, lower: object, color: str) -> None:
+    if not isinstance(upper, (tuple, list)) or not isinstance(lower, (tuple, list)):
+        return
+    points = [*upper, *reversed(lower)]
+    _draw_polyline(draw, points, color, 2, close=True)
 
 
 def _draw_polyline(
@@ -169,9 +224,13 @@ def _draw_polyline(
     *,
     close: bool = False,
 ) -> None:
-    if not isinstance(points, (list, tuple)) or len(points) < 2:
+    if not isinstance(points, (tuple, list)) or len(points) < 2:
         return
-    coordinates = [tuple(int(round(float(value))) for value in point[:2]) for point in points if isinstance(point, (list, tuple)) and len(point) >= 2]
+    coordinates = [
+        tuple(int(round(value)) for value in _xy(point))
+        for point in points
+        if _valid_point(point)
+    ]
     if len(coordinates) >= 2:
         if close:
             coordinates.append(coordinates[0])
@@ -179,13 +238,37 @@ def _draw_polyline(
 
 
 def _draw_point(draw: ImageDraw.ImageDraw, position: object, color: str, radius: int) -> None:
-    if not isinstance(position, (list, tuple)) or len(position) != 2:
+    if not _valid_point(position):
         return
-    x, y = (int(round(float(value))) for value in position)
+    x, y = (int(round(value)) for value in _xy(position))
     draw.ellipse((x - radius, y - radius, x + radius, y + radius), outline=color, width=3)
 
 
-def _color(value: object) -> str:
+def _records(value: object) -> list[Mapping[str, object]]:
+    return [item for item in value if isinstance(item, Mapping)] if isinstance(value, (tuple, list)) else []
+
+
+def _records_or_points(value: object) -> list[object]:
+    return list(value) if isinstance(value, (tuple, list)) else []
+
+
+def _valid_point(value: object) -> bool:
+    return isinstance(value, (tuple, list)) and len(value) == 2 and all(_number(part) is not None for part in value)
+
+
+def _xy(value: object) -> tuple[float, float]:
+    if not _valid_point(value):
+        raise ValueError("invalid pixel point")
+    return float(value[0]), float(value[1])  # type: ignore[index]
+
+
+def _number(value: object) -> float | None:
+    if type(value) not in (int, float):
+        return None
+    return float(value)
+
+
+def _color(value: object, default: str = "#00a6fb") -> str:
     if isinstance(value, str) and len(value) == 7 and value.startswith("#"):
         return value
-    return "#00a6fb"
+    return default

@@ -32,15 +32,12 @@ _TOOL_LABELS = {
     "load_image": "读取图像",
     "decompose_chart_image": "拆分图像",
     "extract_text": "提取文字",
-    "measure_bars": "测量柱状图",
-    "measure_lines": "测量折线图",
-    "measure_scatter": "测量散点图",
-    "measure_pie": "测量饼图",
+    "measure_chart": "测量图表",
     "assemble_chart_figure": "装配图表",
     "render_chart_figure": "绘制图表",
 }
 _OBSERVATION_TOOLS = frozenset(
-    {"extract_text", "measure_bars", "measure_lines", "measure_scatter", "measure_pie"}
+    {"extract_text", "measure_chart"}
 )
 _ERROR_LABELS = {
     "image_not_available": "图像不可用",
@@ -295,24 +292,44 @@ def _result_summary(tool_name: str, result_fact: ToolExecutionFact | None) -> st
         availability = "结果可用" if value.get("available") is True else "无可用结果"
         suffix = "（结果已截断）" if value.get("truncated") is True else ""
         return f"{availability} · {count} 条文字记录{suffix}"
-    if tool_name in {"measure_bars", "measure_lines", "measure_scatter"}:
-        series = value.get("series")
-        series_count = len(series) if isinstance(series, (tuple, list)) else 0
-        item_count = 0
-        if isinstance(series, (tuple, list)):
-            key = "bars" if tool_name == "measure_bars" else "points"
-            item_count = sum(
-                len(item.get(key, ()))
+    if tool_name == "measure_chart":
+        chart_type = value.get("chart_type")
+        observations = value.get("observations")
+        if not isinstance(observations, Mapping):
+            return f"{_measurement_status(value.get('status'))} · 观察结构不可用"
+        family_labels = {
+            "bar": ("柱状图", "bars", "个柱体"),
+            "line": ("折线图", "series", "个系列"),
+            "scatter": ("散点/气泡图", "series", "个系列"),
+            "pie": ("饼图/甜甜圈图", "sectors", "个扇区"),
+            "area": ("面积图", "series", "个系列"),
+            "histogram": ("直方图", "bins", "个区间"),
+            "box_plot": ("箱线图", "groups", "个分组"),
+            "radar": ("雷达图", "spokes", "个维度"),
+            "heatmap": ("热力图", "cells", "个单元格"),
+            "treemap": ("矩形树图", "nodes", "个矩形"),
+        }
+        family = family_labels.get(chart_type) if isinstance(chart_type, str) else None
+        if family is None:
+            return f"{_measurement_status(value.get('status'))} · 图表家族未知"
+        label, key, item_label = family
+        items = observations.get(key)
+        if key == "series":
+            series = items if isinstance(items, (tuple, list)) else ()
+            item_count = len(series)
+            subkey = "points" if chart_type in {"line", "scatter"} else "segments"
+            if chart_type == "radar":
+                subkey = "vertices"
+            detail_count = sum(
+                len(item.get(subkey, ()))
                 for item in series
-                if isinstance(item, Mapping) and isinstance(item.get(key, ()), (tuple, list))
+                if isinstance(item, Mapping) and isinstance(item.get(subkey, ()), (tuple, list))
             )
-            if tool_name == "measure_bars" and isinstance(value.get("bars"), (tuple, list)):
-                item_count = len(value["bars"])
-        return f"{_measurement_status(value.get('status'))} · {series_count} 个系列，{item_count} 个测量项"
-    if tool_name == "measure_pie":
-        sectors = value.get("sectors")
-        count = len(sectors) if isinstance(sectors, (tuple, list)) else 0
-        return f"{_measurement_status(value.get('status'))} · {count} 个扇区"
+            measure = f"{item_count} 个系列、{detail_count} 个观察项"
+        else:
+            count = len(items) if isinstance(items, (tuple, list)) else 0
+            measure = f"{count} {item_label}"
+        return f"{_measurement_status(value.get('status'))} · {label} · {measure}"
     if tool_name == "assemble_chart_figure":
         title = value.get("title")
         charts = value.get("charts")

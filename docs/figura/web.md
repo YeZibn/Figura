@@ -4,7 +4,7 @@
 
 ## 1. 职责与边界
 
-Local Gateway 是 Python 进程内的 HTTP/SSE 边界，不是第二套 Session 或 Run 存储。`bootstrap.py` 负责组装并注入 Runtime、Sources、Agent、Provider 与 Tools；`gateway/application.py` 负责 HTTP 请求处理和安全投影。它把 JSON/图片请求交给 Runtime、Sources、Agent 图像读取器与 ProviderFactory，再把有限的 Session、Run、事件、附件、已提交 Panel、ChartFigure 渲染摘要和 Run 工具时间线 DTO 返回给浏览器。Run 创建持久化后由有界 Dispatcher 异步提交给既有 Agent；Gateway handler 不直接请求模型。当前工作树 Gateway Registry 为 `figura-web-v8`，支持历史搜索/读取工具、`render_chart_figure` 与只读内容路由；PNG 和成功 OCR/测量观察图通过只读内容路由懒加载，测量与渲染仍没有独立前端操作 API。工具时间线是基于 Runtime 已提交 ToolCall、Attempt、Result 事实构造的只读投影，不增加持久表或执行控制入口。
+Local Gateway 是 Python 进程内的 HTTP/SSE 边界，不是第二套 Session 或 Run 存储。`bootstrap.py` 负责组装并注入 Runtime、Sources、Agent、Provider 与 Tools；`gateway/application.py` 负责 HTTP 请求处理和安全投影。它把 JSON/图片请求交给 Runtime、Sources、Agent 图像读取器与 ProviderFactory，再把有限的 Session、Run、事件、附件、已提交 Panel、ChartFigure 渲染摘要和 Run 工具时间线 DTO 返回给浏览器。Run 创建持久化后由有界 Dispatcher 异步提交给既有 Agent；Gateway handler 不直接请求模型。当前工作树 Gateway Registry 为 `figura-web-v9`，注册统一 `measure_chart` 与其他八个图像、历史和绘图工具；启动前检查并拒绝仍绑定 v8 的活动 Run。PNG 和成功 OCR/十类测量观察图通过只读内容路由懒加载，测量与渲染仍没有独立前端操作 API。工具时间线是基于 Runtime 已提交 ToolCall、Attempt、Result 事实构造的只读投影，不增加持久表或执行控制入口。
 
 React Figura mode 通过 `FiguraClient` 负责 HTTP/SSE，再由 `FiguraWorkspaceApi` 映射到现有工作区协议和共享组件。React 组件不直接访问 Gateway；ChartAgent 与 Mock client 模式仍由其原有客户端提供。此边界目前是本地网页接入，没有 Tauri shell 接入。
 
@@ -317,7 +317,7 @@ Session 详情的用户可见对话投影，不是 Agent Session Memory。由 `w
 | `FiguraToolTimelineSourceDto.id` | `string` | 必填 | 来源 Attachment 或 Panel opaque ID | `tool_call_detail` → RunExecutionState 来源引用 → UI 构造内容 URL；服务端仍校验归属 |
 | `FiguraToolTimelineSourceDto.name` | `string` | 必填；最多 96 字符 | 已净化 Attachment filename 或 Panel name | `tool_call_detail` → AttachmentContent / PanelContent → UI 来源标签 |
 
-未知工具名仍出现在步骤列表中；其详情只返回 `runId`、`callId`、`toolName`、`status`、`createdAt`、`updatedAt` 六个基础字段，避免把未经审核的输入/结果摘要公开。观察图仅支持成功的 `extract_text` 与四类测量调用；URL 不取代 Gateway 对同 Session、成功结果和来源资源的核验。
+未知工具名仍出现在步骤列表中；其详情只返回 `runId`、`callId`、`toolName`、`status`、`createdAt`、`updatedAt` 六个基础字段，避免把未经审核的输入/结果摘要公开。观察图仅支持成功的 `extract_text` 与 v2 `measure_chart` 调用；URL 不取代 Gateway 对同 Session、成功结果和来源资源的核验。
 
 前端的 `FiguraToolTimelineStepViewModel` 是纯展示派生值，不是 API DTO 或持久模型。其基础字段完整继承 [`FiguraToolTimelineStepDto`](#tool-timeline-dto)，并添加 `id: string`（`runId:callId` 合并身份）、`label: string`（已知工具的本地化标签，未知工具回显 `toolName`）和 `statusLabel: string`（本地化状态标签）；由 `domain/figura/timeline.ts` 映射，`ToolTimeline` 消费。
 

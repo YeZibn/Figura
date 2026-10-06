@@ -118,14 +118,15 @@ def _project_resource(resource: ExecutionResource) -> dict[str, object]:
         }
         if content.result is not None:
             status = content.result.get("status")
-            if not isinstance(status, str):
+            chart_type = content.result.get("chart_type")
+            observations = content.result.get("observations")
+            if not isinstance(status, str) or not isinstance(chart_type, str) or not isinstance(observations, Mapping):
                 raise RunError(RunErrorCode.INTEGRITY_ERROR)
-            counts = {
-                key: len(content.result[key])
-                for key in ("bars", "series", "sectors")
-                if isinstance(content.result.get(key), (tuple, list))
-            }
-            summary.update({"status": status, "candidate_counts": counts})
+            summary.update({
+                "chart_type": chart_type,
+                "status": status,
+                "candidate_counts": _measurement_candidate_counts(chart_type, observations),
+            })
         else:
             summary["error"] = _error_value(content.error)
         return summary
@@ -171,6 +172,37 @@ def _image_ref(ref: ImageResourceRef | None) -> dict[str, str] | None:
     if ref is None:
         return None
     return {"kind": ref.kind, "id": ref.id}
+
+
+def _measurement_candidate_counts(chart_type: str, observations: Mapping[str, object]) -> dict[str, int]:
+    if chart_type == "bar":
+        return {"bars": _count(observations.get("bars"))}
+    if chart_type in {"line", "scatter", "area", "radar"}:
+        series = observations.get("series")
+        items = series if isinstance(series, (tuple, list)) else ()
+        child_key = {"line": "points", "scatter": "points", "area": "segments", "radar": "vertices"}[chart_type]
+        counts = {
+            "series": len(items),
+            child_key: sum(_count(item.get(child_key)) for item in items if isinstance(item, Mapping)),
+        }
+        if chart_type == "radar":
+            counts["dimensions"] = _count(observations.get("spokes"))
+        return counts
+    field_by_family = {
+        "pie": "sectors",
+        "histogram": "bins",
+        "box_plot": "groups",
+        "heatmap": "cells",
+        "treemap": "nodes",
+    }
+    field = field_by_family.get(chart_type)
+    if field is None:
+        raise RunError(RunErrorCode.INTEGRITY_ERROR)
+    return {field: _count(observations.get(field))}
+
+
+def _count(value: object) -> int:
+    return len(value) if isinstance(value, (tuple, list)) else 0
 
 
 def _tool_ref(ref: ToolResourceRef | None) -> dict[str, str] | None:

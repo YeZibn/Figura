@@ -25,27 +25,11 @@ from figura.sources.repository import SourcesRepository
 from figura.runtime.store import FiguraRunStore
 from figura.tools import ToolOutcome
 from figura.tools.contracts import ToolExecutionError
+from tests.figura_fixtures import bar_chart_figure, measurement_result
 
 
 def _figure():
-    return parse_chart_figure(
-        {
-            "schema_version": 1,
-            "title": "Figure",
-            "layout": {"columns": 1},
-            "charts": [
-                {
-                    "chart_id": "share",
-                    "chart_spec": {
-                        "schema_version": 1,
-                        "metadata": {"chart_type": "pie", "title": "Share"},
-                        "axes": None,
-                        "dataset": [{"category": "A", "value": 1}],
-                    },
-                }
-            ],
-        }
-    )
+    return parse_chart_figure(bar_chart_figure())
 
 
 def test_run_execution_state_owns_only_ordered_typed_resources() -> None:
@@ -59,11 +43,11 @@ def test_run_execution_state_owns_only_ordered_typed_resources() -> None:
         measurement_ref,
         MeasurementContent(
             "attempt-1",
-            "measure_bars",
+            "measure_chart",
             attachment_ref,
             None,
             ToolOutcome.SUCCEEDED,
-            result={"bars": [{"id": "bar-1"}]},
+            result=measurement_result(),
         ),
     )
     state = RunExecutionState("run-1", (attachment, measurement))
@@ -119,7 +103,7 @@ def test_resources_require_exclusive_outcomes_and_valid_figure_links() -> None:
     with pytest.raises(ValueError, match="only a result"):
         OcrContent("attempt-1", source_ref, None, ToolOutcome.SUCCEEDED, error=error)
     with pytest.raises(ValueError, match="only a structured error"):
-        MeasurementContent("attempt-1", "measure_bars", source_ref, None, ToolOutcome.FAILED, result={})
+        MeasurementContent("attempt-1", "measure_chart", source_ref, None, ToolOutcome.FAILED, result={})
     with pytest.raises(ValueError, match="source reference"):
         OcrContent("attempt-1", None, None, ToolOutcome.SUCCEEDED, result={})
     with pytest.raises(ValueError, match="figure_ref"):

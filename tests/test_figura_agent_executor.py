@@ -1054,7 +1054,7 @@ def test_missing_historical_attachment_is_not_read_without_explicit_load(tmp_pat
     )
 
 
-@pytest.mark.parametrize("old_version,new_version", [("registry-v1", "registry-v2"), ("figura-web-v7", "figura-web-v8")])
+@pytest.mark.parametrize("old_version,new_version", [("registry-v1", "registry-v2"), ("figura-web-v8", "figura-web-v9")])
 def test_historical_resolved_tool_registry_mismatch_is_kept_as_inert_history(tmp_path, old_version, new_version) -> None:
     store, coordinator, session, prior = _app(tmp_path)
     historical_registry = ToolRegistry(old_version, _registry().definitions)
@@ -1102,7 +1102,7 @@ def test_historical_resolved_tool_registry_mismatch_is_kept_as_inert_history(tmp
     )
 
 
-@pytest.mark.parametrize("old_version,new_version", [("registry-v1", "registry-v2"), ("figura-web-v7", "figura-web-v8")])
+@pytest.mark.parametrize("old_version,new_version", [("registry-v1", "registry-v2"), ("figura-web-v8", "figura-web-v9")])
 def test_unresolved_old_registry_call_is_not_executed_under_the_new_registry(tmp_path, old_version, new_version) -> None:
     store, coordinator, session, run = _app(tmp_path)
     old_registry = ToolRegistry(old_version, _registry().definitions)

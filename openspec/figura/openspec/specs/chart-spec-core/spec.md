@@ -6,115 +6,81 @@ Defines Figura's versioned, single-chart semantic data contract. The contract le
 
 ## Requirements
 
-### Requirement: Versioned single-chart content model
+### Requirement: Provide a version 2 single-chart content model
+Figura SHALL provide an immutable `ChartSpecData` version 2 with exactly `schema_version`, `metadata`, `coordinate_system`, and `dataset`. `schema_version` SHALL equal 2. `metadata.chart_type` SHALL be exactly one of `bar`, `line`, `scatter`, `pie`, `area`, `histogram`, `box_plot`, `radar`, `heatmap`, or `treemap`. Metadata SHALL contain `chart_type` and MAY contain `title`, display-only `source`, and `note`; omitted text SHALL normalize to the documented empty or null default. Metadata SHALL NOT contain Run identity, source authorization, evidence provenance, generation context, storage location, rendering state, or publication state.
 
-Figura SHALL provide a versioned `ChartSpecData` value that represents one chart using `schema_version`, `metadata`, `axes`, and an ordered `dataset`. Version 1 SHALL support exactly `bar`, `line`, `pie`, and `scatter`. A spec SHALL contain between 1 and 512 data points. The content model SHALL NOT contain runtime identity, Run identity, source authorization, provenance, generation context, storage location, rendering state, or publication state.
+`coordinate_system` SHALL be a typed value with kind `cartesian`, `polar`, `matrix`, `hierarchical`, or `none`. Bar, line, scatter, area, histogram, and box plot SHALL use `cartesian`; radar SHALL use `polar`; heatmap SHALL use `matrix`; treemap SHALL use `hierarchical`; pie SHALL use `none`. Any mismatch between chart type and coordinate-system kind SHALL be rejected. Numeric values SHALL be finite binary64-representable values. Text fields SHALL retain the shared 160-character contract. Ordered collections SHALL retain the current 512-item ChartSpec bound, and the canonical serialized ChartSpec SHALL remain within the existing 256 KiB ChartSpec bound.
 
-`metadata` SHALL contain `chart_type` and MAY contain `title`, `source`, and `note`. Missing optional metadata text SHALL normalize to an empty string; missing `source` SHALL normalize to null. Text values SHALL be strings no longer than 160 Unicode code points. `source` SHALL remain display text and SHALL NOT be treated as evidence or authorization.
+The closed coordinate-system shapes SHALL be: `cartesian` with exactly `kind`, `x_axis`, and `y_axis`, where each axis has `kind` (`categorical`, `numeric`, or `time`) and optional `label`; `polar` with exactly `kind` and `value_range` (`min`, `max`, with `min < max`); and `matrix`, `hierarchical`, or `none` with exactly `kind`. Categorical coordinate values SHALL be strings, numeric coordinate values SHALL be finite numbers, and time coordinate values SHALL be RFC 3339 date-time strings. Axis labels SHALL be display text only; renderers SHALL derive ranges from valid dataset values and SHALL NOT infer units from labels.
 
-`axes` SHALL be an x/y object for `bar`, `line`, and `scatter`, and null for `pie`. Each Cartesian axis SHALL contain a non-empty `label` and MAY contain `categories`, `min_value`, and `max_value`. Axis labels, categories, and series labels SHALL be non-empty strings of at most 160 Unicode code points. A category list SHALL contain between 1 and 512 unique labels. Every data number and numeric axis bound SHALL be representable as a finite IEEE-754 binary64 value (absolute value no greater than `1.7976931348623157e308`); when both axis bounds are present, `min_value` SHALL be less than `max_value`.
+#### Scenario: Round-trip a v2 chart of every supported family
+- **WHEN** valid v2 ChartSpecData is serialized and parsed
+- **THEN** the result preserves its family, metadata, coordinate system, typed dataset, and declared order
 
-#### Scenario: Valid version 1 content round-trips
-- **WHEN** valid ChartSpecData content is serialized and parsed again
-- **THEN** the parsed content SHALL preserve chart type, metadata, axis declarations, data point values, and list order
-- **AND** the canonical serialized form SHALL include `schema_version`, `metadata`, `axes`, and `dataset`
+#### Scenario: Reject a v1 ChartSpec
+- **WHEN** the new ChartSpec parser receives `schema_version: 1`
+- **THEN** it returns a bounded unsupported-version issue and produces no ChartSpecData value
 
-#### Scenario: Unsupported version or chart type is rejected
-- **WHEN** input contains an unsupported schema version or a chart type outside the four version 1 values
-- **THEN** parsing SHALL return a bounded issue at the corresponding field path
-- **AND** no ChartSpecData value SHALL be returned
+#### Scenario: Reject a coordinate-system mismatch
+- **WHEN** a chart family is paired with a coordinate-system kind not allowed for that family
+- **THEN** validation reports the applicable field path and marks the ChartSpec invalid
 
-#### Scenario: Runtime and provenance fields are not part of the core model
-- **WHEN** input contains fields such as `chart_spec_id`, `run_id`, `provenance`, or `generation_context`
-- **THEN** strict parsing SHALL reject the unknown field
-- **AND** it SHALL NOT silently retain or discard it
+#### Scenario: Keep runtime identity outside chart content
+- **WHEN** input includes Run identity, evidence provenance, storage, or publication fields
+- **THEN** strict parsing rejects those undeclared fields
 
-### Requirement: Strict typed parsing and canonical serialization
+### Requirement: Use a strict typed dataset for each selected family
+The v2 `dataset` SHALL have a closed family-specific shape selected by `metadata.chart_type`; it SHALL NOT accept arbitrary row objects or unknown nested fields. IDs SHALL be unique within their collection and be nonempty strings of at most 64 characters. Display labels SHALL use the shared 160-character text bound. Every ordered collection SHALL contain at most 512 items.
 
-The system SHALL parse ChartSpecData from JSON-compatible mappings without coercing values, silently dropping unknown fields, or accepting duplicate object keys in JSON text. The parser SHALL reject missing required fields, unexpected fields at any nesting level, invalid object shapes, out-of-range text or list sizes, booleans used as numbers, and non-finite numbers. Parsing issues SHALL identify a JSON Pointer field path and SHALL NOT echo the submitted value.
+- Bar data SHALL contain exactly `orientation`, `mode`, `categories`, and `series`. `orientation` SHALL be `vertical` or `horizontal`; `mode` SHALL be `grouped` or `stacked`. Categories SHALL be ordered `{id, label}` items. Series SHALL be ordered `{id, label, values}` items whose values array has one finite number per category. Vertical bars SHALL use categorical x and numeric y; horizontal bars SHALL use numeric x and categorical y. Negative values SHALL be valid; stacked positive and negative values SHALL accumulate separately around zero.
+- Line data SHALL contain exactly `series`; each series SHALL contain `id`, `label`, and ordered `{x, y}` points. Its coordinate system SHALL use a categorical, numeric, or time x-axis and a numeric y-axis. `x` SHALL match the declared x-axis kind; `y` SHALL be finite numeric or null. Null y SHALL represent an explicit line gap.
+- Area data SHALL contain exactly `stacking` and `series`, using the Line series/point shape. Its coordinate system SHALL use a categorical, numeric, or time x-axis and a numeric y-axis. `stacking` SHALL be `none` or `stacked`; stacked series SHALL share the same ordered x values and SHALL NOT contain null y values. Positive and negative stacked values SHALL accumulate separately around zero.
+- Scatter data SHALL contain exactly `series`; its coordinate system SHALL use numeric x and y axes. Each series SHALL contain `id`, `label`, and points with numeric `x`, numeric `y`, and optional positive `size`. Size SHALL be present on every point or absent from every point in the dataset. Absent size SHALL mean ordinary scatter; present size SHALL encode bubble area.
+- Pie data SHALL contain exactly `slices` and optional `inner_radius_ratio`. Each slice SHALL contain a unique `id`, `label`, and nonnegative finite `value`; the total SHALL be positive and finite. `inner_radius_ratio` SHALL be from 0 through 0.75; zero or omission means pie, and a positive ratio means donut.
+- Histogram data SHALL contain exactly `measure` and `bins` and SHALL use numeric x and y axes. `measure` SHALL be `count`, `frequency`, `probability`, `density`, or `unknown`. Each bin SHALL contain finite `start`, `end`, and nonnegative `value`, with `start < end`. Bins SHALL be ordered and SHALL NOT overlap; a gap between bins SHALL remain a gap.
+- Box-plot data SHALL contain exactly `orientation` and `groups`. `orientation` SHALL be `vertical` or `horizontal`. Each group SHALL contain `id`, `label`, `lower_whisker`, `q1`, `median`, `q3`, `upper_whisker`, and optional finite `outliers[]`, ordered so `lower_whisker <= q1 <= median <= q3 <= upper_whisker`. The coordinate axes SHALL be categorical/numeric according to orientation. Outliers are explicitly plotted observations and SHALL NOT be inferred from a statistical rule by the renderer.
+- Radar data SHALL contain exactly ordered `dimensions` and `series`. Dimensions SHALL contain unique `{id, label}` items. Each series SHALL contain `id`, `label`, and exactly one finite value per dimension. The polar `value_range` SHALL be finite and contain all values.
+- Heatmap data SHALL contain exactly ordered `x_categories`, ordered `y_categories`, and `values`. Categories SHALL contain unique `{id, label}` items. `values` SHALL be rectangular and row-major, with rows matching y categories and columns matching x categories; cells SHALL be finite numbers or null. Null SHALL mean an explicitly absent cell, not an unreadable value.
+- Treemap data SHALL contain exactly `root_id` and `nodes`. Each node SHALL contain `id`, nullable `parent_id`, `label`, and optional finite `value`. There SHALL be one root matching `root_id`, all parent references SHALL resolve, and the hierarchy SHALL be acyclic. Leaves SHALL have positive finite values. An internal node's optional value SHALL agree with the sum of descendant leaf values when `abs(value - descendant_sum) <= 1e-9 * max(1, abs(value), abs(descendant_sum))`. When absent, the renderer SHALL derive the parent's area from descendant leaf weights.
 
-Canonical serialization SHALL emit only the fields defined by the version 1 contract, preserve array order, normalize omitted optional metadata to their documented defaults, and produce deterministic JSON for the same value. Parsing and serialization SHALL use bounded input and output sizes; the maximum serialized ChartSpecData size SHALL be 256 KiB.
+#### Scenario: Reject a dataset shape for another family
+- **WHEN** a dataset's fields do not match the selected `metadata.chart_type`
+- **THEN** parsing or validation returns a bounded issue and accepts no partial value
 
-#### Scenario: Unknown nested field is rejected
-- **WHEN** metadata, an axis, or a data point contains an undeclared field
-- **THEN** parsing SHALL report that field's path
-- **AND** parsing SHALL NOT produce a partially accepted value
+#### Scenario: Preserve zero, missing, and gaps distinctly
+- **WHEN** a valid dataset contains numeric zero, a permitted null cell, or a null line/area y value
+- **THEN** Figura preserves each meaning and does not coerce missing content to zero
 
-#### Scenario: Invalid primitive type is rejected without coercion
-- **WHEN** a numeric field contains a boolean, numeric string, NaN, or infinity
-- **THEN** parsing or validation SHALL report the numeric field path
-- **AND** the value SHALL NOT be converted to a number
+#### Scenario: Reject malformed radar, matrix, or hierarchy structure
+- **WHEN** radar series lengths differ from dimensions, heatmap rows differ from the declared width, or treemap parents are missing/cyclic
+- **THEN** semantic validation identifies the invalid path and the ChartSpec is not generation-ready
 
-#### Scenario: Serialization is deterministic and bounded
-- **WHEN** the same valid ChartSpecData value is serialized more than once
-- **THEN** both serializations SHALL be byte-identical
-- **AND** content exceeding 256 KiB SHALL be rejected with a bounded issue
+#### Scenario: Validate donut and bubble as family variants
+- **WHEN** a pie dataset supplies a valid inner radius or a scatter dataset supplies positive point sizes
+- **THEN** the content remains a `pie` or `scatter` family with the corresponding donut or bubble behavior
 
-### Requirement: Data point shape matches the chart type
+### Requirement: Parse strictly and serialize canonically
+The v2 parser SHALL reject duplicate JSON keys, unknown fields at every nesting level, missing required fields, booleans used as numbers, numeric strings, NaN, infinity, and values outside declared text, item, or payload bounds. It SHALL NOT coerce, fill, clamp, reorder, silently discard, or partially accept input. Canonical serialization SHALL emit only the v2 contract fields, preserve meaningful array order, normalize only documented defaults, and be deterministic for the same value. Parse issues SHALL include bounded stable codes and JSON Pointer paths without echoing submitted values. The v2 contract SHALL NOT include a v1 compatibility parser, converter, or serializer.
 
-Each version 1 data point SHALL use exactly one shape: categorical points contain `category` and `value`; coordinate points contain `x` and `y`. Either shape MAY contain a `series` label. Categorical fields SHALL be used only by `bar` and `pie`; coordinate fields SHALL be used only by `line` and `scatter`. Values and coordinates SHALL be finite binary64-representable JSON numbers, and a point SHALL NOT mix the two shapes.
+#### Scenario: Reject unknown fields and duplicate keys
+- **WHEN** JSON contains an undeclared field or duplicate object key at any nesting level
+- **THEN** parsing reports a bounded issue and returns no ChartSpecData value
 
-#### Scenario: Categorical chart accepts category and value points
-- **WHEN** a bar or pie spec contains non-empty categories and finite values
-- **THEN** its points SHALL validate as categorical points
-- **AND** coordinate fields SHALL be rejected on those points
+#### Scenario: Reject coercion and non-finite values
+- **WHEN** numeric fields contain booleans, strings, NaN, or infinity
+- **THEN** parsing or semantic validation reports the affected path without converting the value
 
-#### Scenario: Coordinate chart accepts x and y points
-- **WHEN** a line or scatter spec contains finite x and y coordinates
-- **THEN** its points SHALL validate as coordinate points
-- **AND** category/value fields SHALL be rejected on those points
+#### Scenario: Serialize the same content deterministically
+- **WHEN** the same valid v2 content is serialized repeatedly
+- **THEN** every serialization is byte-identical and within the shared ChartSpec bound
 
-#### Scenario: Point shape conflicts with chart type
-- **WHEN** a bar, line, pie, or scatter spec contains the other point shape
-- **THEN** validation SHALL return an issue at that point's field path
-- **AND** the spec SHALL be considered not generation-ready
+### Requirement: Keep v2 validation pure and bounded
+ChartSpec v2 parsing and validation SHALL be deterministic and side-effect free. Validation SHALL distinguish shape/parsing failures from semantic issues, SHALL return issues in stable order within the configured issue bound, and SHALL NOT access Runs, attachments, measurements, files, Providers, storage, or rendering. Validation SHALL report defects without repairing or mutating the supplied content.
 
-### Requirement: Chart-specific semantic validation
+#### Scenario: Report multiple independent v2 defects
+- **WHEN** a correctly shaped v2 value contains multiple independent semantic errors
+- **THEN** validation returns bounded issues in stable order without raising an uncaught exception
 
-Validation SHALL check chart-specific data meaning in addition to field types. Bar data SHALL have at most one point for each `(category, series)` pair; every series SHALL provide an explicit value for every category in the effective x-axis domain. If `axes.x.categories` is omitted, that domain SHALL be derived in first-seen dataset order. Bar x axes SHALL NOT declare numeric bounds.
-
-Pie data SHALL use unique categories, SHALL NOT declare a series label, SHALL contain no negative values, and SHALL have a finite, strictly positive total. Dataset order SHALL define slice order.
-
-Line data SHALL have unique x coordinates within each series and SHALL be ordered by strictly increasing x within each series. When `axes.x.categories` is present, its labels SHALL map to x positions exactly `0` through `len(categories)-1`; line points SHALL use integer x positions in that range, and all declared positions SHALL be represented in every series. Without categories, line x coordinates SHALL be numeric and SHALL NOT use categorical labels.
-
-Scatter data SHALL use numeric x/y coordinates and SHALL NOT declare x-axis categories. Repeated coordinates SHALL remain valid. Version 1 SHALL reject `axes.y.categories` for all Cartesian chart types. For all Cartesian charts, axis numeric bounds SHALL be applicable only to numeric axes, and every plotted value SHALL fall within any declared bound.
-
-Validation SHALL return issues in stable dataset/field order, with at most 32 issues. Each issue SHALL contain a stable code no longer than 64 ASCII characters, a JSON Pointer path no longer than 256 UTF-8 bytes, and a message no longer than 240 Unicode code points. Validation SHALL NOT sort, fill, clamp, relabel, or otherwise repair chart data.
-
-#### Scenario: Bar series has an omitted category value
-- **WHEN** a bar chart contains multiple series and one series lacks a category present in the effective domain
-- **THEN** validation SHALL report the missing category for that series
-- **AND** it SHALL NOT interpret the missing value as zero
-
-#### Scenario: Pie has invalid values or total
-- **WHEN** a pie chart contains a negative value, repeated category, or a total that is not positive
-- **THEN** validation SHALL report the applicable issue paths
-- **AND** the pie chart SHALL not be generation-ready
-
-#### Scenario: Pie total overflows
-- **WHEN** individually finite pie values produce a non-finite total
-- **THEN** validation SHALL report the dataset total as invalid
-- **AND** the pie chart SHALL not be generation-ready
-
-#### Scenario: Categorical line positions map to ordered labels
-- **WHEN** a line chart declares categories `Jan`, `Feb`, and `Mar`
-- **THEN** each series SHALL use x positions 0, 1, and 2 in increasing order
-- **AND** a missing, fractional, duplicate, or out-of-range position SHALL be reported
-
-#### Scenario: Numeric axis bound excludes a plotted value
-- **WHEN** a point falls below the declared minimum or above the declared maximum
-- **THEN** validation SHALL report the point field path and the chart SHALL not be generation-ready
-
-### Requirement: Pure and bounded validation result
-
-ChartSpecData parsing and validation SHALL be deterministic and side-effect free. Validation SHALL distinguish parse-shape failures from semantic issues, SHALL not access Run state, attachments, evidence, files, providers, or storage, and SHALL not perform rendering. All returned issue text and paths SHALL remain within the configured bounds.
-
-#### Scenario: Multiple semantic problems are reported together
-- **WHEN** a correctly shaped ChartSpecData value contains multiple independent semantic errors
-- **THEN** validation SHALL return the errors in stable order up to the configured issue limit
-- **AND** it SHALL not raise an uncaught exception
-
-#### Scenario: Validation does not repair content
-- **WHEN** validation receives unordered line points or incomplete bar series
-- **THEN** it SHALL report the problems
-- **AND** the original point order and values SHALL remain unchanged
+#### Scenario: Leave invalid data unchanged
+- **WHEN** validation receives unordered, incomplete, or out-of-domain chart data
+- **THEN** it reports the applicable issues and preserves the original order and values

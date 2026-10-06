@@ -6,55 +6,6 @@ Defines how Figura combines validated single-chart content into one ordered canv
 
 ## Requirements
 
-### Requirement: Versioned ChartFigure content model
-Figura SHALL provide an immutable version 1 `ChartFigure` content value with exactly these top-level fields: `schema_version`, `title`, `layout`, and `charts`. `schema_version` SHALL equal 1. `title` SHALL be text of at most 160 Unicode code points and MAY be omitted on input, in which case it SHALL normalize to an empty string. `layout` SHALL contain exactly `columns`, an integer from 1 through 2 that is no greater than the number of child charts. The renderer-facing row count SHALL be derived as the ceiling of `chart_count / columns`; it SHALL NOT be stored as a second layout field.
-
-`charts` SHALL be an ordered array of 1 through 4 `ChartFigureItem` values. Each item SHALL contain exactly `chart_id`, `chart_spec`, and `measurement_refs`. `chart_id` SHALL match `[A-Za-z0-9_-]{1,64}` and SHALL be unique within the Figure. `chart_spec` SHALL be a complete `ChartSpecData` value and SHALL pass the existing ChartSpec parser and semantic validator. `measurement_refs` MAY be omitted on input and SHALL normalize to an empty array; when present it SHALL contain at most 16 unique references. Each reference SHALL contain exactly a non-empty opaque `run_id` and `call_id` identifying one measurement tool call. Item order SHALL define canvas order and reference order SHALL be preserved.
-
-ChartFigure parsing SHALL reject duplicate JSON keys, unknown fields at any nesting level, missing required fields, booleans used as numbers, invalid values, and non-finite numbers without coercion or silent repair. Canonical serialization SHALL preserve chart and reference order, normalize the documented optional fields, and be deterministic. A serialized ChartFigure SHALL not exceed 64 KiB, matching the existing model-tool argument bound. ChartFigure SHALL NOT add a generated Figure ID, render state, file location, publication state, or source authorization fields. Its `measurement_refs` identify selected observations but do not certify that the child data exactly matches those observations.
-
-#### Scenario: Parse a Figure with multiple chart types
-- **WHEN** a version 1 Figure contains valid bar and line ChartSpecData children with distinct chart IDs and a two-column layout
-- **THEN** Figura accepts the ordered Figure and preserves both child specs and their order
-- **AND** the layout row count is derived from the child count and column count
-
-#### Scenario: Normalize optional Figure title and measurement references
-- **WHEN** a valid Figure omits `title` and one child omits `measurement_refs`
-- **THEN** canonical content contains an empty Figure title and an empty reference array for that child
-
-#### Scenario: Reject invalid Figure structure atomically
-- **WHEN** a Figure has an unsupported version, duplicate chart ID, invalid child ChartSpecData, invalid columns, more than four children, an unknown field, or serialized content over 64 KiB
-- **THEN** Figura returns a bounded validation failure with the applicable field path
-- **AND** no partially accepted Figure is produced
-
-#### Scenario: Reject repeated measurement references
-- **WHEN** one chart item lists the same `(run_id, call_id)` reference more than once
-- **THEN** Figure validation rejects the duplicate reference at its field path
-
-### Requirement: Assemble a Figure only from valid content and committed measurement references
-Figura SHALL register a model-callable `assemble_chart_figure` tool whose input is one complete version 1 `ChartFigure` object. The tool SHALL run strict Figure parsing, each child's existing ChartSpec validation, and runtime reference resolution before returning success. Every supplied `measurement_refs` entry SHALL resolve to a successful committed `measure_bars`, `measure_lines`, `measure_scatter`, or `measure_pie` outcome in the same Session, either in an earlier terminal Run or in an already committed tool result in the target Run. A reference to an unknown, failed, not-yet-committed, or other-Session measurement SHALL reject the entire Figure. An omitted or empty `measurement_refs` array SHALL mean that no measurement is selected for that child; the tool SHALL NOT infer references from chart text or values.
-
-The tool SHALL NOT determine whether a chart's data values are numerically faithful to its referenced measurement results, repair data, create a partial Figure, render an image, or write a second copy to domain storage. Validation failures SHALL return a bounded structured tool error and SHALL NOT return a Figure reference.
-
-#### Scenario: Assemble a Figure using previously committed measurements
-- **WHEN** every supplied measurement reference points to a successful same-Session measurement result and every child ChartSpecData is valid
-- **THEN** `assemble_chart_figure` succeeds with the complete ordered Figure summary
-
-#### Scenario: Reject an unresolved or unauthorized measurement reference
-- **WHEN** any supplied reference points to a failed or uncommitted call, an unknown call, or a measurement in another Session
-- **THEN** `assemble_chart_figure` fails with a bounded field-specific error
-- **AND** Figura accepts none of the Figure's child charts
-
-#### Scenario: Assemble a chart that has no selected measurement
-- **WHEN** a valid child chart has an omitted or empty `measurement_refs` array
-- **THEN** the Figure may be accepted with no measurement reference for that child
-- **AND** the result does not claim that the child is measurement-backed
-
-#### Scenario: Reject a Figure when one child is invalid
-- **WHEN** one child ChartSpecData or one of its measurement references is invalid
-- **THEN** the entire assembly fails
-- **AND** no valid sibling child is separately accepted
-
 ### Requirement: Accepted Figures have stable Run-scoped references and durable content
 `assemble_chart_figure` SHALL be classified as `replay_safe` because it validates and summarizes content without creating an external side effect. On success, its result SHALL contain exactly `figure_ref`, `figure_digest`, `title`, and `charts`. `figure_ref` SHALL contain `run_id` and `call_id` from the executing Run and tool call. `figure_digest` SHALL be the lowercase hexadecimal SHA-256 digest of the canonical serialized ChartFigure. `charts` SHALL preserve Figure order and contain one summary per item with exactly `chart_id`, `chart_type`, and `title`, where type and title are read from the child `ChartSpecData.metadata`.
 
@@ -99,14 +50,49 @@ Every Provider request SHALL include a compact text inventory projected from the
 - **WHEN** tool arguments exist without a committed result, or a Figure fact belongs to another Session or falls outside the target Run's authorized prefix
 - **THEN** the target Run's resource catalog and Provider inventory omit that Figure fact
 
-### Requirement: Model-facing assembly guidance describes pie constraints
-The registered `assemble_chart_figure` tool description and relevant input-field descriptions SHALL explain that pie dataset points use `category` and `value`, that `series` and Cartesian `axes` must be absent or null, and that separate series intended as separate pies belong in distinct ChartFigure children. Guidance SHALL use the existing ChartSpec and ChartFigure fields and SHALL NOT add alternate schema fields, relax semantic validation, or silently repair invalid content.
+### Requirement: Provide a version 2 ChartFigure content model
+Figura SHALL provide an immutable `ChartFigure` version 2 with exactly `schema_version`, `title`, `layout`, and ordered `charts`. `schema_version` SHALL equal 2. `title` SHALL be text of at most 160 Unicode code points and SHALL default to an empty string when omitted. `layout` SHALL contain exactly `columns`, an integer from 1 through 2 and no greater than the child count; row count SHALL be derived as the ceiling of child count divided by columns. `charts` SHALL contain 1 through 4 items. Each item SHALL contain exactly a unique `chart_id`, a complete ChartSpec v2, and optional `measurement_refs`; omitted references SHALL normalize to an empty array. A reference SHALL contain exactly nonempty opaque `run_id` and `call_id` and SHALL identify a successful committed `measure_chart` call in the same Session. The new Figure contract SHALL NOT parse or convert ChartFigure v1 or ChartSpec v1.
 
-#### Scenario: Inspect the assembly tool contract
-- **WHEN** an Agent receives the registered assembly tool definition
-- **THEN** its model-visible description and schema communicate the pie dataset and axis constraints and the separate-child approach
+Parsing SHALL reject duplicate keys, unknown fields, invalid values, booleans used as numbers, non-finite numbers, and payloads exceeding the existing 64 KiB complete-Figure bound. Canonical serialization SHALL preserve chart and reference order and be deterministic. Figure content SHALL NOT include generated IDs, Run state, file locations, publication state, source authorization, or embedded image bytes; measurement references SHALL NOT certify value-by-value consistency.
 
-#### Scenario: Reject and correct a pie series
-- **WHEN** a submitted pie point contains a non-null `series`
-- **THEN** assembly returns its bounded field-specific validation failure without accepting a partial Figure
-- **AND** a later valid submission using separate pie children can succeed through the same tool
+#### Scenario: Accept a v2 Figure with multiple supported families
+- **WHEN** a v2 Figure contains valid v2 bar and heatmap children and a valid two-column layout
+- **THEN** Figura accepts both ordered children and derives the row count
+
+#### Scenario: Reject v1 Figure or child ChartSpec
+- **WHEN** the new parser receives a Figure with `schema_version: 1` or a v1 child ChartSpec
+- **THEN** it returns a bounded unsupported-version issue and produces no accepted Figure
+
+#### Scenario: Reject duplicate identities or invalid layout
+- **WHEN** chart IDs repeat, references repeat, columns exceed bounds, or a child ChartSpec is invalid
+- **THEN** the whole Figure is rejected without accepting valid siblings
+
+### Requirement: Assemble a Figure from v2 content and committed unified measurements
+Figura SHALL register `assemble_chart_figure` for one complete ChartFigure v2. It SHALL strictly parse the full Figure, validate every ChartSpec v2 child, and resolve every supplied measurement reference to a successful committed `measure_chart` result in the same Session, either in an earlier terminal Run or in the committed prefix of the target Run. Unknown, failed, uncommitted, or cross-Session references SHALL reject the entire Figure. Empty references SHALL mean no measurement was selected; Figura SHALL NOT infer references or assert that selected evidence proves every child value. The tool SHALL NOT repair content, accept v1 values, render the Figure, or create separate domain storage.
+
+#### Scenario: Assemble children backed by successful measurements
+- **WHEN** every child is valid v2 content and every supplied reference names a successful same-Session `measure_chart` call
+- **THEN** assembly succeeds with the complete ordered Figure summary
+
+#### Scenario: Reject an old or unresolved measurement reference
+- **WHEN** a reference names a legacy measurement tool, failed call, uncommitted call, unknown call, or another Session
+- **THEN** assembly fails with a bounded field-specific error and accepts no child chart
+
+#### Scenario: Assemble content without measurement references
+- **WHEN** a valid child has an omitted or empty `measurement_refs`
+- **THEN** the Figure may be accepted without claiming that the child is measurement-backed
+
+#### Scenario: Reject the entire Figure when one child is invalid
+- **WHEN** any child ChartSpec or reference fails validation
+- **THEN** no child is separately accepted and the tool returns a bounded failure
+
+### Requirement: Describe all v2 chart data to the model
+The `assemble_chart_figure` description and native parameter schema SHALL communicate that Figure children use ChartSpec v2 and that `dataset` shape depends on `metadata.chart_type`. Guidance SHALL describe the ten supported types and the basic bubble/scatter and donut/pie variants, distinguish numeric, categorical, polar, matrix, and hierarchical coordinates, explain nullable gaps/cells, and state that evidence references are selected observations rather than value verification. The schema SHALL reject unknown fields and SHALL NOT add alternate v1 shapes or automatic repair.
+
+#### Scenario: Inspect the v2 assembly contract
+- **WHEN** the Agent receives the registered assembly tool definition
+- **THEN** its name, description, and native schema describe v2 family-specific data and valid references
+
+#### Scenario: Reject an old point shape
+- **WHEN** a v2 child uses v1 categorical or coordinate points instead of the selected family dataset
+- **THEN** assembly returns a bounded field-path validation failure without accepting the Figure

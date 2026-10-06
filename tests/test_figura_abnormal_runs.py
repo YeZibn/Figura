@@ -259,7 +259,8 @@ def test_ocr_success_measurement_unknown_render_unstarted_continues_with_authori
     from figura.sources.chart_renders import FiguraChartRenderService
     from figura.tools import ToolRegistry
     from figura.tools.implementations.extract_text import extract_text_definition
-    from figura.tools.implementations.measure_bars import measure_bars_definition
+    from figura.tools.implementations.measure_chart import measure_chart_definition
+    from figura.tools.measurements.family_adapters import current_chart_family_adapters
     from figura.tools.implementations.render_chart_figure import render_chart_figure_definition
     from figura.agent.execution_resources import ToolResourceRef
     from figura.providers import ImageBlock
@@ -271,14 +272,17 @@ def test_ocr_success_measurement_unknown_render_unstarted_continues_with_authori
     reader = make_execution_image_reader(attachments, panels, renders)
     registry = ToolRegistry('abnormal-observation-v1', (
         extract_text_definition(execution_state.for_run, reader),
-        measure_bars_definition(execution_state.for_run, reader),
+        measure_chart_definition(execution_state.for_run, reader, current_chart_family_adapters()),
         render_chart_figure_definition(execution_state.for_run, renders),
     ))
     source = json.dumps({'source_kind': 'attachment', 'source_id': attachment.attachment_id})
+    measurement_source = json.dumps({
+        'source_kind': 'attachment', 'source_id': attachment.attachment_id, 'chart_type': 'bar',
+    })
     _commit_tool_response(co, session.session_id, run.run_id, registry, _response(
         content='读取文字，再测量，最后渲染。', reason=FinishReason.TOOL_CALLS,
         calls=(ProviderToolCall('ocr', 'extract_text', source),
-               ProviderToolCall('measurement', 'measure_bars', source),
+               ProviderToolCall('measurement', 'measure_chart', measurement_source),
                ProviderToolCall('render', 'render_chart_figure', '{"figure_ref":{"run_id":"missing","call_id":"missing"}}'))))
     state = DurableToolExecutor(store, registry).execute_pending(session.session_id, run.run_id, max_calls=1)
     store.begin_tool_attempt(session_id=session.session_id, run_id=run.run_id,
@@ -498,7 +502,7 @@ def test_orphan_render_recovery_reuses_png_written_before_result_commit(tmp_path
         before = files[0].read_bytes(), files[0].stat().st_mtime_ns
         assert not app.execution_state.for_run(session.session_id, run.run_id).list('chart_render')
         monkeypatch.setattr(FiguraRunStore, 'commit_tool_result', original)
-        registry = ToolRegistry('figura-web-v6', (
+        registry = ToolRegistry('figura-web-v9', (
             assemble_chart_figure_definition(app.execution_state.for_run),
             render_chart_figure_definition(app.execution_state.for_run, FiguraChartRenderService(store.data_root))))
         result = _agent(store, co, registry, _FakeFactory([_response()])).execute(session.session_id, run.run_id)

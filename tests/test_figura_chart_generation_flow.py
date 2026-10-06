@@ -16,9 +16,10 @@ from figura.providers import ProviderId, MODEL_IDS
 from figura.runtime.models import RunCreateRequest, RunStatus
 from figura.sources.chart_renders import FiguraChartRenderService
 from figura.tools import ToolRegistry
-from figura.tools.implementations.measure_bars import measure_bars_definition
+from figura.tools.implementations.measure_chart import measure_chart_definition
 from figura.tools.implementations.assemble_chart_figure import assemble_chart_figure_definition
 from figura.tools.implementations.render_chart_figure import render_chart_figure_definition
+from figura.tools.measurements.family_adapters import current_chart_family_adapters
 from figura.gateway.web_projection import run_summary
 
 
@@ -50,8 +51,8 @@ def test_two_run_measure_assemble_render_observe_flow(tmp_path, reasoning, prese
     renders = FiguraChartRenderService(tmp_path)
     state_service = RunExecutionStateService(coordinator, panels)
     reader = make_execution_image_reader(attachments, panels, renders)
-    registry = ToolRegistry('generation-test-v1', (
-        measure_bars_definition(state_service.for_run, reader),
+    registry = ToolRegistry('figura-web-v9', (
+        measure_chart_definition(state_service.for_run, reader, current_chart_family_adapters()),
         assemble_chart_figure_definition(state_service.for_run),
         render_chart_figure_definition(state_service.for_run, renders),
     ))
@@ -60,15 +61,15 @@ def test_two_run_measure_assemble_render_observe_flow(tmp_path, reasoning, prese
         return coordinator.create_run(RunCreateRequest(session_id=session.session_id, text=key,
             provider_id='deepseek', model_id=MODEL_IDS[ProviderId.DEEPSEEK], idempotency_key=key, attachment_ids=ids))
     first = new_run('measure', (attachment.attachment_id,))
-    transport.responses = [response('measure_bars', {'source_kind': 'attachment', 'source_id': attachment.attachment_id}, call_id='measurement'), response()]
+    transport.responses = [response('measure_chart', {'source_kind': 'attachment', 'source_id': attachment.attachment_id, 'chart_type': 'bar'}, call_id='measurement'), response()]
     agent = _agent(store, coordinator, registry, factory, AgentRequestBuilder(state_service, reader))
     assert agent.execute(session.session_id, first.run_id).run.status is RunStatus.COMPLETED
     assert len(state_service.for_run(session.session_id, first.run_id).list('measurement')) == 1
     second = new_run('generate')
-    figure = {'schema_version':1, 'title':'季度销售占比', 'layout':{'columns':2}, 'charts':[
+    figure = {'schema_version':2, 'title':'季度销售占比', 'layout':{'columns':2}, 'charts':[
         {'chart_id':str(i), 'chart_spec':_chart_spec('pie'), 'measurement_refs':[{'run_id':first.run_id, 'call_id':'measurement'}]} for i in range(2)]}
     invalid = deepcopy(figure)
-    invalid['charts'][0]['chart_spec']['dataset'][0]['series'] = 'Target'
+    invalid['charts'][0]['chart_spec']['dataset']['unexpected'] = 'Target'
     transport.responses = [response('assemble_chart_figure', invalid, call_id='invalid'),
         response('assemble_chart_figure', figure, call_id='accepted'),
         response('render_chart_figure', {'figure_ref':{'run_id':second.run_id, 'call_id':'accepted'}},
@@ -78,7 +79,7 @@ def test_two_run_measure_assemble_render_observe_flow(tmp_path, reasoning, prese
     assert resource.content.result is not None
     assert renders.resolve(second.run_id, 'render')[0].startswith(b'\x89PNG')
     results = [fact.payload for fact in state.tool_facts if fact.fact_kind.value == 'tool_result']
-    assert results[0].error.code == 'pie_series_not_supported'
+    assert results[0].error.code == 'invalid_arguments'
     if present:
         assert state.run.status is RunStatus.COMPLETED
         wire = transport.calls[-1]['messages']

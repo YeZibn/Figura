@@ -188,7 +188,7 @@ def _png_bytes() -> bytes:
 
 def _commit_chart_render(app, store, session_id: str, run_id: str):
     registry = ToolRegistry(
-        "figura-web-v6",
+        "figura-web-v9",
         (
             assemble_chart_figure_definition(app.execution_state.for_run),
             render_chart_figure_definition(
@@ -198,20 +198,20 @@ def _commit_chart_render(app, store, session_id: str, run_id: str):
         ),
     )
     figure = {
-        "schema_version": 1,
+        "schema_version": 2,
         "title": "Quarterly sales",
         "layout": {"columns": 1},
         "charts": [
             {
                 "chart_id": "sales",
                 "chart_spec": {
-                    "schema_version": 1,
+                    "schema_version": 2,
                     "metadata": {"chart_type": "pie", "title": "Share"},
-                    "axes": None,
-                    "dataset": [
-                        {"category": "North", "value": 70},
-                        {"category": "South", "value": 30},
-                    ],
+                    "coordinate_system": {"kind": "none"},
+                    "dataset": {"slices": [
+                        {"id": "north", "label": "North", "value": 70},
+                        {"id": "south", "label": "South", "value": 30},
+                    ]},
                 },
             }
         ],
@@ -695,7 +695,7 @@ def test_timeline_status_uses_run_facts_and_dispatcher_ownership(tmp_path):
             session.session_id,
             run.run_id,
             (
-                ProviderToolCall("call-measure", "measure_bars", '{"source_kind":"attachment","source_id":"secret-source","private":"PRIVATE_ARGUMENT"}'),
+                ProviderToolCall("call-measure", "measure_chart", '{"source_kind":"attachment","source_id":"secret-source","chart_type":"bar","private":"PRIVATE_ARGUMENT"}'),
                 ProviderToolCall("call-unknown", "unregistered_tool", '{"prompt":"PRIVATE_UNKNOWN_ARGUMENT"}'),
             ),
         )

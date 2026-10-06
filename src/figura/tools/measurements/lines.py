@@ -15,15 +15,10 @@ from .cartesian import (
 )
 from .colors import color_mask, hex_color, series_palette
 from .ocr import OCRSnippet, recognize_text
-from .observation_scope import decode_scoped_image
 
 
-def measure_line_image(
-    image_bytes: bytes,
-    observation_scope: Mapping[str, Any] | None = None,
-) -> dict[str, Any]:
-    """Return source-coordinate line traces and only supported point samples."""
-    rgb, observation_mask = decode_scoped_image(image_bytes, observation_scope)
+def measure_line_pixels(rgb: np.ndarray, observation_mask: np.ndarray | None = None) -> dict[str, Any]:
+    """Measure an already decoded, scope-masked RGB source without shifting its coordinates."""
     height, width = rgb.shape[:2]
     ocr = recognize_text(rgb, observation_mask) if observation_mask is not None else recognize_text(rgb)
     axes = observe_cartesian_axes(rgb, ocr.snippets, None)

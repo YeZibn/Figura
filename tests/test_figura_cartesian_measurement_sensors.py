@@ -6,9 +6,20 @@ from PIL import Image, ImageDraw
 
 import figura.tools.measurements.lines as line_sensor
 import figura.tools.measurements.scatter as scatter_sensor
-from figura.tools.measurements.lines import measure_line_image
+from figura.tools.measurements.lines import measure_line_pixels
 from figura.tools.measurements.ocr import OCRObservation, OCRSnippet
-from figura.tools.measurements.scatter import measure_scatter_image
+from figura.tools.measurements.scatter import measure_scatter_pixels
+from figura.tools.measurements.observation_scope import decode_scoped_image
+
+
+def _measure_line(content: bytes, observation_scope=None):
+    rgb, mask = decode_scoped_image(content, observation_scope)
+    return measure_line_pixels(rgb, mask)
+
+
+def _measure_scatter(content: bytes, observation_scope=None):
+    rgb, mask = decode_scoped_image(content, observation_scope)
+    return measure_scatter_pixels(rgb, mask)
 
 
 def _png(draw_chart, size: tuple[int, int] = (300, 220)) -> bytes:
@@ -36,7 +47,7 @@ def test_line_sensor_preserves_fragments_and_explicit_markers(monkeypatch) -> No
 
     monkeypatch.setattr(line_sensor, "recognize_text", lambda _image: OCRObservation((), True))
 
-    result = measure_line_image(_png(draw))
+    result = _measure_line(_png(draw))
 
     assert result["status"] == "partial"
     assert len(result["series"]) == 1
@@ -52,7 +63,7 @@ def test_line_scope_limits_trace_pixels_without_rescaling_source_coordinates(mon
         image.line((35, 180, 280, 40), fill="#cc3344", width=4)
 
     monkeypatch.setattr(line_sensor, "recognize_text", lambda *_args: OCRObservation((), True))
-    result = measure_line_image(
+    result = _measure_line(
         _png(draw),
         {"include": [[[0, 0], [500, 0], [500, 1000], [0, 1000]]]},
     )
@@ -74,7 +85,7 @@ def test_line_sensor_samples_only_recognized_x_ticks_when_markers_are_absent(mon
     )
     monkeypatch.setattr(line_sensor, "recognize_text", lambda _image: OCRObservation(snippets, True))
 
-    result = measure_line_image(_png(draw))
+    result = _measure_line(_png(draw))
 
     points = result["series"][0]["points"]
     assert len(points) == 3
@@ -100,7 +111,7 @@ def test_line_sensor_returns_calibrated_marker_coordinates(monkeypatch) -> None:
     )
     monkeypatch.setattr(line_sensor, "recognize_text", lambda _image: OCRObservation(snippets, True))
 
-    result = measure_line_image(_png(draw))
+    result = _measure_line(_png(draw))
 
     points = result["series"][0]["points"]
     assert result["status"] == "measured"
@@ -110,7 +121,7 @@ def test_line_sensor_returns_calibrated_marker_coordinates(monkeypatch) -> None:
 def test_line_sensor_returns_no_evidence_for_a_blank_chart(monkeypatch) -> None:
     monkeypatch.setattr(line_sensor, "recognize_text", lambda _image: OCRObservation((), False))
 
-    result = measure_line_image(_png(lambda _image: None))
+    result = _measure_line(_png(lambda _image: None))
 
     assert result["status"] == "no_evidence"
     assert result["series"] == []
@@ -124,7 +135,7 @@ def test_line_sensor_keeps_geometry_when_axis_geometry_is_unsupported(monkeypatc
 
     monkeypatch.setattr(line_sensor, "recognize_text", lambda _image: OCRObservation((), False))
 
-    result = measure_line_image(_png(draw))
+    result = _measure_line(_png(draw))
 
     assert result["series"]
     assert result["status"] == "partial"
@@ -149,7 +160,7 @@ def test_scatter_sensor_returns_points_and_marks_visible_overlap(monkeypatch) ->
     )
     monkeypatch.setattr(scatter_sensor, "recognize_text", lambda _image: OCRObservation(snippets, True))
 
-    result = measure_scatter_image(_png(draw))
+    result = _measure_scatter(_png(draw))
 
     points = [point for series in result["series"] for point in series["points"]]
     assert len(result["series"]) == 2
@@ -166,7 +177,7 @@ def test_scatter_sensor_keeps_uncalibrated_points_in_pixel_coordinates(monkeypat
 
     monkeypatch.setattr(scatter_sensor, "recognize_text", lambda _image: OCRObservation((), False))
 
-    result = measure_scatter_image(_png(draw))
+    result = _measure_scatter(_png(draw))
 
     point = result["series"][0]["points"][0]
     assert result["status"] == "partial"
@@ -187,7 +198,7 @@ def test_scatter_sensor_keeps_independently_calibrated_coordinates(monkeypatch) 
     )
     monkeypatch.setattr(scatter_sensor, "recognize_text", lambda _image: OCRObservation(snippets, True))
 
-    result = measure_scatter_image(_png(draw))
+    result = _measure_scatter(_png(draw))
 
     point = result["series"][0]["points"][0]
     assert result["axes"]["x"]["calibration"]["calibrated"] is True
@@ -201,8 +212,8 @@ def test_scatter_sensor_flags_dense_components_and_no_evidence(monkeypatch) -> N
         image.ellipse((110, 80, 150, 120), fill="#cc3344")
 
     monkeypatch.setattr(scatter_sensor, "recognize_text", lambda _image: OCRObservation((), False))
-    dense = measure_scatter_image(_png(dense_chart))
-    empty = measure_scatter_image(_png(lambda _image: None))
+    dense = _measure_scatter(_png(dense_chart))
+    empty = _measure_scatter(_png(lambda _image: None))
 
     assert {"merged", "dense"}.issubset(set(dense["series"][0]["points"][0]["flags"]))
     assert dense["status"] == "partial"
@@ -218,7 +229,7 @@ def test_scatter_sensor_preserves_points_for_unsupported_axis_geometry(monkeypat
 
     monkeypatch.setattr(scatter_sensor, "recognize_text", lambda _image: OCRObservation((), False))
 
-    result = measure_scatter_image(_png(draw))
+    result = _measure_scatter(_png(draw))
 
     point = result["series"][0]["points"][0]
     assert result["status"] == "partial"
@@ -234,7 +245,7 @@ def test_scatter_scope_excludes_outside_points_and_keeps_source_positions(monkey
             image.ellipse((x - 5, y - 5, x + 5, y + 5), fill="#cc3344")
 
     monkeypatch.setattr(scatter_sensor, "recognize_text", lambda *_args: OCRObservation((), True))
-    result = measure_scatter_image(
+    result = _measure_scatter(
         _png(draw),
         {"include": [[[0, 0], [500, 0], [500, 1000], [0, 1000]]]},
     )

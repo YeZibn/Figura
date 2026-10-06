@@ -24,26 +24,17 @@ from figura.tools import (
 )
 from figura.tools.contracts import ToolExecutionError
 from figura.tools.implementations.assemble_chart_figure import assemble_chart_figure_definition
+from tests.figura_fixtures import bar_chart_figure, measurement_result
 
 
 def _figure(*, title: str = "Revenue", reference: tuple[str, str] | None = None) -> dict[str, object]:
-    chart: dict[str, object] = {
-        "chart_id": "revenue",
-        "chart_spec": {
-            "schema_version": 1,
-            "metadata": {"chart_type": "bar", "title": "Revenue by month"},
-            "axes": {"x": {"label": "Month"}, "y": {"label": "Revenue"}},
-            "dataset": [{"category": "Jan", "value": 12}],
-        },
-    }
-    if reference is not None:
-        chart["measurement_refs"] = [{"run_id": reference[0], "call_id": reference[1]}]
-    return {
-        "schema_version": 1,
-        "title": title,
-        "layout": {"columns": 1},
-        "charts": [chart],
-    }
+    raw = bar_chart_figure(
+        measurement_ref={"run_id": reference[0], "call_id": reference[1]} if reference is not None else None
+    )
+    raw["title"] = title
+    raw["charts"][0]["chart_id"] = "revenue"
+    raw["charts"][0]["chart_spec"]["metadata"]["title"] = "Revenue by month"
+    return raw
 
 
 def _runtime(measurements=()):
@@ -51,7 +42,7 @@ def _runtime(measurements=()):
     definition = assemble_chart_figure_definition(
         lambda _session_id, _run_id: state
     )
-    return ToolRuntime(ToolRegistry("figura-web-v6", (definition,)))
+    return ToolRuntime(ToolRegistry("figura-web-v9", (definition,)))
 
 
 def _invoke(runtime, figure: dict[str, object], *, call_id: str = "assembly-call"):
@@ -67,16 +58,16 @@ def _measurement(run_id: str, call_id: str, outcome: ToolOutcome = ToolOutcome.S
     if outcome is ToolOutcome.SUCCEEDED:
         content = MeasurementContent(
             "attempt-1",
-            "measure_bars",
+            "measure_chart",
             source_ref,
             None,
             outcome,
-            result={},
+            result=measurement_result(),
         )
     else:
         content = MeasurementContent(
             "attempt-1",
-            "measure_bars",
+            "measure_chart",
             source_ref,
             None,
             outcome,
@@ -101,7 +92,7 @@ def test_tool_is_replay_safe_and_returns_only_figure_reference_digest_and_summar
 
     result = _invoke(runtime, raw)
 
-    assert runtime.registry.version == "figura-web-v6"
+    assert runtime.registry.version == "figura-web-v9"
     assert runtime.registry["assemble_chart_figure"].replay_effect is ReplayEffect.REPLAY_SAFE
     assert result.outcome is ToolOutcome.SUCCEEDED
     assert normalize_json_value(result.result) == {

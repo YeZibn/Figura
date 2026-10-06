@@ -152,7 +152,7 @@ def test_real_panel_crop_hidden_pixels_are_removed_from_observation() -> None:
     assert tuple(rgb[15, 19]) == (255, 255, 255)
 
 
-@pytest.mark.parametrize("tool_name", ["extract_text", "measure_bars", "measure_lines", "measure_scatter", "measure_pie"])
+@pytest.mark.parametrize("tool_name", ["extract_text", "measure_chart"])
 def test_observation_feedback_does_not_restore_hidden_source_colors(tool_name) -> None:
     from figura.tools.measurements.visualization import render_measurement_overlay
 
@@ -161,9 +161,16 @@ def test_observation_feedback_does_not_restore_hidden_source_colors(tool_name) -
         image = Image.new("RGBA", (80, 60), color)
         image.putpixel((20, 30), (0, 0, 0, 128))
         image.putpixel((21, 30), (51, 102, 204, 255))
-        overlay = render_measurement_overlay(_png(image), {
-            "image_size": {"width": 80, "height": 60}, "status": "no_evidence",
-        }, tool_name)
+        result = {"image_size": {"width": 80, "height": 60}, "status": "no_evidence"}
+        if tool_name == "measure_chart":
+            result.update({
+                "chart_type": "bar",
+                "observations": {
+                    "orientation": "unknown", "mode": "unknown", "axes": {},
+                    "baseline_px": None, "baseline_value": None, "series": [], "bars": [],
+                },
+            })
+        overlay = render_measurement_overlay(_png(image), result, tool_name)
         with Image.open(BytesIO(overlay)) as rendered:
             assert rendered.size == (80, 60)
             assert rendered.getpixel((79, 59)) == (255, 255, 255)

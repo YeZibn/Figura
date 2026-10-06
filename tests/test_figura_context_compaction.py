@@ -527,7 +527,7 @@ def test_ordinary_provider_retry_reuses_compaction_checkpoint_without_new_summar
     restarted_coordinator = RunCoordinator(reopened, coordinator._provider_factory)
     retry_factory = _FakeFactory([_response(content="重试完成")])
     from figura.tools import ToolRegistry
-    retry_registry = ToolRegistry("figura-web-v8", _registry().definitions) if registry_changed else _registry()
+    retry_registry = ToolRegistry("figura-web-v9", _registry().definitions) if registry_changed else _registry()
     completed = _agent(reopened, restarted_coordinator, retry_registry, retry_factory).execute(
         session.session_id, target.run_id
     )

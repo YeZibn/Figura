@@ -16,19 +16,13 @@ from .cartesian import (
     observe_cartesian_axes,
 )
 from .ocr import recognize_text
-from .observation_scope import decode_scoped_image
 
 
 Orientation = Literal["vertical", "horizontal"]
 
 
-def measure_bar_image(
-    image_bytes: bytes,
-    observation_scope: Mapping[str, Any] | None = None,
-) -> dict[str, Any]:
-    """Return JSON-compatible bar geometry from image bytes, without file or overlay data."""
-    rgb, observation_mask = decode_scoped_image(image_bytes, observation_scope)
-
+def measure_bar_pixels(rgb: np.ndarray, observation_mask: np.ndarray | None = None) -> dict[str, Any]:
+    """Measure an already decoded, scope-masked RGB source without shifting its coordinates."""
     height, width = rgb.shape[:2]
     ocr = recognize_text(rgb, observation_mask) if observation_mask is not None else recognize_text(rgb)
     candidates, orientation, palette, orientation_confidence = _find_candidates(rgb)

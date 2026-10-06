@@ -11,12 +11,13 @@ from figura.runtime.errors import RunError, RunErrorCode
 from figura.sources.models import PanelPoint
 from figura.tools import ToolOutcome
 from figura.tools.contracts import ToolExecutionError, freeze_json_value
+from figura.tools.measurements.contracts import validate_measurement_result
 
 
 ImageResourceKind: TypeAlias = Literal["attachment", "panel"]
 ToolResourceKind: TypeAlias = Literal["ocr", "measurement", "chart_figure", "chart_render"]
 ResourceKind: TypeAlias = ImageResourceKind | ToolResourceKind
-_MEASUREMENT_TOOL_NAMES = frozenset({"measure_bars", "measure_lines", "measure_scatter", "measure_pie"})
+_MEASUREMENT_TOOL_NAMES = frozenset({"measure_chart"})
 
 
 @dataclass(frozen=True)
@@ -125,7 +126,17 @@ class MeasurementContent:
             raise ValueError("successful measurement resource must have a source reference")
         object.__setattr__(self, "observation_scope", _freeze_optional_mapping(self.observation_scope))
         if self.result is not None:
-            object.__setattr__(self, "result", _freeze_mapping(self.result, "measurement result"))
+            frozen_result = _freeze_mapping(self.result, "measurement result")
+            if self.outcome is ToolOutcome.SUCCEEDED:
+                issue = validate_measurement_result(frozen_result)
+                if (
+                    issue is not None
+                    or self.source_ref is None
+                    or frozen_result.get("source_kind") != self.source_ref.kind
+                    or frozen_result.get("source_id") != self.source_ref.id
+                ):
+                    raise ValueError("successful measurement resource result is invalid")
+            object.__setattr__(self, "result", frozen_result)
 
 
 @dataclass(frozen=True)

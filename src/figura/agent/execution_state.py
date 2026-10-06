@@ -26,11 +26,8 @@ from figura.tools import ToolOutcome
 from figura.tools.contracts import ToolExecutionError
 from figura.tools.implementations.extract_text import EXTRACT_TEXT_RESULT_SCHEMA
 from figura.tools.implementations.image import DECOMPOSE_RESULT_SCHEMA
-from figura.tools.implementations.measure_bars import MEASURE_BARS_RESULT_SCHEMA
-from figura.tools.implementations.measure_lines import MEASURE_LINES_RESULT_SCHEMA
-from figura.tools.implementations.measure_pie import MEASURE_PIE_RESULT_SCHEMA
-from figura.tools.implementations.measure_scatter import MEASURE_SCATTER_RESULT_SCHEMA
 from figura.tools.implementations.measurement_schema import OBSERVATION_SCOPE
+from figura.tools.measurements.contracts import MEASUREMENT_RESULT_V2_SCHEMA, validate_measurement_result
 
 from .execution_resources import (
     AttachmentContent,
@@ -48,10 +45,7 @@ from .execution_resources import (
 
 
 _MEASUREMENT_SCHEMAS = {
-    "measure_bars": MEASURE_BARS_RESULT_SCHEMA,
-    "measure_lines": MEASURE_LINES_RESULT_SCHEMA,
-    "measure_scatter": MEASURE_SCATTER_RESULT_SCHEMA,
-    "measure_pie": MEASURE_PIE_RESULT_SCHEMA,
+    "measure_chart": MEASUREMENT_RESULT_V2_SCHEMA,
 }
 _OBSERVATION_TOOL_NAMES = frozenset({"extract_text", *_MEASUREMENT_SCHEMAS})
 _RESOURCE_TOOL_NAMES = frozenset(
@@ -353,6 +347,11 @@ def _observation_content(
             or result_fact.result.get("source_id") != source_ref.id
         ):
             raise RunError(RunErrorCode.INTEGRITY_ERROR)
+        if call.tool_name == "measure_chart":
+            arguments_chart_type = arguments.get("chart_type") if arguments is not None else None
+            result_issue = validate_measurement_result(result_fact.result)
+            if result_issue is not None or result_fact.result.get("chart_type") != arguments_chart_type:
+                raise RunError(RunErrorCode.INTEGRITY_ERROR)
         if source_ref.kind == "panel":
             panel_position = panel_positions.get(source_ref)
             if panel_position is None or panel_position >= (*call_position, 0):

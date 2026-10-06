@@ -6,62 +6,6 @@ Provides source-bound pixel traces and cautiously calibrated point observations 
 
 ## Requirements
 
-### Requirement: Measure lines from an authorized Attachment or Panel
-Figura SHALL register a `measure_lines` tool accepting exactly `source_kind` (`attachment` or `panel`), an opaque `source_id`, and optional `observation_scope`; it SHALL reject additional arguments. Figura SHALL resolve only an Attachment or Panel present in the target Run's `RunExecutionState` inventory and verify ownership through the corresponding source service before reading image bytes. The tool SHALL analyze the complete selected source when scope is omitted, SHALL NOT require a preceding `load_image` call, and SHALL NOT accept a filesystem path, URL, or image bytes from the model.
-
-`observation_scope` SHALL be an object with no fields other than optional `include` and `exclude` arrays of polygons. Each supplied array SHALL contain 1 through 4 polygons; each polygon SHALL contain 3 through 32 points; each point SHALL be an integer `[x, y]` pair with both coordinates in the inclusive range `0..1000`, normalized to the selected source's width and height. When `include` is absent, the full source is included; when present, the included area is the union of its polygons. The union of `exclude` polygons SHALL be removed from the included area, and exclusions SHALL take precedence where polygons overlap. A supplied scope SHALL contain at least one `include` or `exclude` array. Figura SHALL apply the resulting effective area to line-trace detection, OCR, and label/series association. All returned geometry SHALL remain in the selected source's pixel coordinate system; the observation scope SHALL NOT itself be treated as a calibrated plot area. A scope that produces no observable source pixels SHALL return a bounded structured tool failure. An invalid scope SHALL return a bounded structured tool failure and SHALL NOT fall back to unscoped measurement.
-
-#### Scenario: Measure lines from an authorized Attachment or Panel
-- **WHEN** the model calls `measure_lines` with an Attachment or Panel available in the target Run's Session-scoped inventory
-- **THEN** Figura measures that image and returns coordinates in the selected source's pixel system without exposing local paths or image bytes
-
-#### Scenario: Reject an unavailable or cross-Session source
-- **WHEN** the model supplies an unknown, unreferenced, or cross-Session source ID
-- **THEN** Figura returns a bounded structured tool failure and reads no image bytes
-
-#### Scenario: Restrict line observation to included polygons
-- **WHEN** the model supplies one or more valid `include` polygons
-- **THEN** Figura uses only source pixels inside their union for line-trace detection, OCR, and label/series association, and returns geometry in source-pixel coordinates
-
-#### Scenario: Exclude irrelevant regions from line observation
-- **WHEN** a valid scope contains both included and excluded polygons
-- **THEN** the excluded union is removed from the included area before measurement and takes precedence where polygons overlap
-
-#### Scenario: Treat scope as an observation region, not a plot calibration
-- **WHEN** the model supplies a valid observation scope around a chart region
-- **THEN** Figura uses that region to limit evidence and does not substitute it for a detected or calibrated plot area
-
-#### Scenario: Use the complete source when scope is omitted
-- **WHEN** the model omits `observation_scope`
-- **THEN** Figura analyzes the complete selected source
-
-#### Scenario: Reject invalid scope without widening observation
-- **WHEN** a scope has too many polygons, an invalid point count, out-of-range coordinates, non-integer coordinates, or no polygon
-- **THEN** Figura returns a bounded structured tool failure and does not measure the full source as a fallback
-
-#### Scenario: Reject an empty effective scope
-- **WHEN** valid include and exclude polygons leave no observable source pixels
-- **THEN** Figura returns a bounded structured tool failure without measuring the source
-
-### Requirement: Return line geometry and supported point observations
-For a readable selected source, `measure_lines` SHALL return a bounded JSON object with the common measurement fields `source_kind`, `source_id`, `image_size`, `coordinate_system`, `status`, `plot_area_px`, `axes`, `series`, `confidence`, and `warnings`. Axis and tick observations SHALL use the same field contract as `bar-chart-measurement`. Each line series SHALL contain `id`, `color`, nullable `label`, nullable `label_confidence`, `trace`, and `points`. `trace` SHALL preserve one or more pixel polylines so gaps are not silently bridged. Each point SHALL contain `id`, `position_px`, nullable `x_value`, nullable `y_value`, nullable `x_tick_id`, nullable `x_category_label`, `source` (`marker` or `axis_tick_sample`), and bounded `confidence`. A numeric coordinate SHALL be non-null only when its corresponding axis is calibrated; a categorical x observation SHALL retain its category label and tick identity without inventing a numeric x value. The top-level confidence SHALL contain bounded `overall`, `geometry`, `calibration`, and `association` values. Warnings SHALL identify incomplete, ambiguous, fragmented, or unsupported evidence.
-
-#### Scenario: Return a line trace with calibrated marker points
-- **WHEN** a supported line chart has detectable traces, marker points, and calibrated numeric axes
-- **THEN** the result returns source-pixel polylines and marker points with calibrated coordinates and their series identities
-
-#### Scenario: Sample a line only at supported axis ticks
-- **WHEN** a line has no explicit markers but the x-axis has identifiable tick positions
-- **THEN** Figura may return sampled points at those tick positions and SHALL identify each point source as `axis_tick_sample`
-
-#### Scenario: Preserve a trace when numeric calibration fails
-- **WHEN** a line trace is detected but one or both numeric axes cannot be calibrated
-- **THEN** Figura retains the trace and pixel point positions, sets unavailable coordinate values to null, and returns `partial` with an explanatory warning
-
-#### Scenario: Preserve gaps and report unsupported line geometry
-- **WHEN** a trace is fragmented or the selected chart uses strong perspective, 3D, nonlinear axes, or a broken axis
-- **THEN** Figura preserves separate observed trace fragments where available, does not bridge missing segments or claim unsupported calibrated values, and reports `partial` or `unsupported` with warnings
-
 ### Requirement: Keep line measurements as candidate evidence
 Line measurements SHALL remain observations for the Agent to interpret. OCR labels and geometry SHALL be treated as fallible evidence, and Figura SHALL NOT automatically repeat a measurement, select a preferred series, or block later Agent actions because of a warning. The durable JSON result SHALL NOT contain overlays, image bytes, or local paths.
 

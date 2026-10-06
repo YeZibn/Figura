@@ -1,405 +1,622 @@
-"""Pure generation-readiness validation for ChartSpecData."""
+"""Pure, bounded semantic validation for ChartSpecData v2."""
 
 from __future__ import annotations
 
 import math
-from collections.abc import Callable, Sequence
+from collections import defaultdict
+from collections.abc import Iterable
 
-from ..limits import (
-    MAX_ISSUES,
-    MAX_ISSUE_MESSAGE_LENGTH,
-    MAX_ISSUE_PATH_BYTES,
-    MAX_TEXT_LENGTH,
-)
+from figura.shared.json_schema import JsonValueError, canonical_json_dumps
+
+from ..limits import MAX_ISSUES, MAX_TEXT_LENGTH
+from .codec import _rfc3339
 from .errors import ChartSpecIssue
-from .limits import MAX_DATA_POINTS, MAX_FINITE_NUMBER
+from .limits import CHART_SPEC_SCHEMA_VERSION, MAX_CHART_SPEC_DATA_BYTES, MAX_DATA_POINTS, MAX_FINITE_NUMBER
 from .models import (
-    Axis,
-    Axes,
-    CategoryValuePoint,
+    AreaDataset,
+    AxisKind,
+    BarDataset,
+    BarMode,
+    BarOrientation,
+    BoxPlotDataset,
+    BoxPlotGroup,
+    CartesianAxis,
+    CartesianCoordinateSystem,
+    ChartCategory,
     ChartMetadata,
     ChartSpecData,
     ChartType,
-    CoordinatePoint,
+    CoordinateSystemKind,
+    HistogramDataset,
+    HistogramBin,
+    HistogramMeasure,
+    HeatmapDataset,
+    LineDataset,
+    PieDataset,
+    PieSlice,
+    PolarCoordinateSystem,
+    RadarDataset,
+    RadarDimension,
+    ScatterDataset,
+    ScatterPoint,
+    ScatterSeries,
+    SimpleCoordinateSystem,
+    TreemapDataset,
+    TreemapNode,
+    ValueSeries,
+    XYPoint,
+    XYSeries,
 )
 
-IssueCollector = Callable[[str, str, str], None]
-CategoryPointEntry = tuple[int, CategoryValuePoint, str, str | None]
-CoordinatePointEntry = tuple[int, CoordinatePoint, str | None]
 
+class _Issues:
+    def __init__(self) -> None:
+        self.values: list[ChartSpecIssue] = []
 
-class _InvalidValue:
-    pass
+    def add(self, code: str, path: str, message: str) -> None:
+        if len(self.values) < MAX_ISSUES:
+            self.values.append(ChartSpecIssue(code, path, message[:240]))
 
-
-_INVALID = _InvalidValue()
+    def result(self) -> tuple[ChartSpecIssue, ...]:
+        return tuple(self.values)
 
 
 def validate_chart_spec_data(value: object) -> tuple[ChartSpecIssue, ...]:
-    """Return bounded structural and semantic readiness issues in stable order."""
-    issues: list[ChartSpecIssue] = []
-
-    def add(code: str, path: str, message: str) -> None:
-        if len(issues) >= MAX_ISSUES:
-            return
-        try:
-            path_bytes = path.encode("utf-8")
-        except UnicodeEncodeError:
-            path = ""
-            path_bytes = b""
-        if len(path_bytes) > MAX_ISSUE_PATH_BYTES:
-            path = ""
-        issues.append(
-            ChartSpecIssue(
-                code=code,
-                field_path=path,
-                message=message[:MAX_ISSUE_MESSAGE_LENGTH],
-            )
-        )
-
+    """Return stable semantic issues without mutating or repairing the value."""
+    issues = _Issues()
     if not isinstance(value, ChartSpecData):
-        add("invalid_chart_spec", "", "需要 ChartSpecData 值。")
-        return tuple(issues)
+        issues.add("invalid_chart_spec", "", "需要 ChartSpecData 值。")
+        return issues.result()
 
-    if type(value.schema_version) is not int or value.schema_version != 1:
-        add("unsupported_schema_version", "/schema_version", "ChartSpec schema_version 不受支持。")
-
+    if type(value.schema_version) is not int or value.schema_version != CHART_SPEC_SCHEMA_VERSION:
+        issues.add("unsupported_schema_version", "/schema_version", "ChartSpec schema_version 不受支持。")
     metadata = value.metadata
     if not isinstance(metadata, ChartMetadata):
-        add("invalid_metadata", "/metadata", "metadata 结构无效。")
-        chart_type = None
-    else:
-        chart_type = metadata.chart_type if isinstance(metadata.chart_type, ChartType) else None
-        if chart_type is None:
-            add("unsupported_chart_type", "/metadata/chart_type", "chart_type 不受支持。")
-        _validate_text(metadata.title, "/metadata/title", add, allow_empty=True)
-        if metadata.source is not None:
-            _validate_text(metadata.source, "/metadata/source", add, allow_empty=True)
-        _validate_text(metadata.note, "/metadata/note", add, allow_empty=True)
+        issues.add("invalid_metadata", "/metadata", "metadata 结构无效。")
+        return issues.result()
+    chart_type = metadata.chart_type if isinstance(metadata.chart_type, ChartType) else None
+    if chart_type is None:
+        issues.add("unsupported_chart_type", "/metadata/chart_type", "ChartSpec chart_type 不受支持。")
+    _text(metadata.title, "/metadata/title", issues)
+    if metadata.source is not None:
+        _text(metadata.source, "/metadata/source", issues)
+    _text(metadata.note, "/metadata/note", issues)
+
+    coordinate = value.coordinate_system
+    _validate_coordinate(coordinate, "/coordinate_system", issues)
+    if chart_type is not None:
+        _validate_chart_coordinate(chart_type, coordinate, issues)
 
     dataset = value.dataset
-    if not isinstance(dataset, (tuple, list)):
-        add("invalid_dataset", "/dataset", "dataset 必须是有序数据点列表。")
-        points: Sequence[object] = ()
-    else:
-        points = dataset
-        if not points:
-            add("empty_dataset", "/dataset", "dataset 不能为空。")
-        if len(points) > MAX_DATA_POINTS:
-            add("too_many_data_points", "/dataset", "dataset 超过 512 个数据点限制。")
-            points = points[:MAX_DATA_POINTS]
-
-    axes = value.axes
-    if chart_type is ChartType.PIE:
-        if axes is not None:
-            add("axes_not_allowed", "/axes", "pie 图表不能包含坐标轴。")
-    elif chart_type in {ChartType.BAR, ChartType.LINE, ChartType.SCATTER}:
-        if not isinstance(axes, Axes):
-            add("axes_required", "/axes", "该图表类型需要 x 和 y 坐标轴。")
-            axes = None
-
-    if isinstance(axes, Axes):
-        x_categories = _validate_axis(axes.x, "/axes/x", add)
-        _validate_axis(axes.y, "/axes/y", add, allow_categories=False)
-    else:
-        x_categories = None
-
-    valid_category_points: list[CategoryPointEntry] = []
-    valid_coordinate_points: list[CoordinatePointEntry] = []
-    for index, point in enumerate(points):
-        point_path = f"/dataset/{index}"
-        if isinstance(point, CategoryValuePoint):
-            category = _validate_text(
-                point.category,
-                f"{point_path}/category",
-                add,
-                allow_empty=False,
-            )
-            numeric_ok = _validate_number(point.value, f"{point_path}/value", add)
-            series = _validate_optional_series(point.series, f"{point_path}/series", add)
-            if chart_type not in {ChartType.BAR, ChartType.PIE}:
-                add("unexpected_point_shape", point_path, "该图表类型需要 x/y 坐标数据点。")
-            elif category is not None and numeric_ok and series is not _INVALID:
-                valid_category_points.append((index, point, category, series))
-        elif isinstance(point, CoordinatePoint):
-            x_ok = _validate_number(point.x, f"{point_path}/x", add)
-            y_ok = _validate_number(point.y, f"{point_path}/y", add)
-            series = _validate_optional_series(point.series, f"{point_path}/series", add)
-            if chart_type not in {ChartType.LINE, ChartType.SCATTER}:
-                add("unexpected_point_shape", point_path, "该图表类型需要 category/value 数据点。")
-            elif x_ok and y_ok and series is not _INVALID:
-                valid_coordinate_points.append((index, point, series))
+    if chart_type is not None:
+        expected = {
+            ChartType.BAR: BarDataset,
+            ChartType.LINE: LineDataset,
+            ChartType.SCATTER: ScatterDataset,
+            ChartType.PIE: PieDataset,
+            ChartType.AREA: AreaDataset,
+            ChartType.HISTOGRAM: HistogramDataset,
+            ChartType.BOX_PLOT: BoxPlotDataset,
+            ChartType.RADAR: RadarDataset,
+            ChartType.HEATMAP: HeatmapDataset,
+            ChartType.TREEMAP: TreemapDataset,
+        }[chart_type]
+        if not isinstance(dataset, expected):
+            issues.add("dataset_type_mismatch", "/dataset", "dataset 结构与 chart_type 不匹配。")
         else:
-            add("invalid_data_point", point_path, "数据点结构无效。")
+            _validate_dataset(chart_type, dataset, coordinate, issues)
 
-    if chart_type is ChartType.BAR:
-        _validate_bar(valid_category_points, x_categories, axes, add)
-        _validate_ranges(valid_category_points, (), chart_type, axes, add)
-    elif chart_type is ChartType.PIE:
-        _validate_pie(valid_category_points, add)
-    elif chart_type is ChartType.LINE:
-        _validate_line(valid_coordinate_points, x_categories, axes, add)
-        _validate_ranges((), valid_coordinate_points, chart_type, axes, add)
-    elif chart_type is ChartType.SCATTER:
-        if x_categories is not None:
-            add("scatter_categories_not_supported", "/axes/x/categories", "scatter 图表不支持类别横轴。")
-        _validate_ranges((), valid_coordinate_points, chart_type, axes, add)
-
-    return tuple(issues)
-
-
-def _validate_text(
-    value: object,
-    path: str,
-    add: IssueCollector,
-    *,
-    allow_empty: bool,
-) -> str | None:
-    if not isinstance(value, str):
-        add("invalid_text", path, "字段必须是文本。")
-        return None
-    if len(value) > MAX_TEXT_LENGTH:
-        add("text_too_long", path, "文本超过 160 个字符限制。")
-        return None
-    normalized = value.strip()
-    if not allow_empty and not normalized:
-        add("empty_text", path, "文本不能为空。")
-        return None
-    return normalized
-
-
-def _validate_optional_series(
-    value: object,
-    path: str,
-    add: IssueCollector,
-) -> str | None | _InvalidValue:
-    if value is None:
-        return None
-    normalized = _validate_text(value, path, add, allow_empty=False)
-    return normalized if normalized is not None else _INVALID
-
-
-def _validate_number(value: object, path: str, add: IssueCollector) -> bool:
-    if type(value) not in (int, float):
-        add("invalid_number", path, "字段必须是有限 binary64 数值。")
-        return False
-    if type(value) is float and not math.isfinite(value):
-        add("invalid_number", path, "字段必须是有限 binary64 数值。")
-        return False
     try:
-        in_range = abs(value) <= MAX_FINITE_NUMBER
-    except OverflowError:
-        in_range = False
-    if not in_range:
-        add("number_out_of_range", path, "数值超出有限 binary64 范围。")
+        serialized = canonical_json_dumps(value.to_dict()).encode("utf-8")
+        if len(serialized) > MAX_CHART_SPEC_DATA_BYTES:
+            issues.add("content_too_large", "", "ChartSpec 内容超过 256 KiB 限制。")
+    except (JsonValueError, UnicodeEncodeError, AttributeError, TypeError, ValueError, OverflowError):
+        issues.add("invalid_chart_spec", "", "ChartSpec 无法规范化为 JSON。")
+    return issues.result()
+
+
+def _text(value: object, path: str, issues: _Issues, *, nonempty: bool = False) -> None:
+    if not isinstance(value, str):
+        issues.add("invalid_text", path, "文本字段必须是字符串。")
+    elif nonempty and not value:
+        issues.add("empty_text", path, "文本字段不能为空。")
+    elif len(value) > MAX_TEXT_LENGTH:
+        issues.add("text_too_long", path, "文本字段超过长度限制。")
+
+
+def _id(value: object, path: str, issues: _Issues) -> None:
+    if not isinstance(value, str) or not value or len(value) > 64:
+        issues.add("invalid_id", path, "ID 必须是 1 到 64 个字符的非空字符串。")
+
+
+def _number(value: object, path: str, issues: _Issues, *, minimum: float | None = None, exclusive_minimum: float | None = None) -> bool:
+    valid = type(value) in (int, float)
+    if valid:
+        try:
+            valid = math.isfinite(value) and abs(value) <= MAX_FINITE_NUMBER
+        except (OverflowError, TypeError):
+            valid = False
+    if not valid:
+        issues.add("invalid_number", path, "数值必须是有限 binary64 数字。")
+        return False
+    if minimum is not None and value < minimum:
+        issues.add("number_below_minimum", path, "数值小于允许下界。")
+        return False
+    if exclusive_minimum is not None and value <= exclusive_minimum:
+        issues.add("number_not_positive", path, "数值必须大于零。")
         return False
     return True
 
 
-def _validate_axis(
-    axis: object,
-    path: str,
-    add: IssueCollector,
-    *,
-    allow_categories: bool = True,
-) -> tuple[str, ...] | None:
-    if not isinstance(axis, Axis):
-        add("invalid_axis", path, "坐标轴结构无效。")
+def _bounded(items: object, path: str, issues: _Issues, *, minimum: int = 1) -> bool:
+    if not isinstance(items, (tuple, list)):
+        issues.add("invalid_collection", path, "字段必须是有序数组。")
+        return False
+    if len(items) < minimum:
+        issues.add("too_few_items", path, "数组项数小于允许范围。")
+        return False
+    if len(items) > MAX_DATA_POINTS:
+        issues.add("too_many_items", path, "数组项数超过 512 项限制。")
+        return False
+    return True
+
+
+def _unique_ids(items: Iterable[object], path: str, issues: _Issues) -> None:
+    seen: set[str] = set()
+    for index, item in enumerate(items):
+        item_id = getattr(item, "id", None)
+        _id(item_id, f"{path}/{index}/id", issues)
+        if isinstance(item_id, str):
+            if item_id in seen:
+                issues.add("duplicate_id", f"{path}/{index}/id", "同一集合内的 ID 必须唯一。")
+            seen.add(item_id)
+
+
+def _validate_coordinate(value: object, path: str, issues: _Issues) -> None:
+    if isinstance(value, CartesianCoordinateSystem):
+        _axis(value.x_axis, f"{path}/x_axis", issues)
+        _axis(value.y_axis, f"{path}/y_axis", issues)
+    elif isinstance(value, PolarCoordinateSystem):
+        _number(value.minimum, f"{path}/value_range/min", issues)
+        _number(value.maximum, f"{path}/value_range/max", issues)
+        if type(value.minimum) in (int, float) and type(value.maximum) in (int, float) and value.minimum >= value.maximum:
+            issues.add("invalid_polar_range", f"{path}/value_range", "极坐标最大值必须大于最小值。")
+    elif isinstance(value, SimpleCoordinateSystem):
+        if value.kind not in {CoordinateSystemKind.MATRIX, CoordinateSystemKind.HIERARCHICAL, CoordinateSystemKind.NONE}:
+            issues.add("invalid_coordinate_system", f"{path}/kind", "此 coordinate_system.kind 不应使用简单结构。")
+    else:
+        issues.add("invalid_coordinate_system", path, "coordinate_system 结构无效。")
+
+
+def _axis(value: object, path: str, issues: _Issues) -> None:
+    if not isinstance(value, CartesianAxis):
+        issues.add("invalid_axis", path, "坐标轴结构无效。")
+        return
+    if not isinstance(value.kind, AxisKind):
+        issues.add("invalid_axis_kind", f"{path}/kind", "坐标轴类型不受支持。")
+    if value.label is not None:
+        _text(value.label, f"{path}/label", issues)
+
+
+def _validate_chart_coordinate(chart_type: ChartType, coordinate: object, issues: _Issues) -> None:
+    expected = {
+        ChartType.PIE: CoordinateSystemKind.NONE,
+        ChartType.RADAR: CoordinateSystemKind.POLAR,
+        ChartType.HEATMAP: CoordinateSystemKind.MATRIX,
+        ChartType.TREEMAP: CoordinateSystemKind.HIERARCHICAL,
+    }
+    if chart_type in expected:
+        actual = getattr(coordinate, "kind", None)
+        if actual is not expected[chart_type]:
+            issues.add("coordinate_type_mismatch", "/coordinate_system/kind", "coordinate_system.kind 与图表类型不匹配。")
+    elif not isinstance(coordinate, CartesianCoordinateSystem):
+        issues.add("coordinate_type_mismatch", "/coordinate_system/kind", "此图表类型需要笛卡尔坐标系。")
+
+
+def _cartesian_axes(coordinate: object) -> tuple[CartesianAxis, CartesianAxis] | None:
+    if not isinstance(coordinate, CartesianCoordinateSystem):
         return None
-    _validate_text(axis.label, f"{path}/label", add, allow_empty=False)
-
-    normalized_categories: list[str] | None = None
-    if axis.categories is not None:
-        if not allow_categories:
-            add("axis_categories_not_supported", f"{path}/categories", "该坐标轴不支持类别列表。")
-        categories = axis.categories
-        if not isinstance(categories, (tuple, list)):
-            add("invalid_categories", f"{path}/categories", "categories 必须是类别列表。")
-        else:
-            if not categories:
-                add("empty_categories", f"{path}/categories", "categories 不能为空。")
-            if len(categories) > MAX_DATA_POINTS:
-                add("too_many_categories", f"{path}/categories", "categories 超过 512 项限制。")
-            normalized_categories = []
-            seen: set[str] = set()
-            for index, category in enumerate(categories[:MAX_DATA_POINTS]):
-                normalized = _validate_text(
-                    category,
-                    f"{path}/categories/{index}",
-                    add,
-                    allow_empty=False,
-                )
-                if normalized is None:
-                    continue
-                if normalized in seen:
-                    add("duplicate_category", f"{path}/categories/{index}", "类别不能重复。")
-                    continue
-                seen.add(normalized)
-                normalized_categories.append(normalized)
-
-    minimum_ok = axis.min_value is None or _validate_number(
-        axis.min_value,
-        f"{path}/min_value",
-        add,
-    )
-    maximum_ok = axis.max_value is None or _validate_number(
-        axis.max_value,
-        f"{path}/max_value",
-        add,
-    )
-    if (
-        minimum_ok
-        and maximum_ok
-        and axis.min_value is not None
-        and axis.max_value is not None
-        and axis.min_value >= axis.max_value
-    ):
-        add("invalid_axis_range", path, "坐标轴最小值必须小于最大值。")
-    return tuple(normalized_categories) if normalized_categories is not None else None
+    if not isinstance(coordinate.x_axis, CartesianAxis) or not isinstance(coordinate.y_axis, CartesianAxis):
+        return None
+    return coordinate.x_axis, coordinate.y_axis
 
 
-def _validate_bar(
-    points: Sequence[CategoryPointEntry],
-    declared_categories: tuple[str, ...] | None,
-    axes: object,
-    add: IssueCollector,
-) -> None:
-    if isinstance(axes, Axes) and isinstance(axes.x, Axis) and (
-        axes.x.min_value is not None or axes.x.max_value is not None
-    ):
-        add("categorical_axis_range", "/axes/x", "bar 图表的类别横轴不能设置数值范围。")
-
-    domain = list(declared_categories) if declared_categories is not None else []
-    series_order: list[str | None] = []
-    seen_points: set[tuple[str, str | None]] = set()
-    represented: dict[str | None, set[str]] = {}
-    for _, _, category, series in points:
-        if declared_categories is None and category not in domain:
-            domain.append(category)
-        elif declared_categories is not None and category not in declared_categories:
-            # Axis validation reports malformed declared categories; this points
-            # to the data that falls outside an otherwise valid declared domain.
-            add("category_outside_domain", "/dataset", "数据点包含横轴类别域之外的类别。")
-        key = (category, series)
-        if key in seen_points:
-            add("duplicate_category_series", "/dataset", "同一系列的类别数据点不能重复。")
-        seen_points.add(key)
-        if series not in represented:
-            represented[series] = set()
-            series_order.append(series)
-        represented[series].add(category)
-
-    for series in series_order:
-        if any(category not in represented[series] for category in domain):
-            add("missing_category_value", "/dataset", "每个系列都必须为类别域中的每个类别提供显式数值。")
+def _expect_axis_kind(axis: CartesianAxis, kind: AxisKind, path: str, issues: _Issues) -> None:
+    if axis.kind is not kind:
+        issues.add("axis_kind_mismatch", path, "坐标轴类型与数据结构不匹配。")
 
 
-def _validate_pie(points: Sequence[CategoryPointEntry], add: IssueCollector) -> None:
-    seen_categories: set[str] = set()
-    values: list[float] = []
-    for index, point, category, _series in points:
-        if category in seen_categories:
-            add("duplicate_pie_category", f"/dataset/{index}/category", "pie 图表的类别不能重复。")
-        seen_categories.add(category)
-        if point.series is not None:
-            add("pie_series_not_supported", f"/dataset/{index}/series", "pie 图表不支持 series 字段。")
-        try:
-            numeric = float(point.value)
-        except (OverflowError, TypeError, ValueError):
+def _category(item: object, path: str, issues: _Issues) -> None:
+    if not isinstance(item, (ChartCategory, RadarDimension)):
+        issues.add("invalid_category", path, "类别必须包含 ID 和标签。")
+        return
+    _id(item.id, f"{path}/id", issues)
+    _text(item.label, f"{path}/label", issues)
+
+
+def _validate_dataset(chart_type: ChartType, dataset: object, coordinate: object, issues: _Issues) -> None:
+    if isinstance(dataset, BarDataset):
+        _validate_bar(dataset, coordinate, issues)
+    elif isinstance(dataset, LineDataset):
+        _validate_line(dataset.series, coordinate, "/dataset/series", issues)
+    elif isinstance(dataset, AreaDataset):
+        if dataset.stacking not in {"none", "stacked"}:
+            issues.add("invalid_stacking", "/dataset/stacking", "stacking 必须是 none 或 stacked。")
+        _validate_line(dataset.series, coordinate, "/dataset/series", issues, allow_null=dataset.stacking != "stacked")
+        if dataset.stacking == "stacked":
+            _same_ordered_x(dataset.series, issues)
+    elif isinstance(dataset, ScatterDataset):
+        _validate_scatter(dataset, coordinate, issues)
+    elif isinstance(dataset, PieDataset):
+        _validate_pie(dataset, issues)
+    elif isinstance(dataset, HistogramDataset):
+        _validate_histogram(dataset, coordinate, issues)
+    elif isinstance(dataset, BoxPlotDataset):
+        _validate_box_plot(dataset, coordinate, issues)
+    elif isinstance(dataset, RadarDataset):
+        _validate_radar(dataset, coordinate, issues)
+    elif isinstance(dataset, HeatmapDataset):
+        _validate_heatmap(dataset, issues)
+    elif isinstance(dataset, TreemapDataset):
+        _validate_treemap(dataset, issues)
+    else:
+        issues.add("invalid_dataset", "/dataset", f"{chart_type.value} dataset 类型无效。")
+
+
+def _validate_bar(dataset: BarDataset, coordinate: object, issues: _Issues) -> None:
+    if not isinstance(dataset.orientation, BarOrientation):
+        issues.add("invalid_orientation", "/dataset/orientation", "柱状图方向无效。")
+    if not isinstance(dataset.mode, BarMode):
+        issues.add("invalid_mode", "/dataset/mode", "柱状图模式无效。")
+    if not _bounded(dataset.categories, "/dataset/categories", issues) or not _bounded(dataset.series, "/dataset/series", issues):
+        return
+    for index, item in enumerate(dataset.categories):
+        _category(item, f"/dataset/categories/{index}", issues)
+    _unique_ids(dataset.categories, "/dataset/categories", issues)
+    for index, series in enumerate(dataset.series):
+        if not isinstance(series, ValueSeries):
+            issues.add("invalid_series", f"/dataset/series/{index}", "柱状图系列结构无效。")
             continue
-        if numeric < 0:
-            add("negative_pie_value", f"/dataset/{index}/value", "pie 图表的数值不能为负。")
-        values.append(numeric)
-
-    try:
-        total = math.fsum(values)
-    except (OverflowError, ValueError):
-        total = math.inf
-    if not math.isfinite(total):
-        add("pie_total_overflow", "/dataset", "pie 图表的数值总和超出有限范围。")
-    elif total <= 0:
-        add("invalid_pie_total", "/dataset", "pie 图表的数值总和必须大于零。")
+        _id(series.id, f"/dataset/series/{index}/id", issues)
+        _text(series.label, f"/dataset/series/{index}/label", issues)
+        if not isinstance(series.values, (tuple, list)):
+            issues.add("invalid_collection", f"/dataset/series/{index}/values", "values 必须是数组。")
+            continue
+        if len(series.values) != len(dataset.categories):
+            issues.add("category_value_count_mismatch", f"/dataset/series/{index}/values", "每个系列必须为每个类别提供一个值。")
+        for value_index, number in enumerate(series.values):
+            _number(number, f"/dataset/series/{index}/values/{value_index}", issues)
+    _unique_ids(dataset.series, "/dataset/series", issues)
+    axes = _cartesian_axes(coordinate)
+    if axes is not None:
+        x_axis, y_axis = axes
+        if dataset.orientation is BarOrientation.VERTICAL:
+            _expect_axis_kind(x_axis, AxisKind.CATEGORICAL, "/coordinate_system/x_axis/kind", issues)
+            _expect_axis_kind(y_axis, AxisKind.NUMERIC, "/coordinate_system/y_axis/kind", issues)
+        elif dataset.orientation is BarOrientation.HORIZONTAL:
+            _expect_axis_kind(x_axis, AxisKind.NUMERIC, "/coordinate_system/x_axis/kind", issues)
+            _expect_axis_kind(y_axis, AxisKind.CATEGORICAL, "/coordinate_system/y_axis/kind", issues)
 
 
 def _validate_line(
-    points: Sequence[CoordinatePointEntry],
-    categories: tuple[str, ...] | None,
-    axes: object,
-    add: IssueCollector,
+    series_items: object,
+    coordinate: object,
+    path: str,
+    issues: _Issues,
+    *,
+    allow_null: bool = True,
 ) -> None:
-    if categories is not None and isinstance(axes, Axes) and isinstance(axes.x, Axis) and (
-        axes.x.min_value is not None or axes.x.max_value is not None
-    ):
-        add("categorical_axis_range", "/axes/x", "类别横轴不能设置数值范围。")
-
-    previous: dict[str | None, float] = {}
-    seen_x: dict[str | None, set[float]] = {}
-    represented_positions: dict[str | None, set[int]] = {}
-    series_order: list[str | None] = []
-
-    for index, point, series in points:
-        x = float(point.x)
-        if series not in seen_x:
-            seen_x[series] = set()
-            represented_positions[series] = set()
-            series_order.append(series)
-        if x in seen_x[series]:
-            add("duplicate_line_x", f"/dataset/{index}/x", "同一折线系列的 x 坐标不能重复。")
-        seen_x[series].add(x)
-        if series in previous and x < previous[series]:
-            add("line_x_not_increasing", f"/dataset/{index}/x", "同一折线系列的 x 坐标必须严格递增。")
-        previous[series] = x
-
-        if categories is not None:
-            if not x.is_integer():
-                add("line_category_position_not_integer", f"/dataset/{index}/x", "类别折线的 x 坐标必须是整数位置。")
-                continue
-            position = int(x)
-            if position < 0 or position >= len(categories):
-                add("line_category_position_out_of_range", f"/dataset/{index}/x", "x 坐标超出类别位置范围。")
-                continue
-            represented_positions[series].add(position)
-
-    if categories is not None:
-        required_positions = set(range(len(categories)))
-        for series in series_order:
-            if not required_positions.issubset(represented_positions[series]):
-                add("missing_line_category_position", "/dataset", "每个折线系列都必须表示全部声明类别。")
-
-
-def _validate_ranges(
-    category_points: Sequence[CategoryPointEntry],
-    coordinate_points: Sequence[CoordinatePointEntry],
-    chart_type: ChartType,
-    axes: object,
-    add: IssueCollector,
-) -> None:
-    if (
-        not isinstance(axes, Axes)
-        or not isinstance(axes.x, Axis)
-        or not isinstance(axes.y, Axis)
-    ):
+    if not _bounded(series_items, path, issues):
         return
+    axes = _cartesian_axes(coordinate)
+    x_kind = axes[0].kind if axes is not None else None
+    if axes is not None:
+        if x_kind not in {AxisKind.CATEGORICAL, AxisKind.NUMERIC, AxisKind.TIME}:
+            issues.add("invalid_x_axis_kind", "/coordinate_system/x_axis/kind", "折线 x 轴类型无效。")
+        _expect_axis_kind(axes[1], AxisKind.NUMERIC, "/coordinate_system/y_axis/kind", issues)
+    for series_index, series in enumerate(series_items):
+        item_path = f"{path}/{series_index}"
+        if not isinstance(series, XYSeries):
+            issues.add("invalid_series", item_path, "折线系列结构无效。")
+            continue
+        _id(series.id, f"{item_path}/id", issues)
+        _text(series.label, f"{item_path}/label", issues)
+        if not _bounded(series.points, f"{item_path}/points", issues):
+            continue
+        for point_index, point in enumerate(series.points):
+            point_path = f"{item_path}/points/{point_index}"
+            if not isinstance(point, XYPoint):
+                issues.add("invalid_point", point_path, "折线点结构无效。")
+                continue
+            _coordinate_value(point.x, x_kind, f"{point_path}/x", issues)
+            if point.y is None:
+                if not allow_null:
+                    issues.add("null_stacked_value", f"{point_path}/y", "堆叠面积图不允许空值。")
+            else:
+                _number(point.y, f"{point_path}/y", issues)
+    _unique_ids(series_items, path, issues)
 
-    def check(
-        value: int | float,
-        bound: int | float | None,
-        path: str,
-        *,
-        minimum: bool,
-    ) -> None:
-        if bound is None:
-            return
-        if minimum and value < bound or not minimum and value > bound:
-            add("value_outside_axis_range", path, "数据点超出坐标轴声明范围。")
 
-    if chart_type is ChartType.BAR:
-        for index, point, _, _ in category_points:
-            check(point.value, axes.y.min_value, f"/dataset/{index}/value", minimum=True)
-            check(point.value, axes.y.max_value, f"/dataset/{index}/value", minimum=False)
-    else:
-        for index, point, _ in coordinate_points:
-            check(point.x, axes.x.min_value, f"/dataset/{index}/x", minimum=True)
-            check(point.x, axes.x.max_value, f"/dataset/{index}/x", minimum=False)
-            check(point.y, axes.y.min_value, f"/dataset/{index}/y", minimum=True)
-            check(point.y, axes.y.max_value, f"/dataset/{index}/y", minimum=False)
+def _coordinate_value(value: object, kind: AxisKind | None, path: str, issues: _Issues) -> None:
+    if kind is AxisKind.CATEGORICAL:
+        if not isinstance(value, str):
+            issues.add("coordinate_type_mismatch", path, "类别坐标必须是文本。")
+        else:
+            _text(value, path, issues)
+    elif kind is AxisKind.NUMERIC:
+        _number(value, path, issues)
+    elif kind is AxisKind.TIME:
+        if not isinstance(value, str) or len(value) > MAX_TEXT_LENGTH or not _rfc3339(value):
+            issues.add("invalid_time_coordinate", path, "时间坐标必须是 RFC 3339 日期时间字符串。")
+
+
+def _same_ordered_x(series_items: object, issues: _Issues) -> None:
+    if not isinstance(series_items, (tuple, list)) or not series_items:
+        return
+    first = series_items[0]
+    if not isinstance(first, XYSeries):
+        return
+    expected = tuple(point.x for point in first.points if isinstance(point, XYPoint))
+    for index, series in enumerate(series_items[1:], 1):
+        if isinstance(series, XYSeries) and tuple(point.x for point in series.points if isinstance(point, XYPoint)) != expected:
+            issues.add("stacked_x_domain_mismatch", f"/dataset/series/{index}/points", "堆叠面积系列必须使用相同顺序的 x 坐标。")
+
+
+def _validate_scatter(dataset: ScatterDataset, coordinate: object, issues: _Issues) -> None:
+    if not _bounded(dataset.series, "/dataset/series", issues):
+        return
+    axes = _cartesian_axes(coordinate)
+    if axes is not None:
+        _expect_axis_kind(axes[0], AxisKind.NUMERIC, "/coordinate_system/x_axis/kind", issues)
+        _expect_axis_kind(axes[1], AxisKind.NUMERIC, "/coordinate_system/y_axis/kind", issues)
+    _unique_ids(dataset.series, "/dataset/series", issues)
+    sizes_seen: set[bool] = set()
+    for series_index, series in enumerate(dataset.series):
+        path = f"/dataset/series/{series_index}"
+        if not isinstance(series, ScatterSeries):
+            issues.add("invalid_series", path, "散点系列结构无效。")
+            continue
+        _id(series.id, f"{path}/id", issues)
+        _text(series.label, f"{path}/label", issues)
+        if not _bounded(series.points, f"{path}/points", issues):
+            continue
+        for point_index, point in enumerate(series.points):
+            point_path = f"{path}/points/{point_index}"
+            if not isinstance(point, ScatterPoint):
+                issues.add("invalid_point", point_path, "散点结构无效。")
+                continue
+            _number(point.x, f"{point_path}/x", issues)
+            _number(point.y, f"{point_path}/y", issues)
+            has_size = point.size is not None
+            sizes_seen.add(has_size)
+            if has_size:
+                _number(point.size, f"{point_path}/size", issues, exclusive_minimum=0)
+    if len(sizes_seen) > 1:
+        issues.add("inconsistent_bubble_size", "/dataset/series", "size 必须在全部散点中同时提供或同时省略。")
+
+
+def _validate_pie(dataset: PieDataset, issues: _Issues) -> None:
+    if not _bounded(dataset.slices, "/dataset/slices", issues):
+        return
+    _unique_ids(dataset.slices, "/dataset/slices", issues)
+    values: list[float] = []
+    for index, slice_item in enumerate(dataset.slices):
+        path = f"/dataset/slices/{index}"
+        if not isinstance(slice_item, PieSlice):
+            issues.add("invalid_pie_slice", path, "饼图扇区结构无效。")
+            continue
+        _text(slice_item.label, f"{path}/label", issues)
+        if _number(slice_item.value, f"{path}/value", issues, minimum=0):
+            values.append(float(slice_item.value))
+    try:
+        total = math.fsum(values)
+    except OverflowError:
+        total = math.inf
+    if not math.isfinite(total) or total <= 0:
+        issues.add("invalid_pie_total", "/dataset/slices", "饼图总值必须是有限正数。")
+    ratio = dataset.inner_radius_ratio
+    if ratio is not None and _number(ratio, "/dataset/inner_radius_ratio", issues, minimum=0) and ratio > 0.75:
+        issues.add("inner_radius_too_large", "/dataset/inner_radius_ratio", "圆环内半径比例不得超过 0.75。")
+
+
+def _validate_histogram(dataset: HistogramDataset, coordinate: object, issues: _Issues) -> None:
+    if not isinstance(dataset.measure, HistogramMeasure):
+        issues.add("invalid_histogram_measure", "/dataset/measure", "直方图 measure 不受支持。")
+    if not _bounded(dataset.bins, "/dataset/bins", issues):
+        return
+    axes = _cartesian_axes(coordinate)
+    if axes is not None:
+        _expect_axis_kind(axes[0], AxisKind.NUMERIC, "/coordinate_system/x_axis/kind", issues)
+        _expect_axis_kind(axes[1], AxisKind.NUMERIC, "/coordinate_system/y_axis/kind", issues)
+    prior_end: float | None = None
+    for index, bin_item in enumerate(dataset.bins):
+        path = f"/dataset/bins/{index}"
+        if not isinstance(bin_item, HistogramBin):
+            issues.add("invalid_histogram_bin", path, "直方图区间结构无效。")
+            continue
+        start_ok = _number(bin_item.start, f"{path}/start", issues)
+        end_ok = _number(bin_item.end, f"{path}/end", issues)
+        _number(bin_item.value, f"{path}/value", issues, minimum=0)
+        if start_ok and end_ok:
+            if bin_item.start >= bin_item.end:
+                issues.add("invalid_histogram_interval", path, "直方图区间必须满足 start < end。")
+            if prior_end is not None and bin_item.start < prior_end:
+                issues.add("overlapping_histogram_bins", path, "直方图区间必须有序且不得重叠。")
+            prior_end = float(bin_item.end)
+
+
+def _validate_box_plot(dataset: BoxPlotDataset, coordinate: object, issues: _Issues) -> None:
+    if not isinstance(dataset.orientation, BarOrientation):
+        issues.add("invalid_orientation", "/dataset/orientation", "箱线图方向无效。")
+    if not _bounded(dataset.groups, "/dataset/groups", issues):
+        return
+    _unique_ids(dataset.groups, "/dataset/groups", issues)
+    axes = _cartesian_axes(coordinate)
+    if axes is not None:
+        categorical = AxisKind.CATEGORICAL
+        numeric = AxisKind.NUMERIC
+        if dataset.orientation is BarOrientation.VERTICAL:
+            _expect_axis_kind(axes[0], categorical, "/coordinate_system/x_axis/kind", issues)
+            _expect_axis_kind(axes[1], numeric, "/coordinate_system/y_axis/kind", issues)
+        elif dataset.orientation is BarOrientation.HORIZONTAL:
+            _expect_axis_kind(axes[0], numeric, "/coordinate_system/x_axis/kind", issues)
+            _expect_axis_kind(axes[1], categorical, "/coordinate_system/y_axis/kind", issues)
+    for index, group in enumerate(dataset.groups):
+        path = f"/dataset/groups/{index}"
+        if not isinstance(group, BoxPlotGroup):
+            issues.add("invalid_box_group", path, "箱线图分组结构无效。")
+            continue
+        _text(group.label, f"{path}/label", issues)
+        numbers = (
+            group.lower_whisker,
+            group.q1,
+            group.median,
+            group.q3,
+            group.upper_whisker,
+        )
+        valid = all(_number(number, f"{path}/{field}", issues) for number, field in zip(numbers, ("lower_whisker", "q1", "median", "q3", "upper_whisker")))
+        if valid and not all(left <= right for left, right in zip(numbers, numbers[1:])):
+            issues.add("invalid_quartile_order", path, "箱线图须满足 lower_whisker <= q1 <= median <= q3 <= upper_whisker。")
+        if _bounded(group.outliers, f"{path}/outliers", issues, minimum=0):
+            for outlier_index, outlier in enumerate(group.outliers):
+                _number(outlier, f"{path}/outliers/{outlier_index}", issues)
+
+
+def _validate_radar(dataset: RadarDataset, coordinate: object, issues: _Issues) -> None:
+    if not _bounded(dataset.dimensions, "/dataset/dimensions", issues, minimum=3):
+        return
+    if not _bounded(dataset.series, "/dataset/series", issues):
+        return
+    for index, dimension in enumerate(dataset.dimensions):
+        _category(dimension, f"/dataset/dimensions/{index}", issues)
+    _unique_ids(dataset.dimensions, "/dataset/dimensions", issues)
+    _unique_ids(dataset.series, "/dataset/series", issues)
+    for index, series in enumerate(dataset.series):
+        path = f"/dataset/series/{index}"
+        if not isinstance(series, ValueSeries):
+            issues.add("invalid_series", path, "雷达图系列结构无效。")
+            continue
+        _id(series.id, f"{path}/id", issues)
+        _text(series.label, f"{path}/label", issues)
+        if len(series.values) != len(dataset.dimensions):
+            issues.add("radar_value_count_mismatch", f"{path}/values", "每个雷达系列必须为每个维度提供一个值。")
+        for value_index, number in enumerate(series.values):
+            _number(number, f"{path}/values/{value_index}", issues)
+    if isinstance(coordinate, PolarCoordinateSystem):
+        for series_index, series in enumerate(dataset.series):
+            for value_index, number in enumerate(series.values):
+                if type(number) in (int, float) and (number < coordinate.minimum or number > coordinate.maximum):
+                    issues.add("radar_value_outside_range", f"/dataset/series/{series_index}/values/{value_index}", "雷达数据值超出声明的极坐标范围。")
+
+
+def _validate_heatmap(dataset: HeatmapDataset, issues: _Issues) -> None:
+    if not _bounded(dataset.x_categories, "/dataset/x_categories", issues) or not _bounded(dataset.y_categories, "/dataset/y_categories", issues):
+        return
+    for index, item in enumerate(dataset.x_categories):
+        _category(item, f"/dataset/x_categories/{index}", issues)
+    for index, item in enumerate(dataset.y_categories):
+        _category(item, f"/dataset/y_categories/{index}", issues)
+    _unique_ids(dataset.x_categories, "/dataset/x_categories", issues)
+    _unique_ids(dataset.y_categories, "/dataset/y_categories", issues)
+    if not _bounded(dataset.values, "/dataset/values", issues):
+        return
+    if len(dataset.values) != len(dataset.y_categories):
+        issues.add("heatmap_row_count_mismatch", "/dataset/values", "热力图行数必须与 y_categories 数量相同。")
+    for row_index, row in enumerate(dataset.values):
+        if not _bounded(row, f"/dataset/values/{row_index}", issues):
+            continue
+        if len(row) != len(dataset.x_categories):
+            issues.add("heatmap_column_count_mismatch", f"/dataset/values/{row_index}", "每行列数必须与 x_categories 数量相同。")
+        for column_index, item in enumerate(row):
+            if item is not None:
+                _number(item, f"/dataset/values/{row_index}/{column_index}", issues)
+
+
+def _validate_treemap(dataset: TreemapDataset, issues: _Issues) -> None:
+    if not _bounded(dataset.nodes, "/dataset/nodes", issues):
+        return
+    _id(dataset.root_id, "/dataset/root_id", issues)
+    _unique_ids(dataset.nodes, "/dataset/nodes", issues)
+    nodes: dict[str, TreemapNode] = {}
+    children: dict[str, list[str]] = defaultdict(list)
+    roots: list[str] = []
+    for index, node in enumerate(dataset.nodes):
+        path = f"/dataset/nodes/{index}"
+        if not isinstance(node, TreemapNode):
+            issues.add("invalid_treemap_node", path, "Treemap 节点结构无效。")
+            continue
+        _text(node.label, f"{path}/label", issues)
+        if node.value is not None:
+            _number(node.value, f"{path}/value", issues, minimum=0)
+        if isinstance(node.id, str):
+            nodes[node.id] = node
+        if node.parent_id is None:
+            roots.append(node.id)
+        elif isinstance(node.parent_id, str):
+            children[node.parent_id].append(node.id)
+        else:
+            issues.add("invalid_treemap_parent", f"{path}/parent_id", "parent_id 必须是节点 ID 或 null。")
+    if roots != [dataset.root_id]:
+        issues.add("invalid_treemap_root", "/dataset/root_id", "Treemap 必须且只能有一个根节点，且与 root_id 一致。")
+    for index, node in enumerate(dataset.nodes):
+        if not isinstance(node, TreemapNode):
+            continue
+        if node.parent_id is not None and node.parent_id not in nodes:
+            issues.add("unknown_treemap_parent", f"/dataset/nodes/{index}/parent_id", "Treemap 父节点不存在。")
+
+    state: dict[str, int] = {}
+    totals: dict[str, float | None] = {}
+    cycle_nodes: set[str] = set()
+
+    def visit(node_id: str) -> float | None:
+        status = state.get(node_id, 0)
+        if status == 1:
+            cycle_nodes.add(node_id)
+            return None
+        if status == 2:
+            return totals.get(node_id)
+        state[node_id] = 1
+        node = nodes[node_id]
+        child_ids = children.get(node_id, [])
+        total = 0.0
+        if not child_ids:
+            if node.value is None or type(node.value) not in (int, float) or node.value <= 0:
+                issues.add("invalid_treemap_leaf_value", f"/dataset/nodes/{_node_index(dataset.nodes, node_id)}/value", "Treemap 叶节点必须有正数 value。")
+                total = None
+            else:
+                total = float(node.value)
+        else:
+            child_values: list[float] = []
+            for child_id in child_ids:
+                child_value = visit(child_id)
+                if child_value is not None:
+                    child_values.append(child_value)
+            try:
+                total = math.fsum(child_values)
+            except OverflowError:
+                total = math.inf
+            if not math.isfinite(total):
+                issues.add("treemap_value_overflow", f"/dataset/nodes/{_node_index(dataset.nodes, node_id)}/value", "Treemap 子节点权重总和必须有限。")
+                total = None
+            if node.value is not None and total is not None:
+                tolerance = 1e-9 * max(1.0, abs(float(node.value)), abs(total))
+                if abs(float(node.value) - total) > tolerance:
+                    issues.add("treemap_parent_total_mismatch", f"/dataset/nodes/{_node_index(dataset.nodes, node_id)}/value", "Treemap 内部节点值必须等于其后代叶节点总值。")
+                else:
+                    total = float(node.value)
+        state[node_id] = 2
+        totals[node_id] = total
+        return total
+
+    for node_id in nodes:
+        visit(node_id)
+    if cycle_nodes:
+        first = min(cycle_nodes)
+        issues.add("treemap_cycle", f"/dataset/nodes/{_node_index(dataset.nodes, first)}/parent_id", "Treemap 层级不得包含循环。")
+
+
+def _node_index(nodes: tuple[object, ...], node_id: str) -> int:
+    for index, node in enumerate(nodes):
+        if getattr(node, "id", None) == node_id:
+            return index
+    return 0

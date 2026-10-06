@@ -25,7 +25,7 @@ from figura.shared.image_limits import MAX_IMAGE_BYTES
 from figura.tools import ToolOutcome
 
 
-_MEASUREMENT_TOOLS = frozenset({"measure_bars", "measure_lines", "measure_scatter", "measure_pie"})
+_MEASUREMENT_TOOLS = frozenset({"measure_chart"})
 
 
 def build_observation_messages(
