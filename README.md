@@ -1,12 +1,18 @@
 <p align="center">
-  <img src="docs/assets/figura-logo.png" alt="Figura 图标" width="180" />
+  <img src="docs/assets/figura-logo.png" alt="Figura 图标" width="128" />
 </p>
 
-<h1 align="center">
-  Figura<br />
-  <small>由图见数，由数见意。</small><br />
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/figura-wordmark-dark.svg" />
+    <img src="docs/assets/figura-wordmark.svg" alt="Figura" width="128" height="40" />
+  </picture>
+</p>
+
+<p align="center">
+  <strong>由图见数，由数见意。</strong><br />
   <sub>从像素中辨认脉络，循证据还原其数，于理解之后，重构其形。</sub>
-</h1>
+</p>
 
 <p align="center">
   <a href="#快速开始">快速开始</a> ·
@@ -14,9 +20,9 @@
   <a href="#工作原理">工作原理</a>
 </p>
 
-Figura 是一个面向图表理解与重绘的本地工作区。你可以把图像带进对话，要求 Agent 识别结构、提取文字、测量数据、解释观察中的不确定性，再把分析结果组织成可预览和下载的图表。运行事实、图像资源与工具过程由本地工作区管理；模型推理由你配置的远端 Provider 执行。
+Figura 是一个面向图表理解与重绘的多模态 Agent 系统，提供基于对话的本地工作区。系统支持图表结构识别、文字提取、数据测量与图表生成，并结合工具证据说明分析依据及不确定性，输出可预览和下载的图表产物。
 
-本文介绍 `src/figura/` 当前实现及其使用方式。
+系统采用本地工作区与远端模型服务相结合的架构：会话、图像资源和运行记录在本地管理与持久化，工具在本地执行，模型推理通过用户配置的 Provider 完成。
 
 ## 设计立场
 
