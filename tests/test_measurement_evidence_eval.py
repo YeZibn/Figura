@@ -12,7 +12,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_dashboard_crops_are_measured_independently(tmp_path):
-    dashboard = PROJECT_ROOT / "photo" / "dashboard_text_two_bars_pie.png"
+    dashboard = PROJECT_ROOT / "tests" / "fixtures" / "legacy_charts" / "dashboard_text_two_bars_pie.png"
     regions = [
         {
             "proposal_id": "summary",

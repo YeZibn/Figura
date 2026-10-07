@@ -1,0 +1,76 @@
+{
+  "case_id": "treemap",
+  "image": "single/treemap.png",
+  "figure": {
+    "schema_version": 2,
+    "title": "",
+    "layout": {
+      "columns": 1
+    },
+    "charts": [
+      {
+        "chart_id": "treemap",
+        "chart_spec": {
+          "schema_version": 2,
+          "metadata": {
+            "chart_type": "treemap",
+            "title": "业务收入构成",
+            "source": "Figura 示例数据",
+            "note": "矩形面积表示收入规模"
+          },
+          "coordinate_system": {
+            "kind": "hierarchical"
+          },
+          "dataset": {
+            "root_id": "all",
+            "nodes": [
+              {
+                "id": "all",
+                "parent_id": null,
+                "label": "总收入",
+                "value": 100
+              },
+              {
+                "id": "retail",
+                "parent_id": "all",
+                "label": "零售",
+                "value": 55
+              },
+              {
+                "id": "store",
+                "parent_id": "retail",
+                "label": "门店",
+                "value": 34
+              },
+              {
+                "id": "online",
+                "parent_id": "retail",
+                "label": "线上",
+                "value": 21
+              },
+              {
+                "id": "enterprise",
+                "parent_id": "all",
+                "label": "企业服务",
+                "value": 45
+              },
+              {
+                "id": "consulting",
+                "parent_id": "enterprise",
+                "label": "咨询",
+                "value": 27
+              },
+              {
+                "id": "software",
+                "parent_id": "enterprise",
+                "label": "软件",
+                "value": 18
+              }
+            ]
+          }
+        },
+        "measurement_refs": []
+      }
+    ]
+  }
+}

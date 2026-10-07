@@ -12,6 +12,7 @@ dependencies = [
     "tiktoken>=0.13,<0.14",
     "python-dotenv>=1.0",
     "numpy>=1.24",
+    "scipy>=1.11",
     "pillow>=10",
     "rapidocr>=3.8",
     "matplotlib>=3.8",
@@ -27,7 +28,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 chartagent = ["prompting/assets/**/*.md"]
-figura = ["agent/prompting/assets/*.md"]
+figura = ["agent/prompting/assets/*.md", "agent/assets/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -1,0 +1,79 @@
+{
+  "case_id": "box_plot",
+  "image": "single/box_plot.png",
+  "figure": {
+    "schema_version": 2,
+    "title": "",
+    "layout": {
+      "columns": 1
+    },
+    "charts": [
+      {
+        "chart_id": "box_plot",
+        "chart_spec": {
+          "schema_version": 2,
+          "metadata": {
+            "chart_type": "box_plot",
+            "title": "不同方案的测试分布",
+            "source": "Figura 示例数据",
+            "note": "单位：分数 · 标记显示四分位与离群值"
+          },
+          "coordinate_system": {
+            "kind": "cartesian",
+            "x_axis": {
+              "kind": "categorical",
+              "label": "方案"
+            },
+            "y_axis": {
+              "kind": "numeric",
+              "label": "测试得分"
+            }
+          },
+          "dataset": {
+            "orientation": "vertical",
+            "groups": [
+              {
+                "id": "control",
+                "label": "基线方案",
+                "lower_whisker": 48,
+                "q1": 61,
+                "median": 69,
+                "q3": 78,
+                "upper_whisker": 91,
+                "outliers": [
+                  39,
+                  96
+                ]
+              },
+              {
+                "id": "variant-a",
+                "label": "方案 A",
+                "lower_whisker": 55,
+                "q1": 67,
+                "median": 75,
+                "q3": 83,
+                "upper_whisker": 94,
+                "outliers": [
+                  49
+                ]
+              },
+              {
+                "id": "variant-b",
+                "label": "方案 B",
+                "lower_whisker": 51,
+                "q1": 64,
+                "median": 72,
+                "q3": 81,
+                "upper_whisker": 92,
+                "outliers": [
+                  98
+                ]
+              }
+            ]
+          }
+        },
+        "measurement_refs": []
+      }
+    ]
+  }
+}

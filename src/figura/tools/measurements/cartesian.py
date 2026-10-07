@@ -15,7 +15,7 @@ from .ocr import OCRSnippet
 _AXIS_SLOPE_LIMIT = 0.18
 _AXIS_SLOPE_STEPS = 49
 _MIN_CALIBRATION_SPAN_PX = 40.0
-_NUMERIC_TEXT = re.compile(r"^[+-]?(?:\d+(?:\.\d*)?|\.\d+)%?$")
+_NUMERIC_TEXT = re.compile(r"^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?%?$")
 
 
 def observe_cartesian_axes(
@@ -29,10 +29,28 @@ def observe_cartesian_axes(
     axes: dict[str, dict[str, object]] = {}
     for name in ("x", "y"):
         points = _detect_axis_points(image_rgb, area, name)
-        ticks = _axis_ticks(snippets, points, area, name)
+        local_snippets = snippets
+        if name == "x" and points is not None:
+            preliminary = _axis_ticks(snippets, points, area, name)
+            if len(preliminary) < 3:
+                from .ocr import recognize_region
+                from .context import observation_context
+                context = observation_context()
+                y = max(0, min(height - 1, int(max(p[1] for p in points)) + 4))
+                local = recognize_region(image_rgb, (0, y, width, min(36, height-y)),
+                    context.mask if context is not None else None)
+                local_snippets = list(snippets)
+                for snippet in local:
+                    cx = snippet.bbox_px[0] + snippet.bbox_px[2] / 2
+                    cy = snippet.bbox_px[1] + snippet.bbox_px[3] / 2
+                    if not any(abs(s.bbox_px[0] + s.bbox_px[2]/2-cx) < 6 and
+                               abs(s.bbox_px[1] + s.bbox_px[3]/2-cy) < 6 for s in snippets):
+                        local_snippets.append(snippet)
+        ticks = _axis_ticks(local_snippets, points, area, name)
+        _snap_tick_marks(image_rgb, ticks, points, name)
         numeric_count = sum(tick["value"] is not None for tick in ticks)
         kind = "numeric" if numeric_count else "categorical" if ticks else "unknown"
-        label, label_confidence = _axis_label(snippets, ticks, area, name)
+        label, label_confidence = _axis_label(local_snippets, ticks, area, name)
         calibration = fit_axis_calibration(ticks, points) if points else None
         axes[name] = {
             "kind": kind,
@@ -64,6 +82,25 @@ def fit_axis_calibration(
     values = np.asarray([float(tick["value"]) for tick in numeric_ticks], dtype=float)
     if len(np.unique(pixels)) < 2 or len(np.unique(values)) < 2:
         return None
+    # Two-point consensus avoids letting one mistaken OCR tick tilt the axis.
+    # At least three agreeing observations are needed to reject an outlier.
+    if len(values)>=4:
+        from itertools import combinations
+        tolerance = max(.15,float(np.ptp(values))*.015)
+        hypotheses = []
+        for i,j in combinations(range(len(values)),2):
+            if abs(pixels[j]-pixels[i]) < 1e-6:
+                continue
+            candidate_slope = (values[j]-values[i])/(pixels[j]-pixels[i])
+            candidate_intercept = values[i]-candidate_slope*pixels[i]
+            errors = np.abs(candidate_slope*pixels+candidate_intercept-values)
+            inliers = errors<=tolerance
+            hypotheses.append((int(inliers.sum()),-float(errors[inliers].mean()),inliers))
+        if hypotheses:
+            count,_,inliers = max(hypotheses,key=lambda h:(h[0],h[1]))
+            if count>=3 and count>=len(values)*.7:
+                numeric_ticks = [t for t,keep in zip(numeric_ticks,inliers) if keep]
+                pixels,values = pixels[inliers],values[inliers]
     slope, intercept = np.polyfit(pixels, values, 1)
     if not isfinite(float(slope)) or not isfinite(float(intercept)):
         return None
@@ -86,6 +123,7 @@ def fit_axis_calibration(
         "intercept": float(intercept),
         "residual_value": residual,
         "support_count": len(numeric_ticks),
+        "support_tick_ids": [t["id"] for t in numeric_ticks if "id" in t],
         "support_span_px": support_span,
         "confidence": confidence,
         "calibrated": calibrated,
@@ -297,6 +335,12 @@ def _axis_ticks(
             "confidence": snippet.confidence,
             "_projection": projection,
         })
+    if ticks and axis == "x":
+        axis_y = float(axis_points[0][1])
+        nearest_row = min(float(t["point_px"][1]) - axis_y for t in ticks)
+        ticks = [t for t in ticks if float(t["point_px"][1]) - axis_y <= nearest_row + 8]
+    if axis == "y":
+        ticks = [t for t in ticks if t["value"] is not None or t["bbox_px"][3] <= t["bbox_px"][2] * 1.4]
     ticks.sort(key=lambda tick: float(tick["_projection"]))
     for tick in ticks:
         tick.pop("_projection")
@@ -331,3 +375,29 @@ def _axis_label(
 
 def _clamp(value: float) -> float:
     return max(0.0, min(1.0, float(value)))
+
+
+def _snap_tick_marks(rgb, ticks, points, role):
+    """Align OCR text with physical tick marks, leaving absent marks unchanged."""
+    if points is None:
+        return
+    dark = (rgb.mean(axis=2) < 180) & (np.ptp(rgb.astype(np.int16), axis=2) < 30)
+    for tick in ticks:
+        x, y = tick["point_px"]
+        if role == "y":
+            axis_x = int(round(points[0][0]))
+            lo, hi = max(0, int(round(y))-5), min(rgb.shape[0], int(round(y))+6)
+            patch = dark[lo:hi, max(0,axis_x-6):max(0,axis_x-1)]
+            scores = patch.sum(axis=1)
+            if scores.size and scores.max() >= 3:
+                positions = np.flatnonzero(scores == scores.max())
+                if np.ptp(positions) <= 3:
+                    tick["point_px"] = [x, float(lo + positions.mean())]
+        else:
+            axis_y = int(round(points[0][1]))
+            lo, hi = max(0, int(round(x))-5), min(rgb.shape[1], int(round(x))+6)
+            scores = dark[min(rgb.shape[0],axis_y+1):min(rgb.shape[0],axis_y+7),lo:hi].sum(axis=0)
+            if scores.size and scores.max() >= 3:
+                positions = np.flatnonzero(scores == scores.max())
+                if np.ptp(positions) <= 3:
+                    tick["point_px"] = [float(lo + positions.mean()), y]

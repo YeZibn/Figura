@@ -2,12 +2,11 @@
   <img src="docs/assets/figura-logo.png" alt="Figura 图标" width="180" />
 </p>
 
-<h1 align="center">Figura</h1>
-
-<p align="center">
-  <strong>由图见数，由数见意。</strong><br />
+<h1 align="center">
+  Figura<br />
+  <small>由图见数，由数见意。</small><br />
   <sub>从像素中辨认脉络，循证据还原其数，于理解之后，重构其形。</sub>
-</p>
+</h1>
 
 <p align="center">
   <a href="#快速开始">快速开始</a> ·
@@ -377,6 +376,6 @@ conda run -n agent python -c "import rapidocr"
 - [系统总览](docs/figura-implementation-overview.md)：大组件关系、数据流与实现边界。
 - [Agent](docs/figura/agent.md) · [Runtime](docs/figura/runtime.md) · [Memory](docs/figura/memory.md)：编排、恢复与对话投影。
 - [Tools](docs/figura/tools.md) · [Sources](docs/figura/sources.md) · [Charts](docs/figura/charts.md)：观察工具、来源管理与图表合同。
-- [Provider](docs/figura/provider.md) · [Web](docs/figura/web.md) · [Validation](docs/figura/validation.md)：模型、网页和共享校验边界；细节以当前代码与主规格为准。
+- [Provider](docs/figura/provider.md) · [Web](docs/figura/web.md) · [Validation](docs/figura/validation.md) · [Evaluation](docs/figura/evaluation.md)：模型、网页、共享校验与测量回归边界；细节以当前代码与主规格为准。
 - [Figura 主规格](openspec/figura/openspec/specs/) · [已完成变更归档](openspec/figura/openspec/changes/archive/)：主规格记录当前需求；归档保留对应 change 的设计、delta 与任务历史。`openspec sync` 同步主规格后，仍需完成归档步骤。
 - [架构设计草案](docs/figura-architecture-design.md)：长期设计方向，其中尚未实现的能力以系统总览和当前代码为准。

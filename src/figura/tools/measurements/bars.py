@@ -25,7 +25,13 @@ def measure_bar_pixels(rgb: np.ndarray, observation_mask: np.ndarray | None = No
     """Measure an already decoded, scope-masked RGB source without shifting its coordinates."""
     height, width = rgb.shape[:2]
     ocr = recognize_text(rgb, observation_mask) if observation_mask is not None else recognize_text(rgb)
-    candidates, orientation, palette, orientation_confidence = _find_candidates(rgb)
+    from .layout import legend_regions
+    palette = _color_palette(rgb)
+    regions = legend_regions(rgb, ocr.snippets, palette)
+    data_rgb = rgb.copy()
+    for x, y, w, h in regions:
+        data_rgb[max(0,y):y+h, max(0,x):x+w] = 255
+    candidates, orientation, palette, orientation_confidence = _find_candidates(data_rgb)
     if not candidates:
         axes = observe_cartesian_axes(rgb, ocr.snippets, None)
         return _empty_result(width, height, axes, ocr.truncated)
@@ -287,26 +293,8 @@ def _find_candidates(
 
 
 def _color_palette(rgb: np.ndarray) -> list[tuple[int, int, int]]:
-    pixels = rgb.reshape(-1, 3).astype(np.int16)
-    spread = pixels.max(axis=1) - pixels.min(axis=1)
-    colored = pixels[(spread >= 56) & (pixels.min(axis=1) < 235)]
-    if not len(colored):
-        return []
-    quantized = ((colored // 16) * 16 + 8).astype(np.uint8)
-    colors, counts = np.unique(quantized, axis=0, return_counts=True)
-    order = np.argsort(counts)[::-1]
-    minimum = max(20, int(counts[order[0]] * 0.08))
-    selected: list[tuple[int, int, int]] = []
-    for index in order:
-        if int(counts[index]) < minimum:
-            break
-        candidate = tuple(int(value) for value in colors[index])
-        if any(max(abs(a - b) for a, b in zip(candidate, existing, strict=True)) <= 48 for existing in selected):
-            continue
-        selected.append(candidate)
-        if len(selected) == 8:
-            break
-    return sorted(selected)
+    from .colors import series_palette
+    return sorted(series_palette(rgb))
 
 
 def _color_mask(rgb: np.ndarray, color: Sequence[int]) -> np.ndarray:
@@ -323,7 +311,8 @@ def _candidates_for(
     minimum_span = max(5, int(round(min(height, width) * 0.008)))
     minimum_area = max(40, int(height * width * 0.0001))
     for series_index, color in enumerate(palette, start=1):
-        mask = _color_mask(rgb, color)
+        from .colors import color_mask
+        mask = color_mask(rgb, color, tolerance=28, palette=palette)
         if orientation == "vertical":
             primary = np.flatnonzero(mask.sum(axis=0) >= max(3, int(height * 0.01)))
         else:
@@ -443,8 +432,15 @@ def _axis_hint(rgb: np.ndarray, candidates: Sequence[dict[str, Any]], orientatio
     minimum = max(12, int((right - left if orientation == "vertical" else bottom - top) * 0.35))
     if not len(support) or int(support.max()) < minimum:
         return None
-    axis_index = int(np.argmax(support))
-    return float(top + axis_index if orientation == "vertical" else left + axis_index)
+    offset = top if orientation == "vertical" else left
+    edge_keys = ("_top", "_bottom") if orientation == "vertical" else ("_left", "_right")
+    positions = np.flatnonzero(support >= minimum)
+    axis_index = max(positions, key=lambda i: (
+        sum(min(abs(item[key] - (offset+i)) for key in edge_keys) <= 3 for item in candidates),
+        int(support[i])))
+    if not any(min(abs(item[key] - (offset+axis_index)) for key in edge_keys) <= 3 for item in candidates):
+        return None
+    return float(offset + axis_index)
 
 
 def _fit_baseline(

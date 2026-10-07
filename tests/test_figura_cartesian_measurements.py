@@ -81,7 +81,7 @@ def test_numeric_tick_parser_accepts_common_numeric_labels_only() -> None:
     assert parse_numeric_text("−1,250.5%") == -1250.5
     assert parse_numeric_text("$2,000") == 2000
     assert parse_numeric_text("Q1") is None
-    assert parse_numeric_text("1e6") is None
+    assert parse_numeric_text("1e6") == 1_000_000
 
 
 def test_calibration_projects_ticks_along_a_tilted_axis() -> None:

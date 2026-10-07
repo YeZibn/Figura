@@ -82,7 +82,7 @@ def _setup(tmp_path):
     execution_state = RunExecutionStateService(coordinator, panels)
     renders = FiguraChartRenderService(store.data_root)
     registry = ToolRegistry(
-        "figura-web-v9",
+        "figura-web-v10",
         (
             assemble_chart_figure_definition(execution_state.for_run),
             render_chart_figure_definition(execution_state.for_run, renders),
@@ -624,7 +624,7 @@ def test_completed_v8_tool_call_stays_inert_under_v9_registry(tmp_path) -> None:
         session.session_id, run.run_id
     )
 
-    assert current_registry.version == "figura-web-v9"
+    assert current_registry.version == "figura-web-v10"
     assert replayed.checkpoint.revision == completed.checkpoint.revision
     assert replayed.tool_facts == completed.tool_facts
 

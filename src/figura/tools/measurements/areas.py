@@ -32,20 +32,23 @@ def measure_area(image: PreparedMeasurementImage) -> MeasurementSensorResult:
     left, top, right, bottom = bounds
     crop = rgb[top:bottom, left:right]
     palette = series_palette(crop)
+    from .layout import legend_regions, exclude_legend
+    legend_bounds = legend_regions(rgb, ocr.snippets, palette)
     labels = associate_legend_labels(rgb, ocr.snippets, palette)
     series: list[dict[str, object]] = []
+    derived = []
     candidate_pixel_count = 0
     color_limit_reached = len(palette) >= 8
     truncated = color_limit_reached
     for index, color in enumerate(palette, start=1):
-        mask = color_mask(crop, color)
+        mask = exclude_legend(color_mask(crop, color, tolerance=max(34, int((255-min(color))*.5)), palette=palette), legend_bounds, (left, top))
         if image.observation_mask is not None:
             mask &= image.observation_mask[top:bottom, left:right]
         pixel_count = int(np.count_nonzero(mask))
         candidate_pixel_count += pixel_count
         if pixel_count < max(24, int((right - left) * (bottom - top) * 0.001)):
             continue
-        boundaries = _area_segments(mask, left, top)
+        boundaries = _area_segments(mask, left, top, _zero_baseline_y(axes))
         if not boundaries:
             continue
         if len(boundaries) > MAX_MEASUREMENT_OBSERVATIONS:
@@ -67,12 +70,32 @@ def measure_area(image: PreparedMeasurementImage) -> MeasurementSensorResult:
                 calibrated_axis_value(point, axes["y"])
                 for point in lower
             ]
+            samples = []
+            for tick in axes["x"]["ticks"]:
+                x = tick["point_px"][0]
+                nearest = min(range(len(upper)), key=lambda i: abs(upper[i][0] - x))
+                if abs(upper[nearest][0] - x) > 3:
+                    continue
+                up, low = upper[nearest], lower[nearest]
+                upper_value = calibrated_axis_value(up, axes["y"])
+                lower_value = calibrated_axis_value(low, axes["y"])
+                series_value = upper_value - lower_value if upper_value is not None and lower_value is not None else None
+                samples.append({"position_px":up, "lower_position_px":low,
+                    "category_id":tick["id"] if axes["x"]["kind"] == "categorical" else None,
+                    "category_label":tick["text"] if axes["x"]["kind"] == "categorical" else None,
+                    "x_value":calibrated_axis_value(up, axes["x"]),
+                    "upper_value":upper_value,"lower_value":lower_value,"series_value":series_value})
+                if series_value is not None:
+                    root = f"/observations/series/{len(series)}/segments/{len(segments)}/samples/{len(samples)-1}"
+                    derived.append({"field_path":root+"/series_value", "method":"derived",
+                        "evidence_ids":[], "calibration_ids":[], "input_paths":[root+"/upper_value", root+"/lower_value"], "error_bound":None})
             segments.append(
                 {
                     "upper_boundary_px": upper,
                     "lower_boundary_px": lower,
                     "upper_values": upper_values,
                     "lower_values": lower_values,
+                    "samples": samples,
                 }
             )
         series.append(
@@ -139,6 +162,7 @@ def measure_area(image: PreparedMeasurementImage) -> MeasurementSensorResult:
         plot_area_px={"x": left, "y": top, "width": right - left, "height": bottom - top},
         warnings=tuple(warnings),
         truncated=truncated,
+        value_provenance=tuple(derived),
     )
 
 
@@ -146,7 +170,8 @@ def _area_segments(
     mask: np.ndarray,
     offset_x: int,
     offset_y: int,
-) -> list[tuple[list[list[int]], list[list[int]]]]:
+    baseline_y: float | None = None,
+) -> list[tuple[list[list[float]], list[list[float]]]]:
     columns: list[tuple[int, int] | None] = []
     for x in range(mask.shape[1]):
         ys = np.flatnonzero(mask[:, x])
@@ -162,34 +187,85 @@ def _area_segments(
         ]
         columns.append(max(runs, key=lambda run: run[1] - run[0]) if runs else None)
 
-    result: list[tuple[list[list[int]], list[list[int]]]] = []
+    result: list[tuple[list[list[float]], list[list[float]]]] = []
     active_x: list[int] = []
     active_runs: list[tuple[int, int]] = []
     for x, run in enumerate(columns):
         if run is None:
             if active_x:
-                _append_area_segment(result, active_x, active_runs, offset_x, offset_y)
+                _append_area_segment(result, active_x, active_runs, offset_x, offset_y, baseline_y)
                 active_x, active_runs = [], []
             continue
         active_x.append(x)
         active_runs.append(run)
     if active_x:
-        _append_area_segment(result, active_x, active_runs, offset_x, offset_y)
+        _append_area_segment(result, active_x, active_runs, offset_x, offset_y, baseline_y)
     return result
 
 
 def _append_area_segment(
-    output: list[tuple[list[list[int]], list[list[int]]]],
+    output: list[tuple[list[list[float]], list[list[float]]]],
     xs: Sequence[int],
     runs: Sequence[tuple[int, int]],
     offset_x: int,
     offset_y: int,
+    baseline_y: float | None = None,
 ) -> None:
     if len(xs) < 6 or float(np.median([bottom - top for top, bottom in runs])) < 8:
         return
-    upper = [[offset_x + x, offset_y + top] for x, (top, _bottom) in zip(xs, runs, strict=True)]
-    lower = [[offset_x + x, offset_y + bottom] for x, (_top, bottom) in zip(xs, runs, strict=True)]
+    upper = [[float(offset_x + x), float(offset_y + top - 0.5)] for x, (top, _bottom) in zip(xs, runs, strict=True)]
+    lower = []
+    for x, (_top, bottom) in zip(xs, runs, strict=True):
+        x_px = offset_x + x
+        y_px = float(offset_y + bottom + 2.0)
+        if baseline_y is not None and abs(float(offset_y + bottom) - baseline_y) <= 3.0:
+            y_px = baseline_y
+        lower.append([x_px, y_px])
     output.append((upper, lower))
+
+
+def _zero_baseline_y(axes: Mapping[str, object]) -> float | None:
+    """Return the zero row from its tick or a supported calibrated axis."""
+    axis = axes.get("y")
+    ticks = axis.get("ticks") if isinstance(axis, Mapping) else None
+    if not isinstance(ticks, list):
+        return None
+    zero_ticks = [
+        tick for tick in ticks
+        if isinstance(tick, Mapping)
+        and isinstance(tick.get("value"), (int, float))
+        and abs(float(tick["value"])) <= 1e-9
+        and isinstance(tick.get("point_px"), (tuple, list))
+        and len(tick["point_px"]) == 2
+    ]
+    if zero_ticks:
+        # OCR gives the tick label center. Its y-coordinate is a direct observed
+        # reference to the calibrated zero row; the chart's x-axis may be offset
+        # below zero when the scale includes negative values or extra lower margin.
+        return float(zero_ticks[0]["point_px"][1])
+
+    calibration = axis.get("calibration") if isinstance(axis, Mapping) else None
+    points = axis.get("points_px") if isinstance(axis, Mapping) else None
+    if not isinstance(calibration, Mapping) or calibration.get("calibrated") is not True:
+        return None
+    if not isinstance(points, (tuple, list)) or len(points) != 2:
+        return None
+    try:
+        slope = float(calibration["slope"])
+        intercept = float(calibration["intercept"])
+        x0, y0 = map(float, points[0])
+        x1, y1 = map(float, points[1])
+    except (KeyError, TypeError, ValueError, IndexError):
+        return None
+    if abs(slope) < 1e-9:
+        return None
+    length = hypot(x1 - x0, y1 - y0)
+    if length <= 1e-9:
+        return None
+    zero_scalar = -intercept / slope
+    if -1 <= zero_scalar <= length + 1:
+        return float(y0 + (zero_scalar / length) * (y1 - y0))
+    return None
 
 
 def _plot_bounds(axes: Mapping[str, object], width: int, height: int) -> tuple[int, int, int, int]:

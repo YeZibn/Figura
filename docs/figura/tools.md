@@ -4,11 +4,11 @@
 
 ## 1. 职责与边界
 
-`ToolRegistry` 保存有序、版本化的 `ToolDefinition`；`ToolRuntime` 校验参数、运行同步 handler，并验证成功结果或返回安全错误。`DurableToolExecutor` 属于 Run 执行边界，负责在调用前后提交事实。当前工作树 Gateway Registry 为 `figura-web-v9`，按序注册九个工具：`load_image`、`decompose_chart_image`、`search_history`、`read_history`、`read_resource_image`、`extract_text`、`measure_chart`、`assemble_chart_figure` 和 `render_chart_figure`。历史工具只读当前 Session 的授权前缀；历史图片只有显式请求才附加到下一模型请求。图像、OCR 与测量工具处理已授权 Attachment/Panel；画布组装工具接收 Charts 域的完整 ChartFigure v2 并核对测量引用；渲染工具只接收已接受 Figure 的 `(run_id, call_id)`。v9 不注册旧测量工具、结果适配器或旧版 ChartSpec/Figure 转换器。启动时若仍有绑定 Registry v8 的活动 Run，Gateway 会拒绝激活 v9；旧事实留在 Runtime 历史中，但不投影成 v2 图表资源。
+`ToolRegistry` 保存有序、版本化的 `ToolDefinition`；`ToolRuntime` 校验参数、运行同步 handler，并验证成功结果或返回安全错误。`DurableToolExecutor` 属于 Run 执行边界，负责在调用前后提交事实。当前工作树 Gateway Registry 为 `figura-web-v10`，按序注册九个工具：`load_image`、`decompose_chart_image`、`search_history`、`read_history`、`read_resource_image`、`extract_text`、`measure_chart`、`assemble_chart_figure` 和 `render_chart_figure`。历史工具只读当前 Session 的授权前缀；历史图片只有显式请求才附加到下一模型请求。图像、OCR 与测量工具处理已授权 Attachment/Panel；画布组装工具接收 Charts 域的完整 ChartFigure v2 并核对测量引用；渲染工具只接收已接受 Figure 的 `(run_id, call_id)`。当前 Registry 不注册旧测量工具、结果适配器或旧版 ChartSpec/Figure 转换器。启动时若仍有任何绑定较旧 Registry 的活动 Run，Gateway 会拒绝激活 v10；旧事实留在 Runtime 历史中，但不投影成 v2 图表资源。
 
 ## 2. 内部流转
 
-1. **注册**：Gateway 组装有序 `ToolDefinition`，检查名称唯一、参数与结果 JSON Schema、描述及总大小。当前 v9 工具顺序为 `load_image`、`decompose_chart_image`、`search_history`、`read_history`、`read_resource_image`、`extract_text`、`measure_chart`、`assemble_chart_figure`、`render_chart_figure`；Registry 对外提供只读版本、定义顺序和按名查找。
+1. **注册**：Gateway 组装有序 `ToolDefinition`，检查名称唯一、参数与结果 JSON Schema、描述及总大小。当前 v10 工具顺序为 `load_image`、`decompose_chart_image`、`search_history`、`read_history`、`read_resource_image`、`extract_text`、`measure_chart`、`assemble_chart_figure`、`render_chart_figure`；Registry 对外提供只读版本、定义顺序和按名查找。
 2. **模型投影**：Agent 把允许的工具定义映射为 Provider 的 `FunctionTool`；模型只见名称、说明与参数 Schema，不见 handler、结果 Schema 或本地上下文。九个定义均有工具级 description；原生参数的 description 说明来源引用、坐标点形状、历史局部读取和图表数据语义，并在 Provider 投影中保留。SYSTEM 目录与同一 Registry 同序，但不重复整份 Schema。
 3. **调用**：`ToolInvocation` 的 call ID、名称和 JSON 参数进入 `ToolRuntime`；解析拒绝重复键、无效数值与不符合 Schema 的内容。handler 只收到已验证参数及 `ToolContext`。
 4. **结果与恢复**：成功时结果必须是有界 JSON 对象；失败时返回 `ToolExecutionError`。图像读取、OCR、测量与 `assemble_chart_figure` 为 `replay_safe`；Panel 分割和 `render_chart_figure` 为 `idempotent_local_write`。组装工具不新建外部资源，只验证、摘要并通过既有 Runtime 工具事实保留 Figure；渲染工具把 PNG 安装到 Sources 私有文件区，ToolResultFact 只保存有界摘要。结果超出既有大小上限时整体拒绝，不静默截断或删减观测。`replay_effect` 决定不确定结果能否安全重放或必须显式协调；ToolRuntime 自身不拥有 Run checkpoint。
@@ -88,7 +88,7 @@
 
 图像工具只接受目标 Run `RunExecutionState` 中的 Attachment/Panel 类型化引用，再经 Sources 核对 Session 所有权后读取图像。模型不能提交本机路径、URL 或图片字节。图像字节与标注 PNG 不进入工具结果、Runtime 事实或资源目录。
 
-当前公开观察工具为 `load_image`、`extract_text` 和 `measure_chart`。统一测量实现位于 [`measure_chart.py`](../../src/figura/tools/implementations/measure_chart.py)；来源解析位于 [`measurement_source.py`](../../src/figura/tools/implementations/measurement_source.py)；范围和共享结果合同位于 [`measurements/observation_scope.py`](../../src/figura/tools/measurements/observation_scope.py) 与 [`measurements/contracts.py`](../../src/figura/tools/measurements/contracts.py)；十个 family adapter 由 [`family_adapters.py`](../../src/figura/tools/measurements/family_adapters.py) 路由到 `tools/measurements/` 中各自的视觉算法。旧的四个公开测量定义和 v1 结果兼容执行器不在 v9 Registry 中。
+当前公开观察工具为 `load_image`、`extract_text` 和 `measure_chart`。统一测量实现位于 [`measure_chart.py`](../../src/figura/tools/implementations/measure_chart.py)；来源解析位于 [`measurement_source.py`](../../src/figura/tools/implementations/measurement_source.py)；范围和共享结果合同位于 [`measurements/observation_scope.py`](../../src/figura/tools/measurements/observation_scope.py) 与 [`measurements/contracts.py`](../../src/figura/tools/measurements/contracts.py)；十个 family adapter 由 [`family_adapters.py`](../../src/figura/tools/measurements/family_adapters.py) 路由到 `tools/measurements/` 中各自的视觉算法。旧的四个公开测量定义和 v1 结果兼容执行器不在 v10 Registry 中。
 
 ### 6.1 `measure_chart` 输入与决策边界
 
@@ -122,26 +122,46 @@
 | `PreparedMeasurementImage.rgb` | `numpy.ndarray`；必传 | 按可见像素规则合成的 RGB 图像；解码器写入，sensor 读取，不持久化 |
 | `PreparedMeasurementImage.observation_mask` | `numpy.ndarray \| None`；默认 `None` | 可空有效像素遮罩；范围处理器写入，sensor 只观察保留区域，坐标系仍是完整源图 |
 
-### 6.2 v2 统一结果
+### 6.2 v3 统一结果
 
-成功结果是以顶层 `chart_type` 判别的封闭 v2 联合类型；Schema 对象禁止额外字段。未校准的图表数值必须为 null，不能只依据几何外观补造单位值。
+成功结果是以顶层 `chart_type` 判别的封闭 schema_version 3 联合类型；Schema 对象禁止额外字段。未校准的图表数值必须为 null，不能只依据几何外观补造单位值。
 
 **字段流转：**`measure_chart` handler 与对应 family sensor 写入结果；成功结果的权威持久位置是 Runtime `ToolResultFact.result`，Agent 从匹配的调用、attempt 与结果事实重建 `MeasurementContent`。Agent 和后续工具读取完整 JSON；Provider 收到工具结果文本，Web 只提供经授权的观察图与摘要，不公开原始测量 JSON。结果是已提交 Run 事实的一部分，不原位修订；再次观察会产生新的调用与资源。
 
 | 完整字段路径 | 类型、默认与约束 |
 |---|---|
-| `MeasurementResultV2.schema_version` | `int`；默认固定为 `2` |
-| `MeasurementResultV2.chart_type` | `ChartType`；必传，十类之一且与调用输入相同 |
-| `MeasurementResultV2.source_kind` | `Literal["attachment", "panel"]`；必传 |
-| `MeasurementResultV2.source_id` | `str`；必传，须与目标 Run 授权资源匹配 |
-| `MeasurementResultV2.image_size` | `tuple[int, int]`；必传；JSON 输出为对象 `width`、`height`，均为正整数且不超过 100000 |
-| `MeasurementResultV2.coordinate_system` | `Literal["attachment_px", "panel_px"]`；必传，必须与 source kind 匹配 |
-| `MeasurementResultV2.status` | `MeasurementStatus`；必传：`measured`、`partial`、`no_evidence` 或 `unsupported` |
-| `MeasurementResultV2.plot_area_px` | `PixelRect \| None`；默认 `None`；完整来源坐标中的矩形，不等同于 observation_scope |
-| `MeasurementResultV2.observations` | `MeasurementObservations`；必传；由 `chart_type` 判别的十类闭合联合类型 |
-| `MeasurementResultV2.confidence` | `MeasurementConfidence`；必传；四项 0–1 置信度 |
-| `MeasurementResultV2.warnings` | `tuple[str, ...]`；默认空；最多 32 条、每条最多 256 字符，JSON 输出为数组 |
-| `MeasurementResultV2.truncated` | `bool`；默认 `False`；为 true 时 status 必须为 `partial` |
+| `MeasurementResult.schema_version` | `int`；默认固定为 `3` |
+| `MeasurementResult.chart_type` | `ChartType`；必传，十类之一且与调用输入相同 |
+| `MeasurementResult.source_kind` | `Literal["attachment", "panel"]`；必传 |
+| `MeasurementResult.source_id` | `str`；必传，须与目标 Run 授权资源匹配 |
+| `MeasurementResult.image_size` | `tuple[int, int]`；必传；JSON 输出为对象 `width`、`height`，均为正整数且不超过 100000 |
+| `MeasurementResult.coordinate_system` | `Literal["attachment_px", "panel_px"]`；必传，必须与 source kind 匹配 |
+| `MeasurementResult.status` | `MeasurementStatus`；必传：`measured`、`partial`、`no_evidence` 或 `unsupported` |
+| `MeasurementResult.plot_area_px` | `PixelRect \| None`；默认 `None`；完整来源坐标中的矩形，不等同于 observation_scope |
+| `MeasurementResult.observations` | `MeasurementObservations`；必传；由 `chart_type` 判别的十类闭合联合类型 |
+| `MeasurementResult.confidence` | `MeasurementConfidence`；必传；四项 0–1 置信度 |
+| `MeasurementResult.warnings` | `tuple[str, ...]`；默认空；最多 32 条、每条最多 256 字符，JSON 输出为数组 |
+| `MeasurementResult.truncated` | `bool`；默认 `False`；为 true 时 status 必须为 `partial` |
+| `MeasurementResult.coverage` | `Mapping`；JSON 必需：scope_kind、requested_scope、structure_status、detected_counts；内部默认 None，由 router 构建 |
+| `MeasurementResult.issues` | 结构化问题数组；默认空，最多 32 条 |
+| `MeasurementResult.evidence` | OCR/geometry 闭合联合数组；默认空，最多 4096 条 |
+| `MeasurementResult.calibrations` | axis/radial/color_scale 校准数组；默认空，最多 4096 条 |
+| `MeasurementResult.value_provenance` | 非空语义数值的逐值依据数组；默认空，最多 4096 条 |
+
+每个非空语义数值恰好对应一条可解析 JSON Pointer；纯像素几何、置信度及内部校准参数不属于语义数值。证据 ID 在一次结果内唯一，引用不得悬空；derived 输入必须已有依据且无环。对象数量受 Schema 上界与保留支持数量共同约束；结果体还必须为 ToolResultFact 外层记录留出空间，适配当前 `ToolRegistry` 的 `ExecutionPayloadLimits.max_json_bytes`。达到数量或字节边界时，移除无法保留完整支持闭包的读数及其衍生依赖，将状态标为 partial/truncated；不会静默删减仍然非空的无依据值。若必要的结构/几何本身超过 Runtime payload budget，则整次调用失败，不保存不完整事实。
+
+| 闭合结构 | 全部字段与语义 |
+|---|---|
+| `coverage` | scope_kind（full_source/scoped）、requested_scope（原始 normalized include/exclude 或 null）、structure_status（established/partial/unknown）、detected_counts（与输出对象一致） |
+| `detected_counts` | bar: series/bars；line、scatter: series/points；pie: sectors；area: series/samples；histogram: bins；box_plot: groups；radar: series/dimensions/vertices；heatmap: rows/columns/cells；treemap: nodes/leaves/groups |
+| `issues[]` | code、field_path、evidence_ids、message；路径指向实际存在字段，数值冲突可保留证据并令值为 null |
+| OCR evidence | id、kind=ocr、bounds_px、text、confidence；文本最多 160 字符 |
+| Geometry evidence | id、kind=geometry、bounds_px（可空）、points_px、ratio_denominator（可空，非空须大于零） |
+| Calibration | id、kind、axis_role（x/y/radial/color）、supported、support_evidence_ids、parameters、residual_value、support_domain（两个有序标量）；supported 要求至少两个不同可读支持值 |
+| Axis parameters | slope、intercept、points_px；值为轴投影标量乘 slope 加 intercept |
+| Radial parameters | slope、intercept、center_px；值为中心距离乘 slope 加 intercept |
+| Color-scale parameters | slope、intercept、start_px、end_px、samples；samples[] 为 position_px/color，使用观察色条匹配，不预设色图；多个远离位置同色时保持未知 |
+| Value provenance | field_path、method、evidence_ids、calibration_ids、input_paths、error_bound（可空）；method 为 direct_text、axis_calibration、radial_calibration、color_scale_calibration、geometry_ratio、derived |
 
 family sensor 在公共 router 补充来源身份前返回 `MeasurementSensorResult`；校验器用 `MeasurementResultIssue` 描述首个合同问题。两者是调用期内部模型，不是对外工具结果。
 
@@ -152,6 +172,7 @@ family sensor 在公共 router 补充来源身份前返回 `MeasurementSensorRes
 | `MeasurementSensorResult.confidence` | `MeasurementConfidence`；必传 | family sensor 写入；router 保留并校验四项置信度 |
 | `MeasurementSensorResult.plot_area_px` | `PixelRect \| None`；默认 `None` | family sensor 写入可选绘图区；router 传入最终结果 |
 | `MeasurementSensorResult.warnings` | `tuple[str, ...]`；默认空；构造时 list 会规范为 tuple | family sensor 写入；router 合并后受数量和长度约束 |
+| `MeasurementSensorResult.issues/evidence/calibrations/value_provenance` | 与公共结果同义；各自默认空 tuple | family sensor 写入局部支持；router 追加笛卡尔支持并验证闭合引用 |
 | `MeasurementSensorResult.truncated` | `bool`；默认 `False` | family sensor 标记候选裁断；router 用于最终状态一致性校验 |
 | `MeasurementResultIssue.code` | `str`；必传 | 结果 validator 写入；`measure_chart` 转为有界 ToolExecutionError |
 | `MeasurementResultIssue.field_path` | `str`；必传，最多 256 字符 | validator 写入 JSON Pointer；随错误返回 Agent |
@@ -183,14 +204,15 @@ family sensor 在公共 router 补充来源身份前返回 `MeasurementSensorRes
 | `CartesianAxes` | `x`, `y` | 两个 `AxisObservation`，分别描述 x/y 轴 |
 | `AxisObservation` | `kind`, `label_text`, `label_confidence`, `points_px`, `ticks`, `calibration` | 轴类型 numeric/categorical/unknown；标签与置信度；可空两个轴端像素点；刻度数组；可空线性标定 |
 | `AxisTick` | `id`, `text`, `value`, `bbox_px`, `point_px`, `confidence` | 刻度身份/原文、可空数值、文字框、定位像素和置信度 |
-| `AxisCalibration` | `slope`, `intercept`, `residual_value`, `support_count`, `support_span_px`, `confidence`, `calibrated` | 拟合参数、残差、支持刻度数与像素跨度、置信度及是否通过标定 |
+| `AxisCalibration` | `slope`, `intercept`, `residual_value`, `support_count`, optional `support_tick_ids`, `support_span_px`, `confidence`, `calibrated` | 拟合参数、残差、支持刻度数与像素跨度、置信度及是否通过标定；提供 ID 时必须唯一对应可读刻度 |
 | `MeasurementSeries` | `id`, `color`, `label`, `label_confidence` | 系列身份、可空颜色、可空 OCR 标签及标签关联置信度 |
 | `BarObservation` | `id`, `bounds_px`, `polygon_px`, `category_id`, `category_label`, `series_id`, `pixel_length_px`, `value` | 柱身份/边框/多边形、可空类别关联、可空系列、像素长度与可空标定值 |
-| `LinePoint` | `position_px`, `x_value`, `y_value`, `point_source` | 像素点、可空校准坐标；来源为 marker 或 axis_tick_sample |
+| `LinePoint` | `position_px`, `x_value`, `y_value`, `point_source`, `category_id`, `category_label` | 像素点、可空校准坐标；来源为 marker 或 axis_tick_sample |
 | `LineSeries` | `MeasurementSeries` 字段、`segments_px`, `points` | 保留断点的像素折线段与测量点 |
 | `ScatterPoint` | `center_px`, `radius_px`, `x_value`, `y_value`, `series_id`, `flags` | 点中心、可空半径/校准坐标/系列关联；flags 为 merged、occluded、dense、overlap 的子集 |
 | `PieSector` | `start_angle_deg`, `sweep_angle_deg`, `ratio`, `label`, `color` | 起始角、覆盖角、可空角度占比、可空关联标签和颜色 |
-| `AreaBoundary` | `upper_boundary_px`, `lower_boundary_px`, `upper_values`, `lower_values` | 上下边界像素轨迹及逐点可空的校准值；下边界和下值允许 null |
+| `AreaBoundary` | `upper_boundary_px`, `lower_boundary_px`, `upper_values`, `lower_values`, `samples` | 上下边界像素轨迹及逐点可空的校准值；下边界和下值允许 null |
+| `AreaBoundary.samples[]` | `position_px`, `lower_position_px`, `category_id`, `category_label`, `x_value`, `upper_value`, `lower_value`, `series_value` | 对齐采样的上/下边界；下位置与所有语义值可空，series_value 以衍生支持记录边界差 |
 | `AreaSeries` | `MeasurementSeries` 字段、`segments` | 有序填充区域边界段 |
 | `HistogramBin` | `bounds_px`, `interval_start`, `interval_end`, `value` | 柱体像素矩形、可空区间端点与可空 count/frequency 等测量值 |
 | `BoxPlotGroup` | `id`, `label`, `bounds_px` | 分组身份/可空标签/可空整体像素矩形 |
@@ -200,16 +222,16 @@ family sensor 在公共 router 补充来源身份前返回 `MeasurementSensorRes
 | `BoxPlotOutlier` | `position_px`, `value` | 像素位置与可空校准值 |
 | `RadarSpoke` | `dimension_id`, `label`, `angle_deg`, `endpoint_px` | 可空维度 ID/标签、方向角与像素端点 |
 | `RadarGrid` | `value`, `radius_px` | 可空标定值及网格像素半径 |
-| `RadarVertex` | `dimension_id`, `position_px`, `value` | 可空维度 ID、像素顶点与可空校准值 |
+| `RadarVertex` | `dimension_id`, `position_px`, `value` | 可空维度 ID、可空像素顶点与可空校准值；缺失位置不伪装成轴端点 |
 | `RadarSeries` | `MeasurementSeries` 字段、`vertices` | 系列元数据与有序雷达顶点 |
 | `HeatmapCell` | `row_id`, `column_id`, `bounds_px`, `color`, `value` | 可空行列关联、像素矩形、可空颜色与可空色阶校准值 |
-| `TreemapNodeObservation` | `id`, `parent_id`, `label`, `bounds_px`, `value`, `area_ratio` | 节点身份、可空父 ID/标签、像素矩形、可空数值及可空面积比例 |
+| `TreemapNodeObservation` | `id`, `parent_id`, `label`, `bounds_px`, `value`, `area_ratio`, `role`, `area_ratio_basis`, `area_ratio_parent_id` | 节点身份、可空父 ID/标签、像素矩形、可空数值及可空面积比例 |
 
-这些 observation dataclass/TypedDict 与 `MEASUREMENT_RESULT_V2_SCHEMA` 由 [`contracts.py`](../../src/figura/tools/measurements/contracts.py) 定义；各家族只写自己的字段，公共 router 统一补入来源、坐标系、状态、置信度和警告，并验证结果 family 与调用参数一致。
+这些 observation dataclass/TypedDict 与 `MEASUREMENT_RESULT_SCHEMA` 由 [`contracts.py`](../../src/figura/tools/measurements/contracts.py) 定义；各家族只写自己的字段，公共 router 统一补入来源、坐标系、状态、置信度和警告，并验证结果 family 与调用参数一致。
 
 ### 6.3 范围、资源与重建
 
-handler 先从当前目标 Run 的授权资源目录解析精确来源，再通过 Sources 服务验证 Session/Panel 记录并读图。工具成功或失败都作为普通 ToolResultFact 持久化；成功的 v2 `measure_chart` 调用由 Agent 重建为一个独立 `MeasurementContent`，保留 attempt ID、tool name、来源引用、原始 scope、outcome 和完整结果。资源投影不会重算、规范化或修复提交结果。旧 `measure_bars`、`measure_lines`、`measure_scatter`、`measure_pie` 事实继续留在原始 Run 历史，但不会转换为 v2 `MeasurementContent`。
+handler 先从当前目标 Run 的授权资源目录解析精确来源，再通过 Sources 服务验证 Session/Panel 记录并读图。工具成功或失败都作为普通 ToolResultFact 持久化；当前 schema_version 3 的 `measure_chart` 调用由 Agent 重建为一个独立 `MeasurementContent`，保留 attempt ID、tool name、来源引用、原始 scope、outcome 和完整结果。资源投影不会重算、规范化或修复提交结果。冻结 schema_version 2 的结果只按原样保留在历史 ToolResultFact 中，不投影为当前 MeasurementContent；可通过历史读取工具查看原始结果，不会因此获得新调用或组装权限。旧 `measure_bars`、`measure_lines`、`measure_scatter`、`measure_pie` 事实同样留在原始 Run 历史中。
 
 成功 OCR 与 `measure_chart` 结果在下一次 Provider 请求中按当前已提交批次与调用顺序生成临时标注图；它们不成为独立事实。历史读取和工具结果可以提供文字证据，但只有成功 `load_image` 或当前批次观察才按对应规则附图。图片无法重建、来源不再可读或请求图片越过 Provider 边界时，在 Provider attempt claim 前失败。
 
@@ -221,7 +243,7 @@ flowchart LR
     Authorize --> Decode[可见像素解码/观察遮罩]
     Decode --> Router[显式 family router]
     Router --> Sensors[十种内部 sensors]
-    Sensors --> Contract[MeasurementResult v2 校验]
+    Sensors --> Contract[MeasurementResult 校验]
     Contract --> Fact[ToolResultFact 提交]
     Fact --> Projection[MeasurementContent 类型化资源]
     Fact --> Overlay[下一请求临时观察标注图]
@@ -307,11 +329,11 @@ flowchart LR
 | `chart_render_storage_failed` | Sources 无法写入或校验 PNG | 有界存储失败；仅 `STORAGE_ERROR` 标记可重试 |
 
 `render_chart_figure` 的 `replay_effect` 是 `idempotent_local_write`。文件可以先于 ToolResultFact 安装；在结果未成功提交时它仍是不可从 Agent/Web 读取的孤儿，重放同一调用会验证并复用原文件。工具不会用新内容覆盖损坏或冲突的既有文件。
-当前 Registry 是 `figura-web-v9`。Bootstrap 在启动时检查仍在运行的 Run：只要其已提交工具事实或 Provider binding 仍绑定 v8，就拒绝启动并要求先完成或中断该 Run。v9 不注册旧测量工具、结果 adapter、ChartSpec/Figure 转换器或 unresolved-call executor；已存旧事实原样保留，不创建新类型化图表资源。渲染的文字布局与百分比规则见[Charts 确定性 PNG renderer](charts.md#5-确定性-png-renderer)；会话删除会清除其私有 Panel/render 文件，详见[Sources](sources.md#2-内部流转与不变量)。
+当前 Registry 是 `figura-web-v10`。Bootstrap 在启动时检查仍在运行的 Run：只要其已提交工具事实或 Provider binding 仍绑定较旧 Registry，就拒绝启动并要求先完成或中断该 Run。当前 Registry 不注册旧测量工具、结果 adapter、ChartSpec/Figure 转换器或 unresolved-call executor；已存旧事实原样保留，不创建新类型化图表资源。渲染的文字布局与百分比规则见[Charts 确定性 PNG renderer](charts.md#5-确定性-png-renderer)；会话删除会清除其私有 Panel/render 文件，详见[Sources](sources.md#2-内部流转与不变量)。
 
 ## 9. Session 历史读取工具
 
-当前 v9 Registry 提供三个只读历史工具，可搜索当前 Run 的已闭合前缀与较早历史，再按需取得原始内容或图像；当前未闭合的调用批次不会进入搜索结果。它们的 `ToolContext.session_id` 与 `run_id` 由 DurableToolExecutor 注入，模型不能指定 Session，也不能越过当前 Run 已授权前缀。调用自身仍作为当前 Run 的普通工具事实审计；执行没有重放旧工具的副作用。Memory 拥有来源引用格式、搜索匹配及精确读取语义，见[来源引用](memory.md#historysourceref)和[历史检索边界](memory.md#搜索读取与历史图像边界)；Agent 拥有六类资源内容字段，见[资源合同](agent.md#4-runexecutionstate-资源合同与完整字段)。
+当前 v10 Registry 提供三个只读历史工具，可搜索当前 Run 的已闭合前缀与较早历史，再按需取得原始内容或图像；当前未闭合的调用批次不会进入搜索结果。它们的 `ToolContext.session_id` 与 `run_id` 由 DurableToolExecutor 注入，模型不能指定 Session，也不能越过当前 Run 已授权前缀。调用自身仍作为当前 Run 的普通工具事实审计；执行没有重放旧工具的副作用。Memory 拥有来源引用格式、搜索匹配及精确读取语义，见[来源引用](memory.md#historysourceref)和[历史检索边界](memory.md#搜索读取与历史图像边界)；Agent 拥有六类资源内容字段，见[资源合同](agent.md#4-runexecutionstate-资源合同与完整字段)。
 
 `search_history` 的输入对象只含下表属性且拒绝额外字段。查询使用本地文本匹配与分页，不访问未来 Run；默认页大小为 10，`page_size` 可设为 1–20。
 
@@ -383,3 +405,11 @@ Registry 完整 metadata/parameter Schema/result Schema 投影、参数、成功
 已知 ToolFailure 或参数校验失败只提交一次 failed observation，`retryable=True` 由模型解读；模型的新决策使用新 call ID。未知的部分写入通过 `ToolOutcomeUnknown` 传播，不产生伪造 failed result。Panel 分割与 PNG 保存的无法确认存储异常采用这一分支；按原 replay_effect 和稳定 SHA-256 `[run_id, call_id]` 键恢复。存储 claim 入口强制每逻辑调用最多三次尝试。CancellationSignal 读取持久停止状态；读取失败传播并拒绝执行。尚在 native handler 内的动作保留 owner，真实返回后可保存结果再停止。
 
 工具执行、历史读取与图像观察边界见 [Tool Runtime](../../openspec/figura/openspec/specs/tool-runtime/spec.md)、[历史检索](../../openspec/figura/openspec/specs/session-context-retrieval/spec.md)和[图像观察解码](../../openspec/figura/openspec/specs/image-observation-decoding/spec.md)主规格。结构与回归测试不证明真实模型遵循效果。
+
+### 测量回归与调用期共享基础
+
+`context.py` 仅在一次已授权工具调用内复用 OCR 与局部 OCR 候选，结束即释放；`layout.py` 联合紧凑色样与排列文字判断图例，不通过 RGB 距离删除真实系列。OCR 使用 scope 后的像素，局部放大后映射回来源坐标并再次检查掩码；不会创建新的 Panel 或调用 Provider。校准失败、数字冲突和集合截断仍保留不确定性，不将测量自动提升为 ChartSpec 真值。
+
+固定模拟样例及参考答案位于 `tests/fixtures/figura_measurement/`。生成命令为 `conda run -n agent python scripts/generate_figura_measurement_fixtures.py`，评测命令为 `conda run -n agent python scripts/evaluate_figura_measurements.py`；Gallery 按固定 Panel 范围通过生产授权工具路径执行，参考答案仅用于事后比较。本 Change 的实际通过情况见其 validation.md；不能用注册了十个 family 或工具调用成功代替精度验收。
+
+新 Registry 的发布前提是旧绑定 Run 已终态。历史 schema_version 2 的 measure_chart 事实只用冻结历史 Schema 校验，原 JSON 保持不变，也不会投影为当前测量资源；冻结 Schema 不注册为工具定义，也不参与新调用执行。回滚前同样须确认新绑定 Run 全部终态，禁止改写历史事实。

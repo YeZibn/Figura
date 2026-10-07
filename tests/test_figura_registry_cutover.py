@@ -7,7 +7,7 @@ from figura.providers import FinishReason, MODEL_IDS, ProviderId, ProviderRespon
 from figura.runtime.models import RunCreateRequest, RunStatus
 
 
-def _leave_v8_run(tmp_path, *, terminal: bool):
+def _leave_older_registry_run(tmp_path, *, registry_version: str, terminal: bool):
     application = create_application(tmp_path)
     coordinator = application.coordinator
     session = coordinator.create_session()
@@ -35,7 +35,7 @@ def _leave_v8_run(tmp_path, *, terminal: bool):
             FinishReason.TOOL_CALLS,
         ),
         provider_attempt_id=attempt.attempt_id,
-        registry_version="figura-web-v8",
+        registry_version=registry_version,
     )
     if terminal:
         state = coordinator.read_run_state(session.session_id, run.run_id)
@@ -44,18 +44,20 @@ def _leave_v8_run(tmp_path, *, terminal: bool):
     application.close()
 
 
-def test_registry_v9_startup_blocks_active_v8_runs(tmp_path) -> None:
-    _leave_v8_run(tmp_path, terminal=False)
+@pytest.mark.parametrize("old_version", ["figura-web-v8", "figura-web-v9"])
+def test_registry_v10_startup_blocks_active_older_registry_runs(tmp_path, old_version) -> None:
+    _leave_older_registry_run(tmp_path, registry_version=old_version, terminal=False)
 
-    with pytest.raises(RuntimeError, match="Run bound to v8 is still active"):
+    with pytest.raises(RuntimeError, match="older bound Run is still active"):
         create_application(tmp_path)
 
 
-def test_registry_v9_startup_allows_terminal_v8_history(tmp_path) -> None:
-    _leave_v8_run(tmp_path, terminal=True)
+@pytest.mark.parametrize("old_version", ["figura-web-v8", "figura-web-v9"])
+def test_registry_v10_startup_allows_terminal_older_registry_history(tmp_path, old_version) -> None:
+    _leave_older_registry_run(tmp_path, registry_version=old_version, terminal=True)
 
     application = create_application(tmp_path)
     try:
-        assert application.dispatcher._executor._tools.registry.version == "figura-web-v9"
+        assert application.dispatcher._executor._tools.registry.version == "figura-web-v10"
     finally:
         application.close()

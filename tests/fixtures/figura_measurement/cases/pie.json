@@ -1,0 +1,59 @@
+{
+  "case_id": "pie",
+  "image": "single/pie.png",
+  "figure": {
+    "schema_version": 2,
+    "title": "",
+    "layout": {
+      "columns": 1
+    },
+    "charts": [
+      {
+        "chart_id": "pie",
+        "chart_spec": {
+          "schema_version": 2,
+          "metadata": {
+            "chart_type": "pie",
+            "title": "家庭月度支出构成",
+            "source": "Figura 示例数据",
+            "note": "甜甜圈图 · 占比"
+          },
+          "coordinate_system": {
+            "kind": "none"
+          },
+          "dataset": {
+            "slices": [
+              {
+                "id": "housing",
+                "label": "住房",
+                "value": 38
+              },
+              {
+                "id": "food",
+                "label": "饮食",
+                "value": 26
+              },
+              {
+                "id": "transport",
+                "label": "交通",
+                "value": 14
+              },
+              {
+                "id": "education",
+                "label": "教育",
+                "value": 12
+              },
+              {
+                "id": "other",
+                "label": "其他",
+                "value": 10
+              }
+            ],
+            "inner_radius_ratio": 0.4
+          }
+        },
+        "measurement_refs": []
+      }
+    ]
+  }
+}

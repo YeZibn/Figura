@@ -27,10 +27,12 @@ def measure_scatter_pixels(rgb: np.ndarray, observation_mask: np.ndarray | None 
     left, top, right, bottom = bounds
     crop = rgb[top:bottom, left:right]
     palette = series_palette(crop)
+    from .layout import legend_regions, exclude_legend
+    legend_bounds = legend_regions(rgb, ocr.snippets, palette)
     labels = associate_legend_labels(rgb, ocr.snippets, palette)
     series: list[dict[str, Any]] = []
     for index, color in enumerate(palette, start=1):
-        detections = _point_components(color_mask(crop, color), left, top, width, height)
+        detections = _point_components(exclude_legend(color_mask(crop, color, palette=palette), legend_bounds, (left, top)), left, top, width, height)
         if not detections:
             continue
         color_hex = hex_color(color)

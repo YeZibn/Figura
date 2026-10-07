@@ -141,7 +141,7 @@ def test_registry_exposes_one_explicit_family_measurement_contract(tmp_path) -> 
     assert "chart_type" in MEASURE_CHART_PARAMETERS_SCHEMA["required"]
 
 
-def test_measure_chart_commits_v2_measurement_and_typed_resource(tmp_path) -> None:
+def test_measure_chart_commits_v3_measurement_and_typed_resource(tmp_path) -> None:
     store, coordinator, session, run, _attachments, _panels, execution_state, registry, _runtime, attachment = _setup(tmp_path)
     args = json.dumps({
         "source_kind": "attachment", "source_id": attachment.attachment_id, "chart_type": "bar",
@@ -157,7 +157,7 @@ def test_measure_chart_commits_v2_measurement_and_typed_resource(tmp_path) -> No
     assert isinstance(content, MeasurementContent)
     assert content.tool_name == "measure_chart"
     assert content.outcome is ToolOutcome.SUCCEEDED
-    assert content.result["schema_version"] == 2
+    assert content.result["schema_version"] == 3
     assert content.result["chart_type"] == "bar"
     assert content.result["source_id"] == attachment.attachment_id
     assert content.result["coordinate_system"] == "attachment_px"
@@ -207,7 +207,7 @@ def test_measure_chart_preserves_family_choice_and_returns_partial_observation(t
     assert all("value" not in sector for sector in result.result["observations"]["sectors"])
 
 
-def test_successful_measurement_can_be_read_as_a_v2_annotation(tmp_path) -> None:
+def test_successful_measurement_can_be_read_as_a_validated_annotation(tmp_path) -> None:
     store, coordinator, session, run, _attachments, _panels, execution_state, registry, _runtime, attachment = _setup(tmp_path)
     _commit_measurements(store, coordinator, session.session_id, run.run_id, registry, (
         ProviderToolCall("measurement", "measure_chart", json.dumps({
@@ -231,7 +231,7 @@ def test_successful_measurement_can_be_read_as_a_v2_annotation(tmp_path) -> None
         assert image.size == (width, height) == (300, 200)
 
 
-def test_old_measurement_facts_remain_raw_and_are_not_projected_as_v2(tmp_path) -> None:
+def test_legacy_measurement_facts_remain_raw_and_are_not_projected(tmp_path) -> None:
     store, coordinator, session, run, _attachments, _panels, execution_state, _registry, _runtime, _attachment = _setup(tmp_path)
     legacy = ToolDefinition(
         name="measure_bars",

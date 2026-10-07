@@ -1,0 +1,90 @@
+{
+  "case_id": "bar",
+  "image": "single/bar.png",
+  "figure": {
+    "schema_version": 2,
+    "title": "",
+    "layout": {
+      "columns": 1
+    },
+    "charts": [
+      {
+        "chart_id": "bar",
+        "chart_spec": {
+          "schema_version": 2,
+          "metadata": {
+            "chart_type": "bar",
+            "title": "各区域季度销售额",
+            "source": "Figura 示例数据",
+            "note": "单位：万元"
+          },
+          "coordinate_system": {
+            "kind": "cartesian",
+            "x_axis": {
+              "kind": "categorical"
+            },
+            "y_axis": {
+              "kind": "numeric",
+              "label": "销售额"
+            }
+          },
+          "dataset": {
+            "orientation": "vertical",
+            "mode": "grouped",
+            "categories": [
+              {
+                "id": "q1",
+                "label": "第一季度"
+              },
+              {
+                "id": "q2",
+                "label": "第二季度"
+              },
+              {
+                "id": "q3",
+                "label": "第三季度"
+              },
+              {
+                "id": "q4",
+                "label": "第四季度"
+              }
+            ],
+            "series": [
+              {
+                "id": "east",
+                "label": "华东",
+                "values": [
+                  82,
+                  96,
+                  108,
+                  124
+                ]
+              },
+              {
+                "id": "south",
+                "label": "华南",
+                "values": [
+                  67,
+                  79,
+                  91,
+                  105
+                ]
+              },
+              {
+                "id": "north",
+                "label": "华北",
+                "values": [
+                  58,
+                  72,
+                  84,
+                  98
+                ]
+              }
+            ]
+          }
+        },
+        "measurement_refs": []
+      }
+    ]
+  }
+}

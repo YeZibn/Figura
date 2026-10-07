@@ -1,0 +1,309 @@
+{
+  "case_id": "01_sales_and_market",
+  "image": "gallery/01_sales_and_market.png",
+  "figure": {
+    "schema_version": 2,
+    "title": "销售与市场表现",
+    "layout": {
+      "columns": 2
+    },
+    "charts": [
+      {
+        "chart_id": "bar",
+        "chart_spec": {
+          "schema_version": 2,
+          "metadata": {
+            "chart_type": "bar",
+            "title": "各区域季度销售额",
+            "source": "Figura 示例数据",
+            "note": "单位：万元"
+          },
+          "coordinate_system": {
+            "kind": "cartesian",
+            "x_axis": {
+              "kind": "categorical"
+            },
+            "y_axis": {
+              "kind": "numeric",
+              "label": "销售额"
+            }
+          },
+          "dataset": {
+            "orientation": "vertical",
+            "mode": "grouped",
+            "categories": [
+              {
+                "id": "q1",
+                "label": "第一季度"
+              },
+              {
+                "id": "q2",
+                "label": "第二季度"
+              },
+              {
+                "id": "q3",
+                "label": "第三季度"
+              },
+              {
+                "id": "q4",
+                "label": "第四季度"
+              }
+            ],
+            "series": [
+              {
+                "id": "east",
+                "label": "华东",
+                "values": [
+                  82,
+                  96,
+                  108,
+                  124
+                ]
+              },
+              {
+                "id": "south",
+                "label": "华南",
+                "values": [
+                  67,
+                  79,
+                  91,
+                  105
+                ]
+              },
+              {
+                "id": "north",
+                "label": "华北",
+                "values": [
+                  58,
+                  72,
+                  84,
+                  98
+                ]
+              }
+            ]
+          }
+        },
+        "measurement_refs": []
+      },
+      {
+        "chart_id": "line",
+        "chart_spec": {
+          "schema_version": 2,
+          "metadata": {
+            "chart_type": "line",
+            "title": "月度活跃用户趋势",
+            "source": "Figura 示例数据",
+            "note": "单位：万人"
+          },
+          "coordinate_system": {
+            "kind": "cartesian",
+            "x_axis": {
+              "kind": "categorical",
+              "label": "月份"
+            },
+            "y_axis": {
+              "kind": "numeric",
+              "label": "活跃用户"
+            }
+          },
+          "dataset": {
+            "series": [
+              {
+                "id": "actual",
+                "label": "实际用户",
+                "points": [
+                  {
+                    "x": "1月",
+                    "y": 12.4
+                  },
+                  {
+                    "x": "2月",
+                    "y": 13.1
+                  },
+                  {
+                    "x": "3月",
+                    "y": 15.7
+                  },
+                  {
+                    "x": "4月",
+                    "y": 16.2
+                  },
+                  {
+                    "x": "5月",
+                    "y": 18.6
+                  },
+                  {
+                    "x": "6月",
+                    "y": 21.3
+                  }
+                ]
+              },
+              {
+                "id": "target",
+                "label": "目标用户",
+                "points": [
+                  {
+                    "x": "1月",
+                    "y": 11.8
+                  },
+                  {
+                    "x": "2月",
+                    "y": 13.0
+                  },
+                  {
+                    "x": "3月",
+                    "y": 14.2
+                  },
+                  {
+                    "x": "4月",
+                    "y": 15.5
+                  },
+                  {
+                    "x": "5月",
+                    "y": 17.0
+                  },
+                  {
+                    "x": "6月",
+                    "y": 18.5
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "measurement_refs": []
+      },
+      {
+        "chart_id": "scatter",
+        "chart_spec": {
+          "schema_version": 2,
+          "metadata": {
+            "chart_type": "scatter",
+            "title": "广告投入与订单转化",
+            "source": "Figura 示例数据",
+            "note": "气泡大小表示投放规模"
+          },
+          "coordinate_system": {
+            "kind": "cartesian",
+            "x_axis": {
+              "kind": "numeric",
+              "label": "投入金额（千元）"
+            },
+            "y_axis": {
+              "kind": "numeric",
+              "label": "订单数（百单）"
+            }
+          },
+          "dataset": {
+            "series": [
+              {
+                "id": "search",
+                "label": "搜索广告",
+                "points": [
+                  {
+                    "x": 12,
+                    "y": 18,
+                    "size": 2
+                  },
+                  {
+                    "x": 18,
+                    "y": 25,
+                    "size": 3
+                  },
+                  {
+                    "x": 24,
+                    "y": 31,
+                    "size": 5
+                  },
+                  {
+                    "x": 29,
+                    "y": 38,
+                    "size": 7
+                  },
+                  {
+                    "x": 36,
+                    "y": 43,
+                    "size": 9
+                  }
+                ]
+              },
+              {
+                "id": "social",
+                "label": "社交广告",
+                "points": [
+                  {
+                    "x": 10,
+                    "y": 15,
+                    "size": 2
+                  },
+                  {
+                    "x": 17,
+                    "y": 23,
+                    "size": 4
+                  },
+                  {
+                    "x": 25,
+                    "y": 34,
+                    "size": 6
+                  },
+                  {
+                    "x": 32,
+                    "y": 39,
+                    "size": 8
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "measurement_refs": []
+      },
+      {
+        "chart_id": "pie",
+        "chart_spec": {
+          "schema_version": 2,
+          "metadata": {
+            "chart_type": "pie",
+            "title": "家庭月度支出构成",
+            "source": "Figura 示例数据",
+            "note": "甜甜圈图 · 占比"
+          },
+          "coordinate_system": {
+            "kind": "none"
+          },
+          "dataset": {
+            "slices": [
+              {
+                "id": "housing",
+                "label": "住房",
+                "value": 38
+              },
+              {
+                "id": "food",
+                "label": "饮食",
+                "value": 26
+              },
+              {
+                "id": "transport",
+                "label": "交通",
+                "value": 14
+              },
+              {
+                "id": "education",
+                "label": "教育",
+                "value": 12
+              },
+              {
+                "id": "other",
+                "label": "其他",
+                "value": 10
+              }
+            ],
+            "inner_radius_ratio": 0.4
+          }
+        },
+        "measurement_refs": []
+      }
+    ]
+  }
+}

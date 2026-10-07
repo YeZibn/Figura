@@ -907,7 +907,11 @@ def test_gateway_service_lifecycle_and_message(tmp_path):
     def runtime_factory(name, **_kwargs):
         return FakeRuntime(SQLiteAgentMemory(name, database=database, create=False))
 
-    service = GatewayService(database=database, runtime_factory=runtime_factory)
+    service = GatewayService(
+        database=database,
+        runtime_factory=runtime_factory,
+        readiness_probe=lambda: {"status": "ready", "provider": "openai", "model": "test-model"},
+    )
     result = service.submit_message(session_id, "你好")
     assert result["answer"] == "来自模拟 Agent"
     assert [item["kind"] for item in result["messages"]] == ["user", "assistant"]
@@ -1047,7 +1051,11 @@ def test_gateway_run_id_is_shared_by_runtime_memory_trace_and_projection(tmp_pat
         captured["run_id"] = run_id
         return AgentRuntime(agent, memory, attachments)
 
-    service = GatewayService(database=database, runtime_factory=runtime_factory)
+    service = GatewayService(
+        database=database,
+        runtime_factory=runtime_factory,
+        readiness_probe=lambda: {"status": "ready", "provider": "openai", "model": "test-model"},
+    )
     session_id = service.create_session("canonical-run")["session"]["id"]
     accepted = service.start_run(session_id, "检查身份")
     run_id = accepted["run"]["runId"]
@@ -1099,7 +1107,11 @@ def test_gateway_multiple_runs_restore_once_in_stable_order(tmp_path):
         )
         return AgentRuntime(agent, memory, attachments)
 
-    service = GatewayService(database=database, runtime_factory=runtime_factory)
+    service = GatewayService(
+        database=database,
+        runtime_factory=runtime_factory,
+        readiness_probe=lambda: {"status": "ready", "provider": "openai", "model": "test-model"},
+    )
     session_id = service.create_session("history-runs")["session"]["id"]
     first = service.submit_message(session_id, "第一次")
     second = service.submit_message(session_id, "第二次")
@@ -1129,7 +1141,11 @@ def test_gateway_service_maps_unavailable_agent_and_preserves_history(tmp_path):
     def unavailable(_name, **_kwargs):
         raise ValueError("An API key is required: secret-key-value")
 
-    service = GatewayService(database=database, runtime_factory=unavailable)
+    service = GatewayService(
+        database=database,
+        runtime_factory=unavailable,
+        readiness_probe=lambda: {"status": "ready", "provider": "openai", "model": "test-model"},
+    )
     with pytest.raises(GatewayFault) as error:
         service.submit_message(session_id, "run")
     assert error.value.code == "agent_unavailable"
@@ -1320,6 +1336,7 @@ def test_attachment_ids_are_session_scoped_and_message_stays_lazy(tmp_path):
         database=database,
         attachment_root=tmp_path / "attachments-2",
         runtime_factory=lambda name, **_kwargs: FakeRuntime(SQLiteAgentMemory(name, database=database, create=False)),
+        readiness_probe=lambda: {"status": "ready", "provider": "openai", "model": "test-model"},
     )
     # The fresh service deliberately loses the upload bytes; re-upload into the
     # active service to test message construction independently.
@@ -1575,7 +1592,11 @@ def test_async_gateway_run_streams_trace_and_scoped_visual_observation(tmp_path)
             visual_observation_sink,
         )
 
-    service = GatewayService(database=database, runtime_factory=runtime_factory)
+    service = GatewayService(
+        database=database,
+        runtime_factory=runtime_factory,
+        readiness_probe=lambda: {"status": "ready", "provider": "openai", "model": "test-model"},
+    )
     first_id = service.create_session("first")["session"]["id"]
     second_id = service.create_session("second")["session"]["id"]
     accepted = service.start_run(first_id, "检查图表")
@@ -1622,6 +1643,7 @@ def test_http_async_run_returns_sse_stream(tmp_path):
     service = GatewayService(
         database=database,
         runtime_factory=lambda name, **_kwargs: FakeRuntime(SQLiteAgentMemory(name, database=database, create=False)),
+        readiness_probe=lambda: {"status": "ready", "provider": "openai", "model": "test-model"},
     )
     server = GatewayHTTPServer(("127.0.0.1", 0), service)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -1833,6 +1855,7 @@ def test_gateway_history_routes_return_runs_and_cursor_replay(tmp_path):
     service = GatewayService(
         database=database,
         runtime_factory=lambda name, **_kwargs: FakeRuntime(SQLiteAgentMemory(name, database=database, create=False)),
+        readiness_probe=lambda: {"status": "ready", "provider": "openai", "model": "test-model"},
     )
     session_id = service.create_session("history-routes")["session"]["id"]
     server = GatewayHTTPServer(("127.0.0.1", 0), service)

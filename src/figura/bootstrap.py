@@ -67,7 +67,7 @@ def create_application(
     execution_images = RunExecutionImageReader(attachment_service, panel_service, chart_renders)
     history = SessionHistorySearch(coordinator, execution_state)
     registry = ToolRegistry(
-        "figura-web-v9",
+        "figura-web-v10",
         (
             *image_tool_definitions(execution_state.for_run, execution_images, panel_service),
             *history_tool_definitions(history),
@@ -114,8 +114,8 @@ def recover_running_runs(application: FiguraGatewayApplication) -> int:
 
 
 def _ensure_registry_cutover_ready(coordinator: RunCoordinator, registry_version: str) -> None:
-    """Do not start v9 while any Run bound to v8 could still resume."""
-    if registry_version != "figura-web-v9":
+    """Do not activate new contracts while an older bound Run could still resume."""
+    if registry_version != "figura-web-v10":
         return
     for run in coordinator.list_running_runs():
         state = coordinator.read_run_state(run.session_id, run.run_id)
@@ -130,8 +130,8 @@ def _ensure_registry_cutover_ready(coordinator: RunCoordinator, registry_version
             if isinstance((manifest := binding.asset_manifest), Mapping)
             and isinstance(manifest.get("registry_version"), str)
         )
-        if state.run.status is RunStatus.RUNNING and "figura-web-v8" in bound_versions:
+        if state.run.status is RunStatus.RUNNING and any(version != registry_version for version in bound_versions):
             raise RuntimeError(
-                "Cannot activate Figura Registry v9 while a Run bound to v8 is still active; "
-                "finish or interrupt all v8 Runs, then restart Figura."
+                "Cannot activate Figura Registry v10 while an older bound Run is still active; "
+                "finish or interrupt older Runs, then restart Figura."
             )

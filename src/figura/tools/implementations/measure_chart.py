@@ -10,13 +10,15 @@ from figura.agent.execution_images import RunExecutionImageReader
 from figura.agent.execution_resources import RunExecutionState
 from figura.tools.contracts import ReplayEffect, ToolContext, ToolDefinition, ToolFailure
 from figura.tools.measurements.contracts import (
-    MEASUREMENT_RESULT_V2_SCHEMA,
-    MeasurementResultV2,
+    MEASUREMENT_RESULT_SCHEMA,
+    MeasurementResult,
     MeasurementSensorResult,
     PreparedMeasurementImage,
     validate_measurement_result,
 )
 from figura.tools.measurements.observation_scope import ObservationScopeError, decode_scoped_image
+from figura.tools.measurements.support import build_axis_support
+from figura.tools.measurements.context import shared_observation
 
 from .measurement_schema import OBSERVATION_SCOPE
 from .measurement_source import MeasurementSource, resolve_measurement_source
@@ -91,7 +93,8 @@ def measure_chart_definition(
         scope = arguments.get("observation_scope")
         prepared = _prepare_source(source, scope)
         try:
-            sensor_result = normalized_adapters[chart_type](prepared)
+            with shared_observation(prepared.rgb, prepared.observation_mask):
+                sensor_result = normalized_adapters[chart_type](prepared)
         except ToolFailure:
             raise
         except Exception:
@@ -99,7 +102,7 @@ def measure_chart_definition(
         if not isinstance(sensor_result, MeasurementSensorResult):
             raise ToolFailure("invalid_measurement_result", "图表观察结果不符合统一合同。")
 
-        result = MeasurementResultV2(
+        result = MeasurementResult(
             chart_type=chart_type,
             source_kind=source.source_kind,
             source_id=source.source_id,
@@ -111,15 +114,20 @@ def measure_chart_definition(
             confidence=sensor_result.confidence,
             warnings=sensor_result.warnings,
             truncated=sensor_result.truncated,
+            issues=sensor_result.issues,
+            evidence=sensor_result.evidence,
+            calibrations=sensor_result.calibrations,
+            value_provenance=sensor_result.value_provenance,
         )
-        issue = validate_measurement_result(result)
+        supported_result = build_axis_support(result.to_dict(), scope)
+        issue = validate_measurement_result(supported_result)
         if issue is not None:
             raise ToolFailure(
                 "invalid_measurement_result",
                 "图表观察结果未通过统一合同校验。",
                 field_path=issue.field_path or None,
             )
-        return result.to_dict()
+        return supported_result
 
     return ToolDefinition(
         name="measure_chart",
@@ -127,11 +135,12 @@ def measure_chart_definition(
             "对已授权的 Attachment 或 Panel 执行一次明确家族的图表视觉观察。必须提供 chart_type：bar、line、scatter、pie、area、"
             "histogram、box_plot、radar、heatmap 或 treemap；气泡图归入 scatter，甜甜圈图归入 pie。"
             "家族由 Agent 根据用户描述、当前视觉上下文或 load_image 后观察结果选择；本工具不调用模型、不分类、不改选家族，也不自动重试。"
-            "结果是保留原图像素坐标与不确定性的候选证据，不会自动成为 ChartSpec。未校准的数值保持 null；partial、unsupported、警告和截断情况由 Agent 决定后续动作。"
+            "结果是保留原图像素坐标与不确定性的候选证据，不会自动成为 ChartSpec。非空数值带 value_provenance，coverage 描述实际范围，issues 保留缺口与冲突；未校准的数值保持 null；partial、unsupported、警告和截断情况由 Agent 决定后续动作。"
             "可选 observation_scope 使用来源内 0–1000 归一化多边形，include 取并集、exclude 优先扣除；无效或无可观察像素时失败，不会扩大到全图。"
+            '示例：{"include":[[[100,100],[900,100],[900,900],[100,900]]],"exclude":[[[700,100],[900,100],[900,250],[700,250]]] }。'
         ),
         parameters_schema=MEASURE_CHART_PARAMETERS_SCHEMA,
-        result_schema=MEASUREMENT_RESULT_V2_SCHEMA,
+        result_schema=MEASUREMENT_RESULT_SCHEMA,
         replay_effect=ReplayEffect.REPLAY_SAFE,
         handler=measure,
     )

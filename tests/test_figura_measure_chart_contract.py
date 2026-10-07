@@ -14,8 +14,8 @@ from figura.tools.implementations.measure_chart import (
 )
 from figura.tools.implementations.measurement_source import MeasurementSource
 from figura.tools.measurements.contracts import (
-    MEASUREMENT_RESULT_V2_SCHEMA,
-    MeasurementResultV2,
+    MEASUREMENT_RESULT_SCHEMA,
+    MeasurementResult,
     MeasurementSensorResult,
     validate_measurement_result,
 )
@@ -58,7 +58,7 @@ def _observations(chart_type: ChartType) -> dict[str, object]:
     raise AssertionError(chart_type)
 
 
-def _result(chart_type: ChartType, **overrides: object) -> MeasurementResultV2:
+def _result(chart_type: ChartType, **overrides: object) -> MeasurementResult:
     values: dict[str, object] = {
         "chart_type": chart_type,
         "source_kind": "attachment",
@@ -70,12 +70,12 @@ def _result(chart_type: ChartType, **overrides: object) -> MeasurementResultV2:
         "confidence": {"overall": 0.0, "geometry": 0.0, "calibration": 0.0, "association": 0.0},
     }
     values.update(overrides)
-    return MeasurementResultV2(**values)  # type: ignore[arg-type]
+    return MeasurementResult(**values)  # type: ignore[arg-type]
 
 
 def test_chart_measurement_schemas_are_valid_and_require_explicit_family() -> None:
     validate_schema_definition(MEASURE_CHART_PARAMETERS_SCHEMA, require_object=True)
-    validate_schema_definition(MEASUREMENT_RESULT_V2_SCHEMA, require_object=True)
+    validate_schema_definition(MEASUREMENT_RESULT_SCHEMA, require_object=True)
 
     base = {"source_kind": "attachment", "source_id": "att-1", "chart_type": "heatmap"}
     assert validate_instance(base, MEASURE_CHART_PARAMETERS_SCHEMA) is None
@@ -93,7 +93,7 @@ def test_measurement_result_has_one_closed_observation_shape_for_each_family(cha
     result = _result(chart_type)
 
     assert validate_measurement_result(result) is None
-    assert validate_instance(result.to_dict(), MEASUREMENT_RESULT_V2_SCHEMA) is None
+    assert validate_instance(result.to_dict(), MEASUREMENT_RESULT_SCHEMA) is None
 
 
 def test_measurement_result_rejects_mismatched_family_unknown_fields_and_bad_status() -> None:
@@ -129,7 +129,7 @@ def test_measurement_result_checks_source_coordinate_frame_and_pixel_bounds() ->
     out_of_bounds = _result(ChartType.PIE, observations={**_observations(ChartType.PIE), "center_px": [21, 10]})
     bad_rect = _result(
         ChartType.TREEMAP,
-        observations={"nodes": [{"id": "n", "parent_id": None, "label": None, "bounds_px": {"x": 15, "y": 2, "width": 6, "height": 4}, "value": None, "area_ratio": 1.0}]},
+        observations={"nodes": [{"id": "n", "parent_id": None, "role": "leaf", "area_ratio_basis": "root_plot", "area_ratio_parent_id": None, "label": None, "bounds_px": {"x": 15, "y": 2, "width": 6, "height": 4}, "value": None, "area_ratio": 1.0}]},
     )
 
     assert validate_measurement_result(wrong_frame).code == "coordinate_frame_mismatch"

@@ -1,0 +1,98 @@
+{
+  "case_id": "scatter",
+  "image": "single/scatter.png",
+  "figure": {
+    "schema_version": 2,
+    "title": "",
+    "layout": {
+      "columns": 1
+    },
+    "charts": [
+      {
+        "chart_id": "scatter",
+        "chart_spec": {
+          "schema_version": 2,
+          "metadata": {
+            "chart_type": "scatter",
+            "title": "广告投入与订单转化",
+            "source": "Figura 示例数据",
+            "note": "气泡大小表示投放规模"
+          },
+          "coordinate_system": {
+            "kind": "cartesian",
+            "x_axis": {
+              "kind": "numeric",
+              "label": "投入金额（千元）"
+            },
+            "y_axis": {
+              "kind": "numeric",
+              "label": "订单数（百单）"
+            }
+          },
+          "dataset": {
+            "series": [
+              {
+                "id": "search",
+                "label": "搜索广告",
+                "points": [
+                  {
+                    "x": 12,
+                    "y": 18,
+                    "size": 2
+                  },
+                  {
+                    "x": 18,
+                    "y": 25,
+                    "size": 3
+                  },
+                  {
+                    "x": 24,
+                    "y": 31,
+                    "size": 5
+                  },
+                  {
+                    "x": 29,
+                    "y": 38,
+                    "size": 7
+                  },
+                  {
+                    "x": 36,
+                    "y": 43,
+                    "size": 9
+                  }
+                ]
+              },
+              {
+                "id": "social",
+                "label": "社交广告",
+                "points": [
+                  {
+                    "x": 10,
+                    "y": 15,
+                    "size": 2
+                  },
+                  {
+                    "x": 17,
+                    "y": 23,
+                    "size": 4
+                  },
+                  {
+                    "x": 25,
+                    "y": 34,
+                    "size": 6
+                  },
+                  {
+                    "x": 32,
+                    "y": 39,
+                    "size": 8
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "measurement_refs": []
+      }
+    ]
+  }
+}

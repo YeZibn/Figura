@@ -14,7 +14,19 @@ def measure_treemap(image: PreparedMeasurementImage) -> MeasurementSensorResult:
     height, width = rgb.shape[:2]
     ocr = recognize_text(rgb, image.observation_mask) if image.observation_mask is not None else recognize_text(rgb)
     regions, truncated = visible_color_regions(image)
+    groups = _visible_groups(image, ocr.snippets, regions)
+    regions = [*regions,*groups]
     plot_area = enclosing_plot_area(regions, width, height)
+    root_label = None
+    if plot_area is not None and len(groups)>=2:
+        center_x = plot_area["x"]+plot_area["width"]/2
+        candidates = [s for s in ocr.snippets if
+            abs(s.bbox_px[0]+s.bbox_px[2]/2-center_x) <= plot_area["width"]*.15 and
+            0 < plot_area["y"]-(s.bbox_px[1]+s.bbox_px[3]/2) <= 35]
+        if len(candidates)==1:
+            root_label = candidates[0]
+            regions.append(ColorRegion(plot_area["x"],plot_area["y"],plot_area["width"],plot_area["height"],
+                plot_area["width"]*plot_area["height"],"#ffffff",1.0))
     if not regions or plot_area is None:
         return MeasurementSensorResult(
             status="no_evidence",
@@ -26,6 +38,16 @@ def measure_treemap(image: PreparedMeasurementImage) -> MeasurementSensorResult:
     nodes = []
     labels: list[tuple[str | None, float | None]] = [matched_label(region, ocr.snippets) for region in regions]
     parent_indices = [_parent_index(regions, index) for index in range(len(regions))]
+    if root_label is not None:
+        labels[-1] = (root_label.text,root_label.confidence)
+        # The root spans the observed grouped plot, including equal-size groups.
+        parent_indices = [len(regions)-1 if p is None and i!=len(regions)-1 else p for i,p in enumerate(parent_indices)]
+    for index, region in enumerate(regions):
+        if index in parent_indices and index!=len(regions)-1:
+            header = [s for s in ocr.snippets if region.left <= s.bbox_px[0]+s.bbox_px[2]/2 <= region.right and
+                region.top <= s.bbox_px[1]+s.bbox_px[3]/2 <= region.top+region.height*.18]
+            if len(header)==1:
+                labels[index] = (header[0].text,header[0].confidence)
     for index, region in enumerate(regions):
         parent_index = parent_indices[index]
         denominator = (
@@ -42,6 +64,9 @@ def measure_treemap(image: PreparedMeasurementImage) -> MeasurementSensorResult:
                 "bounds_px": region.bounds_px,
                 "value": None,
                 "area_ratio": round(area_ratio, 6),
+                "role": "group" if index in parent_indices else "leaf",
+                "area_ratio_basis": "parent_plot" if parent_index is not None else "root_plot",
+                "area_ratio_parent_id": f"node_{parent_index + 1}" if parent_index is not None else None,
             }
         )
 
@@ -100,3 +125,31 @@ def _parent_index(regions: list[ColorRegion], child_index: int) -> int | None:
 
 def _clamp(value: float) -> float:
     return max(0.0, min(1.0, float(value)))
+
+
+def _visible_groups(image, snippets, leaves):
+    """Recover sparse enclosing contours with filled title bands and children."""
+    from .colors import series_palette, color_mask, hex_color
+    from .pie import _components
+    groups = []
+    for color in series_palette(image.rgb,limit=512):
+        mask = color_mask(image.rgb,color,tolerance=3)
+        if image.observation_mask is not None:
+            mask &= image.observation_mask
+        for component in _components(mask,20):
+            x,y,w,h = component["bbox"]
+            if w<30 or h<30 or component["area"]/(w*h) >= .42:
+                continue
+            inside = [leaf for leaf in leaves if x<=leaf.left and y<=leaf.top and x+w>=leaf.right and y+h>=leaf.bottom]
+            if len(inside)<2:
+                continue
+            upper = mask[y:y+max(3,int(h*.18)),x:x+w]
+            if np.count_nonzero(upper.sum(axis=1)>=w*.7)<4:
+                continue
+            header = [s for s in snippets if x<=s.bbox_px[0]+s.bbox_px[2]/2<=x+w and y<=s.bbox_px[1]+s.bbox_px[3]/2<=y+h*.18]
+            if len(header)!=1:
+                continue
+            if any(abs(x-r.left)<=2 and abs(y-r.top)<=2 and abs(w-r.width)<=2 and abs(h-r.height)<=2 for r in groups):
+                continue
+            groups.append(ColorRegion(x,y,w,h,component["area"],hex_color(color),1.0))
+    return groups

@@ -454,10 +454,13 @@ def _associate_labels(
     radius = float(region["radius_px"])
     candidates: dict[int, list[tuple[float, float, str]]] = {item["id"]: [] for item in sectors}
     for snippet in snippets:
+        from .cartesian import parse_numeric_text
+        if parse_numeric_text(snippet.text) is not None:
+            continue
         left, top, width, height = snippet.bbox_px
         x, y = left + width / 2.0, top + height / 2.0
         distance = hypot(x - center_x, y - center_y)
-        if distance > radius * 0.92:
+        if distance > radius * 1.65 or distance < radius * 0.15:
             continue
         angle = float(np.degrees(np.arctan2(x - center_x, center_y - y)) % 360.0)
         for sector in sectors:

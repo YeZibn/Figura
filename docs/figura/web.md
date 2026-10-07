@@ -1,10 +1,10 @@
 # Web：Local Gateway 与 React Figura
 
-> 更新日期：2026-10-06。[返回系统总览](../figura-implementation-overview.md)。范围：当前 `src/figura/gateway/`、`src/figura/bootstrap.py`、`frontend/src/api/figura/` 与 `frontend/src/FiguraApp.tsx` 实现；附件和 Panel 源模型归[Sources](sources.md)，Agent 派生清单归[Agent](agent.md)，本篇拥有 Web DTO 与公开路由合同。主规格见 [Gateway](../../openspec/figura/openspec/specs/figura-web-gateway/spec.md) 和 [React Client](../../openspec/figura/openspec/specs/figura-web-client/spec.md)。`connect-figura-web-frontend`、`add-figura-panel-image-tools`、`add-figura-cartesian-chart-measurements`、`add-figura-scoped-chart-observation`、`add-figura-chart-rendering` 与模块结构调整 change 均已归档。
+> 更新日期：2026-10-07。[返回系统总览](../figura-implementation-overview.md)。范围：当前 `src/figura/gateway/`、`src/figura/bootstrap.py`、`frontend/src/api/figura/` 与 `frontend/src/FiguraApp.tsx` 实现；附件和 Panel 源模型归[Sources](sources.md)，Agent 派生清单归[Agent](agent.md)，本篇拥有 Web DTO 与公开路由合同。主规格见 [Gateway](../../openspec/figura/openspec/specs/figura-web-gateway/spec.md) 和 [React Client](../../openspec/figura/openspec/specs/figura-web-client/spec.md)。`connect-figura-web-frontend`、`add-figura-panel-image-tools`、`add-figura-cartesian-chart-measurements`、`add-figura-scoped-chart-observation`、`add-figura-chart-rendering` 与模块结构调整 change 均已归档。
 
 ## 1. 职责与边界
 
-Local Gateway 是 Python 进程内的 HTTP/SSE 边界，不是第二套 Session 或 Run 存储。`bootstrap.py` 负责组装并注入 Runtime、Sources、Agent、Provider 与 Tools；`gateway/application.py` 负责 HTTP 请求处理和安全投影。它把 JSON/图片请求交给 Runtime、Sources、Agent 图像读取器与 ProviderFactory，再把有限的 Session、Run、事件、附件、已提交 Panel、ChartFigure 渲染摘要和 Run 工具时间线 DTO 返回给浏览器。Run 创建持久化后由有界 Dispatcher 异步提交给既有 Agent；Gateway handler 不直接请求模型。当前工作树 Gateway Registry 为 `figura-web-v9`，注册统一 `measure_chart` 与其他八个图像、历史和绘图工具；启动前检查并拒绝仍绑定 v8 的活动 Run。PNG 和成功 OCR/十类测量观察图通过只读内容路由懒加载，测量与渲染仍没有独立前端操作 API。工具时间线是基于 Runtime 已提交 ToolCall、Attempt、Result 事实构造的只读投影，不增加持久表或执行控制入口。
+Local Gateway 是 Python 进程内的 HTTP/SSE 边界，不是第二套 Session 或 Run 存储。`bootstrap.py` 负责组装并注入 Runtime、Sources、Agent、Provider 与 Tools；`gateway/application.py` 负责 HTTP 请求处理和安全投影。它把 JSON/图片请求交给 Runtime、Sources、Agent 图像读取器与 ProviderFactory，再把有限的 Session、Run、事件、附件、已提交 Panel、ChartFigure 渲染摘要和 Run 工具时间线 DTO 返回给浏览器。Run 创建持久化后由有界 Dispatcher 异步提交给既有 Agent；Gateway handler 不直接请求模型。当前工作树 Gateway Registry 为 `figura-web-v10`，注册统一 `measure_chart` 与其他八个图像、历史和绘图工具；启动前检查并拒绝仍绑定 v9 的活动 Run。PNG 和成功 OCR/十类测量观察图通过只读内容路由懒加载，测量与渲染仍没有独立前端操作 API。离线测量回归由仓库脚本执行，不提供 Gateway/Web 评测工作区。工具时间线是基于 Runtime 已提交 ToolCall、Attempt、Result 事实构造的只读投影，不增加持久表或执行控制入口。
 
 React Figura mode 通过 `FiguraClient` 负责 HTTP/SSE，再由 `FiguraWorkspaceApi` 映射到现有工作区协议和共享组件。React 组件不直接访问 Gateway；ChartAgent 与 Mock client 模式仍由其原有客户端提供。此边界目前是本地网页接入，没有 Tauri shell 接入。
 
@@ -88,7 +88,7 @@ Gateway 的 `FiguraSessionDeletion` 是跨 Runtime/Sources 的协调服务，没
 | `GET /sessions/{sessionId}/runs/{runId}/history?afterSequence=N` | 可选非负整数 `afterSequence`，默认 `0` | `FiguraRunHistoryDto` | 只返回同 Session Run 的安全事件 |
 | `GET /sessions/{sessionId}/runs/{runId}/events?afterSequence=N` | 可选非负整数游标，默认 `0` | `text/event-stream` | 按持久事件序号补发和跟随；终态后关闭 |
 
-Gateway 拒绝不在明确白名单中的浏览器 Origin；Origin guard 对无 Origin 的 GET/HEAD 放行，其他无 Origin 请求不作为浏览器写操作放行。当前 API 已提供 Session 整体删除，提供 Run 协作停止，不提供 Run retry/resume、评测工作区、测量或图表渲染操作接口。工具时间线、来源/观察图、Panel 与 ChartFigure PNG 路由均为只读；不存在从网页启动、重试或修改工具调用的接口。
+Gateway 拒绝不在明确白名单中的浏览器 Origin；Origin guard 对无 Origin 的 GET/HEAD 放行，其他无 Origin 请求不作为浏览器写操作放行。当前 API 已提供 Session 整体删除，提供 Run 协作停止，不提供 Run retry/resume、评测工作区、测量或图表渲染操作接口。离线测量回归只通过仓库 CLI 执行；工具时间线、来源/观察图、Panel 与 ChartFigure PNG 路由均为只读；不存在从网页启动、重试或修改工具调用的接口。
 
 前端接口是 TypeScript 调用合同而非持久模型：`FiguraClient` 封装 HTTP/SSE 与 DTO，`FiguraWorkspaceApi` 将结果映射到兼容工作区协议，组件只调用后者。完整方法形状如下；其中 `Session`、`SessionData`、`Attachment`、`RunHandle`、`RunHistory`、`AgentRunEvent` 和 `RunSubscription` 继续使用现有前端协议类型；ChartRenderSummary 是 Figura Run 投影中的只读摘要。
 
@@ -358,7 +358,7 @@ Gateway 错误 envelope 由 application 生成，客户端把它转换成 `Figur
 | React client、Panel gallery、Run tool timeline 与工作区映射 | [Figura client](../../frontend/src/api/figura/client.ts)、[workspace adapter](../../frontend/src/api/figura/workspace.ts)、[Web DTO types](../../frontend/src/api/figura/types.ts)、[FiguraApp](../../frontend/src/FiguraApp.tsx)、[PanelGallery](../../frontend/src/components/figura/PanelGallery.tsx)、[生成图 Gallery](../../frontend/src/components/figura/ChartRenderGallery.tsx)、[共享大图预览](../../frontend/src/components/preview.tsx)、[ToolTimeline](../../frontend/src/components/figura/ToolTimeline.tsx)、[timeline view model](../../frontend/src/domain/figura/timeline.ts)、[safe projection](../../src/figura/gateway/timeline_projection.py) | [Web client 主规格](../../openspec/figura/openspec/specs/figura-web-client/spec.md)、[Gateway 主规格](../../openspec/figura/openspec/specs/figura-web-gateway/spec.md) |
 | 本地双进程 Launcher | [dev-figura.mjs](../../frontend/scripts/dev-figura.mjs)、[Gateway entrypoint](../../src/figura/gateway/__main__.py) | [Web client 主规格](../../openspec/figura/openspec/specs/figura-web-client/spec.md) |
 
-Web Gateway 投影运行输入/最终答案、安全生命周期、已提交 Panel metadata、上下文估算数字和有限的工具时间线摘要；它不能作为 Agent 完整 Memory、Provider 内部响应或工具审计的读取接口。工具时间线、Session 删除、生成图大图/下载以及本地上下文估算相关 change 均已归档；上下文估算的 Web DTO 增量已同步到主规格和本页文档，记录见[归档设计](../../openspec/figura/openspec/changes/archive/2026-10-05-add-local-context-token-estimation/design.md)。PNG 渲染和预览已实现；来源证据、独立持久 ChartSpec、验证/发布和 Evaluation 的目标状态见[系统总览](../figura-implementation-overview.md#4-规划能力与边界)。
+Web Gateway 投影运行输入/最终答案、安全生命周期、已提交 Panel metadata、上下文估算数字和有限的工具时间线摘要；它不能作为 Agent 完整 Memory、Provider 内部响应或工具审计的读取接口。工具时间线、Session 删除、生成图大图/下载以及本地上下文估算相关 change 均已归档；上下文估算的 Web DTO 增量已同步到主规格和本页文档，记录见[归档设计](../../openspec/figura/openspec/changes/archive/2026-10-05-add-local-context-token-estimation/design.md)。PNG 渲染和预览已实现；离线测量回归存在，但 Web 没有评测入口；来源证据、独立持久 ChartSpec、生成图验证/发布和端到端 Agent Evaluation 的目标状态见[系统总览](../figura-implementation-overview.md#4-规划能力与边界)。
 
 ### 协作停止与客户端生命周期
 

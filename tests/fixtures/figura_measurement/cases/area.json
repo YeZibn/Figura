@@ -1,0 +1,94 @@
+{
+  "case_id": "area",
+  "image": "single/area.png",
+  "figure": {
+    "schema_version": 2,
+    "title": "",
+    "layout": {
+      "columns": 1
+    },
+    "charts": [
+      {
+        "chart_id": "area",
+        "chart_spec": {
+          "schema_version": 2,
+          "metadata": {
+            "chart_type": "area",
+            "title": "不同渠道访问量变化",
+            "source": "Figura 示例数据",
+            "note": "单位：千次 · 堆叠面积"
+          },
+          "coordinate_system": {
+            "kind": "cartesian",
+            "x_axis": {
+              "kind": "categorical",
+              "label": "日期"
+            },
+            "y_axis": {
+              "kind": "numeric",
+              "label": "访问量"
+            }
+          },
+          "dataset": {
+            "stacking": "stacked",
+            "series": [
+              {
+                "id": "web",
+                "label": "网页",
+                "points": [
+                  {
+                    "x": "周一",
+                    "y": 28
+                  },
+                  {
+                    "x": "周二",
+                    "y": 32
+                  },
+                  {
+                    "x": "周三",
+                    "y": 36
+                  },
+                  {
+                    "x": "周四",
+                    "y": 34
+                  },
+                  {
+                    "x": "周五",
+                    "y": 43
+                  }
+                ]
+              },
+              {
+                "id": "app",
+                "label": "移动端",
+                "points": [
+                  {
+                    "x": "周一",
+                    "y": 22
+                  },
+                  {
+                    "x": "周二",
+                    "y": 25
+                  },
+                  {
+                    "x": "周三",
+                    "y": 29
+                  },
+                  {
+                    "x": "周四",
+                    "y": 33
+                  },
+                  {
+                    "x": "周五",
+                    "y": 39
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "measurement_refs": []
+      }
+    ]
+  }
+}

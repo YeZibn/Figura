@@ -1,6 +1,6 @@
 # Agent：Run 决策与编排
 
-> 更新日期：2026-10-06。[返回总览](../figura-implementation-overview.md)。本篇说明 Agent 编排及其调用期派生运行态；Provider 与 Tool 的完整字段分别见[Provider](provider.md)和[Tool](tools.md)，附件和 Panel 持久模型见[Sources](sources.md)，Run 执行事实与摘要检查点见[Run Runtime](runtime.md)，规范历史和来源检索见[Session Memory](memory.md)，网页调用和公开投影见[Web 边界](web.md)。
+> 更新日期：2026-10-07。[返回总览](../figura-implementation-overview.md)。本篇说明 Agent 编排及其调用期派生运行态；Provider 与 Tool 的完整字段分别见[Provider](provider.md)和[Tool](tools.md)，附件和 Panel 持久模型见[Sources](sources.md)，Run 执行事实与摘要检查点见[Run Runtime](runtime.md)，规范历史和来源检索见[Session Memory](memory.md)，网页调用和公开投影见[Web 边界](web.md)。
 
 ## 1. 职责与边界
 
@@ -100,7 +100,7 @@ flowchart LR
 | `ProviderRequest`、`ProviderResponse` | [Provider](provider.md#4-完整模型字段) | 组装请求、消费规范化结果；字段合同由 Provider 边界定义 |
 | `ToolDefinition`、`ToolInvocation`、`ToolExecutionResult` | [Tool](tools.md#4-完整模型字段) | 投影可用工具、提交调用、消费结果 |
 
-资源目录与内容均为 Agent 派生状态 dataclass，只在调用期重建，不是独立持久事实。Runtime 仍拥有 Run 生命周期、完整工具调用/尝试/结果事实；Sources 拥有附件/Panel 元数据和图像文件。网页创建 Run 后由 Gateway Dispatcher 调度。当前工作树 Gateway Registry 为 `figura-web-v9`，按序注册九个图像、历史、OCR、测量和画布工具；图表测量只有 `measure_chart` 一个入口，结果由顶层 `chart_type` 选择十类 v2 观察结构。启动时仍绑定 v8 的活动 Run 会阻止 v9 激活；旧事实不会被转换为 v2 类型化资源。资源模型详见本篇第 4 节与[RunExecutionResources 主规格](../../openspec/figura/openspec/specs/run-execution-resources/spec.md)。画布、渲染及历史读取工具的完整输入/输出分别见[画布组装](tools.md#7-图表画布组装工具)、[图表渲染](tools.md#8-图表渲染工具)和[Session 历史读取](tools.md#9-session-历史读取工具)。
+资源目录与内容均为 Agent 派生状态 dataclass，只在调用期重建，不是独立持久事实。Runtime 仍拥有 Run 生命周期、完整工具调用/尝试/结果事实；Sources 拥有附件/Panel 元数据和图像文件。网页创建 Run 后由 Gateway Dispatcher 调度。当前工作树 Gateway Registry 为 `figura-web-v10`，按序注册九个图像、历史、OCR、测量和画布工具；图表测量只有 `measure_chart` 一个入口，成功结果使用 schema v3，并由顶层 `chart_type` 选择十类观察结构。启动时仍绑定 v9 的活动 Run 会阻止 v10 激活；schema_version 2 的历史测量事实保留在 Runtime，但不转换为当前类型化资源。资源模型详见本篇第 4 节与[RunExecutionResources 主规格](../../openspec/figura/openspec/specs/run-execution-resources/spec.md)。画布、渲染及历史读取工具的完整输入/输出分别见[画布组装](tools.md#7-图表画布组装工具)、[图表渲染](tools.md#8-图表渲染工具)和[Session 历史读取](tools.md#9-session-历史读取工具)。
 
 ## 4. RunExecutionState 资源合同与完整字段
 
@@ -170,12 +170,12 @@ Sources 附件元数据在 Run 资源目录中的只读引用；图片字节仍�
 
 ### `MeasurementContent`
 
-单次 `measure_chart` 调用的完整只读资源，覆盖十类图表观察。**字段流转：**`RunExecutionStateService` 从 ToolCallFact、ToolAttemptStartedFact 和 ToolResultFact 重建；调用/尝试/结果事实是权威；Agent 请求索引、ImageReader、`assemble_chart_figure` 的引用校验和 Web 的授权观察图读取消费该资源；完整结果另经 Memory ToolMessage 进入 Provider 上下文，Web 不公开原始测量 JSON。结果保留 `measure_chart` v2 的完整类型化 family observations；它保留重复测量，不把结果折叠为图像级状态。
+单次 `measure_chart` 调用的完整只读资源，覆盖十类图表观察。**字段流转：**`RunExecutionStateService` 从 ToolCallFact、ToolAttemptStartedFact 和 ToolResultFact 重建；调用/尝试/结果事实是权威；Agent 请求索引、ImageReader、`assemble_chart_figure` 的引用校验和 Web 的授权观察图读取消费该资源；完整结果另经 Memory ToolMessage 进入 Provider 上下文，Web 不公开原始测量 JSON。当前结果保留 schema v3 的完整类型化 family observations；schema_version 2 的历史结果按冻结合同读取但不生成 `MeasurementContent`。重复测量仍分别保留，不折叠为图像级状态。
 
 | 完整字段路径 | 类型 | 构造默认 | 含义、约束与流转 |
 |---|---|---|---|
 | `MeasurementContent.attempt_id` | `str` | 必传 | 与匹配 ToolResultFact 对应的已启动工具尝试 ID |
-| `MeasurementContent.tool_name` | `str` | 必传 | 当前只接受 `measure_chart`；成功结果必须通过 v2 family union 校验，且 `result.chart_type` 与调用参数一致 |
+| `MeasurementContent.tool_name` | `str` | 必传 | 当前只接受 `measure_chart`；成功结果必须通过 schema v3 family union 校验，且 `result.chart_type` 与调用参数一致 |
 | `MeasurementContent.source_ref` | `ImageResourceRef \| None` | 必传，可空 | 被测 Attachment/Panel 引用；成功时必有且须授权，失败时不授权图像读取 |
 | `MeasurementContent.observation_scope` | `Mapping[str, object] \| None` | 必传，可空 | 规范化 include/exclude polygon；成功无范围表示整图，失败无效范围为空；完整合同归 Tools |
 | `MeasurementContent.outcome` | `ToolOutcome` | 必传 | 仅 `succeeded` 或 `failed`；决定 result/error 互斥形状 |
@@ -252,7 +252,7 @@ Sources 附件元数据在 Run 资源目录中的只读引用；图片字节仍�
 
 ## 5. 不变量、状态与依据
 
-资源目录是调用期派生视图，不扩展 Runtime RunState，也没有独立持久化。规范历史仍来自同 Session 已提交 Run 事实；普通请求可用摘要替代已覆盖消息，提示索引只列出与当前投影相关的类型化资源引用和精简状态，不复制完整 OCR、测量、Figure 或 render JSON。原图仅在最新已提交工具批次成功 `load_image` 后回看；OCR/`measure_chart` 标注根据已提交结果临时重建；ChartRender PNG 在 Sources 读取并校验。OCR 与十类 `measure_chart` family 共用 Tools 所有的可见像素解码；范围只影响本次观察输入，不改写 Sources 原图或源坐标系。跨 Session、目标 Run 前缀外、失败观察或缺失/损坏文件不能授予图像访问；Gateway 时间线仅允许读取同 Session 下成功且来源可解析的 OCR/测量观察图，且不保存重建图像。旧测量事实保留在原始 Run 历史，但不转成 v2 `MeasurementContent`。所有 Agent 请求所需图像与 Provider 限制在 attempt claim 前校验。代码：[AgentExecutor](../../src/figura/agent/executor.py)、[AgentRequestBuilder](../../src/figura/agent/request.py)、[资源合同](../../src/figura/agent/execution_resources.py)、[资源重建](../../src/figura/agent/execution_state.py)、[统一图片读取](../../src/figura/agent/execution_images.py)、[Run Dispatcher](../../src/figura/gateway/dispatcher.py)；统一测量与资源合同见[图表家族测量主规格](../../openspec/figura/openspec/specs/chart-family-measurement/spec.md)和[Run 资源主规格](../../openspec/figura/openspec/specs/run-execution-resources/spec.md)。
+资源目录是调用期派生视图，不扩展 Runtime RunState，也没有独立持久化。规范历史仍来自同 Session 已提交 Run 事实；普通请求可用摘要替代已覆盖消息，提示索引只列出与当前投影相关的类型化资源引用和精简状态，不复制完整 OCR、测量、Figure 或 render JSON。原图仅在最新已提交工具批次成功 `load_image` 后回看；OCR/`measure_chart` 标注根据已提交结果临时重建；ChartRender PNG 在 Sources 读取并校验。OCR 与十类 `measure_chart` family 共用 Tools 所有的可见像素解码；范围只影响本次观察输入，不改写 Sources 原图或源坐标系。跨 Session、目标 Run 前缀外、失败观察或缺失/损坏文件不能授予图像访问；Gateway 时间线仅允许读取同 Session 下成功且来源可解析的 OCR/测量观察图，且不保存重建图像。历史 schema_version 2 测量事实保留在原始 Run 历史，但不转成当前 schema v3 `MeasurementContent`。所有 Agent 请求所需图像与 Provider 限制在 attempt claim 前校验。代码：[AgentExecutor](../../src/figura/agent/executor.py)、[AgentRequestBuilder](../../src/figura/agent/request.py)、[资源合同](../../src/figura/agent/execution_resources.py)、[资源重建](../../src/figura/agent/execution_state.py)、[统一图片读取](../../src/figura/agent/execution_images.py)、[Run Dispatcher](../../src/figura/gateway/dispatcher.py)；统一测量与资源合同见[图表家族测量主规格](../../openspec/figura/openspec/specs/chart-family-measurement/spec.md)和[Run 资源主规格](../../openspec/figura/openspec/specs/run-execution-resources/spec.md)。
 
 四份稳定提示资产已补充六类任务目标、按需证据选择、OCR/测量不确定性、十类图表的数据表达、Figure 装配与校正、渲染回看及面向用户的限制说明；模型/工具职责和 RunExecutionState 的权威字段归属未变。[agent-react-execution 主规格](../../openspec/figura/openspec/specs/agent-react-execution/spec.md)规定稳定规则、工具目录与执行/资源索引三类基础 SYSTEM 层；启用摘要时，来源关联摘要位于资源/执行索引之前。`improve-figura-prompt-assets` 与执行策略 change 均已归档。归档记录需求演进，不代表代码已发布。
 

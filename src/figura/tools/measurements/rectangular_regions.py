@@ -47,14 +47,14 @@ def visible_color_regions(image: PreparedMeasurementImage) -> tuple[list[ColorRe
     """Find bounded near-rectangular color components without assigning data values."""
     rgb = image.rgb
     height, width = rgb.shape[:2]
-    palette = series_palette(rgb)
+    palette = series_palette(rgb, limit=MAX_MEASUREMENT_OBSERVATIONS)
     if not palette:
         return [], False
     mask_limit = image.observation_mask
     min_area = max(8, int(width * height * 0.00012))
     candidates: list[ColorRegion] = []
     for color in palette:
-        mask = color_mask(rgb, color)
+        mask = color_mask(rgb, color, tolerance=3)
         if mask_limit is not None:
             mask &= mask_limit
         for component in _components(mask, min_area):
@@ -89,7 +89,7 @@ def visible_color_regions(image: PreparedMeasurementImage) -> tuple[list[ColorRe
         if any(_overlap_ratio(candidate, known) >= 0.82 for known in unique):
             continue
         unique.append(candidate)
-    truncated = len(unique) > MAX_MEASUREMENT_OBSERVATIONS or len(palette) >= 8
+    truncated = len(unique) > MAX_MEASUREMENT_OBSERVATIONS or len(palette) >= MAX_MEASUREMENT_OBSERVATIONS
     unique = unique[:MAX_MEASUREMENT_OBSERVATIONS]
     unique.sort(key=lambda item: (item.top, item.left, item.height, item.width))
     return unique, truncated

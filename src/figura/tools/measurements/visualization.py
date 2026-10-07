@@ -14,7 +14,7 @@ def render_measurement_overlay(
     result: Mapping[str, object],
     tool_name: str,
 ) -> bytes:
-    """Draw committed v2 geometry and status labels without changing the source."""
+    """Draw committed geometry and status labels without changing the source."""
     try:
         with Image.open(BytesIO(image_bytes)) as source:
             source.load()
@@ -53,6 +53,7 @@ def render_measurement_overlay(
         if not isinstance(observations, Mapping) or not isinstance(chart_type, str):
             raise ValueError("measurement observation family is invalid")
         _draw_family(draw, chart_type, observations)
+        _draw_evidence(draw, result)
     else:
         _draw_text(draw, result)
 
@@ -106,6 +107,23 @@ def _draw_family(draw: ImageDraw.ImageDraw, chart_type: str, observations: Mappi
             _draw_rect(draw, node.get("bounds_px"), "#00a6fb", label=node.get("label") or node.get("id"))
     else:
         raise ValueError("unsupported measurement chart family")
+
+
+def _draw_evidence(draw: ImageDraw.ImageDraw, result: Mapping[str, object]) -> None:
+    """Mark the exact OCR and geometry supports retained in the committed result."""
+    color = "#ff8c00"
+    for evidence in _records(result.get("evidence")):
+        kind = evidence.get("kind")
+        if kind == "ocr":
+            _draw_rect(draw, evidence.get("bounds_px"), color)
+        elif kind == "geometry":
+            bounds = evidence.get("bounds_px")
+            if bounds is not None:
+                _draw_rect(draw, bounds, color)
+            for point in evidence.get("points_px", []) if isinstance(evidence.get("points_px"), (tuple, list)) else []:
+                if _valid_point(point):
+                    x, y = _xy(point)
+                    draw.ellipse((round(x - 3), round(y - 3), round(x + 3), round(y + 3)), outline=color, width=2)
 
 
 def _draw_bars(draw: ImageDraw.ImageDraw, observations: Mapping[str, object]) -> None:
@@ -225,6 +243,16 @@ def _draw_polyline(
     close: bool = False,
 ) -> None:
     if not isinstance(points, (tuple, list)) or len(points) < 2:
+        return
+    if any(not _valid_point(point) for point in points):
+        segment = []
+        for point in points:
+            if _valid_point(point):
+                segment.append(point)
+            else:
+                _draw_polyline(draw, segment, color, width)
+                segment = []
+        _draw_polyline(draw, segment, color, width)
         return
     coordinates = [
         tuple(int(round(value)) for value in _xy(point))

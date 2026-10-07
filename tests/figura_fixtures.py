@@ -1,6 +1,8 @@
-"""Reusable v2 contracts for Figura execution and resource tests."""
+"""Reusable measurement v3 and Charts v2 contracts for Figura tests."""
 
 from __future__ import annotations
+
+from figura.tools.measurements.contracts import measurement_counts
 
 def measurement_result(
     chart_type: str = "bar",
@@ -29,7 +31,7 @@ def measurement_result(
         "treemap": {"nodes": []},
     }
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "chart_type": chart_type,
         "source_kind": source_kind,
         "source_id": source_id,
@@ -41,6 +43,9 @@ def measurement_result(
         "confidence": {"overall": 0, "geometry": 0, "calibration": 0, "association": 0},
         "warnings": [],
         "truncated": False,
+        "coverage": {"scope_kind": "full_source", "requested_scope": None, "structure_status": "unknown",
+                     "detected_counts": measurement_counts(chart_type, observations[chart_type])},
+        "issues": [], "evidence": [], "calibrations": [], "value_provenance": [],
     }
 
 

@@ -1,0 +1,116 @@
+{
+  "provenance": "Recovered original generation data; single-image PNG hashes reproduce exactly. Gallery verification follows generation.",
+  "diagnostic_scope": {
+    "image_count": 13,
+    "final_answers": 10,
+    "manually_interrupted": 3,
+    "extra_histogram_provider_402": 1,
+    "accuracy_claim": false
+  },
+  "images": [
+    {
+      "image": "gallery/01_sales_and_market.png",
+      "sha256": "729764dce1dcae14412674c02ef6261b13f863ccbbb73fc9f7ab5ecc0c98ed5f",
+      "dimensions": [
+        1280,
+        1002
+      ]
+    },
+    {
+      "image": "gallery/02_trends_and_distributions.png",
+      "sha256": "e0272615659ba9278f23e4d1b4e51d2c5cff6e96837126b35a7b408474436aff",
+      "dimensions": [
+        1280,
+        1002
+      ]
+    },
+    {
+      "image": "gallery/03_operations_and_revenue.png",
+      "sha256": "6759baf1e5e41b52bfa44fc3bdc486dfab237b63ab5826a5518508ba012c111a",
+      "dimensions": [
+        1280,
+        522
+      ]
+    },
+    {
+      "image": "single/area.png",
+      "sha256": "0d5f0e552d3c770358ae6ee196c3c5d81f6221075aa669e930f4cbac21d168fd",
+      "dimensions": [
+        640,
+        480
+      ]
+    },
+    {
+      "image": "single/bar.png",
+      "sha256": "79f04312fcd4430f41f4c53b9d808d2c7e3b094c630d8b0745389ea32eca9e36",
+      "dimensions": [
+        640,
+        480
+      ]
+    },
+    {
+      "image": "single/box_plot.png",
+      "sha256": "00171c79bc78f405fe716ace12229fa4407d88e4b7f0829f789a00f448bfca60",
+      "dimensions": [
+        640,
+        480
+      ]
+    },
+    {
+      "image": "single/heatmap.png",
+      "sha256": "460331e0383b54f6ef0376c652af973afb040ecd268db71f13f3564b1829f5d2",
+      "dimensions": [
+        640,
+        480
+      ]
+    },
+    {
+      "image": "single/histogram.png",
+      "sha256": "4dbc70aebe0f7b8c1c63d6557242eb8a5098ae22622fc4dfeaf9a539f1405587",
+      "dimensions": [
+        640,
+        480
+      ]
+    },
+    {
+      "image": "single/line.png",
+      "sha256": "867aa8790ad97e2a2504866ee9ea432894304b8f89376715744aad5445904d29",
+      "dimensions": [
+        640,
+        480
+      ]
+    },
+    {
+      "image": "single/pie.png",
+      "sha256": "ef48f41300798196f83c293e0e56d38d2f7c3951b7f861c0928a2a7b5fd2aaf2",
+      "dimensions": [
+        640,
+        480
+      ]
+    },
+    {
+      "image": "single/radar.png",
+      "sha256": "dfeeaa68ba46d13d8a803e9df5793d4ceb49c627d1ab63de6d122f55ed39e497",
+      "dimensions": [
+        640,
+        480
+      ]
+    },
+    {
+      "image": "single/scatter.png",
+      "sha256": "51a149f98b6e6fca1a9340cf2c0ec69b14915603e637109c38ed7bae042242a3",
+      "dimensions": [
+        640,
+        480
+      ]
+    },
+    {
+      "image": "single/treemap.png",
+      "sha256": "64d44aa07ea88b348b786555bac8f7b82dd0327b0a06bca249216c4e59bcfe4b",
+      "dimensions": [
+        640,
+        480
+      ]
+    }
+  ]
+}

@@ -171,3 +171,24 @@ def test_calibrates_bar_values_and_associates_category_ticks(monkeypatch) -> Non
     assert result["bars"][0]["measure"]["value"] == pytest.approx(5.0, abs=0.01)
     assert result["bars"][0]["category_label"] == "A"
     assert result["bars"][0]["category_tick_id"] == "x_category_a"
+
+
+def test_calibrates_bars_on_both_sides_of_a_zero_baseline(monkeypatch) -> None:
+    def draw(draw_context: ImageDraw.ImageDraw) -> None:
+        draw_context.line((30, 100, 270, 100), fill="#444444", width=2)
+        draw_context.line((30, 30, 30, 170), fill="#444444", width=2)
+        draw_context.rectangle((60, 60, 95, 99), fill="#3366cc")
+        draw_context.rectangle((130, 101, 165, 140), fill="#cc4433")
+
+    snippets = (
+        OCRSnippet("tick_positive", "5", (10, 54, 12, 12), 0.96),
+        OCRSnippet("tick_zero", "0", (12, 94, 8, 12), 0.96),
+        OCRSnippet("tick_negative", "-5", (6, 134, 16, 12), 0.96),
+    )
+    monkeypatch.setattr(bar_sensor, "recognize_text", lambda *_args: OCRObservation(snippets, True))
+
+    result = _measure_bar(_png(draw))
+
+    assert len(result["bars"]) == 2
+    assert result["status"] == "measured"
+    assert sorted(bar["measure"]["value"] for bar in result["bars"]) == pytest.approx([-5.0, 5.0], abs=0.1)

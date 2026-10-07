@@ -10,6 +10,7 @@ from typing import Any
 import numpy as np
 
 from .observation_scope import contains_observed_box
+from .context import observation_context
 
 _MAX_OCR_SNIPPETS = 512
 _MAX_OCR_TEXT_LENGTH = 128
@@ -38,7 +39,16 @@ def recognize_text(
     image_rgb: np.ndarray,
     observation_mask: np.ndarray | None = None,
 ) -> OCRObservation:
-    """Return bounded OCR snippets without exposing provider-facing images."""
+    """Reuse OCR only for the exact masked source in the active invocation."""
+    context = observation_context()
+    if context is not None and image_rgb is context.rgb and observation_mask is context.mask:
+        if context.ocr is None:
+            context.ocr = _recognize_text(image_rgb, observation_mask)
+        return context.ocr
+    return _recognize_text(image_rgb, observation_mask)
+
+
+def _recognize_text(image_rgb, observation_mask=None):
     if (
         not isinstance(image_rgb, np.ndarray)
         or image_rgb.ndim != 3
@@ -113,3 +123,28 @@ def _bbox(points: Any) -> tuple[int, int, int, int] | None:
 
 def _clamp(value: float) -> float:
     return max(0.0, min(1.0, value))
+
+
+def recognize_region(image_rgb, bounds, observation_mask=None, *, scale=2):
+    """Read a local masked crop and map OCR boxes back to source coordinates."""
+    from PIL import Image
+    x, y, width, height = bounds
+    crop = image_rgb[y:y + height, x:x + width]
+    if not crop.size:
+        return ()
+    context = observation_context()
+    key = (x, y, width, height, scale)
+    if context is not None and image_rgb is context.rgb and key in context.regions:
+        return context.regions[key]
+    enlarged = np.asarray(Image.fromarray(crop).resize((width * scale, height * scale)))
+    observed = _recognize_text(enlarged)
+    snippets = []
+    for index, snippet in enumerate(observed.snippets):
+        sx, sy, sw, sh = snippet.bbox_px
+        box = (x + round(sx / scale), y + round(sy / scale), max(1, round(sw / scale)), max(1, round(sh / scale)))
+        if contains_observed_box(box, observation_mask):
+            snippets.append(OCRSnippet(f"crop_{x}_{y}_{index}", snippet.text, box, snippet.confidence))
+    result = tuple(snippets)
+    if context is not None and image_rgb is context.rgb:
+        context.regions[key] = result
+    return result

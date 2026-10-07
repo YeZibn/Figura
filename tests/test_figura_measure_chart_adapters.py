@@ -7,7 +7,7 @@ import pytest
 from PIL import Image, ImageDraw
 
 from figura.charts.chartspec.models import ChartType
-from figura.tools.measurements.contracts import MeasurementResultV2, PreparedMeasurementImage, validate_measurement_result
+from figura.tools.measurements.contracts import MeasurementResult, PreparedMeasurementImage, validate_measurement_result
 from figura.tools.measurements.family_adapters import current_chart_family_adapters
 from figura.tools.measurements.observation_scope import decode_scoped_image
 
@@ -126,10 +126,10 @@ def _prepared(chart_type: ChartType, *, donut: bool = False) -> PreparedMeasurem
         ChartType.TREEMAP,
     ],
 )
-def test_current_family_adapters_emit_a_valid_v2_result(chart_type: ChartType) -> None:
+def test_current_family_adapters_emit_a_valid_supported_result(chart_type: ChartType) -> None:
     sensor = current_chart_family_adapters()[chart_type]
     sensor_result = sensor(_prepared(chart_type))
-    result = MeasurementResultV2(
+    result = MeasurementResult(
         chart_type=chart_type,
         source_kind="attachment",
         source_id="attachment-1",
@@ -143,7 +143,8 @@ def test_current_family_adapters_emit_a_valid_v2_result(chart_type: ChartType) -
         truncated=sensor_result.truncated,
     )
 
-    assert validate_measurement_result(result) is None
+    from figura.tools.measurements.support import build_axis_support
+    assert validate_measurement_result(build_axis_support(result.to_dict())) is None
     if chart_type is ChartType.BOX_PLOT:
         groups = sensor_result.observations["groups"]
         assert len(groups) == 3

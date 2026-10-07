@@ -1,0 +1,101 @@
+{
+  "case_id": "line",
+  "image": "single/line.png",
+  "figure": {
+    "schema_version": 2,
+    "title": "",
+    "layout": {
+      "columns": 1
+    },
+    "charts": [
+      {
+        "chart_id": "line",
+        "chart_spec": {
+          "schema_version": 2,
+          "metadata": {
+            "chart_type": "line",
+            "title": "月度活跃用户趋势",
+            "source": "Figura 示例数据",
+            "note": "单位：万人"
+          },
+          "coordinate_system": {
+            "kind": "cartesian",
+            "x_axis": {
+              "kind": "categorical",
+              "label": "月份"
+            },
+            "y_axis": {
+              "kind": "numeric",
+              "label": "活跃用户"
+            }
+          },
+          "dataset": {
+            "series": [
+              {
+                "id": "actual",
+                "label": "实际用户",
+                "points": [
+                  {
+                    "x": "1月",
+                    "y": 12.4
+                  },
+                  {
+                    "x": "2月",
+                    "y": 13.1
+                  },
+                  {
+                    "x": "3月",
+                    "y": 15.7
+                  },
+                  {
+                    "x": "4月",
+                    "y": 16.2
+                  },
+                  {
+                    "x": "5月",
+                    "y": 18.6
+                  },
+                  {
+                    "x": "6月",
+                    "y": 21.3
+                  }
+                ]
+              },
+              {
+                "id": "target",
+                "label": "目标用户",
+                "points": [
+                  {
+                    "x": "1月",
+                    "y": 11.8
+                  },
+                  {
+                    "x": "2月",
+                    "y": 13.0
+                  },
+                  {
+                    "x": "3月",
+                    "y": 14.2
+                  },
+                  {
+                    "x": "4月",
+                    "y": 15.5
+                  },
+                  {
+                    "x": "5月",
+                    "y": 17.0
+                  },
+                  {
+                    "x": "6月",
+                    "y": 18.5
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "measurement_refs": []
+      }
+    ]
+  }
+}

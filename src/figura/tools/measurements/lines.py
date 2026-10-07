@@ -26,6 +26,8 @@ def measure_line_pixels(rgb: np.ndarray, observation_mask: np.ndarray | None = N
     left, top, right, bottom = bounds
     crop = rgb[top:bottom, left:right]
     palette = series_palette(crop)
+    from .layout import legend_regions, exclude_legend
+    legend_bounds = legend_regions(rgb, ocr.snippets, palette)
     legend_labels = associate_legend_labels(rgb, ocr.snippets, palette)
     warnings: list[str] = []
     if ocr.truncated:
@@ -33,16 +35,28 @@ def measure_line_pixels(rgb: np.ndarray, observation_mask: np.ndarray | None = N
     series: list[dict[str, Any]] = []
     trace_count = 0
     geometry_confidences: list[float] = []
-    for index, color in enumerate(palette, start=1):
-        mask = color_mask(crop, color)
+    masks = [
+        exclude_legend(color_mask(crop, color, palette=palette), legend_bounds, (left, top))
+        for color in palette
+    ]
+    if observation_mask is not None:
+        for mask in masks:
+            mask &= observation_mask[top:bottom, left:right]
+    markers_by_series = [_marker_centers(mask, left, top) for mask in masks]
+    for index, (color, mask, markers) in enumerate(zip(palette, masks, markers_by_series, strict=True), start=1):
         traces = _trace_fragments(mask, left, top)
         if not traces:
             continue
         trace_count += len(traces)
         if len(traces) > 1:
             warnings.append(f"series_{index} contains {len(traces)} disconnected trace fragments")
-        markers = _marker_centers(mask, left, top)
-        points = _line_points(traces, axes, markers)
+        other_markers = [
+            marker
+            for other_index, other_series in enumerate(markers_by_series)
+            if other_index != index - 1
+            for marker in other_series
+        ]
+        points = _line_points(traces, axes, markers, other_markers, mask, left, top)
         geometry_confidences.append(min(1.0, sum(len(fragment) for fragment in traces) / max(10.0, (right - left) * 0.25)))
         color_hex = hex_color(color)
         label, label_confidence = legend_labels.get(color_hex, (None, None))
@@ -106,17 +120,29 @@ def _public_plot_area(bounds: tuple[int, int, int, int]) -> dict[str, int]:
     return {"x": left, "y": top, "width": right - left, "height": bottom - top}
 
 
-def _trace_fragments(mask: np.ndarray, offset_x: int, offset_y: int) -> list[list[list[int]]]:
-    traces: list[list[list[int]]] = []
+def _trace_fragments(
+    mask: np.ndarray,
+    offset_x: int,
+    offset_y: int,
+    *,
+    simplify: bool = True,
+    x_range: tuple[int, int] | None = None,
+) -> list[list[list[float]]]:
+    traces: list[list[list[float]]] = []
     active: list[int] = []
-    for local_x in range(mask.shape[1]):
+    start_x, end_x = x_range or (0, mask.shape[1])
+    start_x = max(0, min(mask.shape[1], start_x))
+    end_x = max(start_x, min(mask.shape[1], end_x))
+    for local_x in range(start_x, end_x):
         ys = np.flatnonzero(mask[:, local_x])
         clusters = _clusters(ys)
         global_x = offset_x + local_x
         used: set[int] = set()
         next_active: list[int] = []
         for first, last in clusters:
-            center_y = int(round((first + last) / 2.0)) + offset_y
+            # Keep half-pixel centers for even-width strokes; rounding each
+            # column accumulates visible bias when a trace is interpolated.
+            center_y = (first + last) / 2.0 + offset_y
             candidates = [
                 (abs(traces[index][-1][1] - center_y) + (global_x - traces[index][-1][0]) * 1.5, index)
                 for index in active
@@ -132,7 +158,7 @@ def _trace_fragments(mask: np.ndarray, offset_x: int, offset_y: int) -> list[lis
             used.add(trace_index)
             next_active.append(trace_index)
         active = next_active
-    fragments = [_simplify(trace, 1.25) for trace in traces if len(trace) >= 3]
+    fragments = [(_simplify(trace, 1.25) if simplify else trace) for trace in traces if len(trace) >= 3]
     return [fragment for fragment in fragments if len(fragment) >= 2]
 
 
@@ -145,7 +171,7 @@ def _clusters(values: np.ndarray) -> list[tuple[int, int]]:
     return [(int(values[first]), int(values[last])) for first, last in zip(starts, ends, strict=True)]
 
 
-def _simplify(points: list[list[int]], tolerance: float) -> list[list[int]]:
+def _simplify(points: list[list[float]], tolerance: float) -> list[list[float]]:
     if len(points) <= 2:
         return points
     first, last = np.asarray(points[0], dtype=float), np.asarray(points[-1], dtype=float)
@@ -162,22 +188,43 @@ def _simplify(points: list[list[int]], tolerance: float) -> list[list[int]]:
     return _join(_simplify(points[: split + 1], tolerance), _simplify(points[split:], tolerance))
 
 
-def _join(first: list[list[int]], second: list[list[int]]) -> list[list[int]]:
+def _join(first: list[list[float]], second: list[list[float]]) -> list[list[float]]:
     return first[:-1] + second
 
 
 def _line_points(
-    traces: Sequence[Sequence[Sequence[int]]],
+    traces: Sequence[Sequence[Sequence[float]]],
     axes: Mapping[str, object],
     markers: Sequence[Sequence[float]],
+    other_markers: Sequence[Sequence[float]] = (),
+    mask: np.ndarray | None = None,
+    offset_x: int = 0,
+    offset_y: int = 0,
 ) -> list[dict[str, object]]:
-    source = "marker" if markers else "axis_tick_sample"
-    positions = markers if markers else _sample_ticks(traces, axes)
+    positions: list[tuple[Sequence[float], str]] = [(point, "marker") for point in markers]
+    for sample in _sample_ticks(traces, axes):
+        if any(abs(sample[0] - marker[0]) < 10 for marker in markers):
+            continue
+        y = sample[1]
+        occluded = any(
+            abs(sample[0] - marker[0]) <= 10 and abs(y - marker[1]) <= 12
+            for marker in other_markers
+        )
+        if occluded:
+            estimated = None
+            if mask is not None:
+                local_x = sample[0] - offset_x
+                window = (int(np.floor(local_x - 27)), int(np.ceil(local_x + 28)))
+                local_traces = _trace_fragments(mask, offset_x, offset_y, simplify=False, x_range=window)
+                estimated = _interpolate_across_marker_gap(local_traces, sample[0])
+            if estimated is not None:
+                y = estimated
+        positions.append(([sample[0], y], "axis_tick_sample"))
     points: list[dict[str, object]] = []
     x_axis, y_axis = axes.get("x"), axes.get("y")
     ticks = x_axis.get("ticks", []) if isinstance(x_axis, Mapping) else []
     x_kind = x_axis.get("kind") if isinstance(x_axis, Mapping) else "unknown"
-    for index, position in enumerate(positions, start=1):
+    for index, (position, source) in enumerate(positions, start=1):
         tick = _nearest_tick(position[0], ticks) if isinstance(ticks, list) else None
         points.append({
             "id": f"point_{index}",
@@ -192,24 +239,65 @@ def _line_points(
     return points
 
 
+def _interpolate_across_marker_gap(
+    traces: Sequence[Sequence[Sequence[float]]],
+    x: float,
+) -> float | None:
+    """Estimate an occluded vertex from the visible line segments on both sides."""
+    left_values = []
+    right_values = []
+    for trace in traces:
+        left = [point for point in trace if x - 26 <= point[0] <= x - 8]
+        right = [point for point in trace if x + 8 <= point[0] <= x + 26]
+        left_value = _fit_local_line(left, x)
+        right_value = _fit_local_line(right, x)
+        if left_value is not None:
+            left_values.append(left_value)
+        if right_value is not None:
+            right_values.append(right_value)
+    pairs = [
+        (left, right)
+        for left in left_values
+        for right in right_values
+        if abs(left - right) <= 5
+    ]
+    if not pairs:
+        return None
+    left, right = min(pairs, key=lambda pair: abs(pair[0] - pair[1]))
+    return float((left + right) / 2)
+
+
+def _fit_local_line(points: Sequence[Sequence[float]], x: float) -> float | None:
+    if len(points) < 4:
+        return None
+    coordinates = np.asarray(points, dtype=float)
+    center_x = float(np.mean(coordinates[:, 0]))
+    center_y = float(np.mean(coordinates[:, 1]))
+    spread = coordinates[:, 0] - center_x
+    denominator = float(np.dot(spread, spread))
+    if denominator <= 1e-9:
+        return None
+    slope = float(np.dot(spread, coordinates[:, 1] - center_y) / denominator)
+    intercept = center_y - slope * center_x
+    residual = coordinates[:, 1] - (slope * coordinates[:, 0] + intercept)
+    if float(np.sqrt(np.mean(residual**2))) > 1.5:
+        return None
+    return float(slope * x + intercept)
+
+
 def _marker_centers(mask: np.ndarray, offset_x: int, offset_y: int) -> list[list[float]]:
-    if min(mask.shape) < 7:
+    from scipy.ndimage import distance_transform_edt, maximum_filter, label, center_of_mass
+    distance = distance_transform_edt(mask)
+    maxima = (distance >= 2.8) & (distance == maximum_filter(distance, size=11))
+    components, count = label(maxima)
+    if not count:
         return []
-    integral = np.pad(mask.astype(np.uint32), ((1, 0), (1, 0))).cumsum(axis=0).cumsum(axis=1)
-    counts = integral[7:, 7:] - integral[:-7, 7:] - integral[7:, :-7] + integral[:-7, :-7]
-    candidates = np.argwhere(counts >= 20)
-    if not len(candidates):
-        return []
-    ranked = sorted(
-        ((int(counts[y, x]), int(x + 3), int(y + 3)) for y, x in candidates),
-        reverse=True,
-    )
-    selected: list[list[float]] = []
-    for _count, x, y in ranked:
-        center = [float(x + offset_x), float(y + offset_y)]
-        if any(hypot(center[0] - prior[0], center[1] - prior[1]) < 7 for prior in selected):
+    centers = center_of_mass(maxima, components, range(1, count+1))
+    selected = []
+    for y, x in sorted(centers, key=lambda p: -distance[int(round(p[0])),int(round(p[1]))]):
+        if any(hypot(x + offset_x-p[0],y + offset_y-p[1]) < 10 for p in selected):
             continue
-        selected.append(center)
+        selected.append([float(x + offset_x),float(y + offset_y)])
     return sorted(selected, key=lambda point: (point[0], point[1]))
 
 
@@ -230,7 +318,7 @@ def _sample_ticks(traces: Sequence[Sequence[Sequence[int]]], axes: Mapping[str, 
     return positions
 
 
-def _interpolate(trace: Sequence[Sequence[int]], x: float) -> float | None:
+def _interpolate(trace: Sequence[Sequence[float]], x: float) -> float | None:
     for first, second in zip(trace, trace[1:]):
         if first[0] <= x <= second[0] and second[0] > first[0]:
             fraction = (x - first[0]) / (second[0] - first[0])

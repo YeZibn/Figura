@@ -87,7 +87,7 @@ def test_real_diagnostic_manifest_validates_relative_assets_and_fingerprints():
         "shareholders_and_adjusted_price",
     ]
     assert manifest.samples[0].expected_panel_count == 4
-    assert manifest.samples[0].asset_path == ROOT / "photo" / "dashboard_text_two_bars_pie.png"
+    assert manifest.samples[0].asset_path == ROOT / "tests" / "fixtures" / "legacy_charts" / "dashboard_text_two_bars_pie.png"
     assert all(not Path(sample.asset).is_absolute() for sample in manifest.samples)
 
 

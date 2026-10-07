@@ -1,0 +1,4483 @@
+{
+  "schema_version": 1,
+  "measurement_targets": "visible image evidence; no hidden data",
+  "renderer": "figura ChartFigure",
+  "matplotlib_version": "3.11.1",
+  "fonts": [
+    "PingFang SC",
+    "Arial Unicode MS",
+    "Noto Sans CJK SC",
+    "DejaVu Sans"
+  ],
+  "cases": [
+    {
+      "case_id": "01_sales_and_market",
+      "image": "gallery/01_sales_and_market.png",
+      "source": "cases/01_sales_and_market.json",
+      "sha256": "729764dce1dcae14412674c02ef6261b13f863ccbbb73fc9f7ab5ecc0c98ed5f",
+      "image_size": [
+        1280,
+        1002
+      ],
+      "provenance": "recovered_original_generator",
+      "charts": [
+        {
+          "chart_type": "bar",
+          "plot_area_px": [
+            67.16666666666667,
+            101.8888888888888,
+            531.8333333333334,
+            317.30729166666674
+          ],
+          "numeric_tolerance": {
+            "x": 0.015719210278909435,
+            "y": 0.8206555816358332
+          },
+          "geometry_tolerance_px": 2.0,
+          "targets": [
+            {
+              "id": "east:0",
+              "series_label": "华东",
+              "label": "第一季度",
+              "position_px": [
+                108.3053,
+                319.2761
+              ],
+              "bounds_px": [
+                91.3409,
+                219.356,
+                33.928799999999995,
+                199.84019999999998
+              ],
+              "values": {
+                "value": 82
+              },
+              "visibility": "visible",
+              "color": "#4e79a7"
+            },
+            {
+              "id": "east:1",
+              "series_label": "华东",
+              "label": "第二季度",
+              "position_px": [
+                235.53815,
+                302.21655
+              ],
+              "bounds_px": [
+                218.5738,
+                185.2369,
+                33.92869999999999,
+                233.95929999999998
+              ],
+              "values": {
+                "value": 96
+              },
+              "visibility": "visible",
+              "color": "#4e79a7"
+            },
+            {
+              "id": "east:2",
+              "series_label": "华东",
+              "label": "第三季度",
+              "position_px": [
+                362.771,
+                287.5941
+              ],
+              "bounds_px": [
+                345.8066,
+                155.992,
+                33.928800000000024,
+                263.2042
+              ],
+              "values": {
+                "value": 108
+              },
+              "visibility": "visible",
+              "color": "#4e79a7"
+            },
+            {
+              "id": "east:3",
+              "series_label": "华东",
+              "label": "第四季度",
+              "position_px": [
+                490.00385,
+                268.09749999999997
+              ],
+              "bounds_px": [
+                473.0395,
+                116.9988,
+                33.92870000000005,
+                302.19739999999996
+              ],
+              "values": {
+                "value": 124
+              },
+              "visibility": "visible",
+              "color": "#4e79a7"
+            },
+            {
+              "id": "south:0",
+              "series_label": "华南",
+              "label": "第一季度",
+              "position_px": [
+                142.23405,
+                337.55415
+              ],
+              "bounds_px": [
+                125.2697,
+                255.9121,
+                33.92869999999999,
+                163.28409999999997
+              ],
+              "values": {
+                "value": 67
+              },
+              "visibility": "visible",
+              "color": "#f28e2b"
+            },
+            {
+              "id": "south:1",
+              "series_label": "华南",
+              "label": "第二季度",
+              "position_px": [
+                269.4669,
+                322.9317
+              ],
+              "bounds_px": [
+                252.5025,
+                226.6672,
+                33.928800000000024,
+                192.52899999999997
+              ],
+              "values": {
+                "value": 79
+              },
+              "visibility": "visible",
+              "color": "#f28e2b"
+            },
+            {
+              "id": "south:2",
+              "series_label": "华南",
+              "label": "第三季度",
+              "position_px": [
+                396.69975,
+                308.30925
+              ],
+              "bounds_px": [
+                379.7354,
+                197.4223,
+                33.92869999999999,
+                221.77389999999997
+              ],
+              "values": {
+                "value": 91
+              },
+              "visibility": "visible",
+              "color": "#f28e2b"
+            },
+            {
+              "id": "south:3",
+              "series_label": "华南",
+              "label": "第四季度",
+              "position_px": [
+                523.9326000000001,
+                291.24969999999996
+              ],
+              "bounds_px": [
+                506.9682,
+                163.3032,
+                33.928800000000024,
+                255.89299999999997
+              ],
+              "values": {
+                "value": 105
+              },
+              "visibility": "visible",
+              "color": "#f28e2b"
+            },
+            {
+              "id": "north:0",
+              "series_label": "华北",
+              "label": "第一季度",
+              "position_px": [
+                176.1628,
+                348.52099999999996
+              ],
+              "bounds_px": [
+                159.1984,
+                277.8458,
+                33.928799999999995,
+                141.35039999999998
+              ],
+              "values": {
+                "value": 58
+              },
+              "visibility": "visible",
+              "color": "#e15759"
+            },
+            {
+              "id": "north:1",
+              "series_label": "华北",
+              "label": "第二季度",
+              "position_px": [
+                303.39565000000005,
+                331.46145
+              ],
+              "bounds_px": [
+                286.4313,
+                243.7267,
+                33.92869999999999,
+                175.46949999999998
+              ],
+              "values": {
+                "value": 72
+              },
+              "visibility": "visible",
+              "color": "#e15759"
+            },
+            {
+              "id": "north:2",
+              "series_label": "华北",
+              "label": "第三季度",
+              "position_px": [
+                430.62850000000003,
+                316.839
+              ],
+              "bounds_px": [
+                413.6641,
+                214.4818,
+                33.92879999999997,
+                204.71439999999998
+              ],
+              "values": {
+                "value": 84
+              },
+              "visibility": "visible",
+              "color": "#e15759"
+            },
+            {
+              "id": "north:3",
+              "series_label": "华北",
+              "label": "第四季度",
+              "position_px": [
+                557.8614,
+                299.77945
+              ],
+              "bounds_px": [
+                540.897,
+                180.3627,
+                33.92879999999991,
+                238.8335
+              ],
+              "values": {
+                "value": 98
+              },
+              "visibility": "visible",
+              "color": "#e15759"
+            }
+          ],
+          "panel_polygon": [
+            [
+              0,
+              42
+            ],
+            [
+              500,
+              42
+            ],
+            [
+              500,
+              521
+            ],
+            [
+              0,
+              521
+            ]
+          ],
+          "chart_id": "bar"
+        },
+        {
+          "chart_type": "line",
+          "plot_area_px": [
+            706.0000000000001,
+            101.8888888888888,
+            532.9999999999999,
+            309.14483167404126
+          ],
+          "numeric_tolerance": {
+            "x": 0.020637898686678646,
+            "y": 0.06760585285163856
+          },
+          "geometry_tolerance_px": 2.0,
+          "targets": [
+            {
+              "id": "actual:0",
+              "series_label": "实际用户",
+              "label": "1月",
+              "position_px": [
+                730.2273,
+                379.2317
+              ],
+              "bounds_px": null,
+              "values": {
+                "y_value": 12.4
+              },
+              "visibility": "visible",
+              "point_source": "marker",
+              "lower_position_px": null
+            },
+            {
+              "id": "actual:1",
+              "series_label": "实际用户",
+              "label": "2月",
+              "position_px": [
+                827.1364,
+                358.5235
+              ],
+              "bounds_px": null,
+              "values": {
+                "y_value": 13.1
+              },
+              "visibility": "visible",
+              "point_source": "marker",
+              "lower_position_px": null
+            },
+            {
+              "id": "actual:2",
+              "series_label": "实际用户",
+              "label": "3月",
+              "position_px": [
+                924.0455,
+                281.6071
+              ],
+              "bounds_px": null,
+              "values": {
+                "y_value": 15.7
+              },
+              "visibility": "visible",
+              "point_source": "marker",
+              "lower_position_px": null
+            },
+            {
+              "id": "actual:3",
+              "series_label": "实际用户",
+              "label": "4月",
+              "position_px": [
+                1020.9545,
+                266.8154
+              ],
+              "bounds_px": null,
+              "values": {
+                "y_value": 16.2
+              },
+              "visibility": "visible",
+              "point_source": "marker",
+              "lower_position_px": null
+            },
+            {
+              "id": "actual:4",
+              "series_label": "实际用户",
+              "label": "5月",
+              "position_px": [
+                1117.8636,
+                195.8157
+              ],
+              "bounds_px": null,
+              "values": {
+                "y_value": 18.6
+              },
+              "visibility": "visible",
+              "point_source": "marker",
+              "lower_position_px": null
+            },
+            {
+              "id": "actual:5",
+              "series_label": "实际用户",
+              "label": "6月",
+              "position_px": [
+                1214.7727,
+                115.9409
+              ],
+              "bounds_px": null,
+              "values": {
+                "y_value": 21.3
+              },
+              "visibility": "visible",
+              "point_source": "marker",
+              "lower_position_px": null
+            },
+            {
+              "id": "target:0",
+              "series_label": "目标用户",
+              "label": "1月",
+              "position_px": [
+                730.2273,
+                396.9817
+              ],
+              "bounds_px": null,
+              "values": {
+                "y_value": 11.8
+              },
+              "visibility": "visible",
+              "point_source": "marker",
+              "lower_position_px": null
+            },
+            {
+              "id": "target:1",
+              "series_label": "目标用户",
+              "label": "2月",
+              "position_px": [
+                827.1364,
+                361.4818
+              ],
+              "bounds_px": null,
+              "values": {
+                "y_value": 13.0
+              },
+              "visibility": "visible",
+              "point_source": "marker",
+              "lower_position_px": null
+            },
+            {
+              "id": "target:2",
+              "series_label": "目标用户",
+              "label": "3月",
+              "position_px": [
+                924.0455,
+                325.9819
+              ],
+              "bounds_px": null,
+              "values": {
+                "y_value": 14.2
+              },
+              "visibility": "visible",
+              "point_source": "marker",
+              "lower_position_px": null
+            },
+            {
+              "id": "target:3",
+              "series_label": "目标用户",
+              "label": "4月",
+              "position_px": [
+                1020.9545,
+                287.5237
+              ],
+              "bounds_px": null,
+              "values": {
+                "y_value": 15.5
+              },
+              "visibility": "visible",
+              "point_source": "marker",
+              "lower_position_px": null
+            },
+            {
+              "id": "target:4",
+              "series_label": "目标用户",
+              "label": "5月",
+              "position_px": [
+                1117.8636,
+                243.1488
+              ],
+              "bounds_px": null,
+              "values": {
+                "y_value": 17.0
+              },
+              "visibility": "visible",
+              "point_source": "marker",
+              "lower_position_px": null
+            },
+            {
+              "id": "target:5",
+              "series_label": "目标用户",
+              "label": "6月",
+              "position_px": [
+                1214.7727,
+                198.774
+              ],
+              "bounds_px": null,
+              "values": {
+                "y_value": 18.5
+              },
+              "visibility": "visible",
+              "point_source": "marker",
+              "lower_position_px": null
+            }
+          ],
+          "panel_polygon": [
+            [
+              500,
+              42
+            ],
+            [
+              1000,
+              42
+            ],
+            [
+              1000,
+              521
+            ],
+            [
+              500,
+              521
+            ]
+          ],
+          "chart_id": "line"
+        },
+        {
+          "chart_type": "scatter",
+          "plot_area_px": [
+            66.0,
+            571.7777777777778,
+            533.0,
+            317.3072916666667
+          ],
+          "numeric_tolerance": {
+            "x": 0.1073170731707318,
+            "y": 0.1941335784514866
+          },
+          "geometry_tolerance_px": 2.0,
+          "targets": [
+            {
+              "id": "search:0",
+              "series_label": "搜索广告",
+              "label": null,
+              "position_px": [
+                127.5,
+                843.7555
+              ],
+              "bounds_px": null,
+              "values": {
+                "y_value": 18,
+                "x_value": 12
+              },
+              "visibility": "visible",
+              "point_source": "visible_marker",
+              "lower_position_px": null
+            },
+            {
+              "id": "search:1",
+              "series_label": "搜索广告",
+              "label": null,
+              "position_px": [
+                239.3182,
+                771.6402
+              ],
+              "bounds_px": null,
+              "values": {
+                "y_value": 25,
+                "x_value": 18
+              },
+              "visibility": "visible",
+              "point_source": "visible_marker",
+              "lower_position_px": null
+            },
+            {
+              "id": "search:2",
+              "series_label": "搜索广告",
+              "label": null,
+              "position_px": [
+                351.1364,
+                709.8271
+              ],
+              "bounds_px": null,
+              "values": {
+                "y_value": 31,
+                "x_value": 24
+              },
+              "visibility": "visible",
+              "point_source": "visible_marker",
+              "lower_position_px": null
+            },
+            {
+              "id": "search:3",
+              "series_label": "搜索广告",
+              "label": null,
+              "position_px": [
+                444.3182,
+                637.7118
+              ],
+              "bounds_px": null,
+              "values": {
+                "y_value": 38,
+                "x_value": 29
+              },
+              "visibility": "visible",
+              "point_source": "visible_marker",
+              "lower_position_px": null
+            },
+            {
+              "id": "search:4",
+              "series_label": "搜索广告",
+              "label": null,
+              "position_px": [
+                574.7727,
+                586.2008
+              ],
+              "bounds_px": null,
+              "values": {
+                "y_value": 43,
+                "x_value": 36
+              },
+              "visibility": "visible",
+              "point_source": "visible_marker",
+              "lower_position_px": null
+            },
+            {
+              "id": "social:0",
+              "series_label": "社交广告",
+              "label": null,
+              "position_px": [
+                90.2273,
+                874.662
+              ],
+              "bounds_px": null,
+              "values": {
+                "y_value": 15,
+                "x_value": 10
+              },
+              "visibility": "visible",
+              "point_source": "visible_marker",
+              "lower_position_px": null
+            },
+            {
+              "id": "social:1",
+              "series_label": "社交广告",
+              "label": null,
+              "position_px": [
+                220.6818,
+                792.2445
+              ],
+              "bounds_px": null,
+              "values": {
+                "y_value": 23,
+                "x_value": 17
+              },
+              "visibility": "visible",
+              "point_source": "visible_marker",
+              "lower_position_px": null
+            },
+            {
+              "id": "social:2",
+              "series_label": "社交广告",
+              "label": null,
+              "position_px": [
+                369.7727,
+                678.9205
+              ],
+              "bounds_px": null,
+              "values": {
+                "y_value": 34,
+                "x_value": 25
+              },
+              "visibility": "visible",
+              "point_source": "visible_marker",
+              "lower_position_px": null
+            },
+            {
+              "id": "social:3",
+              "series_label": "社交广告",
+              "label": null,
+              "position_px": [
+                500.2273,
+                627.4096
+              ],
+              "bounds_px": null,
+              "values": {
+                "y_value": 39,
+                "x_value": 32
+              },
+              "visibility": "visible",
+              "point_source": "visible_marker",
+              "lower_position_px": null
+            }
+          ],
+          "panel_polygon": [
+            [
+              0,
+              521
+            ],
+            [
+              500,
+              521
+            ],
+            [
+              500,
+              1000
+            ],
+            [
+              0,
+              1000
+            ]
+          ],
+          "chart_id": "scatter"
+        },
+        {
+          "chart_type": "pie",
+          "plot_area_px": [
+            813.8463541666667,
+            571.7777777777778,
+            317.3072916666665,
+            317.3072916666667
+          ],
+          "numeric_tolerance": {
+            "ratio": 0.005555555555555556
+          },
+          "geometry_tolerance_px": 2.0,
+          "targets": [
+            {
+              "id": "housing",
+              "series_label": null,
+              "label": "住房",
+              "position_px": [
+                1055.107,
+                697.725
+              ],
+              "bounds_px": null,
+              "values": {
+                "ratio": 0.38
+              },
+              "visibility": "visible",
+              "start_angle_deg": -46.800000000000004,
+              "sweep_angle_deg": 136.8
+            },
+            {
+              "id": "food",
+              "series_label": null,
+              "label": "饮食",
+              "position_px": [
+                966.9213,
+                819.1021
+              ],
+              "bounds_px": null,
+              "values": {
+                "ratio": 0.26
+              },
+              "visibility": "visible",
+              "start_angle_deg": -140.4,
+              "sweep_angle_deg": 93.6
+            },
+            {
+              "id": "transport",
+              "series_label": null,
+              "label": "交通",
+              "position_px": [
+                886.4452,
+                752.5265
+              ],
+              "bounds_px": null,
+              "values": {
+                "ratio": 0.14
+              },
+              "visibility": "visible",
+              "start_angle_deg": -190.8,
+              "sweep_angle_deg": 50.400000000000006
+            },
+            {
+              "id": "education",
+              "series_label": null,
+              "label": "教育",
+              "position_px": [
+                897.4848,
+                682.8253
+              ],
+              "bounds_px": null,
+              "values": {
+                "ratio": 0.12
+              },
+              "visibility": "visible",
+              "start_angle_deg": -234.0,
+              "sweep_angle_deg": 43.19999999999999
+            },
+            {
+              "id": "other",
+              "series_label": null,
+              "label": "其他",
+              "position_px": [
+                945.0451,
+                645.9338
+              ],
+              "bounds_px": null,
+              "values": {
+                "ratio": 0.1
+              },
+              "visibility": "visible",
+              "start_angle_deg": -270.0,
+              "sweep_angle_deg": 36.0
+            }
+          ],
+          "panel_polygon": [
+            [
+              500,
+              521
+            ],
+            [
+              1000,
+              521
+            ],
+            [
+              1000,
+              1000
+            ],
+            [
+              500,
+              1000
+            ]
+          ],
+          "chart_id": "pie"
+        }
+      ]
+    },
+    {
+      "case_id": "02_trends_and_distributions",
+      "image": "gallery/02_trends_and_distributions.png",
+      "source": "cases/02_trends_and_distributions.json",
+      "sha256": "e0272615659ba9278f23e4d1b4e51d2c5cff6e96837126b35a7b408474436aff",
+      "image_size": [
+        1280,
+        1002
+      ],
+      "provenance": "recovered_original_generator",
+      "charts": [
+        {
+          "chart_type": "area",
+          "plot_area_px": [
+            66.0,
+            101.8888888888888,
+            533.0,
+            317.30729166666674
+          ],
+          "numeric_tolerance": {
+            "x": 0.016510318949343405,
+            "y": 0.5685340511793697
+          },
+          "geometry_tolerance_px": 2.0,
+          "targets": [
+            {
+              "id": "web:0",
+              "series_label": "网页",
+              "label": "周一",
+              "position_px": [
+                90.2273,
+                306.2742
+              ],
+              "bounds_px": null,
+              "values": {
+                "series_value": 28,
+                "upper_value": 28.0,
+                "lower_value": 0.0
+              },
+              "visibility": "visible",
+              "point_source": "boundary",
+              "lower_position_px": [
+                90.2273,
+                404.7731
+              ]
+            },
+            {
+              "id": "web:1",
+              "series_label": "网页",
+              "label": "周二",
+              "position_px": [
+                211.3636,
+                292.2029
+              ],
+              "bounds_px": null,
+              "values": {
+                "series_value": 32,
+                "upper_value": 32.0,
+                "lower_value": 0.0
+              },
+              "visibility": "visible",
+              "point_source": "boundary",
+              "lower_position_px": [
+                211.3636,
+                404.7731
+              ]
+            },
+            {
+              "id": "web:2",
+              "series_label": "网页",
+              "label": "周三",
+              "position_px": [
+                332.5,
+                278.1316
+              ],
+              "bounds_px": null,
+              "values": {
+                "series_value": 36,
+                "upper_value": 36.0,
+                "lower_value": 0.0
+              },
+              "visibility": "visible",
+              "point_source": "boundary",
+              "lower_position_px": [
+                332.5,
+                404.7731
+              ]
+            },
+            {
+              "id": "web:3",
+              "series_label": "网页",
+              "label": "周四",
+              "position_px": [
+                453.6364,
+                285.1673
+              ],
+              "bounds_px": null,
+              "values": {
+                "series_value": 34,
+                "upper_value": 34.0,
+                "lower_value": 0.0
+              },
+              "visibility": "visible",
+              "point_source": "boundary",
+              "lower_position_px": [
+                453.6364,
+                404.7731
+              ]
+            },
+            {
+              "id": "web:4",
+              "series_label": "网页",
+              "label": "周五",
+              "position_px": [
+                574.7727,
+                253.5069
+              ],
+              "bounds_px": null,
+              "values": {
+                "series_value": 43,
+                "upper_value": 43.0,
+                "lower_value": 0.0
+              },
+              "visibility": "visible",
+              "point_source": "boundary",
+              "lower_position_px": [
+                574.7727,
+                404.7731
+              ]
+            },
+            {
+              "id": "app:0",
+              "series_label": "移动端",
+              "label": "周一",
+              "position_px": [
+                90.2273,
+                228.8822
+              ],
+              "bounds_px": null,
+              "values": {
+                "series_value": 22,
+                "upper_value": 50.0,
+                "lower_value": 28.0
+              },
+              "visibility": "visible",
+              "point_source": "boundary",
+              "lower_position_px": [
+                90.2273,
+                306.2742
+              ]
+            },
+            {
+              "id": "app:1",
+              "series_label": "移动端",
+              "label": "周二",
+              "position_px": [
+                211.3636,
+                204.2574
+              ],
+              "bounds_px": null,
+              "values": {
+                "series_value": 25,
+                "upper_value": 57.0,
+                "lower_value": 32.0
+              },
+              "visibility": "visible",
+              "point_source": "boundary",
+              "lower_position_px": [
+                211.3636,
+                292.2029
+              ]
+            },
+            {
+              "id": "app:2",
+              "series_label": "移动端",
+              "label": "周三",
+              "position_px": [
+                332.5,
+                176.1149
+              ],
+              "bounds_px": null,
+              "values": {
+                "series_value": 29,
+                "upper_value": 65.0,
+                "lower_value": 36.0
+              },
+              "visibility": "visible",
+              "point_source": "boundary",
+              "lower_position_px": [
+                332.5,
+                278.1316
+              ]
+            },
+            {
+              "id": "app:3",
+              "series_label": "移动端",
+              "label": "周四",
+              "position_px": [
+                453.6364,
+                169.0792
+              ],
+              "bounds_px": null,
+              "values": {
+                "series_value": 33,
+                "upper_value": 67.0,
+                "lower_value": 34.0
+              },
+              "visibility": "visible",
+              "point_source": "boundary",
+              "lower_position_px": [
+                453.6364,
+                285.1673
+              ]
+            },
+            {
+              "id": "app:4",
+              "series_label": "移动端",
+              "label": "周五",
+              "position_px": [
+                574.7727,
+                116.3119
+              ],
+              "bounds_px": null,
+              "values": {
+                "series_value": 39,
+                "upper_value": 82.0,
+                "lower_value": 43.0
+              },
+              "visibility": "visible",
+              "point_source": "boundary",
+              "lower_position_px": [
+                574.7727,
+                253.5069
+              ]
+            }
+          ],
+          "panel_polygon": [
+            [
+              0,
+              42
+            ],
+            [
+              500,
+              42
+            ],
+            [
+              500,
+              521
+            ],
+            [
+              0,
+              521
+            ]
+          ],
+          "chart_id": "area"
+        },
+        {
+          "chart_type": "histogram",
+          "plot_area_px": [
+            706.0,
+            101.8888888888888,
+            533.0,
+            317.30729166666674
+          ],
+          "numeric_tolerance": {
+            "x": 0.02476547842401544,
+            "y": 0.2250184659324077
+          },
+          "geometry_tolerance_px": 2.0,
+          "targets": [
+            {
+              "id": "0",
+              "series_label": null,
+              "label": null,
+              "position_px": [
+                770.60605,
+                383.64355
+              ],
+              "bounds_px": [
+                730.2273,
+                348.0909,
+                80.75749999999994,
+                71.1053
+              ],
+              "values": {
+                "interval_start": 0,
+                "interval_end": 1,
+                "value": 8
+              },
+              "visibility": "visible"
+            },
+            {
+              "id": "1",
+              "series_label": null,
+              "label": null,
+              "position_px": [
+                851.3635999999999,
+                325.8705
+              ],
+              "bounds_px": [
+                810.9848,
+                232.5448,
+                80.75760000000002,
+                186.65139999999997
+              ],
+              "values": {
+                "interval_start": 1,
+                "interval_end": 2,
+                "value": 21
+              },
+              "visibility": "visible"
+            },
+            {
+              "id": "2",
+              "series_label": null,
+              "label": null,
+              "position_px": [
+                932.1212,
+                268.09749999999997
+              ],
+              "bounds_px": [
+                891.7424,
+                116.9988,
+                80.75760000000002,
+                302.19739999999996
+              ],
+              "values": {
+                "interval_start": 2,
+                "interval_end": 3,
+                "value": 34
+              },
+              "visibility": "visible"
+            },
+            {
+              "id": "3",
+              "series_label": null,
+              "label": null,
+              "position_px": [
+                1012.8788,
+                303.6501
+              ],
+              "bounds_px": [
+                972.5,
+                188.104,
+                80.75759999999991,
+                231.09219999999996
+              ],
+              "values": {
+                "interval_start": 3,
+                "interval_end": 4,
+                "value": 26
+              },
+              "visibility": "visible"
+            },
+            {
+              "id": "4",
+              "series_label": null,
+              "label": null,
+              "position_px": [
+                1093.6363999999999,
+                361.42314999999996
+              ],
+              "bounds_px": [
+                1053.2576,
+                303.6501,
+                80.75760000000014,
+                115.54609999999997
+              ],
+              "values": {
+                "interval_start": 4,
+                "interval_end": 5,
+                "value": 13
+              },
+              "visibility": "visible"
+            },
+            {
+              "id": "5",
+              "series_label": null,
+              "label": null,
+              "position_px": [
+                1174.3939500000001,
+                396.9758
+              ],
+              "bounds_px": [
+                1134.0152,
+                374.7554,
+                80.75749999999994,
+                44.44079999999997
+              ],
+              "values": {
+                "interval_start": 5,
+                "interval_end": 6,
+                "value": 5
+              },
+              "visibility": "visible"
+            }
+          ],
+          "panel_polygon": [
+            [
+              500,
+              42
+            ],
+            [
+              1000,
+              42
+            ],
+            [
+              1000,
+              521
+            ],
+            [
+              500,
+              521
+            ]
+          ],
+          "chart_id": "histogram"
+        },
+        {
+          "chart_type": "box_plot",
+          "plot_area_px": [
+            67.16666666666667,
+            571.7777777777778,
+            531.8333333333334,
+            317.30729166666663
+          ],
+          "numeric_tolerance": {
+            "x": 0.009514258853024149,
+            "y": 0.4090671831656323
+          },
+          "geometry_tolerance_px": 2.0,
+          "targets": [
+            {
+              "id": "control",
+              "series_label": null,
+              "label": "基线方案",
+              "position_px": [
+                122.8725,
+                727.9868
+              ],
+              "bounds_px": null,
+              "values": {
+                "lower_whisker": 48,
+                "q1": 61,
+                "median": 69,
+                "q3": 78,
+                "upper_whisker": 91
+              },
+              "visibility": "visible",
+              "outliers": [
+                39,
+                96
+              ],
+              "statistic_positions": {
+                "lower_whisker": [
+                  122.8725,
+                  830.6595
+                ],
+                "q1": [
+                  122.8725,
+                  767.1002
+                ],
+                "median": [
+                  122.8725,
+                  727.9868
+                ],
+                "q3": [
+                  122.8725,
+                  683.9843
+                ],
+                "upper_whisker": [
+                  122.8725,
+                  620.425
+                ]
+              }
+            },
+            {
+              "id": "variant-a",
+              "series_label": null,
+              "label": "方案 A",
+              "position_px": [
+                333.0833,
+                698.6518
+              ],
+              "bounds_px": null,
+              "values": {
+                "lower_whisker": 55,
+                "q1": 67,
+                "median": 75,
+                "q3": 83,
+                "upper_whisker": 94
+              },
+              "visibility": "visible",
+              "outliers": [
+                49
+              ],
+              "statistic_positions": {
+                "lower_whisker": [
+                  333.0833,
+                  796.4353
+                ],
+                "q1": [
+                  333.0833,
+                  737.7652
+                ],
+                "median": [
+                  333.0833,
+                  698.6518
+                ],
+                "q3": [
+                  333.0833,
+                  659.5384
+                ],
+                "upper_whisker": [
+                  333.0833,
+                  605.7575
+                ]
+              }
+            },
+            {
+              "id": "variant-b",
+              "series_label": null,
+              "label": "方案 B",
+              "position_px": [
+                543.2941,
+                713.3193
+              ],
+              "bounds_px": null,
+              "values": {
+                "lower_whisker": 51,
+                "q1": 64,
+                "median": 72,
+                "q3": 81,
+                "upper_whisker": 92
+              },
+              "visibility": "visible",
+              "outliers": [
+                98
+              ],
+              "statistic_positions": {
+                "lower_whisker": [
+                  543.2941,
+                  815.9919
+                ],
+                "q1": [
+                  543.2941,
+                  752.4327
+                ],
+                "median": [
+                  543.2941,
+                  713.3193
+                ],
+                "q3": [
+                  543.2941,
+                  669.3168
+                ],
+                "upper_whisker": [
+                  543.2941,
+                  615.5359
+                ]
+              }
+            }
+          ],
+          "panel_polygon": [
+            [
+              0,
+              521
+            ],
+            [
+              500,
+              521
+            ],
+            [
+              500,
+              1000
+            ],
+            [
+              0,
+              1000
+            ]
+          ],
+          "chart_id": "box_plot"
+        },
+        {
+          "chart_type": "radar",
+          "plot_area_px": [
+            819.5407986111113,
+            583.1666666666667,
+            305.9184027777776,
+            305.91840277777766
+          ],
+          "numeric_tolerance": {
+            "radial": 0.13075382193421514
+          },
+          "geometry_tolerance_px": 2.0,
+          "targets": [
+            {
+              "id": "alpha:0",
+              "series_label": "方案 A",
+              "label": "速度",
+              "position_px": [
+                972.5,
+                606.1105
+              ],
+              "bounds_px": null,
+              "values": {
+                "value": 8.5
+              },
+              "visibility": "visible"
+            },
+            {
+              "id": "alpha:1",
+              "series_label": "方案 A",
+              "label": "质量",
+              "position_px": [
+                1077.2404,
+                702.0936
+              ],
+              "bounds_px": null,
+              "values": {
+                "value": 7.2
+              },
+              "visibility": "visible"
+            },
+            {
+              "id": "alpha:2",
+              "series_label": "方案 A",
+              "label": "成本",
+              "position_px": [
+                1033.6369,
+                820.2736
+              ],
+              "bounds_px": null,
+              "values": {
+                "value": 6.8
+              },
+              "visibility": "visible"
+            },
+            {
+              "id": "alpha:3",
+              "series_label": "方案 A",
+              "label": "稳定性",
+              "position_px": [
+                892.4826,
+                846.2603
+              ],
+              "bounds_px": null,
+              "values": {
+                "value": 8.9
+              },
+              "visibility": "visible"
+            },
+            {
+              "id": "alpha:4",
+              "series_label": "方案 A",
+              "label": "服务",
+              "position_px": [
+                859.0312,
+                699.2576
+              ],
+              "bounds_px": null,
+              "values": {
+                "value": 7.8
+              },
+              "visibility": "visible"
+            },
+            {
+              "id": "beta:0",
+              "series_label": "方案 B",
+              "label": "速度",
+              "position_px": [
+                972.5,
+                627.5248
+              ],
+              "bounds_px": null,
+              "values": {
+                "value": 7.1
+              },
+              "visibility": "visible"
+            },
+            {
+              "id": "beta:1",
+              "series_label": "方案 B",
+              "label": "质量",
+              "position_px": [
+                1099.0614,
+                695.0036
+              ],
+              "bounds_px": null,
+              "values": {
+                "value": 8.7
+              },
+              "visibility": "visible"
+            },
+            {
+              "id": "beta:2",
+              "series_label": "方案 B",
+              "label": "成本",
+              "position_px": [
+                1046.2239,
+                837.5981
+              ],
+              "bounds_px": null,
+              "values": {
+                "value": 8.2
+              },
+              "visibility": "visible"
+            },
+            {
+              "id": "beta:3",
+              "series_label": "方案 B",
+              "label": "稳定性",
+              "position_px": [
+                904.1706,
+                830.1733
+              ],
+              "bounds_px": null,
+              "values": {
+                "value": 7.6
+              },
+              "visibility": "visible"
+            },
+            {
+              "id": "beta:4",
+              "series_label": "方案 B",
+              "label": "服务",
+              "position_px": [
+                850.3028,
+                696.4216
+              ],
+              "bounds_px": null,
+              "values": {
+                "value": 8.4
+              },
+              "visibility": "visible"
+            }
+          ],
+          "panel_polygon": [
+            [
+              500,
+              521
+            ],
+            [
+              1000,
+              521
+            ],
+            [
+              1000,
+              1000
+            ],
+            [
+              500,
+              1000
+            ]
+          ],
+          "chart_id": "radar"
+        }
+      ]
+    },
+    {
+      "case_id": "03_operations_and_revenue",
+      "image": "gallery/03_operations_and_revenue.png",
+      "source": "cases/03_operations_and_revenue.json",
+      "sha256": "6759baf1e5e41b52bfa44fc3bdc486dfab237b63ab5826a5518508ba012c111a",
+      "image_size": [
+        1280,
+        522
+      ],
+      "provenance": "recovered_original_generator",
+      "charts": [
+        {
+          "chart_type": "heatmap",
+          "plot_area_px": [
+            66.0,
+            101.88888888888891,
+            487.69499999999994,
+            307.19618055555554
+          ],
+          "numeric_tolerance": {
+            "color": 0.2864618949391054
+          },
+          "geometry_tolerance_px": 2.0,
+          "targets": [
+            {
+              "id": "0:0",
+              "series_label": null,
+              "label": "周一",
+              "position_px": [
+                114.7695,
+                140.28840000000002
+              ],
+              "bounds_px": [
+                66.0,
+                101.8889,
+                97.53899999999999,
+                76.799
+              ],
+              "values": {
+                "value": 38
+              },
+              "visibility": "visible",
+              "row_label": "华东"
+            },
+            {
+              "id": "0:1",
+              "series_label": null,
+              "label": "周二",
+              "position_px": [
+                212.30849999999998,
+                140.28840000000002
+              ],
+              "bounds_px": [
+                163.539,
+                101.8889,
+                97.53899999999999,
+                76.799
+              ],
+              "values": {
+                "value": 45
+              },
+              "visibility": "visible",
+              "row_label": "华东"
+            },
+            {
+              "id": "0:2",
+              "series_label": null,
+              "label": "周三",
+              "position_px": [
+                309.84749999999997,
+                140.28840000000002
+              ],
+              "bounds_px": [
+                261.078,
+                101.8889,
+                97.53900000000004,
+                76.799
+              ],
+              "values": {
+                "value": 51
+              },
+              "visibility": "visible",
+              "row_label": "华东"
+            },
+            {
+              "id": "0:3",
+              "series_label": null,
+              "label": "周四",
+              "position_px": [
+                407.3865,
+                140.28840000000002
+              ],
+              "bounds_px": [
+                358.617,
+                101.8889,
+                97.53899999999999,
+                76.799
+              ],
+              "values": {
+                "value": 48
+              },
+              "visibility": "visible",
+              "row_label": "华东"
+            },
+            {
+              "id": "0:4",
+              "series_label": null,
+              "label": "周五",
+              "position_px": [
+                504.92550000000006,
+                140.28840000000002
+              ],
+              "bounds_px": [
+                456.156,
+                101.8889,
+                97.53900000000004,
+                76.799
+              ],
+              "values": {
+                "value": 62
+              },
+              "visibility": "visible",
+              "row_label": "华东"
+            },
+            {
+              "id": "1:0",
+              "series_label": null,
+              "label": "周一",
+              "position_px": [
+                114.7695,
+                217.08745
+              ],
+              "bounds_px": [
+                66.0,
+                178.6879,
+                97.53899999999999,
+                76.79909999999998
+              ],
+              "values": {
+                "value": 27
+              },
+              "visibility": "visible",
+              "row_label": "华南"
+            },
+            {
+              "id": "1:1",
+              "series_label": null,
+              "label": "周二",
+              "position_px": [
+                212.30849999999998,
+                217.08745
+              ],
+              "bounds_px": [
+                163.539,
+                178.6879,
+                97.53899999999999,
+                76.79909999999998
+              ],
+              "values": {
+                "value": 31
+              },
+              "visibility": "visible",
+              "row_label": "华南"
+            },
+            {
+              "id": "1:2",
+              "series_label": null,
+              "label": "周三",
+              "position_px": [
+                309.84749999999997,
+                217.08745
+              ],
+              "bounds_px": [
+                261.078,
+                178.6879,
+                97.53900000000004,
+                76.79909999999998
+              ],
+              "values": {
+                "value": 42
+              },
+              "visibility": "visible",
+              "row_label": "华南"
+            },
+            {
+              "id": "1:3",
+              "series_label": null,
+              "label": "周四",
+              "position_px": [
+                407.3865,
+                217.08745
+              ],
+              "bounds_px": [
+                358.617,
+                178.6879,
+                97.53899999999999,
+                76.79909999999998
+              ],
+              "values": {
+                "value": 39
+              },
+              "visibility": "visible",
+              "row_label": "华南"
+            },
+            {
+              "id": "1:4",
+              "series_label": null,
+              "label": "周五",
+              "position_px": [
+                504.92550000000006,
+                217.08745
+              ],
+              "bounds_px": [
+                456.156,
+                178.6879,
+                97.53900000000004,
+                76.79909999999998
+              ],
+              "values": {
+                "value": 55
+              },
+              "visibility": "visible",
+              "row_label": "华南"
+            },
+            {
+              "id": "2:0",
+              "series_label": null,
+              "label": "周一",
+              "position_px": [
+                114.7695,
+                293.8865
+              ],
+              "bounds_px": [
+                66.0,
+                255.487,
+                97.53899999999999,
+                76.799
+              ],
+              "values": {
+                "value": 23
+              },
+              "visibility": "visible",
+              "row_label": "华北"
+            },
+            {
+              "id": "2:1",
+              "series_label": null,
+              "label": "周二",
+              "position_px": [
+                212.30849999999998,
+                293.8865
+              ],
+              "bounds_px": [
+                163.539,
+                255.487,
+                97.53899999999999,
+                76.799
+              ],
+              "values": {
+                "value": 34
+              },
+              "visibility": "visible",
+              "row_label": "华北"
+            },
+            {
+              "id": "2:2",
+              "series_label": null,
+              "label": "周三",
+              "position_px": [
+                309.84749999999997,
+                293.8865
+              ],
+              "bounds_px": [
+                261.078,
+                255.487,
+                97.53900000000004,
+                76.799
+              ],
+              "values": {
+                "value": 37
+              },
+              "visibility": "visible",
+              "row_label": "华北"
+            },
+            {
+              "id": "2:3",
+              "series_label": null,
+              "label": "周四",
+              "position_px": [
+                407.3865,
+                293.8865
+              ],
+              "bounds_px": [
+                358.617,
+                255.487,
+                97.53899999999999,
+                76.799
+              ],
+              "values": {
+                "value": 43
+              },
+              "visibility": "visible",
+              "row_label": "华北"
+            },
+            {
+              "id": "2:4",
+              "series_label": null,
+              "label": "周五",
+              "position_px": [
+                504.92550000000006,
+                293.8865
+              ],
+              "bounds_px": [
+                456.156,
+                255.487,
+                97.53900000000004,
+                76.799
+              ],
+              "values": {
+                "value": 49
+              },
+              "visibility": "visible",
+              "row_label": "华北"
+            },
+            {
+              "id": "3:0",
+              "series_label": null,
+              "label": "周一",
+              "position_px": [
+                114.7695,
+                370.68555000000003
+              ],
+              "bounds_px": [
+                66.0,
+                332.286,
+                97.53899999999999,
+                76.79910000000001
+              ],
+              "values": {
+                "value": 18
+              },
+              "visibility": "visible",
+              "row_label": "西部"
+            },
+            {
+              "id": "3:1",
+              "series_label": null,
+              "label": "周二",
+              "position_px": [
+                212.30849999999998,
+                370.68555000000003
+              ],
+              "bounds_px": [
+                163.539,
+                332.286,
+                97.53899999999999,
+                76.79910000000001
+              ],
+              "values": {
+                "value": 25
+              },
+              "visibility": "visible",
+              "row_label": "西部"
+            },
+            {
+              "id": "3:2",
+              "series_label": null,
+              "label": "周三",
+              "position_px": [
+                309.84749999999997,
+                370.68555000000003
+              ],
+              "bounds_px": [
+                261.078,
+                332.286,
+                97.53900000000004,
+                76.79910000000001
+              ],
+              "values": {
+                "value": 29
+              },
+              "visibility": "visible",
+              "row_label": "西部"
+            },
+            {
+              "id": "3:3",
+              "series_label": null,
+              "label": "周四",
+              "position_px": [
+                407.3865,
+                370.68555000000003
+              ],
+              "bounds_px": [
+                358.617,
+                332.286,
+                97.53899999999999,
+                76.79910000000001
+              ],
+              "values": {
+                "value": 33
+              },
+              "visibility": "visible",
+              "row_label": "西部"
+            },
+            {
+              "id": "3:4",
+              "series_label": null,
+              "label": "周五",
+              "position_px": [
+                504.92550000000006,
+                370.68555000000003
+              ],
+              "bounds_px": [
+                456.156,
+                332.286,
+                97.53900000000004,
+                76.79910000000001
+              ],
+              "values": {
+                "value": 40
+              },
+              "visibility": "visible",
+              "row_label": "西部"
+            }
+          ],
+          "panel_polygon": [
+            [
+              0,
+              80
+            ],
+            [
+              500,
+              80
+            ],
+            [
+              500,
+              1000
+            ],
+            [
+              0,
+              1000
+            ]
+          ],
+          "chart_id": "heatmap"
+        },
+        {
+          "chart_type": "treemap",
+          "plot_area_px": [
+            706.0,
+            101.88888888888891,
+            533.0,
+            307.19618055555554
+          ],
+          "numeric_tolerance": {},
+          "geometry_tolerance_px": 2.0,
+          "targets": [
+            {
+              "id": "all",
+              "series_label": null,
+              "label": "总收入",
+              "position_px": [
+                972.5,
+                112.6408
+              ],
+              "bounds_px": null,
+              "values": {},
+              "visibility": "visible",
+              "role": "group",
+              "parent_label": null,
+              "source_value_visible": false
+            },
+            {
+              "id": "retail",
+              "series_label": null,
+              "label": "零售",
+              "position_px": [
+                852.575,
+                140.2884
+              ],
+              "bounds_px": [
+                706.0,
+                126.4646,
+                293.15,
+                282.6205
+              ],
+              "values": {},
+              "visibility": "visible",
+              "role": "group",
+              "parent_label": "总收入",
+              "source_value_visible": false
+            },
+            {
+              "id": "store",
+              "series_label": null,
+              "label": "门店",
+              "position_px": [
+                852.575,
+                329.5012
+              ],
+              "bounds_px": [
+                709.5178,
+                251.9447,
+                286.11440000000005,
+                155.11289999999997
+              ],
+              "values": {},
+              "visibility": "visible",
+              "role": "leaf",
+              "parent_label": "零售",
+              "source_value_visible": false
+            },
+            {
+              "id": "online",
+              "series_label": null,
+              "label": "线上",
+              "position_px": [
+                852.575,
+                204.0422
+              ],
+              "bounds_px": [
+                709.5178,
+                156.1397,
+                286.11440000000005,
+                95.805
+              ],
+              "values": {},
+              "visibility": "visible",
+              "role": "leaf",
+              "parent_label": "零售",
+              "source_value_visible": false
+            },
+            {
+              "id": "enterprise",
+              "series_label": null,
+              "label": "企业服务",
+              "position_px": [
+                1119.075,
+                140.2884
+              ],
+              "bounds_px": [
+                999.15,
+                126.4646,
+                239.85000000000002,
+                282.6205
+              ],
+              "values": {},
+              "visibility": "visible",
+              "role": "group",
+              "parent_label": "总收入",
+              "source_value_visible": false
+            },
+            {
+              "id": "consulting",
+              "series_label": null,
+              "label": "咨询",
+              "position_px": [
+                1119.075,
+                331.9297
+              ],
+              "bounds_px": [
+                1002.0282,
+                256.4331,
+                234.09359999999992,
+                150.99309999999997
+              ],
+              "values": {},
+              "visibility": "visible",
+              "role": "leaf",
+              "parent_label": "企业服务",
+              "source_value_visible": false
+            },
+            {
+              "id": "software",
+              "series_label": null,
+              "label": "软件",
+              "position_px": [
+                1119.075,
+                206.1021
+              ],
+              "bounds_px": [
+                1002.0282,
+                155.7711,
+                234.09359999999992,
+                100.66200000000003
+              ],
+              "values": {},
+              "visibility": "visible",
+              "role": "leaf",
+              "parent_label": "企业服务",
+              "source_value_visible": false
+            }
+          ],
+          "panel_polygon": [
+            [
+              500,
+              80
+            ],
+            [
+              1000,
+              80
+            ],
+            [
+              1000,
+              1000
+            ],
+            [
+              500,
+              1000
+            ]
+          ],
+          "chart_id": "treemap"
+        }
+      ]
+    },
+    {
+      "case_id": "area",
+      "image": "single/area.png",
+      "source": "cases/area.json",
+      "sha256": "0d5f0e552d3c770358ae6ee196c3c5d81f6221075aa669e930f4cbac21d168fd",
+      "image_size": [
+        640,
+        480
+      ],
+      "provenance": "recovered_original_generator",
+      "charts": [
+        {
+          "chart_type": "area",
+          "plot_area_px": [
+            66.0,
+            63.666666666666686,
+            533.0,
+            303.41840277777777
+          ],
+          "numeric_tolerance": {
+            "x": 0.016510318949343405,
+            "y": 0.5945585315473565
+          },
+          "geometry_tolerance_px": 2.0,
+          "targets": [
+            {
+              "id": "web:0",
+              "series_label": "网页",
+              "label": "周一",
+              "position_px": [
+                90.2273,
+                259.1058
+              ],
+              "bounds_px": null,
+              "values": {
+                "series_value": 28,
+                "upper_value": 28.0,
+                "lower_value": 0.0
+              },
+              "visibility": "visible",
+              "point_source": "boundary",
+              "lower_position_px": [
+                90.2273,
+                353.2933
+              ]
+            },
+            {
+              "id": "web:1",
+              "series_label": "网页",
+              "label": "周二",
+              "position_px": [
+                211.3636,
+                245.6504
+              ],
+              "bounds_px": null,
+              "values": {
+                "series_value": 32,
+                "upper_value": 32.0,
+                "lower_value": 0.0
+              },
+              "visibility": "visible",
+              "point_source": "boundary",
+              "lower_position_px": [
+                211.3636,
+                353.2933
+              ]
+            },
+            {
+              "id": "web:2",
+              "series_label": "网页",
+              "label": "周三",
+              "position_px": [
+                332.5,
+                232.1951
+              ],
+              "bounds_px": null,
+              "values": {
+                "series_value": 36,
+                "upper_value": 36.0,
+                "lower_value": 0.0
+              },
+              "visibility": "visible",
+              "point_source": "boundary",
+              "lower_position_px": [
+                332.5,
+                353.2933
+              ]
+            },
+            {
+              "id": "web:3",
+              "series_label": "网页",
+              "label": "周四",
+              "position_px": [
+                453.6364,
+                238.9228
+              ],
+              "bounds_px": null,
+              "values": {
+                "series_value": 34,
+                "upper_value": 34.0,
+                "lower_value": 0.0
+              },
+              "visibility": "visible",
+              "point_source": "boundary",
+              "lower_position_px": [
+                453.6364,
+                353.2933
+              ]
+            },
+            {
+              "id": "web:4",
+              "series_label": "网页",
+              "label": "周五",
+              "position_px": [
+                574.7727,
+                208.6482
+              ],
+              "bounds_px": null,
+              "values": {
+                "series_value": 43,
+                "upper_value": 43.0,
+                "lower_value": 0.0
+              },
+              "visibility": "visible",
+              "point_source": "boundary",
+              "lower_position_px": [
+                574.7727,
+                353.2933
+              ]
+            },
+            {
+              "id": "app:0",
+              "series_label": "移动端",
+              "label": "周一",
+              "position_px": [
+                90.2273,
+                185.1013
+              ],
+              "bounds_px": null,
+              "values": {
+                "series_value": 22,
+                "upper_value": 50.0,
+                "lower_value": 28.0
+              },
+              "visibility": "visible",
+              "point_source": "boundary",
+              "lower_position_px": [
+                90.2273,
+                259.1058
+              ]
+            },
+            {
+              "id": "app:1",
+              "series_label": "移动端",
+              "label": "周二",
+              "position_px": [
+                211.3636,
+                161.5544
+              ],
+              "bounds_px": null,
+              "values": {
+                "series_value": 25,
+                "upper_value": 57.0,
+                "lower_value": 32.0
+              },
+              "visibility": "visible",
+              "point_source": "boundary",
+              "lower_position_px": [
+                211.3636,
+                245.6504
+              ]
+            },
+            {
+              "id": "app:2",
+              "series_label": "移动端",
+              "label": "周三",
+              "position_px": [
+                332.5,
+                134.6437
+              ],
+              "bounds_px": null,
+              "values": {
+                "series_value": 29,
+                "upper_value": 65.0,
+                "lower_value": 36.0
+              },
+              "visibility": "visible",
+              "point_source": "boundary",
+              "lower_position_px": [
+                332.5,
+                232.1951
+              ]
+            },
+            {
+              "id": "app:3",
+              "series_label": "移动端",
+              "label": "周四",
+              "position_px": [
+                453.6364,
+                127.916
+              ],
+              "bounds_px": null,
+              "values": {
+                "series_value": 33,
+                "upper_value": 67.0,
+                "lower_value": 34.0
+              },
+              "visibility": "visible",
+              "point_source": "boundary",
+              "lower_position_px": [
+                453.6364,
+                238.9228
+              ]
+            },
+            {
+              "id": "app:4",
+              "series_label": "移动端",
+              "label": "周五",
+              "position_px": [
+                574.7727,
+                77.4584
+              ],
+              "bounds_px": null,
+              "values": {
+                "series_value": 39,
+                "upper_value": 82.0,
+                "lower_value": 43.0
+              },
+              "visibility": "visible",
+              "point_source": "boundary",
+              "lower_position_px": [
+                574.7727,
+                208.6482
+              ]
+            }
+          ],
+          "panel_polygon": [
+            [
+              0,
+              0
+            ],
+            [
+              1000,
+              0
+            ],
+            [
+              1000,
+              1000
+            ],
+            [
+              0,
+              1000
+            ]
+          ],
+          "chart_id": "area"
+        }
+      ]
+    },
+    {
+      "case_id": "bar",
+      "image": "single/bar.png",
+      "source": "cases/bar.json",
+      "sha256": "79f04312fcd4430f41f4c53b9d808d2c7e3b094c630d8b0745389ea32eca9e36",
+      "image_size": [
+        640,
+        480
+      ],
+      "provenance": "recovered_original_generator",
+      "charts": [
+        {
+          "chart_type": "bar",
+          "plot_area_px": [
+            67.16666666666667,
+            63.666666666666686,
+            531.8333333333334,
+            303.41840277777777
+          ],
+          "numeric_tolerance": {
+            "x": 0.015719210278909435,
+            "y": 0.8582208515240097
+          },
+          "geometry_tolerance_px": 2.0,
+          "targets": [
+            {
+              "id": "east:0",
+              "series_label": "华东",
+              "label": "第一季度",
+              "position_px": [
+                108.3053,
+                271.5386
+              ],
+              "bounds_px": [
+                91.3409,
+                175.9921,
+                33.928799999999995,
+                191.09300000000002
+              ],
+              "values": {
+                "value": 82
+              },
+              "visibility": "visible",
+              "color": "#4e79a7"
+            },
+            {
+              "id": "east:1",
+              "series_label": "华东",
+              "label": "第二季度",
+              "position_px": [
+                235.53815,
+                255.22575
+              ],
+              "bounds_px": [
+                218.5738,
+                143.3664,
+                33.92869999999999,
+                223.7187
+              ],
+              "values": {
+                "value": 96
+              },
+              "visibility": "visible",
+              "color": "#4e79a7"
+            },
+            {
+              "id": "east:2",
+              "series_label": "华东",
+              "label": "第三季度",
+              "position_px": [
+                362.771,
+                241.24335000000002
+              ],
+              "bounds_px": [
+                345.8066,
+                115.4016,
+                33.928800000000024,
+                251.6835
+              ],
+              "values": {
+                "value": 108
+              },
+              "visibility": "visible",
+              "color": "#4e79a7"
+            },
+            {
+              "id": "east:3",
+              "series_label": "华东",
+              "label": "第四季度",
+              "position_px": [
+                490.00385,
+                222.60014999999999
+              ],
+              "bounds_px": [
+                473.0395,
+                78.1152,
+                33.92870000000005,
+                288.9699
+              ],
+              "values": {
+                "value": 124
+              },
+              "visibility": "visible",
+              "color": "#4e79a7"
+            },
+            {
+              "id": "south:0",
+              "series_label": "华南",
+              "label": "第一季度",
+              "position_px": [
+                142.23405,
+                289.01660000000004
+              ],
+              "bounds_px": [
+                125.2697,
+                210.9481,
+                33.92869999999999,
+                156.137
+              ],
+              "values": {
+                "value": 67
+              },
+              "visibility": "visible",
+              "color": "#f28e2b"
+            },
+            {
+              "id": "south:1",
+              "series_label": "华南",
+              "label": "第二季度",
+              "position_px": [
+                269.4669,
+                275.0342
+              ],
+              "bounds_px": [
+                252.5025,
+                182.9833,
+                33.928800000000024,
+                184.1018
+              ],
+              "values": {
+                "value": 79
+              },
+              "visibility": "visible",
+              "color": "#f28e2b"
+            },
+            {
+              "id": "south:2",
+              "series_label": "华南",
+              "label": "第三季度",
+              "position_px": [
+                396.69975,
+                261.05175
+              ],
+              "bounds_px": [
+                379.7354,
+                155.0184,
+                33.92869999999999,
+                212.0667
+              ],
+              "values": {
+                "value": 91
+              },
+              "visibility": "visible",
+              "color": "#f28e2b"
+            },
+            {
+              "id": "south:3",
+              "series_label": "华南",
+              "label": "第四季度",
+              "position_px": [
+                523.9326000000001,
+                244.73895
+              ],
+              "bounds_px": [
+                506.9682,
+                122.3928,
+                33.928800000000024,
+                244.69230000000002
+              ],
+              "values": {
+                "value": 105
+              },
+              "visibility": "visible",
+              "color": "#f28e2b"
+            },
+            {
+              "id": "north:0",
+              "series_label": "华北",
+              "label": "第一季度",
+              "position_px": [
+                176.1628,
+                299.5034
+              ],
+              "bounds_px": [
+                159.1984,
+                231.9217,
+                33.928799999999995,
+                135.16340000000002
+              ],
+              "values": {
+                "value": 58
+              },
+              "visibility": "visible",
+              "color": "#e15759"
+            },
+            {
+              "id": "north:1",
+              "series_label": "华北",
+              "label": "第二季度",
+              "position_px": [
+                303.39565000000005,
+                283.1906
+              ],
+              "bounds_px": [
+                286.4313,
+                199.2961,
+                33.92869999999999,
+                167.78900000000002
+              ],
+              "values": {
+                "value": 72
+              },
+              "visibility": "visible",
+              "color": "#e15759"
+            },
+            {
+              "id": "north:2",
+              "series_label": "华北",
+              "label": "第三季度",
+              "position_px": [
+                430.62850000000003,
+                269.20820000000003
+              ],
+              "bounds_px": [
+                413.6641,
+                171.3313,
+                33.92879999999997,
+                195.7538
+              ],
+              "values": {
+                "value": 84
+              },
+              "visibility": "visible",
+              "color": "#e15759"
+            },
+            {
+              "id": "north:3",
+              "series_label": "华北",
+              "label": "第四季度",
+              "position_px": [
+                557.8614,
+                252.89535
+              ],
+              "bounds_px": [
+                540.897,
+                138.7056,
+                33.92879999999991,
+                228.3795
+              ],
+              "values": {
+                "value": 98
+              },
+              "visibility": "visible",
+              "color": "#e15759"
+            }
+          ],
+          "panel_polygon": [
+            [
+              0,
+              0
+            ],
+            [
+              1000,
+              0
+            ],
+            [
+              1000,
+              1000
+            ],
+            [
+              0,
+              1000
+            ]
+          ],
+          "chart_id": "bar"
+        }
+      ]
+    },
+    {
+      "case_id": "box_plot",
+      "image": "single/box_plot.png",
+      "source": "cases/box_plot.json",
+      "sha256": "00171c79bc78f405fe716ace12229fa4407d88e4b7f0829f789a00f448bfca60",
+      "image_size": [
+        640,
+        480
+      ],
+      "provenance": "recovered_original_generator",
+      "charts": [
+        {
+          "chart_type": "box_plot",
+          "plot_area_px": [
+            67.16666666666667,
+            63.666666666666686,
+            531.8333333333334,
+            303.41840277777777
+          ],
+          "numeric_tolerance": {
+            "x": 0.009514258853024149,
+            "y": 0.4277921141621306
+          },
+          "geometry_tolerance_px": 2.0,
+          "targets": [
+            {
+              "id": "control",
+              "series_label": null,
+              "label": "基线方案",
+              "position_px": [
+                122.8725,
+                213.0383
+              ],
+              "bounds_px": null,
+              "values": {
+                "lower_whisker": 48,
+                "q1": 61,
+                "median": 69,
+                "q3": 78,
+                "upper_whisker": 91
+              },
+              "visibility": "visible",
+              "outliers": [
+                39,
+                96
+              ],
+              "statistic_positions": {
+                "lower_whisker": [
+                  122.8725,
+                  311.2168
+                ],
+                "q1": [
+                  122.8725,
+                  250.4396
+                ],
+                "median": [
+                  122.8725,
+                  213.0383
+                ],
+                "q3": [
+                  122.8725,
+                  170.9618
+                ],
+                "upper_whisker": [
+                  122.8725,
+                  110.1846
+                ]
+              }
+            },
+            {
+              "id": "variant-a",
+              "series_label": null,
+              "label": "方案 A",
+              "position_px": [
+                333.0833,
+                184.9873
+              ],
+              "bounds_px": null,
+              "values": {
+                "lower_whisker": 55,
+                "q1": 67,
+                "median": 75,
+                "q3": 83,
+                "upper_whisker": 94
+              },
+              "visibility": "visible",
+              "outliers": [
+                49
+              ],
+              "statistic_positions": {
+                "lower_whisker": [
+                  333.0833,
+                  278.4906
+                ],
+                "q1": [
+                  333.0833,
+                  222.3886
+                ],
+                "median": [
+                  333.0833,
+                  184.9873
+                ],
+                "q3": [
+                  333.0833,
+                  147.5859
+                ],
+                "upper_whisker": [
+                  333.0833,
+                  96.1591
+                ]
+              }
+            },
+            {
+              "id": "variant-b",
+              "series_label": null,
+              "label": "方案 B",
+              "position_px": [
+                543.2941,
+                199.0128
+              ],
+              "bounds_px": null,
+              "values": {
+                "lower_whisker": 51,
+                "q1": 64,
+                "median": 72,
+                "q3": 81,
+                "upper_whisker": 92
+              },
+              "visibility": "visible",
+              "outliers": [
+                98
+              ],
+              "statistic_positions": {
+                "lower_whisker": [
+                  543.2941,
+                  297.1913
+                ],
+                "q1": [
+                  543.2941,
+                  236.4141
+                ],
+                "median": [
+                  543.2941,
+                  199.0128
+                ],
+                "q3": [
+                  543.2941,
+                  156.9363
+                ],
+                "upper_whisker": [
+                  543.2941,
+                  105.5094
+                ]
+              }
+            }
+          ],
+          "panel_polygon": [
+            [
+              0,
+              0
+            ],
+            [
+              1000,
+              0
+            ],
+            [
+              1000,
+              1000
+            ],
+            [
+              0,
+              1000
+            ]
+          ],
+          "chart_id": "box_plot"
+        }
+      ]
+    },
+    {
+      "case_id": "heatmap",
+      "image": "single/heatmap.png",
+      "source": "cases/heatmap.json",
+      "sha256": "460331e0383b54f6ef0376c652af973afb040ecd268db71f13f3564b1829f5d2",
+      "image_size": [
+        640,
+        480
+      ],
+      "provenance": "recovered_original_generator",
+      "charts": [
+        {
+          "chart_type": "heatmap",
+          "plot_area_px": [
+            66.0,
+            63.666666666666686,
+            487.69499999999994,
+            303.41840277777777
+          ],
+          "numeric_tolerance": {
+            "color": 0.29002855197432037
+          },
+          "geometry_tolerance_px": 2.0,
+          "targets": [
+            {
+              "id": "0:0",
+              "series_label": null,
+              "label": "周一",
+              "position_px": [
+                114.7695,
+                101.594
+              ],
+              "bounds_px": [
+                66.0,
+                63.6667,
+                97.53899999999999,
+                75.8546
+              ],
+              "values": {
+                "value": 38
+              },
+              "visibility": "visible",
+              "row_label": "华东"
+            },
+            {
+              "id": "0:1",
+              "series_label": null,
+              "label": "周二",
+              "position_px": [
+                212.30849999999998,
+                101.594
+              ],
+              "bounds_px": [
+                163.539,
+                63.6667,
+                97.53899999999999,
+                75.8546
+              ],
+              "values": {
+                "value": 45
+              },
+              "visibility": "visible",
+              "row_label": "华东"
+            },
+            {
+              "id": "0:2",
+              "series_label": null,
+              "label": "周三",
+              "position_px": [
+                309.84749999999997,
+                101.594
+              ],
+              "bounds_px": [
+                261.078,
+                63.6667,
+                97.53900000000004,
+                75.8546
+              ],
+              "values": {
+                "value": 51
+              },
+              "visibility": "visible",
+              "row_label": "华东"
+            },
+            {
+              "id": "0:3",
+              "series_label": null,
+              "label": "周四",
+              "position_px": [
+                407.3865,
+                101.594
+              ],
+              "bounds_px": [
+                358.617,
+                63.6667,
+                97.53899999999999,
+                75.8546
+              ],
+              "values": {
+                "value": 48
+              },
+              "visibility": "visible",
+              "row_label": "华东"
+            },
+            {
+              "id": "0:4",
+              "series_label": null,
+              "label": "周五",
+              "position_px": [
+                504.92550000000006,
+                101.594
+              ],
+              "bounds_px": [
+                456.156,
+                63.6667,
+                97.53900000000004,
+                75.8546
+              ],
+              "values": {
+                "value": 62
+              },
+              "visibility": "visible",
+              "row_label": "华东"
+            },
+            {
+              "id": "1:0",
+              "series_label": null,
+              "label": "周一",
+              "position_px": [
+                114.7695,
+                177.4486
+              ],
+              "bounds_px": [
+                66.0,
+                139.5213,
+                97.53899999999999,
+                75.8546
+              ],
+              "values": {
+                "value": 27
+              },
+              "visibility": "visible",
+              "row_label": "华南"
+            },
+            {
+              "id": "1:1",
+              "series_label": null,
+              "label": "周二",
+              "position_px": [
+                212.30849999999998,
+                177.4486
+              ],
+              "bounds_px": [
+                163.539,
+                139.5213,
+                97.53899999999999,
+                75.8546
+              ],
+              "values": {
+                "value": 31
+              },
+              "visibility": "visible",
+              "row_label": "华南"
+            },
+            {
+              "id": "1:2",
+              "series_label": null,
+              "label": "周三",
+              "position_px": [
+                309.84749999999997,
+                177.4486
+              ],
+              "bounds_px": [
+                261.078,
+                139.5213,
+                97.53900000000004,
+                75.8546
+              ],
+              "values": {
+                "value": 42
+              },
+              "visibility": "visible",
+              "row_label": "华南"
+            },
+            {
+              "id": "1:3",
+              "series_label": null,
+              "label": "周四",
+              "position_px": [
+                407.3865,
+                177.4486
+              ],
+              "bounds_px": [
+                358.617,
+                139.5213,
+                97.53899999999999,
+                75.8546
+              ],
+              "values": {
+                "value": 39
+              },
+              "visibility": "visible",
+              "row_label": "华南"
+            },
+            {
+              "id": "1:4",
+              "series_label": null,
+              "label": "周五",
+              "position_px": [
+                504.92550000000006,
+                177.4486
+              ],
+              "bounds_px": [
+                456.156,
+                139.5213,
+                97.53900000000004,
+                75.8546
+              ],
+              "values": {
+                "value": 55
+              },
+              "visibility": "visible",
+              "row_label": "华南"
+            },
+            {
+              "id": "2:0",
+              "series_label": null,
+              "label": "周一",
+              "position_px": [
+                114.7695,
+                253.3032
+              ],
+              "bounds_px": [
+                66.0,
+                215.3759,
+                97.53899999999999,
+                75.8546
+              ],
+              "values": {
+                "value": 23
+              },
+              "visibility": "visible",
+              "row_label": "华北"
+            },
+            {
+              "id": "2:1",
+              "series_label": null,
+              "label": "周二",
+              "position_px": [
+                212.30849999999998,
+                253.3032
+              ],
+              "bounds_px": [
+                163.539,
+                215.3759,
+                97.53899999999999,
+                75.8546
+              ],
+              "values": {
+                "value": 34
+              },
+              "visibility": "visible",
+              "row_label": "华北"
+            },
+            {
+              "id": "2:2",
+              "series_label": null,
+              "label": "周三",
+              "position_px": [
+                309.84749999999997,
+                253.3032
+              ],
+              "bounds_px": [
+                261.078,
+                215.3759,
+                97.53900000000004,
+                75.8546
+              ],
+              "values": {
+                "value": 37
+              },
+              "visibility": "visible",
+              "row_label": "华北"
+            },
+            {
+              "id": "2:3",
+              "series_label": null,
+              "label": "周四",
+              "position_px": [
+                407.3865,
+                253.3032
+              ],
+              "bounds_px": [
+                358.617,
+                215.3759,
+                97.53899999999999,
+                75.8546
+              ],
+              "values": {
+                "value": 43
+              },
+              "visibility": "visible",
+              "row_label": "华北"
+            },
+            {
+              "id": "2:4",
+              "series_label": null,
+              "label": "周五",
+              "position_px": [
+                504.92550000000006,
+                253.3032
+              ],
+              "bounds_px": [
+                456.156,
+                215.3759,
+                97.53900000000004,
+                75.8546
+              ],
+              "values": {
+                "value": 49
+              },
+              "visibility": "visible",
+              "row_label": "华北"
+            },
+            {
+              "id": "3:0",
+              "series_label": null,
+              "label": "周一",
+              "position_px": [
+                114.7695,
+                329.1578
+              ],
+              "bounds_px": [
+                66.0,
+                291.2305,
+                97.53899999999999,
+                75.8546
+              ],
+              "values": {
+                "value": 18
+              },
+              "visibility": "visible",
+              "row_label": "西部"
+            },
+            {
+              "id": "3:1",
+              "series_label": null,
+              "label": "周二",
+              "position_px": [
+                212.30849999999998,
+                329.1578
+              ],
+              "bounds_px": [
+                163.539,
+                291.2305,
+                97.53899999999999,
+                75.8546
+              ],
+              "values": {
+                "value": 25
+              },
+              "visibility": "visible",
+              "row_label": "西部"
+            },
+            {
+              "id": "3:2",
+              "series_label": null,
+              "label": "周三",
+              "position_px": [
+                309.84749999999997,
+                329.1578
+              ],
+              "bounds_px": [
+                261.078,
+                291.2305,
+                97.53900000000004,
+                75.8546
+              ],
+              "values": {
+                "value": 29
+              },
+              "visibility": "visible",
+              "row_label": "西部"
+            },
+            {
+              "id": "3:3",
+              "series_label": null,
+              "label": "周四",
+              "position_px": [
+                407.3865,
+                329.1578
+              ],
+              "bounds_px": [
+                358.617,
+                291.2305,
+                97.53899999999999,
+                75.8546
+              ],
+              "values": {
+                "value": 33
+              },
+              "visibility": "visible",
+              "row_label": "西部"
+            },
+            {
+              "id": "3:4",
+              "series_label": null,
+              "label": "周五",
+              "position_px": [
+                504.92550000000006,
+                329.1578
+              ],
+              "bounds_px": [
+                456.156,
+                291.2305,
+                97.53900000000004,
+                75.8546
+              ],
+              "values": {
+                "value": 40
+              },
+              "visibility": "visible",
+              "row_label": "西部"
+            }
+          ],
+          "panel_polygon": [
+            [
+              0,
+              0
+            ],
+            [
+              1000,
+              0
+            ],
+            [
+              1000,
+              1000
+            ],
+            [
+              0,
+              1000
+            ]
+          ],
+          "chart_id": "heatmap"
+        }
+      ]
+    },
+    {
+      "case_id": "histogram",
+      "image": "single/histogram.png",
+      "source": "cases/histogram.json",
+      "sha256": "4dbc70aebe0f7b8c1c63d6557242eb8a5098ae22622fc4dfeaf9a539f1405587",
+      "image_size": [
+        640,
+        480
+      ],
+      "provenance": "recovered_original_generator",
+      "charts": [
+        {
+          "chart_type": "histogram",
+          "plot_area_px": [
+            66.0,
+            63.666666666666686,
+            533.0,
+            303.41840277777777
+          ],
+          "numeric_tolerance": {
+            "x": 0.024765478424014997,
+            "y": 0.23531862057916442
+          },
+          "geometry_tolerance_px": 2.0,
+          "targets": [
+            {
+              "id": "0",
+              "series_label": null,
+              "label": null,
+              "position_px": [
+                130.60605,
+                333.08865000000003
+              ],
+              "bounds_px": [
+                90.2273,
+                299.0922,
+                80.75750000000001,
+                67.99290000000002
+              ],
+              "values": {
+                "interval_start": 0,
+                "interval_end": 1,
+                "value": 8
+              },
+              "visibility": "visible"
+            },
+            {
+              "id": "1",
+              "series_label": null,
+              "label": null,
+              "position_px": [
+                211.36360000000002,
+                277.8444
+              ],
+              "bounds_px": [
+                170.9848,
+                188.6037,
+                80.7576,
+                178.4814
+              ],
+              "values": {
+                "interval_start": 1,
+                "interval_end": 2,
+                "value": 21
+              },
+              "visibility": "visible"
+            },
+            {
+              "id": "2",
+              "series_label": null,
+              "label": null,
+              "position_px": [
+                292.1212,
+                222.60014999999999
+              ],
+              "bounds_px": [
+                251.7424,
+                78.1152,
+                80.7576,
+                288.9699
+              ],
+              "values": {
+                "interval_start": 2,
+                "interval_end": 3,
+                "value": 34
+              },
+              "visibility": "visible"
+            },
+            {
+              "id": "3",
+              "series_label": null,
+              "label": null,
+              "position_px": [
+                372.8788,
+                256.5966
+              ],
+              "bounds_px": [
+                332.5,
+                146.1081,
+                80.75760000000002,
+                220.977
+              ],
+              "values": {
+                "interval_start": 3,
+                "interval_end": 4,
+                "value": 26
+              },
+              "visibility": "visible"
+            },
+            {
+              "id": "4",
+              "series_label": null,
+              "label": null,
+              "position_px": [
+                453.6364,
+                311.84085000000005
+              ],
+              "bounds_px": [
+                413.2576,
+                256.5966,
+                80.75759999999997,
+                110.48849999999999
+              ],
+              "values": {
+                "interval_start": 4,
+                "interval_end": 5,
+                "value": 13
+              },
+              "visibility": "visible"
+            },
+            {
+              "id": "5",
+              "series_label": null,
+              "label": null,
+              "position_px": [
+                534.39395,
+                345.8373
+              ],
+              "bounds_px": [
+                494.0152,
+                324.5895,
+                80.7575,
+                42.495600000000024
+              ],
+              "values": {
+                "interval_start": 5,
+                "interval_end": 6,
+                "value": 5
+              },
+              "visibility": "visible"
+            }
+          ],
+          "panel_polygon": [
+            [
+              0,
+              0
+            ],
+            [
+              1000,
+              0
+            ],
+            [
+              1000,
+              1000
+            ],
+            [
+              0,
+              1000
+            ]
+          ],
+          "chart_id": "histogram"
+        }
+      ]
+    },
+    {
+      "case_id": "line",
+      "image": "single/line.png",
+      "source": "cases/line.json",
+      "sha256": "867aa8790ad97e2a2504866ee9ea432894304b8f89376715744aad5445904d29",
+      "image_size": [
+        640,
+        480
+      ],
+      "provenance": "recovered_original_generator",
+      "charts": [
+        {
+          "chart_type": "line",
+          "plot_area_px": [
+            66.0,
+            63.666666666666686,
+            533.0,
+            295.2559427851521
+          ],
+          "numeric_tolerance": {
+            "x": 0.0206378986866792,
+            "y": 0.07078604346740569
+          },
+          "geometry_tolerance_px": 2.0,
+          "targets": [
+            {
+              "id": "actual:0",
+              "series_label": "实际用户",
+              "label": "1月",
+              "position_px": [
+                90.2273,
+                328.5494
+              ],
+              "bounds_px": null,
+              "values": {
+                "y_value": 12.4
+              },
+              "visibility": "visible",
+              "point_source": "marker",
+              "lower_position_px": null
+            },
+            {
+              "id": "actual:1",
+              "series_label": "实际用户",
+              "label": "2月",
+              "position_px": [
+                187.1364,
+                308.7715
+              ],
+              "bounds_px": null,
+              "values": {
+                "y_value": 13.1
+              },
+              "visibility": "visible",
+              "point_source": "marker",
+              "lower_position_px": null
+            },
+            {
+              "id": "actual:2",
+              "series_label": "实际用户",
+              "label": "3月",
+              "position_px": [
+                284.0455,
+                235.3107
+              ],
+              "bounds_px": null,
+              "values": {
+                "y_value": 15.7
+              },
+              "visibility": "visible",
+              "point_source": "marker",
+              "lower_position_px": null
+            },
+            {
+              "id": "actual:3",
+              "series_label": "实际用户",
+              "label": "4月",
+              "position_px": [
+                380.9545,
+                221.1836
+              ],
+              "bounds_px": null,
+              "values": {
+                "y_value": 16.2
+              },
+              "visibility": "visible",
+              "point_source": "marker",
+              "lower_position_px": null
+            },
+            {
+              "id": "actual:4",
+              "series_label": "实际用户",
+              "label": "5月",
+              "position_px": [
+                477.8636,
+                153.3736
+              ],
+              "bounds_px": null,
+              "values": {
+                "y_value": 18.6
+              },
+              "visibility": "visible",
+              "point_source": "marker",
+              "lower_position_px": null
+            },
+            {
+              "id": "actual:5",
+              "series_label": "实际用户",
+              "label": "6月",
+              "position_px": [
+                574.7727,
+                77.0874
+              ],
+              "bounds_px": null,
+              "values": {
+                "y_value": 21.3
+              },
+              "visibility": "visible",
+              "point_source": "marker",
+              "lower_position_px": null
+            },
+            {
+              "id": "target:0",
+              "series_label": "目标用户",
+              "label": "1月",
+              "position_px": [
+                90.2273,
+                345.5019
+              ],
+              "bounds_px": null,
+              "values": {
+                "y_value": 11.8
+              },
+              "visibility": "visible",
+              "point_source": "marker",
+              "lower_position_px": null
+            },
+            {
+              "id": "target:1",
+              "series_label": "目标用户",
+              "label": "2月",
+              "position_px": [
+                187.1364,
+                311.5969
+              ],
+              "bounds_px": null,
+              "values": {
+                "y_value": 13.0
+              },
+              "visibility": "visible",
+              "point_source": "marker",
+              "lower_position_px": null
+            },
+            {
+              "id": "target:2",
+              "series_label": "目标用户",
+              "label": "3月",
+              "position_px": [
+                284.0455,
+                277.6919
+              ],
+              "bounds_px": null,
+              "values": {
+                "y_value": 14.2
+              },
+              "visibility": "visible",
+              "point_source": "marker",
+              "lower_position_px": null
+            },
+            {
+              "id": "target:3",
+              "series_label": "目标用户",
+              "label": "4月",
+              "position_px": [
+                380.9545,
+                240.9615
+              ],
+              "bounds_px": null,
+              "values": {
+                "y_value": 15.5
+              },
+              "visibility": "visible",
+              "point_source": "marker",
+              "lower_position_px": null
+            },
+            {
+              "id": "target:4",
+              "series_label": "目标用户",
+              "label": "5月",
+              "position_px": [
+                477.8636,
+                198.5803
+              ],
+              "bounds_px": null,
+              "values": {
+                "y_value": 17.0
+              },
+              "visibility": "visible",
+              "point_source": "marker",
+              "lower_position_px": null
+            },
+            {
+              "id": "target:5",
+              "series_label": "目标用户",
+              "label": "6月",
+              "position_px": [
+                574.7727,
+                156.199
+              ],
+              "bounds_px": null,
+              "values": {
+                "y_value": 18.5
+              },
+              "visibility": "visible",
+              "point_source": "marker",
+              "lower_position_px": null
+            }
+          ],
+          "panel_polygon": [
+            [
+              0,
+              0
+            ],
+            [
+              1000,
+              0
+            ],
+            [
+              1000,
+              1000
+            ],
+            [
+              0,
+              1000
+            ]
+          ],
+          "chart_id": "line"
+        }
+      ]
+    },
+    {
+      "case_id": "pie",
+      "image": "single/pie.png",
+      "source": "cases/pie.json",
+      "sha256": "ef48f41300798196f83c293e0e56d38d2f7c3951b7f861c0928a2a7b5fd2aaf2",
+      "image_size": [
+        640,
+        480
+      ],
+      "provenance": "recovered_original_generator",
+      "charts": [
+        {
+          "chart_type": "pie",
+          "plot_area_px": [
+            180.79079861111111,
+            63.666666666666686,
+            303.4184027777778,
+            303.41840277777777
+          ],
+          "numeric_tolerance": {
+            "ratio": 0.005555555555555556
+          },
+          "geometry_tolerance_px": 2.0,
+          "targets": [
+            {
+              "id": "housing",
+              "series_label": null,
+              "label": "住房",
+              "position_px": [
+                411.4912,
+                184.1011
+              ],
+              "bounds_px": null,
+              "values": {
+                "ratio": 0.38
+              },
+              "visibility": "visible",
+              "start_angle_deg": -46.800000000000004,
+              "sweep_angle_deg": 136.8
+            },
+            {
+              "id": "food",
+              "series_label": null,
+              "label": "饮食",
+              "position_px": [
+                327.1655,
+                300.1654
+              ],
+              "bounds_px": null,
+              "values": {
+                "ratio": 0.26
+              },
+              "visibility": "visible",
+              "start_angle_deg": -140.4,
+              "sweep_angle_deg": 93.6
+            },
+            {
+              "id": "transport",
+              "series_label": null,
+              "label": "交通",
+              "position_px": [
+                250.2119,
+                236.5039
+              ],
+              "bounds_px": null,
+              "values": {
+                "ratio": 0.14
+              },
+              "visibility": "visible",
+              "start_angle_deg": -190.8,
+              "sweep_angle_deg": 50.400000000000006
+            },
+            {
+              "id": "education",
+              "series_label": null,
+              "label": "教育",
+              "position_px": [
+                260.7683,
+                169.8535
+              ],
+              "bounds_px": null,
+              "values": {
+                "ratio": 0.12
+              },
+              "visibility": "visible",
+              "start_angle_deg": -234.0,
+              "sweep_angle_deg": 43.19999999999999
+            },
+            {
+              "id": "other",
+              "series_label": null,
+              "label": "其他",
+              "position_px": [
+                306.2468,
+                134.5768
+              ],
+              "bounds_px": null,
+              "values": {
+                "ratio": 0.1
+              },
+              "visibility": "visible",
+              "start_angle_deg": -270.0,
+              "sweep_angle_deg": 36.0
+            }
+          ],
+          "panel_polygon": [
+            [
+              0,
+              0
+            ],
+            [
+              1000,
+              0
+            ],
+            [
+              1000,
+              1000
+            ],
+            [
+              0,
+              1000
+            ]
+          ],
+          "chart_id": "pie"
+        }
+      ]
+    },
+    {
+      "case_id": "radar",
+      "image": "single/radar.png",
+      "source": "cases/radar.json",
+      "sha256": "dfeeaa68ba46d13d8a803e9df5793d4ceb49c627d1ab63de6d122f55ed39e497",
+      "image_size": [
+        640,
+        480
+      ],
+      "provenance": "recovered_original_generator",
+      "charts": [
+        {
+          "chart_type": "radar",
+          "plot_area_px": [
+            186.48524305555566,
+            75.05555555555566,
+            292.0295138888888,
+            292.0295138888888
+          ],
+          "numeric_tolerance": {
+            "radial": 0.13697251030204494
+          },
+          "geometry_tolerance_px": 2.0,
+          "targets": [
+            {
+              "id": "alpha:0",
+              "series_label": "方案 A",
+              "label": "速度",
+              "position_px": [
+                332.5,
+                96.9578
+              ],
+              "bounds_px": null,
+              "values": {
+                "value": 8.5
+              },
+              "visibility": "visible"
+            },
+            {
+              "id": "alpha:1",
+              "series_label": "方案 A",
+              "label": "质量",
+              "position_px": [
+                432.4852,
+                188.5832
+              ],
+              "bounds_px": null,
+              "values": {
+                "value": 7.2
+              },
+              "visibility": "visible"
+            },
+            {
+              "id": "alpha:2",
+              "series_label": "方案 A",
+              "label": "成本",
+              "position_px": [
+                390.8612,
+                301.3976
+              ],
+              "bounds_px": null,
+              "values": {
+                "value": 6.8
+              },
+              "visibility": "visible"
+            },
+            {
+              "id": "alpha:3",
+              "series_label": "方案 A",
+              "label": "稳定性",
+              "position_px": [
+                256.1155,
+                326.2046
+              ],
+              "bounds_px": null,
+              "values": {
+                "value": 8.9
+              },
+              "visibility": "visible"
+            },
+            {
+              "id": "alpha:4",
+              "series_label": "方案 A",
+              "label": "服务",
+              "position_px": [
+                224.1827,
+                185.8759
+              ],
+              "bounds_px": null,
+              "values": {
+                "value": 7.8
+              },
+              "visibility": "visible"
+            },
+            {
+              "id": "beta:0",
+              "series_label": "方案 B",
+              "label": "速度",
+              "position_px": [
+                332.5,
+                117.3998
+              ],
+              "bounds_px": null,
+              "values": {
+                "value": 7.1
+              },
+              "visibility": "visible"
+            },
+            {
+              "id": "beta:1",
+              "series_label": "方案 B",
+              "label": "质量",
+              "position_px": [
+                453.3154,
+                181.815
+              ],
+              "bounds_px": null,
+              "values": {
+                "value": 8.7
+              },
+              "visibility": "visible"
+            },
+            {
+              "id": "beta:2",
+              "series_label": "方案 B",
+              "label": "成本",
+              "position_px": [
+                402.8768,
+                317.9356
+              ],
+              "bounds_px": null,
+              "values": {
+                "value": 8.2
+              },
+              "visibility": "visible"
+            },
+            {
+              "id": "beta:3",
+              "series_label": "方案 B",
+              "label": "稳定性",
+              "position_px": [
+                267.2728,
+                310.8479
+              ],
+              "bounds_px": null,
+              "values": {
+                "value": 7.6
+              },
+              "visibility": "visible"
+            },
+            {
+              "id": "beta:4",
+              "series_label": "方案 B",
+              "label": "服务",
+              "position_px": [
+                215.8506,
+                183.1686
+              ],
+              "bounds_px": null,
+              "values": {
+                "value": 8.4
+              },
+              "visibility": "visible"
+            }
+          ],
+          "panel_polygon": [
+            [
+              0,
+              0
+            ],
+            [
+              1000,
+              0
+            ],
+            [
+              1000,
+              1000
+            ],
+            [
+              0,
+              1000
+            ]
+          ],
+          "chart_id": "radar"
+        }
+      ]
+    },
+    {
+      "case_id": "scatter",
+      "image": "single/scatter.png",
+      "source": "cases/scatter.json",
+      "sha256": "51a149f98b6e6fca1a9340cf2c0ec69b14915603e637109c38ed7bae042242a3",
+      "image_size": [
+        640,
+        480
+      ],
+      "provenance": "recovered_original_generator",
+      "charts": [
+        {
+          "chart_type": "scatter",
+          "plot_area_px": [
+            66.0,
+            63.666666666666686,
+            533.0,
+            303.41840277777777
+          ],
+          "numeric_tolerance": {
+            "x": 0.1073170731707318,
+            "y": 0.20301998638202434
+          },
+          "geometry_tolerance_px": 2.0,
+          "targets": [
+            {
+              "id": "search:0",
+              "series_label": "搜索广告",
+              "label": null,
+              "position_px": [
+                127.5,
+                323.7396
+              ],
+              "bounds_px": null,
+              "values": {
+                "y_value": 18,
+                "x_value": 12
+              },
+              "visibility": "visible",
+              "point_source": "visible_marker",
+              "lower_position_px": null
+            },
+            {
+              "id": "search:1",
+              "series_label": "搜索广告",
+              "label": null,
+              "position_px": [
+                239.3182,
+                254.7809
+              ],
+              "bounds_px": null,
+              "values": {
+                "y_value": 25,
+                "x_value": 18
+              },
+              "visibility": "visible",
+              "point_source": "visible_marker",
+              "lower_position_px": null
+            },
+            {
+              "id": "search:2",
+              "series_label": "搜索广告",
+              "label": null,
+              "position_px": [
+                351.1364,
+                195.6734
+              ],
+              "bounds_px": null,
+              "values": {
+                "y_value": 31,
+                "x_value": 24
+              },
+              "visibility": "visible",
+              "point_source": "visible_marker",
+              "lower_position_px": null
+            },
+            {
+              "id": "search:3",
+              "series_label": "搜索广告",
+              "label": null,
+              "position_px": [
+                444.3182,
+                126.7146
+              ],
+              "bounds_px": null,
+              "values": {
+                "y_value": 38,
+                "x_value": 29
+              },
+              "visibility": "visible",
+              "point_source": "visible_marker",
+              "lower_position_px": null
+            },
+            {
+              "id": "search:4",
+              "series_label": "搜索广告",
+              "label": null,
+              "position_px": [
+                574.7727,
+                77.4584
+              ],
+              "bounds_px": null,
+              "values": {
+                "y_value": 43,
+                "x_value": 36
+              },
+              "visibility": "visible",
+              "point_source": "visible_marker",
+              "lower_position_px": null
+            },
+            {
+              "id": "social:0",
+              "series_label": "社交广告",
+              "label": null,
+              "position_px": [
+                90.2273,
+                353.2933
+              ],
+              "bounds_px": null,
+              "values": {
+                "y_value": 15,
+                "x_value": 10
+              },
+              "visibility": "visible",
+              "point_source": "visible_marker",
+              "lower_position_px": null
+            },
+            {
+              "id": "social:1",
+              "series_label": "社交广告",
+              "label": null,
+              "position_px": [
+                220.6818,
+                274.4833
+              ],
+              "bounds_px": null,
+              "values": {
+                "y_value": 23,
+                "x_value": 17
+              },
+              "visibility": "visible",
+              "point_source": "visible_marker",
+              "lower_position_px": null
+            },
+            {
+              "id": "social:2",
+              "series_label": "社交广告",
+              "label": null,
+              "position_px": [
+                369.7727,
+                166.1196
+              ],
+              "bounds_px": null,
+              "values": {
+                "y_value": 34,
+                "x_value": 25
+              },
+              "visibility": "visible",
+              "point_source": "visible_marker",
+              "lower_position_px": null
+            },
+            {
+              "id": "social:3",
+              "series_label": "社交广告",
+              "label": null,
+              "position_px": [
+                500.2273,
+                116.8634
+              ],
+              "bounds_px": null,
+              "values": {
+                "y_value": 39,
+                "x_value": 32
+              },
+              "visibility": "visible",
+              "point_source": "visible_marker",
+              "lower_position_px": null
+            }
+          ],
+          "panel_polygon": [
+            [
+              0,
+              0
+            ],
+            [
+              1000,
+              0
+            ],
+            [
+              1000,
+              1000
+            ],
+            [
+              0,
+              1000
+            ]
+          ],
+          "chart_id": "scatter"
+        }
+      ]
+    },
+    {
+      "case_id": "treemap",
+      "image": "single/treemap.png",
+      "source": "cases/treemap.json",
+      "sha256": "64d44aa07ea88b348b786555bac8f7b82dd0327b0a06bca249216c4e59bcfe4b",
+      "image_size": [
+        640,
+        480
+      ],
+      "provenance": "recovered_original_generator",
+      "charts": [
+        {
+          "chart_type": "treemap",
+          "plot_area_px": [
+            66.0,
+            63.666666666666686,
+            533.0,
+            303.41840277777777
+          ],
+          "numeric_tolerance": {},
+          "geometry_tolerance_px": 2.0,
+          "targets": [
+            {
+              "id": "all",
+              "series_label": null,
+              "label": "总收入",
+              "position_px": [
+                332.5,
+                74.2863
+              ],
+              "bounds_px": null,
+              "values": {},
+              "visibility": "visible",
+              "role": "group",
+              "parent_label": null,
+              "source_value_visible": false
+            },
+            {
+              "id": "retail",
+              "series_label": null,
+              "label": "零售",
+              "position_px": [
+                212.575,
+                101.594
+              ],
+              "bounds_px": [
+                66.0,
+                87.9401,
+                293.15,
+                279.145
+              ],
+              "values": {},
+              "visibility": "visible",
+              "role": "group",
+              "parent_label": "总收入",
+              "source_value_visible": false
+            },
+            {
+              "id": "store",
+              "series_label": null,
+              "label": "门店",
+              "position_px": [
+                212.575,
+                288.4798
+              ],
+              "bounds_px": [
+                69.5178,
+                211.8772,
+                286.11440000000005,
+                153.2053
+              ],
+              "values": {},
+              "visibility": "visible",
+              "role": "leaf",
+              "parent_label": "零售",
+              "source_value_visible": false
+            },
+            {
+              "id": "online",
+              "series_label": null,
+              "label": "线上",
+              "position_px": [
+                212.575,
+                164.5638
+              ],
+              "bounds_px": [
+                69.5178,
+                117.2504,
+                286.11440000000005,
+                94.62679999999999
+              ],
+              "values": {},
+              "visibility": "visible",
+              "role": "leaf",
+              "parent_label": "零售",
+              "source_value_visible": false
+            },
+            {
+              "id": "enterprise",
+              "series_label": null,
+              "label": "企业服务",
+              "position_px": [
+                479.075,
+                101.594
+              ],
+              "bounds_px": [
+                359.15,
+                87.9401,
+                239.85000000000002,
+                279.145
+              ],
+              "values": {},
+              "visibility": "visible",
+              "role": "group",
+              "parent_label": "总收入",
+              "source_value_visible": false
+            },
+            {
+              "id": "consulting",
+              "series_label": null,
+              "label": "咨询",
+              "position_px": [
+                479.075,
+                290.8785
+              ],
+              "bounds_px": [
+                362.0282,
+                216.3104,
+                234.09359999999998,
+                149.1362
+              ],
+              "values": {},
+              "visibility": "visible",
+              "role": "leaf",
+              "parent_label": "企业服务",
+              "source_value_visible": false
+            },
+            {
+              "id": "software",
+              "series_label": null,
+              "label": "软件",
+              "position_px": [
+                479.075,
+                166.5983
+              ],
+              "bounds_px": [
+                362.0282,
+                116.8863,
+                234.09359999999998,
+                99.42409999999998
+              ],
+              "values": {},
+              "visibility": "visible",
+              "role": "leaf",
+              "parent_label": "企业服务",
+              "source_value_visible": false
+            }
+          ],
+          "panel_polygon": [
+            [
+              0,
+              0
+            ],
+            [
+              1000,
+              0
+            ],
+            [
+              1000,
+              1000
+            ],
+            [
+              0,
+              1000
+            ]
+          ],
+          "chart_id": "treemap"
+        }
+      ]
+    }
+  ]
+}

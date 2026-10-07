@@ -1,0 +1,164 @@
+{
+  "case_id": "03_operations_and_revenue",
+  "image": "gallery/03_operations_and_revenue.png",
+  "figure": {
+    "schema_version": 2,
+    "title": "运营热度与收入结构",
+    "layout": {
+      "columns": 2
+    },
+    "charts": [
+      {
+        "chart_id": "heatmap",
+        "chart_spec": {
+          "schema_version": 2,
+          "metadata": {
+            "chart_type": "heatmap",
+            "title": "区域与星期订单热度",
+            "source": "Figura 示例数据",
+            "note": "颜色越亮表示订单量越高"
+          },
+          "coordinate_system": {
+            "kind": "matrix"
+          },
+          "dataset": {
+            "x_categories": [
+              {
+                "id": "mon",
+                "label": "周一"
+              },
+              {
+                "id": "tue",
+                "label": "周二"
+              },
+              {
+                "id": "wed",
+                "label": "周三"
+              },
+              {
+                "id": "thu",
+                "label": "周四"
+              },
+              {
+                "id": "fri",
+                "label": "周五"
+              }
+            ],
+            "y_categories": [
+              {
+                "id": "east",
+                "label": "华东"
+              },
+              {
+                "id": "south",
+                "label": "华南"
+              },
+              {
+                "id": "north",
+                "label": "华北"
+              },
+              {
+                "id": "west",
+                "label": "西部"
+              }
+            ],
+            "values": [
+              [
+                38,
+                45,
+                51,
+                48,
+                62
+              ],
+              [
+                27,
+                31,
+                42,
+                39,
+                55
+              ],
+              [
+                23,
+                34,
+                37,
+                43,
+                49
+              ],
+              [
+                18,
+                25,
+                29,
+                33,
+                40
+              ]
+            ]
+          }
+        },
+        "measurement_refs": []
+      },
+      {
+        "chart_id": "treemap",
+        "chart_spec": {
+          "schema_version": 2,
+          "metadata": {
+            "chart_type": "treemap",
+            "title": "业务收入构成",
+            "source": "Figura 示例数据",
+            "note": "矩形面积表示收入规模"
+          },
+          "coordinate_system": {
+            "kind": "hierarchical"
+          },
+          "dataset": {
+            "root_id": "all",
+            "nodes": [
+              {
+                "id": "all",
+                "parent_id": null,
+                "label": "总收入",
+                "value": 100
+              },
+              {
+                "id": "retail",
+                "parent_id": "all",
+                "label": "零售",
+                "value": 55
+              },
+              {
+                "id": "store",
+                "parent_id": "retail",
+                "label": "门店",
+                "value": 34
+              },
+              {
+                "id": "online",
+                "parent_id": "retail",
+                "label": "线上",
+                "value": 21
+              },
+              {
+                "id": "enterprise",
+                "parent_id": "all",
+                "label": "企业服务",
+                "value": 45
+              },
+              {
+                "id": "consulting",
+                "parent_id": "enterprise",
+                "label": "咨询",
+                "value": 27
+              },
+              {
+                "id": "software",
+                "parent_id": "enterprise",
+                "label": "软件",
+                "value": 18
+              }
+            ]
+          }
+        },
+        "measurement_refs": []
+      }
+    ]
+  }
+}

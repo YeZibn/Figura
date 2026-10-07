@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from importlib.resources import files
 from collections.abc import Iterable, Mapping
 
 from figura.charts.chartfigure import chart_figure_digest, parse_chart_figure, validate_chart_figure
@@ -27,7 +28,7 @@ from figura.tools.contracts import ToolExecutionError
 from figura.tools.implementations.extract_text import EXTRACT_TEXT_RESULT_SCHEMA
 from figura.tools.implementations.image import DECOMPOSE_RESULT_SCHEMA
 from figura.tools.implementations.measurement_schema import OBSERVATION_SCOPE
-from figura.tools.measurements.contracts import MEASUREMENT_RESULT_V2_SCHEMA, validate_measurement_result
+from figura.tools.measurements.contracts import MEASUREMENT_RESULT_SCHEMA, validate_measurement_result
 
 from .execution_resources import (
     AttachmentContent,
@@ -44,8 +45,14 @@ from .execution_resources import (
 )
 
 
+# Frozen read-only schema for already committed facts. It is never registered as
+# a tool result schema and does not convert or execute historical observations.
+_HISTORICAL_MEASUREMENT_SCHEMA = json.loads(
+    files("figura.agent").joinpath("assets/measurement-history-schema.json").read_text(encoding="utf-8")
+)
+
 _MEASUREMENT_SCHEMAS = {
-    "measure_chart": MEASUREMENT_RESULT_V2_SCHEMA,
+    "measure_chart": MEASUREMENT_RESULT_SCHEMA,
 }
 _OBSERVATION_TOOL_NAMES = frozenset({"extract_text", *_MEASUREMENT_SCHEMAS})
 _RESOURCE_TOOL_NAMES = frozenset(
@@ -293,6 +300,8 @@ def _committed_tool_resources(
                     panel_positions,
                     prefix,
                 )
+                if content is None:
+                    continue  # Historical facts remain available through History tools, not current resources.
                 kind = "ocr" if call.tool_name == "extract_text" else "measurement"
                 ref = ToolResourceRef(kind, state.run.run_id, call.call_id)
                 resource = ExecutionResource(ref, content)
@@ -325,7 +334,8 @@ def _observation_content(
     panel_ids: frozenset[str],
     panel_positions: Mapping[ImageResourceRef, _PanelPosition],
     call_position: tuple[int, int, int],
-) -> OcrContent | MeasurementContent:
+) -> OcrContent | MeasurementContent | None:
+    """Project current observations; validate but do not convert frozen history."""
     arguments = _parse_object(call.arguments_json)
     source_ref = _source_ref(arguments)
     scope = _scope(arguments)
@@ -336,6 +346,13 @@ def _observation_content(
             if call.tool_name == "extract_text"
             else _MEASUREMENT_SCHEMAS[call.tool_name]
         )
+        historical_measurement = (
+            call.tool_name == "measure_chart"
+            and isinstance(result_fact.result, Mapping)
+            and result_fact.result.get("schema_version") == 2
+        )
+        if historical_measurement:
+            schema = _HISTORICAL_MEASUREMENT_SCHEMA
         if (
             result_fact.error is not None
             or not isinstance(result_fact.result, Mapping)
@@ -349,13 +366,15 @@ def _observation_content(
             raise RunError(RunErrorCode.INTEGRITY_ERROR)
         if call.tool_name == "measure_chart":
             arguments_chart_type = arguments.get("chart_type") if arguments is not None else None
-            result_issue = validate_measurement_result(result_fact.result)
+            result_issue = None if historical_measurement else validate_measurement_result(result_fact.result)
             if result_issue is not None or result_fact.result.get("chart_type") != arguments_chart_type:
                 raise RunError(RunErrorCode.INTEGRITY_ERROR)
         if source_ref.kind == "panel":
             panel_position = panel_positions.get(source_ref)
             if panel_position is None or panel_position >= (*call_position, 0):
                 raise RunError(RunErrorCode.INTEGRITY_ERROR)
+        if historical_measurement:
+            return None
     else:
         _validate_failure(result_fact)
         if "observation_scope" in (arguments or {}) and scope is None:

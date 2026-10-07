@@ -1,0 +1,72 @@
+{
+  "case_id": "histogram",
+  "image": "single/histogram.png",
+  "figure": {
+    "schema_version": 2,
+    "title": "",
+    "layout": {
+      "columns": 1
+    },
+    "charts": [
+      {
+        "chart_id": "histogram",
+        "chart_spec": {
+          "schema_version": 2,
+          "metadata": {
+            "chart_type": "histogram",
+            "title": "用户响应时长分布",
+            "source": "Figura 示例数据",
+            "note": "单位：秒 · 纵轴为样本数"
+          },
+          "coordinate_system": {
+            "kind": "cartesian",
+            "x_axis": {
+              "kind": "numeric",
+              "label": "响应时长"
+            },
+            "y_axis": {
+              "kind": "numeric",
+              "label": "样本数"
+            }
+          },
+          "dataset": {
+            "measure": "count",
+            "bins": [
+              {
+                "start": 0,
+                "end": 1,
+                "value": 8
+              },
+              {
+                "start": 1,
+                "end": 2,
+                "value": 21
+              },
+              {
+                "start": 2,
+                "end": 3,
+                "value": 34
+              },
+              {
+                "start": 3,
+                "end": 4,
+                "value": 26
+              },
+              {
+                "start": 4,
+                "end": 5,
+                "value": 13
+              },
+              {
+                "start": 5,
+                "end": 6,
+                "value": 5
+              }
+            ]
+          }
+        },
+        "measurement_refs": []
+      }
+    ]
+  }
+}

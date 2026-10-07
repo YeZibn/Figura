@@ -1,4 +1,4 @@
-"""Adapters from family geometry sensors to the closed measurement v2 union."""
+"""Adapters from family geometry sensors to the closed measurement union."""
 
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ from .scatter import measure_scatter_pixels
 
 
 def current_chart_family_adapters() -> dict[ChartType, Any]:
-    """Return all family sensors implemented at this migration step."""
+    """Return all family sensors implemented for the current result contract."""
     return {
         ChartType.BAR: measure_bar,
         ChartType.LINE: measure_line,
@@ -85,6 +85,8 @@ def measure_line(image: PreparedMeasurementImage) -> MeasurementSensorResult:
                 "x_value": point["x_value"],
                 "y_value": point["y_value"],
                 "point_source": point["source"],
+                "category_id": point.get("x_tick_id"),
+                "category_label": point.get("x_category_label"),
             }
             for point in item["points"]
         ]

@@ -209,7 +209,7 @@ def test_measure_chart_authorizes_attachment_and_requires_a_valid_scope(tmp_path
         "source_kind": "attachment", "source_id": attachment.attachment_id, "chart_type": "pie",
     }, run.run_id, session.session_id)
     assert valid.outcome is ToolOutcome.SUCCEEDED
-    assert valid.result["schema_version"] == 2
+    assert valid.result["schema_version"] == 3
     assert valid.result["chart_type"] == "pie"
     assert valid.result["source_id"] == attachment.attachment_id
     assert valid.result["coordinate_system"] == "attachment_px"

@@ -20,7 +20,7 @@ def measure_box_plot(image: PreparedMeasurementImage) -> MeasurementSensorResult
     left, top, right, bottom = _plot_bounds(axes, width, height)
     gray = np.mean(rgb.astype(np.float32), axis=2)
     spread = rgb.max(axis=2).astype(np.int16) - rgb.min(axis=2).astype(np.int16)
-    dark = (gray <= 120) & (spread <= 72)
+    dark = gray <= 155
     colored = (spread >= 58) & (rgb.max(axis=2) <= 240) & (rgb.min(axis=2) <= 215)
     ink = (dark | colored)
     if image.observation_mask is not None:

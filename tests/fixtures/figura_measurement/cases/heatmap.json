@@ -1,0 +1,101 @@
+{
+  "case_id": "heatmap",
+  "image": "single/heatmap.png",
+  "figure": {
+    "schema_version": 2,
+    "title": "",
+    "layout": {
+      "columns": 1
+    },
+    "charts": [
+      {
+        "chart_id": "heatmap",
+        "chart_spec": {
+          "schema_version": 2,
+          "metadata": {
+            "chart_type": "heatmap",
+            "title": "区域与星期订单热度",
+            "source": "Figura 示例数据",
+            "note": "颜色越亮表示订单量越高"
+          },
+          "coordinate_system": {
+            "kind": "matrix"
+          },
+          "dataset": {
+            "x_categories": [
+              {
+                "id": "mon",
+                "label": "周一"
+              },
+              {
+                "id": "tue",
+                "label": "周二"
+              },
+              {
+                "id": "wed",
+                "label": "周三"
+              },
+              {
+                "id": "thu",
+                "label": "周四"
+              },
+              {
+                "id": "fri",
+                "label": "周五"
+              }
+            ],
+            "y_categories": [
+              {
+                "id": "east",
+                "label": "华东"
+              },
+              {
+                "id": "south",
+                "label": "华南"
+              },
+              {
+                "id": "north",
+                "label": "华北"
+              },
+              {
+                "id": "west",
+                "label": "西部"
+              }
+            ],
+            "values": [
+              [
+                38,
+                45,
+                51,
+                48,
+                62
+              ],
+              [
+                27,
+                31,
+                42,
+                39,
+                55
+              ],
+              [
+                23,
+                34,
+                37,
+                43,
+                49
+              ],
+              [
+                18,
+                25,
+                29,
+                33,
+                40
+              ]
+            ]
+          }
+        },
+        "measurement_refs": []
+      }
+    ]
+  }
+}

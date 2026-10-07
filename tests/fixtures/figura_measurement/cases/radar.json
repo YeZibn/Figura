@@ -1,0 +1,81 @@
+{
+  "case_id": "radar",
+  "image": "single/radar.png",
+  "figure": {
+    "schema_version": 2,
+    "title": "",
+    "layout": {
+      "columns": 1
+    },
+    "charts": [
+      {
+        "chart_id": "radar",
+        "chart_spec": {
+          "schema_version": 2,
+          "metadata": {
+            "chart_type": "radar",
+            "title": "产品方案能力画像",
+            "source": "Figura 示例数据",
+            "note": "评分范围：0–10"
+          },
+          "coordinate_system": {
+            "kind": "polar",
+            "value_range": {
+              "min": 0,
+              "max": 10
+            }
+          },
+          "dataset": {
+            "dimensions": [
+              {
+                "id": "speed",
+                "label": "速度"
+              },
+              {
+                "id": "quality",
+                "label": "质量"
+              },
+              {
+                "id": "cost",
+                "label": "成本"
+              },
+              {
+                "id": "stability",
+                "label": "稳定性"
+              },
+              {
+                "id": "service",
+                "label": "服务"
+              }
+            ],
+            "series": [
+              {
+                "id": "alpha",
+                "label": "方案 A",
+                "values": [
+                  8.5,
+                  7.2,
+                  6.8,
+                  8.9,
+                  7.8
+                ]
+              },
+              {
+                "id": "beta",
+                "label": "方案 B",
+                "values": [
+                  7.1,
+                  8.7,
+                  8.2,
+                  7.6,
+                  8.4
+                ]
+              }
+            ]
+          }
+        },
+        "measurement_refs": []
+      }
+    ]
+  }
+}

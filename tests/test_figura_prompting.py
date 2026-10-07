@@ -237,7 +237,7 @@ def test_all_gateway_tool_guidance_survives_native_provider_projection(tmp_path)
         registry = app.dispatcher._executor._tools.registry
         projected = project_provider_tools(registry)
         directory = _payload(build_tool_instruction(registry))["tools"]
-        assert registry.version == "figura-web-v9"
+        assert registry.version == "figura-web-v10"
         assert [tool.name for tool in projected] == [
             "load_image", "decompose_chart_image", "search_history", "read_history",
             "read_resource_image", "extract_text", "measure_chart", "assemble_chart_figure", "render_chart_figure",

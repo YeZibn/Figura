@@ -16,6 +16,11 @@ def measure_heatmap(image: PreparedMeasurementImage) -> MeasurementSensorResult:
     height, width = rgb.shape[:2]
     ocr = recognize_text(rgb, image.observation_mask) if image.observation_mask is not None else recognize_text(rgb)
     regions, truncated = visible_color_regions(image)
+    if regions:
+        largest = sorted(regions, key=lambda r: r.width*r.height, reverse=True)[:max(1,len(regions)//4)]
+        typical_width = float(np.median([r.width for r in largest]))
+        typical_height = float(np.median([r.height for r in largest]))
+        regions = [r for r in regions if r.width >= typical_width * .65 and r.height >= typical_height * .65]
     plot_area = enclosing_plot_area(regions, width, height)
     if not regions or plot_area is None:
         return MeasurementSensorResult(
@@ -43,9 +48,7 @@ def measure_heatmap(image: PreparedMeasurementImage) -> MeasurementSensorResult:
         top = min(item.top for item in candidates)
         right = max(item.right for item in candidates)
         bottom = max(item.bottom for item in candidates)
-        weights = np.asarray([item.pixels for item in candidates], dtype=np.float64)
-        colors = np.asarray([_rgb_tuple(item.color) for item in candidates], dtype=np.float64)
-        color = tuple(int(round(value)) for value in np.average(colors, axis=0, weights=weights))
+        color = _cell_center_color(rgb, left, top, right, bottom)
         row_id, column_id = f"row_{row_index + 1}", f"column_{column_index + 1}"
         cells.append(
             {
@@ -58,8 +61,43 @@ def measure_heatmap(image: PreparedMeasurementImage) -> MeasurementSensorResult:
         )
         cell_bounds[(row_index, column_index)] = (left, top, right, bottom)
 
-    row_labels, labeled_rows = _row_labels(ocr.snippets, rows, plot_area, typical_height)
-    column_labels, labeled_columns = _column_labels(ocr.snippets, columns, plot_area, typical_width)
+    from .scales import color_scale_support, color_reading, text_evidence
+    from .cartesian import parse_numeric_text
+    evidence, calibration = color_scale_support(rgb, ocr.snippets, plot_area)
+    provenance, issues = [], []
+    for index, cell in enumerate(cells):
+        rect = cell["bounds_px"]
+        numeric = [s for s in ocr.snippets if parse_numeric_text(s.text) is not None and
+            rect["x"] <= s.bbox_px[0]+s.bbox_px[2]/2 <= rect["x"]+rect["width"] and
+            rect["y"] <= s.bbox_px[1]+s.bbox_px[3]/2 <= rect["y"]+rect["height"]]
+        scale_value = color_reading(cell["color"],calibration) if calibration else None
+        text_value = parse_numeric_text(numeric[0].text) if len(numeric)==1 else None
+        path = f"/observations/cells/{index}/value"
+        if text_value is not None and scale_value is not None and abs(text_value-scale_value) > 2*abs(calibration["parameters"]["slope"])+calibration["residual_value"]:
+            identity = f"cell_text_{index}"
+            evidence.append(text_evidence(numeric[0],identity))
+            issues.append({"code":"value_conflict","field_path":path,"evidence_ids":[identity],"message":"格内数字与色条读数冲突，保持未知。"})
+            continue
+        if text_value is not None:
+            identity = f"cell_text_{index}"
+            evidence.append(text_evidence(numeric[0],identity))
+            method, refs, c_refs, value = "direct_text",[identity],[],text_value
+        elif scale_value is not None:
+            identity = f"cell_geometry_{index}"
+            evidence.append({"id":identity,"kind":"geometry","bounds_px":rect,"points_px":[],"ratio_denominator":None})
+            method, refs, c_refs, value = "color_scale_calibration",[identity],[calibration["id"]],scale_value
+        else:
+            continue
+        cell["value"] = value
+        provenance.append({"field_path":path,"method":method,"evidence_ids":refs,"calibration_ids":c_refs,"input_paths":[],
+            "error_bound":0 if method=="direct_text" else 2*abs(calibration["parameters"]["slope"])+calibration["residual_value"]})
+
+    from .ocr import recognize_region
+    band_y = min(height-1,plot_area["y"]+plot_area["height"]+2)
+    extra_labels = recognize_region(rgb,(plot_area["x"],band_y,plot_area["width"],min(36,height-band_y)),image.observation_mask,scale=3)
+    label_snippets = (*ocr.snippets,*extra_labels)
+    row_labels, labeled_rows = _row_labels(label_snippets, rows, plot_area, typical_height)
+    column_labels, labeled_columns = _column_labels(label_snippets, columns, plot_area, typical_width)
     occupied_rows = {row_index for row_index, _ in buckets}
     occupied_columns = {column_index for _, column_index in buckets}
     row_labels = [row_labels[index] if index in occupied_rows else None for index in range(len(rows))]
@@ -97,6 +135,8 @@ def measure_heatmap(image: PreparedMeasurementImage) -> MeasurementSensorResult:
         plot_area_px=plot_area,
         warnings=tuple(warnings),
         truncated=truncated,
+        evidence=tuple(evidence), calibrations=(calibration,) if calibration else (),
+        value_provenance=tuple(provenance), issues=tuple(issues[:32]),
     )
 
 
@@ -112,6 +152,18 @@ def _cluster_regions(regions: list[ColorRegion], coordinate: str, typical_size: 
         else:
             clusters.append([center])
     return [float(np.mean(cluster)) for cluster in clusters]
+
+
+def _cell_center_color(rgb: np.ndarray, left: int, top: int, right: int, bottom: int) -> tuple[int, int, int]:
+    """Read a robust interior color, avoiding antialiased cell borders."""
+    width, height = right - left, bottom - top
+    inset_x = min(max(1, int(round(width * 0.15))), max(1, (width - 1) // 2))
+    inset_y = min(max(1, int(round(height * 0.15))), max(1, (height - 1) // 2))
+    patch = rgb[top + inset_y : bottom - inset_y, left + inset_x : right - inset_x]
+    if not patch.size:
+        patch = rgb[top:bottom, left:right]
+    representative = np.median(patch.reshape(-1, 3), axis=0)
+    return tuple(int(round(float(channel))) for channel in representative)
 
 
 def _nearest_cluster_map(regions: list[ColorRegion], clusters: list[float], coordinate: str) -> dict[int, int]:
@@ -131,7 +183,7 @@ def _row_labels(snippets, centers: list[float], plot_area: dict[str, int], cell_
     for snippet in snippets:
         x, y, width, height = snippet.bbox_px
         center_x, center_y = x + width / 2, y + height / 2
-        if left <= center_x <= right:
+        if center_x >= left or left-center_x > max(70, cell_height*1.5):
             continue
         nearest = min(range(len(centers)), key=lambda index: abs(centers[index] - center_y)) if centers else None
         if nearest is None or abs(centers[nearest] - center_y) > max(14, cell_height * 0.8):
@@ -152,7 +204,7 @@ def _column_labels(snippets, centers: list[float], plot_area: dict[str, int], ce
     for snippet in snippets:
         x, y, width, height = snippet.bbox_px
         center_x, center_y = x + width / 2, y + height / 2
-        if top <= center_y <= bottom:
+        if center_y <= bottom or center_y-bottom > max(42, height*1.2):
             continue
         nearest = min(range(len(centers)), key=lambda index: abs(centers[index] - center_x)) if centers else None
         if nearest is None or abs(centers[nearest] - center_x) > max(18, cell_width * 0.8):

@@ -22,7 +22,7 @@ from chartagent.tools.chart.observation.segmentation import (
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-COMPLEX_IMAGE = PROJECT_ROOT / "photo" / "dashboard_text_two_bars_pie.png"
+COMPLEX_IMAGE = PROJECT_ROOT / "tests" / "fixtures" / "legacy_charts" / "dashboard_text_two_bars_pie.png"
 
 REGIONS = [
     {

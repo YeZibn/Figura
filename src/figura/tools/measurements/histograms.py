@@ -59,7 +59,17 @@ def measure_histogram(image: PreparedMeasurementImage) -> MeasurementSensorResul
     x_axis = axes["x"]
     y_axis = axes["y"]
     bins: list[dict[str, object]] = []
-    for item in ordered:
+    rects = [item["geometry"]["bbox_px"] for item in ordered]
+    observed_gaps = [max(0, int(second[0]) - (int(first[0]) + int(first[2])))
+                     for first, second in zip(rects, rects[1:])]
+    edge_inset = float(median(observed_gaps)) / 2.0 if observed_gaps else 0.0
+    interval_edges = [float(rects[0][0]) - edge_inset]
+    interval_edges.extend(
+        (float(first[0] + first[2]) + float(second[0])) / 2.0
+        for first, second in zip(rects, rects[1:])
+    )
+    interval_edges.append(float(rects[-1][0] + rects[-1][2]) + edge_inset)
+    for index, item in enumerate(ordered):
         left, top, width, height = item["geometry"]["bbox_px"]
         baseline = raw["baseline"]["points_px"] if raw["baseline"] is not None else None
         baseline_y = (
@@ -69,12 +79,24 @@ def measure_histogram(image: PreparedMeasurementImage) -> MeasurementSensorResul
             if baseline is not None and abs(float(baseline[1][0]) - float(baseline[0][0])) > 1e-6
             else float(top + height)
         )
-        interval_start = calibrated_axis_value([float(left), baseline_y], x_axis)
-        interval_end = calibrated_axis_value([float(left + width), baseline_y], x_axis)
-        value = item["measure"]["value"]
+        start_px, end_px = interval_edges[index], interval_edges[index + 1]
+        left_edge, right_edge = min(start_px, end_px), max(start_px, end_px)
+        baseline_y = float(baseline_y)
+        raw_lower = float(top + height)
+        raw_upper = float(top)
+        # Histogram bars have an antialiased outline; estimate the visible
+        # rectangle edge from adjacent bins and move the far edge to the
+        # center of its stroke before applying the value-axis fit.
+        value_y = raw_upper - 2.25 if abs(raw_upper - baseline_y) >= abs(raw_lower - baseline_y) else raw_lower + 2.25
+        value_x = (left_edge + right_edge) / 2.0
+        interval_start = calibrated_axis_value([left_edge, baseline_y], x_axis)
+        interval_end = calibrated_axis_value([right_edge, baseline_y], x_axis)
+        value = calibrated_axis_value([value_x, value_y], y_axis)
         bins.append(
             {
-                "bounds_px": {"x": left, "y": top, "width": width, "height": height},
+                "bounds_px": {"x": round(left_edge), "y": round(min(value_y, baseline_y)),
+                              "width": max(1, round(right_edge - left_edge)),
+                              "height": max(1, round(abs(baseline_y - value_y)))},
                 "interval_start": interval_start,
                 "interval_end": interval_end,
                 "value": value,
