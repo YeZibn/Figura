@@ -60,20 +60,47 @@ flowchart LR
 
 ### 提示分层与代码职责
 
-每次普通模型请求包含三层基础 `InstructionBlock(SYSTEM)`；使用摘要检查点时在工具目录之后、资源/执行索引之前增加摘要层，因此总数为三层或四层。这些是 `ProviderRequest.instructions` 的调用期内容，不是 Memory 消息、Run 字段或持久 Prompt 模型。
+每次普通模型请求包含三层基础 `InstructionBlock(SYSTEM)`；使用摘要检查点时在工具目录之后、资源/执行索引之前增加摘要层，因此总数为三层或四层。`image_feedback.md` 与四份基础规则共同组成第一层稳定指令；每张实际回传的图像前还会附加该类型的一句局部 Cue。这些都是 `ProviderRequest` 的调用期内容，不是 Memory 消息、Run 字段或持久 Prompt 模型。
 
 | 顺序 | 来源 | 内容与边界 |
 |---|---|---|
-| 1. 稳定规则 | `agent/prompting/assets/agent.md`、`evidence.md`、`workflow.md`、`response.md`，由 `loader.py` 按固定顺序载入 | 任务分类、证据与不确定性、工作流和回答规则；不包含本次用户输入、工具状态或资源值 |
+| 1. 稳定规则 | 四份基础资产 `agent.md`、`evidence.md`、`workflow.md`、`response.md`，随后加入 `image_feedback.md`，由 `loader.py` 固定载入 | 职责、证据、工作流、回答规则与四类图像观察政策；不包含本次用户输入、工具状态或资源值 |
 | 2. 当前工具目录 | 本次请求的 `ToolRegistry`，由 `tools.py` 投影 | 按注册顺序列工具名称和描述；参数以同请求 `ProviderRequest.tools` Schema 为准 |
 | 3. 可选摘要索引 | Runtime 的 `SessionContextCheckpoint`，由 `execution.py` 投影 | 自动摘要、覆盖边界、revision 和来源引用；全体内容作为不可信历史数据，必要时通过历史工具核对原始事实 |
 | 最后一层：资源/执行状态索引 | `RunExecutionState` 与 Memory 的异常 outcome，由 `execution.py` 投影 | 只列请求相关资源引用、精简状态和合法异常状态；不替代完整服务端资源目录或闭合 ToolMessage |
 
 目录中的文件名、标题、OCR 片段、摘要、检索结果和工具观察均为数据而非指令。工具目录说明不能扩展或覆盖原生工具 Schema。指令块每次按权威运行态重建，不写入 Run facts；Provider 的 `InstructionBlock` 字段合同由[Provider 专题](provider.md#4-完整模型字段)拥有。
 
-普通稳定规则分工为：`agent.md` 管目标与职责，`evidence.md` 管来源、候选观察、缺失值和坐标，`workflow.md` 管按需读取、完整新 Figure 与结束路径，`response.md` 管实际交付及完成阶段。工具的详细字段解释留在原生参数 Schema，SYSTEM 工具目录只列名称与说明。描述性新标题/轴名可依数据拟定，不得伪称原图标签或补造单位。
+四份基础规则分别由 `agent.md` 管目标与职责，`evidence.md` 管来源、候选观察、缺失值和坐标，`workflow.md` 管按需读取、完整新 Figure 与结束路径，`response.md` 管实际交付及完成阶段；`image_feedback.md` 集中定义原图、OCR 标注图、测量标注图和生成图的观察规则与邻近 Cue。工具的详细字段解释留在原生参数 Schema，SYSTEM 工具目录只列名称与说明。描述性新标题/轴名可依数据拟定，不得伪称原图标签或补造单位。
 
-摘要请求仅加载第五份 [`compaction.md`](../../src/figura/agent/prompting/assets/compaction.md)，带一个来源 JSON 文本消息，无工具、无图像；普通请求不加载其 JSON-only 输出规则。资产加载失败在摘要准备边界映射为既有 `invalid_summary_input` fallback，不 dispatch 空指令请求，也不覆盖旧检查点。摘要实际指令和 `context-compaction-v2` registry identity 参与 `prompt_digest`；摘要 request binding 记录合同版本 2。资产或合同身份变化后，已绑定请求仍进行严格核验，不匹配则 `summary_binding_mismatch` 回退。
+摘要请求仅加载独立的 [`compaction.md`](../../src/figura/agent/prompting/assets/compaction.md)，带一个来源 JSON 文本消息，无工具、无图像；普通请求不加载其 JSON-only 输出规则。资产加载失败在摘要准备边界映射为既有 `invalid_summary_input` fallback，不 dispatch 空指令请求，也不覆盖旧检查点。摘要实际指令和 `context-compaction-v2` registry identity 参与 `prompt_digest`；摘要 request binding 记录合同版本 2。资产或合同身份变化后，已绑定请求仍进行严格核验，不匹配则 `summary_binding_mismatch` 回退。
+
+### 图像回传观察引导
+
+当前工作树新增 [image_feedback.md](../../src/figura/agent/prompting/assets/image_feedback.md)，其完整内容加入第一 SYSTEM 层，参与既有 prompt_digest。原有四份规则相对顺序保持不变，摘要请求只加载 compaction.md。资产使用固定的 Common、Original、OCR、Measurement、Rendered 章节，后四类各包含非空 Rules/Cue；缺失、重复或空章节抛出 PromptAssetError。
+
+完整工具批次提交后，图像通过原有授权和结果一致性校验，再在每个实际 ImageBlock 前加入一个 TextBlock：JSON 身份数据及一至两句系统观察提醒。提醒是调用期投影，不写入 Run facts，不产生检查状态或额外 Provider 请求。没有实际图片的 JSON 工具结果不产生局部提醒。
+
+| 类型 | 关注内容 |
+|---|---|
+| original | 原图/Panel 的任务相关结构、轴、标签和图例 |
+| ocr | 文字覆盖、框位置、识别内容和关联；标注不保证识别正确 |
+| measurement | 遗漏、重复、图例误检、类别/系列对应与校准依据；几何不是业务数值 |
+| rendered | 目标和数据对应、图例、文字遮挡、裁切和布局；绘制成功不是审核通过 |
+
+邻近身份对象的完整字段由 Agent 构造并序列化为 JSON，Provider 只按 TextBlock 文本消费：
+
+| 字段 | 类型/约束 | 来源与生命周期 |
+|---|---|---|
+| feedback_kind | original/ocr/measurement/rendered，必填 | 已授权资源的 content 类型；仅 prompting 内部分类，不改 ImageBlock.observation_kind |
+| resource_ref | ImageResourceRef 或 ToolResourceRef 的完整 JSON，必填 | 与相邻 ImageBlock.source_ref 一致；历史图片保留原始 run_id/call_id |
+| trigger_call.run_id | 非空字符串，必填 | 本次工具调用所属 Run |
+| trigger_call.call_id | 非空字符串，必填 | 产生或加载本图片的本次工具调用 |
+| trigger_call.tool_name | 非空字符串，必填 | 本次工具名称；历史重载为 read_resource_image |
+
+图片中的文字与标记、资源名称都作为不可信数据。read_resource_image 按被读取资源类型复用规则，不按读取工具名统一分类；历史完整 JSON 或源图缺失时按需取回，不因提示自动加载。source 原图去重、图片数量与调用顺序沿原有实现。模型自行选择补证据、修正、继续或交付，无强制审核报告。相同前缀与资产确定性重建；资产变化仍遵循严格请求绑定校验，不静默更换已绑定请求。
+
+本功能见已归档 change [add-figura-image-feedback-guidance](../../openspec/figura/openspec/changes/archive/2026-10-08-add-figura-image-feedback-guidance/proposal.md)，主规格已同步。离线请求验证证明提醒送达与身份关联，不代表真实模型发现问题的准确率；真实 Provider 探测被 HTTP 403 拒绝，未取得模型行为证据，详情见[评测记录](../evaluations/image-feedback.md)。
 
 `observations.py` 负责与 SYSTEM 指令分开的图像观察选择和 Provider 图像消息构造。`AgentRequestBuilder` 组合规范历史/请求投影、资源索引、指令、观察图像、Provider tools/options，不负责最终 Provider 校验；`AgentExecutor` 在 attempt claim 前调用 `ProviderClient.prepare`。
 
@@ -82,7 +109,7 @@ flowchart LR
 | [request.py](../../src/figura/agent/request.py) | 协调 Memory、Runtime checkpoint、完整资源目录、Registry、提示层、观察图像与源响应续接，组装 ProviderRequest |
 | [executor.py](../../src/figura/agent/executor.py) | 估算阈值判断、摘要请求与检查点复用；管理 prepare → checkpoint 复查 → attempt claim → dispatch/commit |
 | [context_compaction.py](../../src/figura/agent/context_compaction.py) | 选择可压缩 Run 并验证摘要 JSON 与来源引用 |
-| [prompting/loader.py](../../src/figura/agent/prompting/loader.py) 与 [assets](../../src/figura/agent/prompting/assets/) | 按原顺序载入四份稳定中文规则，另为摘要请求独立载入 `compaction.md`；缺失、不可读或空资产抛出 `PromptAssetError` |
+| [prompting/loader.py](../../src/figura/agent/prompting/loader.py) 与 [assets](../../src/figura/agent/prompting/assets/) | 按固定顺序载入四份基础中文规则与 `image_feedback.md` 图像观察政策；摘要请求独立载入 `compaction.md`。固定章节或资产缺失、重复、不可读或为空时抛出 `PromptAssetError` |
 | [prompting/tools.py](../../src/figura/agent/prompting/tools.py) | 从当前 ToolRegistry 生成工具名称/描述目录 |
 | [prompting/execution.py](../../src/figura/agent/prompting/execution.py) | 生成可选摘要指令与请求相关的资源/异常状态 JSON 索引 |
 | [prompting/observations.py](../../src/figura/agent/prompting/observations.py) | 选择当前 Run 上一完整工具批次的图像观察并构造 Provider 消息 |

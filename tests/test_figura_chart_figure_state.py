@@ -507,9 +507,9 @@ def test_render_observations_include_prior_and_current_runs_and_structured_failu
         block.text
         for message in request.messages
         for block in (message.content if isinstance(message.content, tuple) else ())
-        if isinstance(block, TextBlock) and "Figure 图像回看" in block.text
+        if isinstance(block, TextBlock) and "系统观察提醒" in block.text
     ]
-    assert [text.rsplit("调用 ID：", 1)[-1].rstrip("。") for text in current_render_texts] == [
+    assert [json.loads(text.split("\n")[1])["trigger_call"]["call_id"] for text in current_render_texts] == [
         "successful-render",
         "successful-current-render",
     ]

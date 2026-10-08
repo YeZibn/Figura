@@ -364,7 +364,13 @@ def test_latest_load_batch_attaches_multiple_images_once_in_tool_order(tmp_path)
     assert isinstance(image_message.content, tuple)
     image_blocks = [block for block in image_message.content if isinstance(block, ImageBlock)]
     assert image_blocks == [ImageBlock("image/png", second_image), ImageBlock("image/png", first_image)]
-    assert sum("已加载图像" in block.text for block in image_message.content if isinstance(block, TextBlock)) == 2
+    cues = [json.loads(block.text.split("\n")[1]) for block in image_message.content if isinstance(block, TextBlock)]
+    assert len(cues) == 2
+    assert [cue["feedback_kind"] for cue in cues] == ["original", "original"]
+    assert [cue["trigger_call"]["call_id"] for cue in cues] == ["load-0", "load-1"]
+    for index, image in enumerate(image_blocks):
+        assert cues[index]["resource_ref"] == dict(image.source_ref)
+    assert request == _builder(store, coordinator, attachments).build(state, registry)
 
     later_state = _commit_tool_round(
         store, coordinator, session, run, registry, call_id="later-inspect", value=1

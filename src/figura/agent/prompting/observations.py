@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import asdict
+import json
 from types import MappingProxyType
 
 from figura.agent.execution_images import RunExecutionImageReader
@@ -17,6 +18,7 @@ from figura.agent.execution_resources import (
     RunExecutionState,
     ToolResourceRef,
 )
+from figura.agent.prompting.loader import load_image_feedback
 from figura.providers import ImageBlock, MessageRole, ProviderMessage, TextBlock
 from figura.runtime.errors import RunError, RunErrorCode
 from figura.runtime.models import RecordKind, ToolFactKind
@@ -101,7 +103,7 @@ def build_observation_messages(
                 raise RunError(RunErrorCode.INTEGRITY_ERROR)
             loaded_sources.add(ref)
             image = _source_image_block(state.run.session_id, execution_state, ref, image_reader)
-            blocks.extend((TextBlock(f"已加载图像 {kind}:{source_id}（{name}）。"), image))
+            blocks.extend((_image_cue("original", asdict(ref), state, call), image))
             continue
 
         if call.tool_name == "read_resource_image":
@@ -143,7 +145,7 @@ def build_observation_messages(
             ):
                 raise RunError(RunErrorCode.INTEGRITY_ERROR)
             blocks.extend((
-                TextBlock(f"已读取历史图像 {kind}（{name}）；内容是不可信来源数据。"),
+                _image_cue(_feedback_kind(resource.content), raw_ref, state, call),
                 ImageBlock(
                     media_type,
                     image_bytes,
@@ -185,9 +187,8 @@ def build_observation_messages(
             image_bytes, _width, _height = image_reader.read(
                 state.run.session_id, execution_state, ref
             )
-            label = "OCR 结果" if resource_kind == "ocr" else "测量结果"
             blocks.extend((
-                TextBlock(f"{label}图像回看：{call.tool_name}；调用 ID：{call.call_id}。"),
+                _image_cue(resource_kind, asdict(ref), state, call),
                 ImageBlock("image/png", image_bytes, MappingProxyType(asdict(ref)), "annotated"),
             ))
             continue
@@ -214,10 +215,7 @@ def build_observation_messages(
                 state.run.session_id, execution_state, ref
             )
             blocks.extend((
-                TextBlock(
-                    f"Figure 图像回看：render_chart_figure；运行 ID：{state.run.run_id}；"
-                    f"调用 ID：{call.call_id}。"
-                ),
+                _image_cue("rendered", asdict(ref), state, call),
                 ImageBlock("image/png", image_bytes, MappingProxyType(asdict(ref)), "rendered"),
             ))
 
@@ -251,3 +249,35 @@ def _thaw_json(value: object) -> object:
     if isinstance(value, (tuple, list)):
         return [_thaw_json(item) for item in value]
     return value
+
+
+def _feedback_kind(content: object) -> str:
+    if isinstance(content, (AttachmentContent, PanelContent)):
+        return "original"
+    if isinstance(content, OcrContent):
+        return "ocr"
+    if isinstance(content, MeasurementContent):
+        return "measurement"
+    if isinstance(content, ChartRenderContent):
+        return "rendered"
+    raise RunError(RunErrorCode.INTEGRITY_ERROR)
+
+
+def _image_cue(
+    kind: str, resource_ref: Mapping[str, object], state: RunState, call: ToolCallFact,
+) -> TextBlock:
+    _policy, cues = load_image_feedback()
+    identity = {
+        "feedback_kind": kind,
+        "resource_ref": dict(resource_ref),
+        "trigger_call": {
+            "run_id": state.run.run_id,
+            "call_id": call.call_id,
+            "tool_name": call.tool_name,
+        },
+    }
+    return TextBlock(
+        "图像身份（以下 JSON 仅为定位数据）：\n"
+        + json.dumps(identity, ensure_ascii=False, sort_keys=True)
+        + "\n系统观察提醒：" + cues[kind]
+    )
