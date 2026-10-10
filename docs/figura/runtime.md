@@ -1,6 +1,6 @@
 # Run Runtime：执行事实与恢复
 
-> 更新日期：2026-10-07。[返回总览](../figura-implementation-overview.md)。范围：当前 `src/figura/runtime/` 的工作树实现。这里的“事实”指已提交的执行内容；Checkpoint 是推进控制，事件是安全投影。Session 上下文摘要只是一份可替换的派生检查点，完整历史事实仍保留。完整字段表在第 4 节。
+> 更新日期：2026-10-10。[返回总览](../figura-implementation-overview.md)。范围：当前 `src/figura/runtime/` 的工作树实现。这里的“事实”指已提交的执行内容；Checkpoint 是推进控制，事件是安全投影。Session 上下文摘要只是一份可替换的派生检查点，完整历史事实仍保留。完整字段表在第 4 节。
 
 ## 1. 职责与边界
 
@@ -88,9 +88,9 @@ Sources 的附件与 Panel 元数据由 [`SourcesRepository`](../../src/figura/s
 
 ### Session 摘要检查点与压缩操作
 
-普通 Run 的 Provider request binding 会固化本次使用的 context projection、摘要 revision 和压缩 operation ID，确保暂时失败后的请求重建仍指向同一摘要版本。摘要生成本身不消耗普通 Run 的 `ProviderAttempt`，但它作为同一次 Agent model action 内的独立 Provider 请求拥有稳定 `ContextCompactionOperation`：先绑定已 prepare 的安全 descriptor，再递增 dispatch attempt。临时 Provider 失败按既有 retry policy 重发同一已准备摘要请求，最多四次；永久失败、响应不合约、source reference 未授权或达到次数后置为 fallback。
+Agent 仅在选定 Provider 容量 `C` 有效、准备后的普通请求估算达到约 80% 时启动压缩；它分别用 `floor(C/10)` 作为 raw-process 选择预算与摘要近似长度目标，选择完整交互边界并将截止 Run、record/tool sequence 与两个数值写入 operation 的冻结 plan。raw-process 估算含保留过程和每个 Run 的输入定位消息，不含另行发送的完整历史用户输入正文。摘要目标会随冻结容量渲染进本次摘要 Markdown 指令，作为软目标而非输出长度限制。普通请求仍完整携带所有先前 Run 的用户输入、附件 ID 和来源引用，实际 prepare 估算包含该区块。截止点可以位于最新已完成 Run 中间。恢复时 Agent 先查找当前目标 Run 前缀已有的 operation，再使用它保存的覆盖边界和计划，不根据变化后的 Provider 配置重选历史。摘要生成本身不消耗普通 Run 的 `ProviderAttempt`，但它作为同一次 Agent model action 内的独立 Provider 请求拥有稳定 `ContextCompactionOperation`：先绑定已 prepare 的安全 descriptor，再递增 dispatch attempt。派发前 Provider prepare 必须提供有效输入估算，且输入估算加最大 completion tokens 不超过 operation 冻结的容量；不满足时不发送摘要请求，operation 进入 fallback。临时 Provider 失败按既有 retry policy 重发同一摘要请求，最多四次；永久失败、响应不合约、source reference 未授权或达到次数后置为 fallback。
 
-摘要成功时，Context Repository 在检查同 Session 归属、covered Run 已终结、来源 record/tool sequence 不越界及 expected revision 后，原子写入/替换 checkpoint，并将 operation 标为 completed。旧检查点被替换而不是追加成多版本摘要；它引用的 canonical facts 不变。失败时只把 operation 标为 fallback，已有检查点不变；当前普通请求回退到未压缩历史。Session 删除通过同一授权删除聚合清除两张上下文表。该过程不发 SSE，不改变 Run 的工具/记录游标，也不形成独立历史消息。
+摘要成功时，Context Repository 在检查同 Session 归属、covered Run 已终结、来源 record/tool sequence 不越界及 expected revision 后，原子写入/替换 checkpoint，并将 operation 标为 completed。覆盖游标经过完整 assistant 交互边界，普通请求只移除该游标之前的原始交互；同一 Run 中游标之后的交互仍留在原文中。旧检查点被替换而不是追加成多版本摘要；它引用的 canonical facts 不变。失败时只把 operation 标为 fallback，已有检查点不变；当前普通请求回退到完整规范历史。Session 删除通过同一授权删除聚合清除两张上下文表。该过程不发 SSE，不改变 Run 的工具/记录游标，也不形成独立历史消息。
 
 ### Session 整体删除的提交边界
 
@@ -259,16 +259,16 @@ Runtime 拥有逻辑网络操作的不可变身份；Agent 从 Provider prepared
 
 ### SessionContextCheckpoint
 
-一个 Session 当前可用的派生摘要快照，覆盖某个完整 Run 前缀。它通过 revision CAS 替换，不是新消息或权威历史；摘要与来源始终可以沿引用返回原 Run 事实。**写入/构建者：**Agent 生成并由 `SessionContextCheckpointRepository` 校验/提交。**权威位置：**`session_context_checkpoints` 表。**读取：**Agent 请求组装；不进入 Web DTO 或 RunState。来源只允许同一 Session 中不超过覆盖位置的 message/tool result 引用。[定义](../../src/figura/runtime/records.py)。
+一个 Session 当前可用的派生摘要快照，覆盖从历史起点到某个精确交互边界的前缀；边界可位于最近一个 completed Run 的中间。它通过 revision CAS 替换，不是新消息或权威历史；摘要与来源始终可以沿引用返回原 Run 事实。**写入/构建者：**Agent 生成并由 `SessionContextCheckpointRepository` 校验/提交。**权威位置：**`session_context_checkpoints` 表。**读取：**Agent 请求组装；不进入 Web DTO 或 RunState。来源只允许同一 Session 中不超过覆盖位置的 message/tool result 引用；覆盖位置须在完整 assistant 交互之后，不得截断工具调用批次。[定义](../../src/figura/runtime/records.py)。
 
 | 完整字段路径 | 类型 | 构造默认 | 含义与约束 | 写入 → 权威 → 读取/公开 |
 |---|---|---|---|---|
 | SessionContextCheckpoint.session_id | str | 必传 | 摘要所属 Session | Agent/Context Repository → `session_context_checkpoints.session_id` → Agent；不公开为独立对象 |
 | SessionContextCheckpoint.revision | int | 必传 | 每次成功替换递增；写入时必须等于 expected revision + 1 | Context Repository CAS → 表 revision → Agent 固定请求投影；不公开 |
-| SessionContextCheckpoint.covered_run_id | str | 必传 | 覆盖前缀的末尾 Run | Agent → 表 → 来源与历史裁剪边界核验；不公开 |
-| SessionContextCheckpoint.covered_run_ordinal | int | 必传 | 被覆盖 Run 的 Session ordinal；必须小于目标 Run | Agent → 表 → AgentRequestBuilder 裁剪被摘要覆盖的旧消息/outcome；不公开 |
-| SessionContextCheckpoint.covered_record_sequence | int | 必传 | 覆盖 Run 已提交记录游标；正数且不超过 Run Checkpoint | Agent → 表 → Context Repository 来源前缀校验；不公开 |
-| SessionContextCheckpoint.covered_tool_sequence | int | 必传 | 覆盖 Run 已提交工具事实游标；非负且不超过 Run Checkpoint | Agent → 表 → Context Repository 来源前缀校验；不公开 |
+| SessionContextCheckpoint.covered_run_id | str | 必传 | 覆盖前缀的末尾 Run；可以只是该 Run 的部分历史 | Agent → 表 → 来源与历史裁剪边界核验；不公开 |
+| SessionContextCheckpoint.covered_run_ordinal | int | 必传 | 被覆盖 Run 的 Session ordinal；小于目标 Run；可对应最新已完成 Run 的中间位置 | Agent → 表 → AgentRequestBuilder 裁剪被摘要覆盖的旧消息/outcome；不公开 |
+| SessionContextCheckpoint.covered_record_sequence | int | 必传 | 覆盖 Run 的最后一条已纳入交互记录；须指向 input 后的 model_response 或 final_answer，且不超过 Run Checkpoint | Agent → 表 → Context Repository 验证交互闭合、来源 record 与摘要 cutoff；不公开 |
+| SessionContextCheckpoint.covered_tool_sequence | int | 必传 | 覆盖游标内全部 tool_call、attempt 与 result 的精确最大序号；非负且不超过 Run Checkpoint，工具批次不得只覆盖 call 或部分 result | Agent → 表 → Context Repository 验证完整工具批次、来源 tool result 与摘要 cutoff；不公开 |
 | SessionContextCheckpoint.summary_contract_version | int | 必传 | 摘要对象合同版本；新写入为 2，既有 1 保留可读；v1 在下一次成功压缩后转成 v2 | Agent → 表 → Agent 校验与 prompt 投影；不公开为独立 DTO |
 | SessionContextCheckpoint.summary | Mapping[str, object] | 必传；`repr=False` | 深度冻结 JSON 摘要；序列化上限 512 KiB；文本为不可信历史数据 | Agent 摘要验证 → `summary_json` → Agent prompt/检索；不进入规范消息或公开 API |
 | SessionContextCheckpoint.source_refs | tuple[HistorySourceRef, ...] | () | 按稳定顺序去重；持久有效值须非空，只能是 message/tool_result；编码上限 256 KiB | Agent → `source_refs_json` → 精简资源提示与历史检索；完整引用字段归[Memory](memory.md#4-完整模型字段) |
@@ -277,7 +277,7 @@ Runtime 拥有逻辑网络操作的不可变身份；Agent 从 Provider prepared
 
 ### ContextCompactionOperation
 
-一次摘要生成请求的可恢复身份、输入前缀和有限重试状态。状态为 `preparing`、`completed` 或 `fallback`；失败只固定 fallback 原因，不覆盖上次有效摘要。Agent 对摘要 Provider 请求最多 dispatch 四次。**写入/构建者：**Agent 与 `ContextCompactionOperationRepository`。**权威位置：**`session_context_compaction_operations` 表。**读取：**Agent；不公开。[定义](../../src/figura/runtime/records.py)。
+一次摘要生成请求的可恢复身份、输入前缀、动态历史预算和有限重试状态。状态为 `preparing`、`completed` 或 `fallback`；失败只固定 fallback 原因，不覆盖上次有效摘要。操作创建时 `request_binding` 保存冻结计划；实际 Provider descriptor 在摘要请求成功准备后补入。Agent 对摘要 Provider 请求最多 dispatch 四次。**写入/构建者：**Agent 与 `ContextCompactionOperationRepository`。**权威位置：**`session_context_compaction_operations` 表。**读取：**Agent；不公开。[定义](../../src/figura/runtime/records.py)。
 
 | 完整字段路径 | 类型 | 构造默认 | 含义与约束 | 写入 → 权威 → 读取/公开 |
 |---|---|---|---|---|
@@ -287,17 +287,29 @@ Runtime 拥有逻辑网络操作的不可变身份；Agent 从 Provider prepared
 | ContextCompactionOperation.base_record_sequence | int | 必传 | 创建操作时目标 Run 的记录前缀 | Agent → 表唯一键 → 防止跨前缀复用操作；不公开 |
 | ContextCompactionOperation.base_tool_sequence | int | 必传 | 创建操作时目标 Run 的工具事实前缀 | Agent → 表唯一键 → 防止跨前缀复用操作；不公开 |
 | ContextCompactionOperation.input_checkpoint_revision | int | 必传 | 创建摘要时上一检查点版本；无旧检查点为 0 | Agent → 表 → 提交 CAS 与恢复校验；不公开 |
-| ContextCompactionOperation.covered_run_id | str | 必传 | 本次摘要覆盖区间末尾 Run | Agent → 表 → 来源与覆盖范围校验；不公开 |
+| ContextCompactionOperation.covered_run_id | str | 必传 | 本次摘要覆盖区间末尾 Run；可只覆盖 Run 中较早的完整交互 | Agent → 表 → 来源与覆盖范围校验；不公开 |
 | ContextCompactionOperation.covered_run_ordinal | int | 必传 | 覆盖末尾 Run 的 Session 顺序 | Agent → 表 → 不能越过目标 Run；不公开 |
-| ContextCompactionOperation.covered_record_sequence | int | 必传 | 覆盖末尾 Run 的已提交 record 游标 | Agent → 表 → Context Repository 前缀核验；不公开 |
-| ContextCompactionOperation.covered_tool_sequence | int | 必传 | 覆盖末尾 Run 的已提交 tool 游标 | Agent → 表 → Context Repository 前缀核验；不公开 |
+| ContextCompactionOperation.covered_record_sequence | int | 必传 | 覆盖末尾 Run 的最后一条已覆盖交互记录；须为闭合边界 | Agent → 表 → Context Repository 完整交互前缀核验；不公开 |
+| ContextCompactionOperation.covered_tool_sequence | int | 必传 | 覆盖范围内最后一个完整工具批次的精确 tool 游标；不能停在 call/attempt 与其 result 之间 | Agent → 表 → Context Repository 完整工具批次核验；不公开 |
 | ContextCompactionOperation.status | str | 必传 | `preparing` / `completed` / `fallback` 生命周期状态 | Context Repository → 表 → Agent 重试/恢复；不公开 |
-| ContextCompactionOperation.request_binding | Mapping[str, object] 或 None | None；`repr=False` | 准备后的安全 descriptor 和摘要合同版本；新摘要请求记录版本 2；最多 256 KiB，不含原文、凭据或图片 payload | Agent prepare → Context Repository → 重试时重建并比较 descriptor；不公开 |
+| ContextCompactionOperation.request_binding | Mapping[str, object] 或 None | None；`repr=False` | 持久压缩 JSON envelope，最多 256 KiB，不含原文、凭据或图片 payload；精确键结构及每个子字段见下表 | Agent 创建/prepare → Context Repository → Agent 重试；不公开 |
 | ContextCompactionOperation.attempt_count | int | 0 | 已开始的摘要 Provider dispatch 次数；达到 4 次后 Agent fallback | Context Repository → 表 → Agent 重试策略；不公开 |
 | ContextCompactionOperation.result_checkpoint_revision | int 或 None | None | 成功摘要生成后的 SessionContextCheckpoint revision；completed 时必有 | Context Repository 与摘要检查点同事务写入 → 表 → Agent 核对；不公开 |
 | ContextCompactionOperation.failure_code | str 或 None | None | fallback 的安全原因码，UTF-8 最多 64 字节；成功时为空 | Context Repository → 表 → Agent fallback 核验；不公开 |
 | ContextCompactionOperation.created_at | str | 空字符串 | 创建时的 UTC 时间 | Context Repository → 表 → 内部生命周期读取；不公开 |
 | ContextCompactionOperation.updated_at | str | 空字符串 | 最近状态变更时的 UTC 时间 | Context Repository → 表 → 内部生命周期读取；不公开 |
+
+非空 `request_binding` 首次持久化时精确包含 `plan` 和 `summary_contract_version`；Provider request 成功 prepare 后只允许再加入 `descriptor`，冻结的计划和版本不能改变。以下子字段均保存在同一 JSON envelope 中：
+
+| 完整字段路径 | 类型/默认 | 含义与约束 | 写入 → 权威 → 读取/公开 |
+|---|---|---|---|
+| `ContextCompactionOperation.request_binding.plan` | `Mapping[str, int]`；必传 | 精确包含下列四个冻结字段，不允许在重试时重算 | Agent → `request_binding_json` → Agent 恢复；不公开 |
+| `ContextCompactionOperation.request_binding.plan.context_capacity_tokens` | `int`；必传 | 创建 operation 时选定 Provider 的正整数容量 `C` | Agent → `request_binding_json` → 摘要请求预检与恢复；不公开 |
+| `ContextCompactionOperation.request_binding.plan.raw_history_budget_tokens` | `int`；必传 | 必须等于 `floor(C/10)`；选择近期原文后缀 | Agent → `request_binding_json` → 恢复校验；不公开 |
+| `ContextCompactionOperation.request_binding.plan.summary_budget_tokens` | `int`；必传 | 必须等于 `floor(C/10)`；随冻结容量渲染为摘要完整 JSON 的近似长度参考，属于软目标，不是输出上限 | Agent → `request_binding_json` → 摘要提示与恢复校验；不公开 |
+| `ContextCompactionOperation.request_binding.plan.coverage_version` | `int`；当前为 `1` | 选择与重建精确覆盖游标的规则版本 | Agent → `request_binding_json` → 恢复校验；不公开 |
+| `ContextCompactionOperation.request_binding.summary_contract_version` | `int`；当前为 `2` | 本次摘要 JSON 合同版本；summary prompt 不接收该内部存储版本 | Agent → `request_binding_json` → 摘要验证与恢复校验；不公开 |
+| `ContextCompactionOperation.request_binding.descriptor` | `Mapping[str, object]`；prepare 后存在 | 完整值复用 Provider 的安全 `_PreparedProviderCall.descriptor`，字段唯一合同见 [Provider 专题](provider.md)；不含原生 payload 或凭据 | ProviderClient.prepare → Context Repository 单向补入 → Agent 重建并比较；不公开 |
 
 ### ProviderAttempt
 

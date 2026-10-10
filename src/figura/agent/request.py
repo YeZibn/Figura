@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import hashlib
 import json
 from dataclasses import replace
 from types import MappingProxyType
 from figura.shared.payloads import encode_json
 
+from figura.agent.context_compaction import CompactionSelection
 from figura.agent.execution_images import RunExecutionImageReader
 from figura.agent.execution_state import RunExecutionStateService
 from figura.agent.execution_resources import (
@@ -39,7 +41,7 @@ from figura.providers import (
     ProviderToolCall,
 )
 from figura.runtime.errors import RunError, RunErrorCode
-from figura.runtime.models import ActionKind, RunStatus, ToolFactKind
+from figura.runtime.models import ActionKind, RecordKind, RunStatus, ToolFactKind
 from figura.runtime.records import RunInput, RunState, SessionContextCheckpoint, ToolCallFact
 from figura.shared.source_refs import HistorySourceRef, MessageSourceRef, ToolResultSourceRef
 from figura.tools import ToolRegistry, project_provider_tools
@@ -98,13 +100,14 @@ class AgentRequestBuilder:
                 history,
                 messages=tuple(
                     item for item in history.messages
-                    if item.run_ordinal > context_checkpoint.covered_run_ordinal
+                    if _message_is_after_checkpoint(item, prior_run_states, context_checkpoint)
                 ),
                 run_outcomes=tuple(
                     item for item in history.run_outcomes
-                    if item.run_ordinal > context_checkpoint.covered_run_ordinal
+                    if _run_outcome_is_after_checkpoint(item, prior_run_states, context_checkpoint)
                 ),
             )
+        historical_inputs = _historical_input_entries(prior_run_states)
         full_execution_state = self._execution_state.build(state, prior_run_states)
         execution_state = _prompt_resource_projection(
             full_execution_state, state, prior_run_states, context_checkpoint
@@ -114,7 +117,13 @@ class AgentRequestBuilder:
             selected_provider=provider_id,
             continuations=_continuations_by_response((*prior_run_states, state)),
             registry=registry,
+            historical_inputs=historical_inputs,
         )
+        if historical_inputs:
+            messages = (
+                _historical_user_inputs_message(historical_inputs),
+                *messages,
+            )
         messages = (
             *messages,
             *build_observation_messages(state, execution_state, self._execution_images),
@@ -157,6 +166,10 @@ class AgentRequestBuilder:
         state: RunState,
         selected_run_states: tuple[RunState, ...],
         previous_checkpoint: SessionContextCheckpoint | None,
+        *,
+        coverage: CompactionSelection | None = None,
+        context_capacity_tokens: int,
+        summary_budget_tokens: int,
     ) -> tuple[ProviderRequest, tuple[HistorySourceRef, ...]]:
         """Build a tool-free request over a stable, complete source slice."""
         if (
@@ -164,11 +177,21 @@ class AgentRequestBuilder:
             or not isinstance(selected_run_states, tuple)
             or not selected_run_states
             or any(not isinstance(item, RunState) for item in selected_run_states)
+            or type(context_capacity_tokens) is not int
+            or context_capacity_tokens <= 0
+            or type(summary_budget_tokens) is not int
+            or summary_budget_tokens != context_capacity_tokens // 10
         ):
             raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
         if previous_checkpoint is not None and (
             previous_checkpoint.session_id != state.run.session_id
-            or previous_checkpoint.covered_run_ordinal >= selected_run_states[0].run.ordinal
+            or previous_checkpoint.covered_run_ordinal > selected_run_states[-1].run.ordinal
+        ):
+            raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
+        if coverage is not None and (
+            coverage.covered_run_ordinal < selected_run_states[0].run.ordinal
+            or coverage.covered_run_ordinal > selected_run_states[-1].run.ordinal
+            or selected_run_states[-1].run.run_id != coverage.covered_run_id
         ):
             raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
 
@@ -182,8 +205,30 @@ class AgentRequestBuilder:
                 or source_state.run.status is not RunStatus.COMPLETED
             ):
                 raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
+            run_messages = project_run_messages(source_state)
+            input_messages = tuple(item for item in run_messages if isinstance(item, UserMessage))
+            if len(input_messages) != 1:
+                raise RunError(RunErrorCode.INTEGRITY_ERROR)
+            source_input = input_messages[0]
+            input_ref = MessageSourceRef(source_input.run_id, source_input.source_record_id)
+            if (
+                source_input.run_id != source_state.run.run_id
+                or source_input.run_ordinal != source_state.run.ordinal
+                or source_input.source_record_id != source_state.run.input_record_id
+            ):
+                raise RunError(RunErrorCode.INTEGRITY_ERROR)
+            refs.append(input_ref)
             projected_messages: list[dict[str, object]] = []
-            for message in project_run_messages(source_state):
+            source_messages = tuple(
+                message for message in run_messages
+                if _message_is_within_compaction_slice(
+                    message, source_state, previous_checkpoint, coverage
+                )
+                and not isinstance(message, UserMessage)
+            )
+            if not source_messages:
+                continue
+            for message in source_messages:
                 if isinstance(message, UserMessage):
                     ref = MessageSourceRef(message.run_id, message.source_record_id)
                     projected_messages.append({
@@ -223,13 +268,19 @@ class AgentRequestBuilder:
                 "run_ordinal": source_state.run.ordinal,
                 "status": source_state.run.status.value,
                 "terminal_code": source_state.run.terminal_code,
+                "input": {
+                    "reference": input_ref.to_dict(),
+                    "text": source_input.text,
+                    "attachment_ids": list(source_input.attachment_ids),
+                },
                 "messages": projected_messages,
             })
 
         unique_refs = tuple(dict.fromkeys(refs))
         source_payload = {
             "previous_summary": (
-                None if previous_checkpoint is None else dict(previous_checkpoint.summary)
+                None if previous_checkpoint is None
+                else json.loads(encode_json(previous_checkpoint.summary))
             ),
             "previous_source_refs": [
                 ref.to_dict() for ref in (
@@ -239,7 +290,10 @@ class AgentRequestBuilder:
             "source_runs": source_runs,
         }
         try:
-            instructions = (build_compaction_instruction(),)
+            instructions = (build_compaction_instruction(
+                context_capacity_tokens=context_capacity_tokens,
+                summary_budget_tokens=summary_budget_tokens,
+            ),)
         except PromptAssetError:
             raise ValueError("summary prompt asset cannot be loaded") from None
         tools: tuple = ()
@@ -272,6 +326,7 @@ class AgentRequestBuilder:
         selected_provider: ProviderId,
         continuations: dict[tuple[str, str], ProviderContinuation],
         registry: ToolRegistry,
+        historical_inputs: dict[str, dict[str, object]],
     ) -> tuple[ProviderMessage, ...]:
         projected: list[ProviderMessage] = []
         resolved_calls_by_response: dict[tuple[str, str], set[str]] = {}
@@ -285,8 +340,11 @@ class AgentRequestBuilder:
                     break
                 paired.add(following.tool_call_id)
             resolved_calls_by_response[key] = paired
+        last_historical_run_id: str | None = None
         for message in messages:
             if isinstance(message, UserMessage):
+                if message.run_id in historical_inputs:
+                    continue
                 projected.append(
                     ProviderMessage(
                         MessageRole.USER,
@@ -294,6 +352,10 @@ class AgentRequestBuilder:
                     )
                 )
             elif isinstance(message, AssistantMessage):
+                historical_input = historical_inputs.get(message.run_id)
+                if historical_input is not None and last_historical_run_id != message.run_id:
+                    projected.append(_historical_run_context_message(historical_input))
+                    last_historical_run_id = message.run_id
                 paired_calls = resolved_calls_by_response.get(
                     (message.run_id, message.source_record_id), set()
                 )
@@ -323,6 +385,10 @@ class AgentRequestBuilder:
                     )
                 )
             elif isinstance(message, ToolMessage):
+                historical_input = historical_inputs.get(message.run_id)
+                if historical_input is not None and last_historical_run_id != message.run_id:
+                    projected.append(_historical_run_context_message(historical_input))
+                    last_historical_run_id = message.run_id
                 projected.append(
                     ProviderMessage(
                         role=MessageRole.TOOL,
@@ -333,6 +399,74 @@ class AgentRequestBuilder:
             else:
                 raise RunError(RunErrorCode.INTEGRITY_ERROR)
         return tuple(projected)
+
+
+def _historical_input_entries(
+    prior_run_states: tuple[RunState, ...],
+) -> dict[str, dict[str, object]]:
+    entries: dict[str, dict[str, object]] = {}
+    for state in prior_run_states:
+        input_records = tuple(
+            record for record in state.records
+            if record.record_id == state.run.input_record_id
+        )
+        if len(input_records) != 1:
+            raise RunError(RunErrorCode.INTEGRITY_ERROR)
+        input_record = input_records[0]
+        source = input_record.payload
+        if (
+            input_record is not state.records[0]
+            or input_record.run_id != state.run.run_id
+            or input_record.record_sequence != 1
+            or input_record.record_kind is not RecordKind.INPUT
+            or not isinstance(source, RunInput)
+            or not isinstance(source.text, str)
+            or not isinstance(source.attachment_ids, tuple)
+            or any(not isinstance(item, str) for item in source.attachment_ids)
+            or state.run.run_id in entries
+        ):
+            raise RunError(RunErrorCode.INTEGRITY_ERROR)
+        reference = MessageSourceRef(state.run.run_id, input_record.record_id)
+        entries[state.run.run_id] = {
+            "run_id": state.run.run_id,
+            "run_ordinal": state.run.ordinal,
+            "text": source.text,
+            "attachment_ids": list(source.attachment_ids),
+            "source_ref": reference.to_dict(),
+        }
+    return entries
+
+
+def _historical_user_inputs_message(
+    entries: Mapping[str, Mapping[str, object]],
+) -> ProviderMessage:
+    content = json.dumps(
+        {
+            "figura_context_type": "historical_user_inputs",
+            "entries": list(entries.values()),
+        },
+        ensure_ascii=False,
+        allow_nan=False,
+        separators=(",", ":"),
+    )
+    return ProviderMessage(MessageRole.USER, content)
+
+
+def _historical_run_context_message(
+    entry: Mapping[str, object],
+) -> ProviderMessage:
+    content = json.dumps(
+        {
+            "figura_context_type": "historical_run_context",
+            "run_id": entry["run_id"],
+            "run_ordinal": entry["run_ordinal"],
+            "input_ref": entry["source_ref"],
+        },
+        ensure_ascii=False,
+        allow_nan=False,
+        separators=(",", ":"),
+    )
+    return ProviderMessage(MessageRole.USER, content)
 
 
 def _continuations_by_response(
@@ -400,23 +534,35 @@ def _prompt_resource_projection(
         elif isinstance(ref, ToolResultSourceRef):
             relevant_tool_refs.add((ref.run_id, ref.call_id))
 
-    for fact in current.tool_facts:
-        if fact.fact_kind is not ToolFactKind.TOOL_CALL or not isinstance(
-            fact.payload, ToolCallFact
-        ):
-            continue
-        try:
-            arguments = json.loads(fact.payload.arguments_json)
-        except (TypeError, ValueError):
-            raise RunError(RunErrorCode.INTEGRITY_ERROR) from None
-        if not isinstance(arguments, dict):
-            raise RunError(RunErrorCode.INTEGRITY_ERROR)
-        raw_ref = arguments.get("resource_ref")
-        if isinstance(raw_ref, dict):
-            _include_resource_reference(raw_ref, relevant_image_ids, relevant_tool_refs)
-        source_kind, source_id = arguments.get("source_kind"), arguments.get("source_id")
-        if source_kind in {"attachment", "panel"} and isinstance(source_id, str):
-            relevant_image_ids.add(source_id)
+    for run_state in (*prior, current):
+        record_sequences = {item.record_id: item.record_sequence for item in run_state.records}
+        for fact in run_state.tool_facts:
+            if fact.fact_kind is not ToolFactKind.TOOL_CALL or not isinstance(
+                fact.payload, ToolCallFact
+            ):
+                continue
+            response_sequence = record_sequences.get(fact.payload.response_record_id)
+            if response_sequence is None:
+                raise RunError(RunErrorCode.INTEGRITY_ERROR)
+            is_raw = run_state.run.ordinal > checkpoint.covered_run_ordinal or (
+                run_state.run.ordinal == checkpoint.covered_run_ordinal
+                and response_sequence > checkpoint.covered_record_sequence
+            )
+            if not is_raw:
+                continue
+            relevant_tool_refs.add((run_state.run.run_id, fact.payload.call_id))
+            try:
+                arguments = json.loads(fact.payload.arguments_json)
+            except (TypeError, ValueError):
+                raise RunError(RunErrorCode.INTEGRITY_ERROR) from None
+            if not isinstance(arguments, dict):
+                raise RunError(RunErrorCode.INTEGRITY_ERROR)
+            raw_ref = arguments.get("resource_ref")
+            if isinstance(raw_ref, dict):
+                _include_resource_reference(raw_ref, relevant_image_ids, relevant_tool_refs)
+            source_kind, source_id = arguments.get("source_kind"), arguments.get("source_id")
+            if source_kind in {"attachment", "panel"} and isinstance(source_id, str):
+                relevant_image_ids.add(source_id)
 
     resources = []
     for resource in state.resources:
@@ -432,7 +578,7 @@ def _prompt_resource_projection(
             include = ref.id in relevant_image_ids
         elif isinstance(ref, ToolResourceRef):
             include = (
-                ref.run_id in relevant_run_ids
+                (ref.run_id in relevant_run_ids and ref.run_id != checkpoint.covered_run_id)
                 or (ref.run_id, ref.call_id) in relevant_tool_refs
             )
         else:
@@ -466,3 +612,90 @@ def _run_input_attachment_ids(state: RunState) -> tuple[str, ...]:
     if record is None or not isinstance(record.payload, RunInput):
         raise RunError(RunErrorCode.INTEGRITY_ERROR)
     return tuple(record.payload.attachment_ids)
+
+
+def _message_is_after_checkpoint(
+    message: MemoryMessage,
+    prior: tuple[RunState, ...],
+    checkpoint: SessionContextCheckpoint,
+) -> bool:
+    if message.run_ordinal > checkpoint.covered_run_ordinal:
+        return True
+    if message.run_ordinal < checkpoint.covered_run_ordinal:
+        return False
+    state = next((item for item in prior if item.run.run_id == message.run_id), None)
+    if state is None:
+        raise RunError(RunErrorCode.INTEGRITY_ERROR)
+    if isinstance(message, ToolMessage):
+        return message.source_tool_sequence > checkpoint.covered_tool_sequence
+    sequence = next(
+        (item.record_sequence for item in state.records
+         if item.record_id == message.source_record_id),
+        None,
+    )
+    if sequence is None:
+        raise RunError(RunErrorCode.INTEGRITY_ERROR)
+    return sequence > checkpoint.covered_record_sequence
+
+
+def _run_outcome_is_after_checkpoint(
+    outcome,
+    prior: tuple[RunState, ...],
+    checkpoint: SessionContextCheckpoint,
+) -> bool:
+    if outcome.run_ordinal > checkpoint.covered_run_ordinal:
+        return True
+    if outcome.run_ordinal < checkpoint.covered_run_ordinal:
+        return False
+    state = next((item for item in prior if item.run.run_id == outcome.run_id), None)
+    if state is None:
+        return True
+    return any(
+        record.record_sequence > checkpoint.covered_record_sequence
+        and record.record_kind.value != "final_answer"
+        for record in state.records
+    ) or any(
+        fact.tool_sequence > checkpoint.covered_tool_sequence
+        for fact in state.tool_facts
+    )
+
+
+def _message_is_within_compaction_slice(
+    message: MemoryMessage,
+    state: RunState,
+    previous_checkpoint: SessionContextCheckpoint | None,
+    coverage: CompactionSelection | None,
+) -> bool:
+    if previous_checkpoint is not None:
+        if state.run.ordinal < previous_checkpoint.covered_run_ordinal:
+            return False
+        if state.run.ordinal == previous_checkpoint.covered_run_ordinal:
+            if isinstance(message, ToolMessage):
+                if message.source_tool_sequence <= previous_checkpoint.covered_tool_sequence:
+                    return False
+            else:
+                record_sequence = next(
+                    (item.record_sequence for item in state.records
+                     if item.record_id == message.source_record_id),
+                    None,
+                )
+                if record_sequence is None:
+                    raise RunError(RunErrorCode.INTEGRITY_ERROR)
+                if record_sequence <= previous_checkpoint.covered_record_sequence:
+                    return False
+    if coverage is None or state.run.ordinal < coverage.covered_run_ordinal:
+        return True
+    if state.run.ordinal > coverage.covered_run_ordinal:
+        return False
+    if state.run.run_id != coverage.covered_run_id:
+        return False
+    if isinstance(message, ToolMessage):
+        return message.source_tool_sequence <= coverage.covered_tool_sequence
+    record_sequence = next(
+        (item.record_sequence for item in state.records
+         if item.record_id == message.source_record_id),
+        None,
+    )
+    if record_sequence is None:
+        raise RunError(RunErrorCode.INTEGRITY_ERROR)
+    return record_sequence <= coverage.covered_record_sequence

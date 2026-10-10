@@ -27,7 +27,12 @@ from figura.runtime.records import (
     ToolAttemptStartedFact,
     ToolCallFact,
 )
-from .context_compaction import eligible_compaction_runs, validate_summary_response
+from .context_compaction import (
+    calculate_context_history_budgets,
+    select_compaction_coverage,
+    selection_for_coverage,
+    validate_summary_response,
+)
 from figura.runtime.tool_execution import DurableToolExecutor
 from figura.runtime.run_lock import PerRunExecutionLock, RunExecutionOwnership, RunExecutionLockUnavailable
 
@@ -205,6 +210,7 @@ class AgentExecutor:
         if not self.is_ready(state):
             return state
         binding = None
+        pending_compaction = None
         if state.checkpoint.next_action.action_kind is ActionKind.PROVIDER_RETRY:
             last = state.provider_attempts[-1]
             binding = next((item for item in state.provider_request_bindings if item.operation_id == last.operation_id), None)
@@ -235,6 +241,12 @@ class AgentExecutor:
                 context_compaction_operation_id = binding.context_compaction_operation_id
             else:
                 context_checkpoint = self._coordinator.read_session_context_checkpoint(session_id)
+                pending_compaction = self._coordinator.find_context_compaction_operation(
+                    session_id,
+                    run_id,
+                    state.checkpoint.last_committed_record_sequence,
+                    state.checkpoint.last_committed_tool_sequence,
+                )
                 request = self._requests.build(
                     state,
                     self._tools.registry,
@@ -265,7 +277,10 @@ class AgentExecutor:
                 else:
                     prepared = client.prepare(request)
                     estimate = getattr(prepared, "context_estimate", None)
-                    if (
+                    should_resume_compaction = pending_compaction is not None and (
+                        pending_compaction.status in {"preparing", "fallback"}
+                    )
+                    if should_resume_compaction or (
                         estimate is not None
                         and estimate.context_window_tokens is not None
                         and estimate.input_tokens / estimate.context_window_tokens >= 0.8
@@ -279,6 +294,13 @@ class AgentExecutor:
                             state,
                             prior_run_states,
                             context_checkpoint,
+                            context_capacity_tokens=(
+                                estimate.context_window_tokens
+                                if estimate is not None else None
+                            ),
+                            existing_operation=(
+                                pending_compaction if should_resume_compaction else None
+                            ),
                         )
                         context_checkpoint_revision = (
                             context_checkpoint.revision
@@ -437,30 +459,50 @@ class AgentExecutor:
         state: RunState,
         prior_run_states: tuple[RunState, ...],
         previous_checkpoint: SessionContextCheckpoint | None,
+        *,
+        context_capacity_tokens: int | None,
+        existing_operation=None,
     ) -> tuple[SessionContextCheckpoint | None, str, str | None]:
-        checkpoint_ordinal = (
-            previous_checkpoint.covered_run_ordinal if previous_checkpoint else 0
-        )
-        selected_runs = eligible_compaction_runs(prior_run_states, checkpoint_ordinal)
-        if not selected_runs:
-            return (
+        budgets = calculate_context_history_budgets(context_capacity_tokens)
+        if existing_operation is None:
+            if budgets is None:
+                return (
+                    previous_checkpoint,
+                    "checkpoint" if previous_checkpoint is not None else "full",
+                    previous_checkpoint.compaction_operation_id if previous_checkpoint else None,
+                )
+            candidate = select_compaction_coverage(
+                prior_run_states,
                 previous_checkpoint,
-                "checkpoint" if previous_checkpoint is not None else "full",
-                previous_checkpoint.compaction_operation_id if previous_checkpoint else None,
+                budgets.raw_history_tokens,
             )
+            if candidate is None:
+                return (
+                    previous_checkpoint,
+                    "checkpoint" if previous_checkpoint is not None else "full",
+                    previous_checkpoint.compaction_operation_id if previous_checkpoint else None,
+                )
+            frozen_plan = {
+                "context_capacity_tokens": budgets.context_capacity_tokens,
+                "raw_history_budget_tokens": budgets.raw_history_tokens,
+                "summary_budget_tokens": budgets.summary_tokens,
+                "coverage_version": 1,
+            }
+            operation = self._coordinator.get_or_create_context_compaction_operation(
+                session_id=state.run.session_id,
+                target_run_id=state.run.run_id,
+                base_record_sequence=state.checkpoint.last_committed_record_sequence,
+                base_tool_sequence=state.checkpoint.last_committed_tool_sequence,
+                input_checkpoint_revision=(previous_checkpoint.revision if previous_checkpoint else 0),
+                covered_run_id=candidate.covered_run_id,
+                covered_run_ordinal=candidate.covered_run_ordinal,
+                covered_record_sequence=candidate.covered_record_sequence,
+                covered_tool_sequence=candidate.covered_tool_sequence,
+                selection_binding=frozen_plan,
+            )
+        else:
+            operation = existing_operation
 
-        covered = selected_runs[-1]
-        operation = self._coordinator.get_or_create_context_compaction_operation(
-            session_id=state.run.session_id,
-            target_run_id=state.run.run_id,
-            base_record_sequence=state.checkpoint.last_committed_record_sequence,
-            base_tool_sequence=state.checkpoint.last_committed_tool_sequence,
-            input_checkpoint_revision=(previous_checkpoint.revision if previous_checkpoint else 0),
-            covered_run_id=covered.run.run_id,
-            covered_run_ordinal=covered.run.ordinal,
-            covered_record_sequence=covered.checkpoint.last_committed_record_sequence,
-            covered_tool_sequence=covered.checkpoint.last_committed_tool_sequence,
-        )
         if operation.status == "completed":
             checkpoint = self._coordinator.read_session_context_checkpoint(state.run.session_id)
             if (
@@ -475,24 +517,58 @@ class AgentExecutor:
         if operation.status != "preparing":
             raise RunError(RunErrorCode.INTEGRITY_ERROR)
 
+        request_binding = operation.request_binding
+        frozen_plan = _validated_compaction_plan(request_binding)
+        if frozen_plan is None:
+            self._coordinator.fallback_context_compaction_operation(
+                operation.operation_id, "summary_plan_missing"
+            )
+            return None, "fallback", operation.operation_id
+        selection = selection_for_coverage(
+            prior_run_states, previous_checkpoint, operation
+        )
+        if selection is None:
+            self._coordinator.fallback_context_compaction_operation(
+                operation.operation_id, "summary_coverage_unavailable"
+            )
+            return None, "fallback", operation.operation_id
+        selected_runs = selection.selected_run_states
+        covered = next(
+            (item for item in selected_runs if item.run.run_id == operation.covered_run_id),
+            None,
+        )
+        if covered is None:
+            raise RunError(RunErrorCode.INTEGRITY_ERROR)
+
         try:
             summary_request, allowed_refs = self._requests.build_summary_request(
-                state, selected_runs, previous_checkpoint
+                state,
+                selected_runs,
+                previous_checkpoint,
+                coverage=selection,
+                context_capacity_tokens=frozen_plan["context_capacity_tokens"],
+                summary_budget_tokens=frozen_plan["summary_budget_tokens"],
             )
-        except (TypeError, ValueError):
+        except (RunError, TypeError, ValueError):
             self._coordinator.fallback_context_compaction_operation(
                 operation.operation_id, "invalid_summary_input"
             )
             return None, "fallback", operation.operation_id
 
-        request_binding = operation.request_binding
         try:
-            if request_binding is None:
+            descriptor = request_binding.get("descriptor")
+            if descriptor is None:
                 prepared = client.prepare(summary_request)
                 descriptor = prepared.descriptor
+                if not _summary_request_fits_capacity(prepared, frozen_plan):
+                    self._coordinator.fallback_context_compaction_operation(
+                        operation.operation_id, "summary_request_exceeds_capacity"
+                    )
+                    return None, "fallback", operation.operation_id
                 request_binding = {
-                    "descriptor": dict(descriptor),
+                    "plan": dict(request_binding["plan"]),
                     "summary_contract_version": 2,
+                    "descriptor": dict(descriptor),
                 }
                 operation = self._coordinator.bind_context_compaction_request(
                     operation.operation_id, request_binding
@@ -500,7 +576,6 @@ class AgentExecutor:
             else:
                 if request_binding.get("summary_contract_version") != 2:
                     raise ValueError("saved summary contract version changed")
-                descriptor = request_binding.get("descriptor")
                 if not isinstance(descriptor, Mapping):
                     raise ValueError("invalid saved summary request binding")
                 options = descriptor.get("options")
@@ -517,10 +592,15 @@ class AgentExecutor:
                     frozen_request,
                     frozen_options=True,
                     frozen_timeout_seconds=options["timeout_seconds"],
-                    estimate_context=False,
+                    estimate_context=True,
                 )
                 if encode_json(prepared.descriptor) != encode_json(descriptor):
                     raise ValueError("summary request identity changed")
+                if not _summary_request_fits_capacity(prepared, frozen_plan):
+                    self._coordinator.fallback_context_compaction_operation(
+                        operation.operation_id, "summary_request_exceeds_capacity"
+                    )
+                    return None, "fallback", operation.operation_id
         except ProviderCallError as error:
             self._coordinator.fallback_context_compaction_operation(
                 operation.operation_id, error.failure.failure_code.value
@@ -593,7 +673,9 @@ class AgentExecutor:
             if previous_checkpoint is not None:
                 prior_outcomes = previous_checkpoint.summary.get("run_outcomes", ())
                 if isinstance(prior_outcomes, (tuple, list)):
-                    summary["run_outcomes"] = [*prior_outcomes, *summary["run_outcomes"]]
+                    summary["run_outcomes"] = _merge_run_outcomes(
+                        prior_outcomes, summary["run_outcomes"]
+                    )
 
             source_refs = tuple(dict.fromkeys((
                 *(previous_checkpoint.source_refs if previous_checkpoint else ()),
@@ -602,10 +684,10 @@ class AgentExecutor:
             checkpoint = SessionContextCheckpoint(
                 session_id=state.run.session_id,
                 revision=(previous_checkpoint.revision + 1 if previous_checkpoint else 1),
-                covered_run_id=covered.run.run_id,
-                covered_run_ordinal=covered.run.ordinal,
-                covered_record_sequence=covered.checkpoint.last_committed_record_sequence,
-                covered_tool_sequence=covered.checkpoint.last_committed_tool_sequence,
+                covered_run_id=selection.covered_run_id,
+                covered_run_ordinal=selection.covered_run_ordinal,
+                covered_record_sequence=selection.covered_record_sequence,
+                covered_tool_sequence=selection.covered_tool_sequence,
                 summary_contract_version=2,
                 summary=summary,
                 source_refs=source_refs,
@@ -783,3 +865,60 @@ def _preparation_failure_message(error: ProviderCallError) -> str | None:
     ):
         key = "missing_deepseek_continuation"
     return PREPARATION_MESSAGES.get(key)
+
+
+def _validated_compaction_plan(binding: Mapping[str, object] | None) -> dict[str, int] | None:
+    if not isinstance(binding, Mapping) or binding.get("summary_contract_version") != 2:
+        return None
+    plan = binding.get("plan")
+    if not isinstance(plan, Mapping):
+        return None
+    capacity = plan.get("context_capacity_tokens")
+    raw_budget = plan.get("raw_history_budget_tokens")
+    summary_budget = plan.get("summary_budget_tokens")
+    version = plan.get("coverage_version")
+    if (
+        type(capacity) is not int or capacity <= 0
+        or raw_budget != capacity // 10
+        or summary_budget != capacity // 10
+        or type(raw_budget) is not int
+        or type(summary_budget) is not int
+        or type(version) is not int
+        or version != 1
+    ):
+        return None
+    return {
+        "context_capacity_tokens": capacity,
+        "raw_history_budget_tokens": raw_budget,
+        "summary_budget_tokens": summary_budget,
+        "coverage_version": version,
+    }
+
+
+def _summary_request_fits_capacity(prepared, plan: Mapping[str, int]) -> bool:
+    estimate = getattr(prepared, "context_estimate", None)
+    request = getattr(prepared, "request", None)
+    options = getattr(request, "options", None)
+    input_tokens = getattr(estimate, "input_tokens", None)
+    completion_tokens = getattr(options, "max_completion_tokens", None)
+    capacity = plan.get("context_capacity_tokens")
+    if (
+        type(input_tokens) is not int or input_tokens < 0
+        or type(capacity) is not int or capacity <= 0
+        or (completion_tokens is not None and (
+            type(completion_tokens) is not int or completion_tokens < 0
+        ))
+    ):
+        return False
+    return input_tokens + (completion_tokens or 0) <= capacity
+
+
+def _merge_run_outcomes(previous: object, current: object) -> list[object]:
+    merged: dict[str, object] = {}
+    for value in (*tuple(previous), *tuple(current)):
+        if isinstance(value, Mapping) and isinstance(value.get("run_id"), str):
+            merged[value["run_id"]] = value
+    return sorted(
+        merged.values(),
+        key=lambda value: value.get("run_ordinal", 0) if isinstance(value, Mapping) else 0,
+    )

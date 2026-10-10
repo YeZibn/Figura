@@ -112,14 +112,20 @@ def test_invalid_image_feedback_asset_fails_explicitly(monkeypatch, fault):
 def test_cue_changes_are_part_of_static_policy_but_not_summary(monkeypatch):
     original = loader._load_asset
     before = loader.build_static_instruction()
-    summary = loader.build_compaction_instruction()
+    summary = loader.build_compaction_instruction(
+        context_capacity_tokens=200_000,
+        summary_budget_tokens=20_000,
+    )
     def changed(name):
         content = original(name)
         return content.replace('请观察这张原图', '请认真观察这张原图') if name == 'image_feedback.md' else content
     monkeypatch.setattr(loader, '_load_asset', changed)
     assert loader.build_static_instruction() != before
     assert loader.load_image_feedback()[1]['original'] in loader.build_static_instruction().content
-    assert loader.build_compaction_instruction() == summary
+    assert loader.build_compaction_instruction(
+        context_capacity_tokens=200_000,
+        summary_budget_tokens=20_000,
+    ) == summary
 
 
 def test_asset_change_blocks_bound_retry_before_another_dispatch(tmp_path, monkeypatch):

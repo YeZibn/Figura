@@ -1,10 +1,16 @@
 # Evaluation：图表测量离线回归
 
-> 更新日期：2026-10-07。[返回系统总览](../figura-implementation-overview.md)。本篇说明当前可运行的测量回归脚本及其报告；它不是在线评测服务，也不拥有 Run 事实。
+> 更新日期：2026-10-09。[返回系统总览](../figura-implementation-overview.md)。本篇说明当前可运行的测量回归脚本及其报告；它不是在线评测服务，也不拥有 Run 事实。
 
 ## 1. 职责与边界
 
-当前评测入口是 [`scripts/evaluate_figura_measurements.py`](../../scripts/evaluate_figura_measurements.py)，固定样例和参考目标位于 [`tests/fixtures/figura_measurement/`](../../tests/fixtures/figura_measurement/)。它通过 `measure_chart` 的生产授权、来源解析、工具运行和结果校验路径，衡量固定图像中声明可见对象的结构、关联、位置和数值表现。测量工具与 schema v3 结果的权威合同归 [Tools](tools.md#6-图像与测量工具合同)，评测要求归 [chart-measurement-regression 主规格](../../openspec/figura/openspec/specs/chart-measurement-regression/spec.md)。
+当前测量回归入口是 [`scripts/evaluate_figura_measurements.py`](../../scripts/evaluate_figura_measurements.py)，固定样例和参考目标位于 [`tests/fixtures/figura_measurement/`](../../tests/fixtures/figura_measurement/)。它通过 `measure_chart` 的生产授权、来源解析、工具运行和结果校验路径，衡量固定图像中声明可见对象的结构、关联、位置和数值表现。测量工具与 schema v3 结果的权威合同归 [Tools](tools.md#6-图像与测量工具合同)，评测要求归 [chart-measurement-regression 主规格](../../openspec/figura/openspec/specs/chart-measurement-regression/spec.md)。
+
+另有独立的[上下文摘要与历史检索对照实验](../evaluations/context-compaction-ablation.md)，使用固定合成历史、真实模型摘要、生产请求构建及只读历史工具，对比输入占用和事实恢复。它不属于本篇测量回归，也不是完整 Agent/Gateway 端到端评测；实验记录另列本地估算、Provider usage 和事实/格式分数。
+
+该实验后续增加了[摘要 Token 软目标复测](../evaluations/context-compaction-token-target.md)：加入约 4,000 tokens 目标后，摘要均值变长、请求 Token 降幅低于无目标基线；样本量较小且 Provider 输出无固定随机种子，结论仅作方向性参考。
+
+另有[上下文容量预算实验](../evaluations/context-compaction-capacity.md)，对固定合成历史在 100,000 和 200,000 容量下比较动态 10%/10% 历史预算，记录首请求本地估算、摘要输出长度、Provider 累计用量和源事实恢复。试验结论只适用于其固定样例；数值提示小样本未显示收益，因此生产摘要提示不包含预算数字。
 
 这是一套可重复的合成样例回归，不是开放域图表基准、Provider 模型评测或 Agent 端到端完成率。它不会发起 Provider 网络请求；脚本用合成响应记录工具意图，仅为让 `DurableToolExecutor` 经正常 Run/Tool 路径执行工具。Gateway 与 Web 不提供评测工作区或评测 API。
 

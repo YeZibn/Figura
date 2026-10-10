@@ -96,6 +96,20 @@ def input_projection(payload: Mapping[str, object]) -> tuple[dict, int]:
     return result, images
 
 
+def estimate_text_tokens(text: str, encoding: tiktoken.Encoding | None = None) -> int | None:
+    """Estimate a history text fragment with the shared local tokenizer."""
+    if not isinstance(text, str):
+        return None
+    selected = cached_encoding() if encoding is None else encoding
+    if selected is None:
+        return None
+    try:
+        return len(selected.encode_ordinary(text))
+    except Exception:
+        _LOGGER.warning("本次历史片段的本地 Token 估算不可用。")
+        return None
+
+
 def estimate_input(payload: Mapping[str, object], capacity: int | None,
                    encoding: tiktoken.Encoding | None) -> ContextEstimate | None:
     if encoding is None:

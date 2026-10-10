@@ -144,6 +144,17 @@ class FiguraRunStore:
     def get_or_create_context_compaction_operation(self, **values) -> ContextCompactionOperation:
         return self._context_operations.get_or_create(**values)
 
+    def find_context_compaction_operation(
+        self,
+        session_id: str,
+        target_run_id: str,
+        base_record_sequence: int,
+        base_tool_sequence: int,
+    ) -> ContextCompactionOperation | None:
+        return self._context_operations.find_for_target(
+            session_id, target_run_id, base_record_sequence, base_tool_sequence
+        )
+
     def bind_context_compaction_request(
         self, operation_id: str, binding: dict[str, object]
     ) -> ContextCompactionOperation:

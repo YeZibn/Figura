@@ -114,6 +114,17 @@ class RunCoordinator:
     ) -> ContextCompactionOperation:
         return self._store.get_or_create_context_compaction_operation(**values)
 
+    def find_context_compaction_operation(
+        self,
+        session_id: str,
+        target_run_id: str,
+        base_record_sequence: int,
+        base_tool_sequence: int,
+    ) -> ContextCompactionOperation | None:
+        return self._store.find_context_compaction_operation(
+            session_id, target_run_id, base_record_sequence, base_tool_sequence
+        )
+
     def bind_context_compaction_request(
         self, operation_id: str, binding: dict[str, object]
     ) -> ContextCompactionOperation:

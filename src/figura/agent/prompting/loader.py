@@ -61,6 +61,24 @@ def load_image_feedback() -> tuple[str, dict[str, str]]:
     return content, cues
 
 
-def build_compaction_instruction() -> InstructionBlock:
-    """Load the isolated summary task without ordinary Agent workflow rules."""
-    return InstructionBlock(InstructionRole.SYSTEM, _load_asset("compaction.md"))
+def build_compaction_instruction(
+    *, context_capacity_tokens: int, summary_budget_tokens: int
+) -> InstructionBlock:
+    """Load the summary task with the operation's frozen approximate length target."""
+    if (
+        type(context_capacity_tokens) is not int
+        or context_capacity_tokens <= 0
+        or type(summary_budget_tokens) is not int
+        or summary_budget_tokens != context_capacity_tokens // 10
+    ):
+        raise PromptAssetError("compaction prompt requires a valid frozen summary budget")
+    content = _load_asset("compaction.md")
+    values = {
+        "{{context_capacity_tokens}}": str(context_capacity_tokens),
+        "{{summary_budget_tokens}}": str(summary_budget_tokens),
+    }
+    for placeholder, value in values.items():
+        if content.count(placeholder) != 1:
+            raise PromptAssetError("compaction.md has an invalid budget placeholder contract")
+        content = content.replace(placeholder, value)
+    return InstructionBlock(InstructionRole.SYSTEM, content)

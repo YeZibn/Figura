@@ -137,6 +137,13 @@ def _validate_ownership(
         or checkpoint.covered_tool_sequence > covered["last_committed_tool_sequence"]
     ):
         raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
+    _validate_coverage_boundary(
+        connection,
+        checkpoint.session_id,
+        checkpoint.covered_run_id,
+        checkpoint.covered_record_sequence,
+        checkpoint.covered_tool_sequence,
+    )
 
     for source_ref in checkpoint.source_refs:
         if isinstance(source_ref, MessageSourceRef):
@@ -178,6 +185,83 @@ def _validate_ownership(
                 and row["tool_sequence"] > checkpoint.covered_tool_sequence
             ):
                 raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
+
+
+def _validate_coverage_boundary(
+    connection: sqlite3.Connection,
+    session_id: str,
+    run_id: str,
+    record_sequence: int,
+    tool_sequence: int,
+) -> None:
+    """Require a coverage cursor to end after a complete, committed interaction."""
+    boundary = connection.execute(
+        "SELECT e.record_kind, e.record_id, e.payload_json FROM run_execution_records e "
+        "JOIN runs r USING (run_id) WHERE r.session_id = ? AND r.run_id = ? "
+        "AND e.record_sequence = ?",
+        (session_id, run_id, record_sequence),
+    ).fetchone()
+    if boundary is None or boundary["record_kind"] not in {"model_response", "final_answer"}:
+        raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
+
+    response_record_id = boundary["record_id"]
+    if boundary["record_kind"] == "final_answer":
+        try:
+            payload = json.loads(boundary["payload_json"])
+            response_record_id = payload["response_record_id"]
+        except (TypeError, ValueError, KeyError):
+            raise RunError(RunErrorCode.INTEGRITY_ERROR) from None
+        response = connection.execute(
+            "SELECT record_sequence FROM run_execution_records WHERE run_id = ? "
+            "AND record_id = ? AND record_kind = 'model_response'",
+            (run_id, response_record_id),
+        ).fetchone()
+        if response is None or response["record_sequence"] >= record_sequence:
+            raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
+
+    if boundary["record_kind"] == "model_response":
+        try:
+            payload = json.loads(boundary["payload_json"])
+            finish_reason = payload["finish_reason"]
+        except (TypeError, ValueError, KeyError):
+            raise RunError(RunErrorCode.INTEGRITY_ERROR) from None
+        calls = connection.execute(
+            "SELECT tool_sequence, json_extract(payload_json, '$.call_id') AS call_id "
+            "FROM run_tool_execution_facts WHERE run_id = ? AND fact_kind = 'tool_call' "
+            "AND json_extract(payload_json, '$.response_record_id') = ?",
+            (run_id, boundary["record_id"]),
+        ).fetchall()
+        if (finish_reason == "tool_calls") != bool(calls):
+            raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
+        for call in calls:
+            result = connection.execute(
+                "SELECT MAX(tool_sequence) AS tool_sequence FROM run_tool_execution_facts "
+                "WHERE run_id = ? AND fact_kind = 'tool_result' "
+                "AND json_extract(payload_json, '$.tool_call_sequence') = ?",
+                (run_id, call["tool_sequence"]),
+            ).fetchone()
+            if result is None or result["tool_sequence"] is None or result["tool_sequence"] > tool_sequence:
+                raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
+
+    expected_tool_sequence = connection.execute(
+        "WITH covered_calls AS ("
+        " SELECT f.tool_sequence AS call_sequence FROM run_tool_execution_facts f "
+        " JOIN run_execution_records e ON e.run_id = f.run_id "
+        " AND e.record_id = json_extract(f.payload_json, '$.response_record_id') "
+        " WHERE f.run_id = ? AND f.fact_kind = 'tool_call' AND e.record_sequence <= ?"
+        "), covered_facts AS ("
+        " SELECT f.tool_sequence FROM run_tool_execution_facts f "
+        " WHERE f.run_id = ? AND ("
+        "   (f.fact_kind = 'tool_call' AND f.tool_sequence IN (SELECT call_sequence FROM covered_calls))"
+        "   OR (f.fact_kind IN ('tool_attempt_started', 'tool_result') AND "
+        "       CAST(json_extract(f.payload_json, '$.tool_call_sequence') AS INTEGER) "
+        "       IN (SELECT call_sequence FROM covered_calls))"
+        " )"
+        ") SELECT MAX(tool_sequence) FROM covered_facts",
+        (run_id, record_sequence, run_id),
+    ).fetchone()[0]
+    if (expected_tool_sequence or 0) != tool_sequence:
+        raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
 
 
 class SessionContextCheckpointRepository:
@@ -311,6 +395,7 @@ class ContextCompactionOperationRepository:
         covered_run_ordinal: int,
         covered_record_sequence: int,
         covered_tool_sequence: int,
+        selection_binding: Mapping[str, object] | None = None,
     ) -> ContextCompactionOperation:
         for identity in (session_id, target_run_id, covered_run_id):
             _validate_id(identity)
@@ -331,6 +416,17 @@ class ContextCompactionOperationRepository:
             or covered_tool_sequence < 0
         ):
             raise RunError(RunErrorCode.INVALID_REQUEST)
+        selection_json = None
+        if selection_binding is not None:
+            if not isinstance(selection_binding, Mapping):
+                raise RunError(RunErrorCode.INVALID_REQUEST)
+            try:
+                selection_json = encode_json({
+                    "plan": dict(selection_binding),
+                    "summary_contract_version": 2,
+                }, maximum=262144)
+            except (PayloadError, TypeError, ValueError):
+                raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD) from None
 
         with self._database.write() as connection:
             target = connection.execute(
@@ -340,13 +436,6 @@ class ContextCompactionOperationRepository:
                 "WHERE r.session_id = ? AND r.run_id = ?",
                 (session_id, target_run_id),
             ).fetchone()
-            covered = connection.execute(
-                "SELECT r.ordinal, r.status, c.last_committed_record_sequence, "
-                "c.last_committed_tool_sequence FROM runs r "
-                "JOIN run_execution_checkpoints c USING (run_id) "
-                "WHERE r.session_id = ? AND r.run_id = ?",
-                (session_id, covered_run_id),
-            ).fetchone()
             checkpoint = connection.execute(
                 "SELECT revision FROM session_context_checkpoints WHERE session_id = ?",
                 (session_id,),
@@ -354,16 +443,10 @@ class ContextCompactionOperationRepository:
             checkpoint_revision = 0 if checkpoint is None else checkpoint["revision"]
             if target is None or target["status"] != "running":
                 raise RunError(RunErrorCode.RUN_NOT_FOUND)
-            if covered is None or covered["status"] == "running":
-                raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
             if (
                 target["last_committed_record_sequence"] != base_record_sequence
                 or target["last_committed_tool_sequence"] != base_tool_sequence
                 or checkpoint_revision != input_checkpoint_revision
-                or covered["ordinal"] != covered_run_ordinal
-                or covered_run_ordinal >= target["ordinal"]
-                or covered_record_sequence > covered["last_committed_record_sequence"]
-                or covered_tool_sequence > covered["last_committed_tool_sequence"]
             ):
                 raise RunError(RunErrorCode.STALE_CHECKPOINT)
 
@@ -374,25 +457,53 @@ class ContextCompactionOperationRepository:
             ).fetchone()
             if row is not None:
                 operation = _operation_from_row(row)
-                expected = (
-                    session_id,
-                    input_checkpoint_revision,
-                    covered_run_id,
-                    covered_run_ordinal,
-                    covered_record_sequence,
-                    covered_tool_sequence,
-                )
-                actual = (
-                    operation.session_id,
-                    operation.input_checkpoint_revision,
-                    operation.covered_run_id,
-                    operation.covered_run_ordinal,
-                    operation.covered_record_sequence,
-                    operation.covered_tool_sequence,
-                )
-                if actual != expected:
+                if (
+                    operation.session_id != session_id
+                    or operation.input_checkpoint_revision != input_checkpoint_revision
+                ):
                     raise RunError(RunErrorCode.INTEGRITY_ERROR)
+                stored_covered = connection.execute(
+                    "SELECT r.ordinal, r.status, c.last_committed_record_sequence, "
+                    "c.last_committed_tool_sequence FROM runs r "
+                    "JOIN run_execution_checkpoints c USING (run_id) "
+                    "WHERE r.session_id = ? AND r.run_id = ?",
+                    (session_id, operation.covered_run_id),
+                ).fetchone()
+                if (
+                    stored_covered is None
+                    or stored_covered["status"] == "running"
+                    or stored_covered["ordinal"] != operation.covered_run_ordinal
+                    or operation.covered_run_ordinal >= target["ordinal"]
+                    or operation.covered_record_sequence > stored_covered["last_committed_record_sequence"]
+                    or operation.covered_tool_sequence > stored_covered["last_committed_tool_sequence"]
+                ):
+                    raise RunError(RunErrorCode.INTEGRITY_ERROR)
+                _validate_coverage_boundary(
+                    connection, session_id, operation.covered_run_id,
+                    operation.covered_record_sequence, operation.covered_tool_sequence,
+                )
                 return operation
+
+            covered = connection.execute(
+                "SELECT r.ordinal, r.status, c.last_committed_record_sequence, "
+                "c.last_committed_tool_sequence FROM runs r "
+                "JOIN run_execution_checkpoints c USING (run_id) "
+                "WHERE r.session_id = ? AND r.run_id = ?",
+                (session_id, covered_run_id),
+            ).fetchone()
+            if covered is None or covered["status"] == "running":
+                raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
+            if (
+                covered["ordinal"] != covered_run_ordinal
+                or covered_run_ordinal >= target["ordinal"]
+                or covered_record_sequence > covered["last_committed_record_sequence"]
+                or covered_tool_sequence > covered["last_committed_tool_sequence"]
+            ):
+                raise RunError(RunErrorCode.STALE_CHECKPOINT)
+            _validate_coverage_boundary(
+                connection, session_id, covered_run_id,
+                covered_record_sequence, covered_tool_sequence,
+            )
 
             now = _utc_now()
             operation_id = uuid.uuid4().hex
@@ -402,7 +513,7 @@ class ContextCompactionOperationRepository:
                 "input_checkpoint_revision, covered_run_id, covered_run_ordinal, "
                 "covered_record_sequence, covered_tool_sequence, status, request_binding_json, "
                 "attempt_count, result_checkpoint_revision, failure_code, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'preparing', NULL, 0, NULL, NULL, ?, ?)",
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'preparing', ?, 0, NULL, NULL, ?, ?)",
                 (
                     operation_id,
                     session_id,
@@ -414,6 +525,7 @@ class ContextCompactionOperationRepository:
                     covered_run_ordinal,
                     covered_record_sequence,
                     covered_tool_sequence,
+                    selection_json,
                     now,
                     now,
                 ),
@@ -444,6 +556,26 @@ class ContextCompactionOperationRepository:
                 raise RunError(RunErrorCode.INVALID_TRANSITION)
             if row["request_binding_json"] is not None:
                 if row["request_binding_json"] != binding_json:
+                    current = dict(operation.request_binding or {})
+                    incoming = dict(binding)
+                    if (
+                        current.get("descriptor") is None
+                        and incoming.get("descriptor") is not None
+                        and current.get("plan") == incoming.get("plan")
+                        and current.get("summary_contract_version") == incoming.get("summary_contract_version")
+                        and set(incoming) == {"plan", "summary_contract_version", "descriptor"}
+                    ):
+                        connection.execute(
+                            "UPDATE session_context_compaction_operations SET request_binding_json = ?, "
+                            "updated_at = ? WHERE operation_id = ? AND status = 'preparing' "
+                            "AND request_binding_json = ?",
+                            (binding_json, _utc_now(), operation_id, row["request_binding_json"]),
+                        )
+                        updated = connection.execute(
+                            "SELECT * FROM session_context_compaction_operations WHERE operation_id = ?",
+                            (operation_id,),
+                        ).fetchone()
+                        return _operation_from_row(updated)
                     raise RunError(RunErrorCode.INTEGRITY_ERROR)
                 return operation
             connection.execute(
@@ -456,6 +588,32 @@ class ContextCompactionOperationRepository:
                 (operation_id,),
             ).fetchone()
             return _operation_from_row(updated)
+
+    @payload_read_scope
+    def find_for_target(
+        self,
+        session_id: str,
+        target_run_id: str,
+        base_record_sequence: int,
+        base_tool_sequence: int,
+    ) -> ContextCompactionOperation | None:
+        _validate_id(session_id)
+        _validate_id(target_run_id)
+        if (
+            type(base_record_sequence) is not int
+            or base_record_sequence < 1
+            or type(base_tool_sequence) is not int
+            or base_tool_sequence < 0
+        ):
+            raise RunError(RunErrorCode.INVALID_REQUEST)
+        with self._database.read() as connection:
+            row = connection.execute(
+                "SELECT * FROM session_context_compaction_operations "
+                "WHERE session_id = ? AND target_run_id = ? AND base_record_sequence = ? "
+                "AND base_tool_sequence = ?",
+                (session_id, target_run_id, base_record_sequence, base_tool_sequence),
+            ).fetchone()
+        return None if row is None else _operation_from_row(row)
 
     @payload_read_scope
     def read(self, operation_id: str) -> ContextCompactionOperation:

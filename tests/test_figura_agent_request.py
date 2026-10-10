@@ -32,6 +32,7 @@ from figura.providers.errors import ProviderInputError
 from figura.runtime.coordinator import RunCoordinator
 from figura.runtime.errors import RunError, RunErrorCode
 from figura.runtime.models import RunCreateRequest
+from figura.runtime.records import RunInput, SessionContextCheckpoint
 from figura.runtime.store import FiguraRunStore
 from figura.runtime.tool_execution import DurableToolExecutor
 from figura.tools import ReplayEffect, ToolDefinition, ToolFailure, ToolRegistry
@@ -531,6 +532,7 @@ def test_request_replays_continuations_from_multiple_prior_runs_by_source_identi
 
     assert [message.role for message in request.messages] == [
         MessageRole.USER,
+        MessageRole.USER,
         MessageRole.ASSISTANT,
         MessageRole.TOOL,
         MessageRole.ASSISTANT,
@@ -538,13 +540,45 @@ def test_request_replays_continuations_from_multiple_prior_runs_by_source_identi
         MessageRole.ASSISTANT,
         MessageRole.USER,
     ]
-    assert request.messages[0].content == "请分析以下图表数据。"
-    assert request.messages[1].continuation == first_tool_continuation
-    assert request.messages[2].tool_call_id == "first-run-tool"
-    assert request.messages[3].continuation == first_final_continuation
-    assert request.messages[4].content == "第二轮输入。"
-    assert request.messages[5].continuation == second_continuation
-    assert request.messages[6].content == "第三轮输入。"
+    historical_inputs = json.loads(request.messages[0].content)
+    assert historical_inputs["figura_context_type"] == "historical_user_inputs"
+    assert historical_inputs["entries"] == [
+        {
+            "run_id": first_run.run_id,
+            "run_ordinal": first_run.ordinal,
+            "text": "请分析以下图表数据。",
+            "attachment_ids": [],
+            "source_ref": {
+                "kind": "message",
+                "run_id": first_run.run_id,
+                "record_id": first_run.input_record_id,
+            },
+        },
+        {
+            "run_id": second_run.run_id,
+            "run_ordinal": second_run.ordinal,
+            "text": "第二轮输入。",
+            "attachment_ids": [],
+            "source_ref": {
+                "kind": "message",
+                "run_id": second_run.run_id,
+                "record_id": second_run.input_record_id,
+            },
+        },
+    ]
+    assert json.loads(request.messages[1].content) == {
+        "figura_context_type": "historical_run_context",
+        "run_id": first_run.run_id,
+        "run_ordinal": first_run.ordinal,
+        "input_ref": historical_inputs["entries"][0]["source_ref"],
+    }
+    assert request.messages[2].continuation == first_tool_continuation
+    assert request.messages[3].tool_call_id == "first-run-tool"
+    assert request.messages[4].continuation == first_final_continuation
+    assert json.loads(request.messages[5].content)["run_id"] == second_run.run_id
+    assert request.messages[6].continuation == second_continuation
+    assert request.messages[7].content == "第三轮输入。"
+    assert all("第三轮输入。" not in item["text"] for item in historical_inputs["entries"])
     assert _execution_inventory(request)["resources"] == []
 
     target_state = _commit_text_response(
@@ -603,6 +637,150 @@ def test_request_replays_continuations_from_multiple_prior_runs_by_source_identi
     )
 
 
+def test_historical_user_input_and_ordered_attachments_survive_compaction_cutoff(tmp_path) -> None:
+    store, coordinator, session, first_run, attachments = _app_with_attachments(
+        tmp_path, (_image_bytes("red"), _image_bytes("blue"))
+    )
+    attachment_ids = tuple(
+        item.attachment_id for item in attachments.list(session.session_id)
+    )
+    completed = _commit_text_response(
+        coordinator,
+        session.session_id,
+        first_run.run_id,
+        content="历史 Run 已完成。",
+    )
+    coordinator.complete_run(
+        session.session_id, first_run.run_id, completed.checkpoint.revision
+    )
+    target_run = coordinator.create_run(
+        RunCreateRequest(
+            session_id=session.session_id,
+            text="请继续当前问题。",
+            provider_id=ProviderId.QWEN.value,
+            model_id=MODEL_IDS[ProviderId.QWEN],
+            idempotency_key="agent-request-after-compaction-cutoff",
+        )
+    )
+    checkpoint = SessionContextCheckpoint(
+        session_id=session.session_id,
+        revision=1,
+        covered_run_id=first_run.run_id,
+        covered_run_ordinal=first_run.ordinal,
+        covered_record_sequence=completed.checkpoint.last_committed_record_sequence,
+        covered_tool_sequence=completed.checkpoint.last_committed_tool_sequence,
+        summary_contract_version=2,
+        summary={"trust": "untrusted_history", "facts": []},
+    )
+
+    builder = _builder(store, coordinator, attachments)
+    target_state = coordinator.read_run_state(session.session_id, target_run.run_id)
+    request = builder.build(
+        target_state,
+        _registry(),
+        coordinator.read_prior_run_states(session.session_id, target_run.run_id),
+        context_checkpoint=checkpoint,
+    )
+
+    history = json.loads(request.messages[0].content)
+    assert history["figura_context_type"] == "historical_user_inputs"
+    assert history["entries"] == [{
+        "run_id": first_run.run_id,
+        "run_ordinal": first_run.ordinal,
+        "text": "请分析这些图表。",
+        "attachment_ids": list(attachment_ids),
+        "source_ref": {
+            "kind": "message",
+            "run_id": first_run.run_id,
+            "record_id": first_run.input_record_id,
+        },
+    }]
+    assert [message.content for message in request.messages[1:]] == ["请继续当前问题。"]
+
+    provider_factory = ProviderFactory.from_env(
+        {
+            "FIGURA_QWEN_API_KEY": "qwen-secret",
+            "FIGURA_QWEN_BASE_URL": "https://qwen.example.test/v1",
+        },
+        transport_factory=lambda _profile: None,
+    )
+    client = provider_factory.create(ProviderId.QWEN, MODEL_IDS[ProviderId.QWEN])
+    complete_estimate = client.prepare(request).context_estimate
+    without_history_inputs = replace(request, messages=request.messages[1:])
+    current_only_estimate = client.prepare(without_history_inputs).context_estimate
+    if complete_estimate is None or current_only_estimate is None:
+        pytest.skip("local tiktoken encoding is unavailable")
+    assert complete_estimate.input_tokens > current_only_estimate.input_tokens
+
+    provider_factory.payload_limits = ExecutionPayloadLimits(
+        _request_text_bytes(request) - 1
+    )
+    with pytest.raises(ProviderInputError):
+        provider_factory.create(
+            ProviderId.QWEN, MODEL_IDS[ProviderId.QWEN]
+        ).prepare(request)
+
+
+def test_historical_input_section_keeps_duplicate_and_empty_text_as_distinct_runs(tmp_path) -> None:
+    store, coordinator, session, first = _app(tmp_path)
+    first_state = _commit_text_response(
+        coordinator, session.session_id, first.run_id, content="完成第一轮。"
+    )
+    coordinator.complete_run(session.session_id, first.run_id, first_state.checkpoint.revision)
+    second = coordinator.create_run(RunCreateRequest(
+        session_id=session.session_id,
+        text="请分析以下图表数据。",
+        provider_id=ProviderId.QWEN.value,
+        model_id=MODEL_IDS[ProviderId.QWEN],
+        idempotency_key="duplicate-historical-input",
+    ))
+    second_state = _commit_text_response(
+        coordinator, session.session_id, second.run_id, content="完成第二轮。"
+    )
+    coordinator.complete_run(session.session_id, second.run_id, second_state.checkpoint.revision)
+    third = coordinator.create_run(RunCreateRequest(
+        session_id=session.session_id,
+        text="将由已保存输入投影为空文本的历史 Run。",
+        provider_id=ProviderId.QWEN.value,
+        model_id=MODEL_IDS[ProviderId.QWEN],
+        idempotency_key="empty-historical-input",
+    ))
+    third_state = _commit_text_response(
+        coordinator, session.session_id, third.run_id, content="完成第三轮。"
+    )
+    coordinator.complete_run(session.session_id, third.run_id, third_state.checkpoint.revision)
+    third_complete = coordinator.read_run_state(session.session_id, third.run_id)
+    target = coordinator.create_run(RunCreateRequest(
+        session_id=session.session_id,
+        text="当前问题",
+        provider_id=ProviderId.QWEN.value,
+        model_id=MODEL_IDS[ProviderId.QWEN],
+        idempotency_key="duplicate-empty-input-target",
+    ))
+    prior = coordinator.read_prior_run_states(session.session_id, target.run_id)
+    third_input = replace(third_complete.records[0].payload, text="")
+    assert isinstance(third_input, RunInput)
+    prior = (*prior[:-1], replace(
+        third_complete,
+        records=(replace(third_complete.records[0], payload=third_input), *third_complete.records[1:]),
+    ))
+
+    request = _builder(store, coordinator).build(
+        coordinator.read_run_state(session.session_id, target.run_id),
+        _registry(),
+        prior,
+    )
+
+    payload = json.loads(request.messages[0].content)
+    assert [entry["text"] for entry in payload["entries"]] == [
+        "请分析以下图表数据。",
+        "请分析以下图表数据。",
+        "",
+    ]
+    assert [entry["run_ordinal"] for entry in payload["entries"]] == [1, 2, 3]
+    assert request.messages[-1].content == "当前问题"
+
+
 def test_request_keeps_fully_resolved_history_from_a_prior_registry_version(tmp_path) -> None:
     store, coordinator, session, run = _app(tmp_path)
     original = _registry()
@@ -646,6 +824,7 @@ def test_request_fails_closed_for_unresolved_call_from_an_older_registry_version
             selected_provider=ProviderId.QWEN,
             continuations={},
             registry=_registry(version="figura-web-v4"),
+            historical_inputs={},
         )
 
     assert error.value.code is RunErrorCode.UNSUPPORTED_PAYLOAD

@@ -201,9 +201,16 @@ def test_compaction_asset_loads_independently_from_ordinary_instructions() -> No
     from figura.agent.prompting.loader import build_compaction_instruction
 
     asset = files("figura.agent.prompting").joinpath("assets", "compaction.md").read_text(encoding="utf-8")
-    instruction = build_compaction_instruction()
+    instruction = build_compaction_instruction(
+        context_capacity_tokens=200_000,
+        summary_budget_tokens=20_000,
+    )
     assert instruction.role is InstructionRole.SYSTEM
-    assert instruction.content == asset.strip()
+    assert "200000 tokens" in instruction.content
+    assert "20000 tokens" in instruction.content
+    assert "{{context_capacity_tokens}}" not in instruction.content
+    assert "{{summary_budget_tokens}}" not in instruction.content
+    assert "{{context_capacity_tokens}}" in asset
     assert instruction.content not in build_static_instruction().content
 
 
@@ -222,7 +229,10 @@ def test_missing_or_empty_compaction_asset_has_explicit_load_error(monkeypatch, 
 
     monkeypatch.setattr(loader.resources, "files", lambda _package: Asset())
     with pytest.raises(loader.PromptAssetError) as error:
-        loader.build_compaction_instruction()
+        loader.build_compaction_instruction(
+            context_capacity_tokens=200_000,
+            summary_budget_tokens=20_000,
+        )
     assert "compaction.md" in str(error.value)
     assert "private filesystem detail" not in str(error.value)
 

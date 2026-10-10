@@ -1,6 +1,6 @@
 # Provider：模型请求与响应边界
 
-> 更新日期：2026-10-05。[返回总览](../figura-implementation-overview.md)。本篇拥有模型服务的调用期合同、配置、适配与规范化失败；持久 `ProviderAttempt` 和 `ProviderContinuationFact` 由[Run Runtime](runtime.md#4-完整模型字段)定义。
+> 更新日期：2026-10-10。[返回总览](../figura-implementation-overview.md)。本篇拥有模型服务的调用期合同、配置、适配与规范化失败；持久 `ProviderAttempt` 和 `ProviderContinuationFact` 由[Run Runtime](runtime.md#4-完整模型字段)定义。
 
 ## 1. 职责与边界
 
@@ -85,6 +85,32 @@ ProviderClient 私有的冻结调用封套，`repr=False` 且禁止序列化；�
 | `_PreparedProviderCall.payload` | `Mapping[str, Any]` | 必传；`repr=False` | adapter 已准备的原生请求参数，可含图像和私有续接；作为本次 transport.create 的参数 | adapter.build_payload / prepare → 私有内存 → dispatch/transport；无公开或独立修订入口 |
 | `_PreparedProviderCall.descriptor` | `Mapping[str, Any]` | 必传；`repr=False` | 冻结的安全描述：provider/model、endpoint SHA-256、prepared payload（含 timeout）、POST/path 与 endpoint binding 的 canonical SHA-256、resolved options（包括冻结的 phase timeout）与完整 asset manifest | prepare → 私有内存 → Runtime binding；各持久字段见 [Runtime](runtime.md#providerrequestbinding)，不公开 |
 | `_PreparedProviderCall.context_estimate` | `ContextEstimate` 或 None | None | 独立输入估算；重试 prepare 跳过，不参与 descriptor 或 payload | prepare → 首次 Runtime binding；只公开数字 |
+
+`descriptor` 是允许持久化的安全指纹，不是 payload 副本；其顶层结构及嵌套字段如下。Runtime 的 `ProviderRequestBinding` 与 `ContextCompactionOperation` 都引用这一 Provider 合同，不重复定义字段。
+
+| 完整字段路径 | 类型/默认 | 含义与约束 | 写入 → 权威 → 读取/公开 |
+|---|---|---|---|
+| `_PreparedProviderCall.descriptor.provider_id` | `str`；必传 | 规范 `ProviderId.value` | ProviderClient.prepare → 私有 descriptor → Runtime 比较；不公开 |
+| `_PreparedProviderCall.descriptor.model_id` | `str`；必传 | 当前 ProviderClient 固定模型身份 | ProviderClient.prepare → 私有 descriptor → Runtime 比较；不公开 |
+| `_PreparedProviderCall.descriptor.endpoint_binding` | SHA-256 `str`；必传 | 规范 endpoint 的摘要，不保存 URL 原文 | ProviderClient.prepare → 私有 descriptor → Runtime 比较；不公开 |
+| `_PreparedProviderCall.descriptor.request_fingerprint` | SHA-256 `str`；必传 | 对 method、path、endpoint binding 与完整 prepared payload 的 canonical digest | ProviderClient.prepare → 私有 descriptor → Runtime 比较；不公开 |
+| `_PreparedProviderCall.descriptor.options` | `Mapping[str, object]`；必传 | 精确包含下列五个已解析选项 | ProviderClient.prepare → 私有 descriptor → Runtime 重建时冻结；不公开 |
+| `_PreparedProviderCall.descriptor.options.max_completion_tokens` | `int` 或 `None` | 已解析的单请求 completion 上限 | ProviderClient.prepare → descriptor → Runtime 重建；不公开 |
+| `_PreparedProviderCall.descriptor.options.stream` | `bool` | 当前 Agent 固定为 `False` | ProviderClient.prepare → descriptor → Runtime 重建；不公开 |
+| `_PreparedProviderCall.descriptor.options.thinking_mode` | `bool` 或 `None` | 已解析的思考模式 | ProviderClient.prepare → descriptor → Runtime 重建；不公开 |
+| `_PreparedProviderCall.descriptor.options.reasoning_effort` | `str` 或 `None` | 已解析的推理强度 | ProviderClient.prepare → descriptor → Runtime 重建；不公开 |
+| `_PreparedProviderCall.descriptor.options.timeout_seconds` | 有限正 `int`/`float` | 已解析并冻结的请求超时 | ProviderClient.prepare → descriptor → Runtime 重建；不公开 |
+| `_PreparedProviderCall.descriptor.asset_manifest` | `Mapping[str, object]`；必传 | Agent 提供的 asset contract 加 Provider adapter 版本及有序图片指纹 | Agent/ProviderClient.prepare → 私有 descriptor → Runtime 比较；不公开 |
+| `_PreparedProviderCall.descriptor.asset_manifest.prompt_digest` | SHA-256 `str`；必传 | 实际指令投影摘要 | Agent `asset_contract` 或 Provider 默认投影 → descriptor → Runtime 比较；不公开 |
+| `_PreparedProviderCall.descriptor.asset_manifest.registry_version` | 非空 `str`；必传 | 当前工具合同版本；摘要请求无工具时使用 `context-compaction-v2` | Agent `asset_contract` 或 Provider 默认值 → descriptor → Runtime 比较；不公开 |
+| `_PreparedProviderCall.descriptor.asset_manifest.registry_digest` | SHA-256 `str`；必传 | 工具声明投影摘要；摘要请求工具集合为空 | Agent `asset_contract` 或 Provider 默认投影 → descriptor → Runtime 比较；不公开 |
+| `_PreparedProviderCall.descriptor.asset_manifest.adapter_contract_version` | `int`；当前为 `1` | Provider prepare/wire 适配合同版本 | ProviderClient.prepare → descriptor → Runtime 比较；不公开 |
+| `_PreparedProviderCall.descriptor.asset_manifest.images` | 有序图片指纹数组；必传，可空 | 仅保存每个图像块的引用与摘要，不保存图像字节；摘要请求为空数组 | ProviderClient.prepare → descriptor → Runtime 比较；不公开 |
+| `_PreparedProviderCall.descriptor.asset_manifest.images[].source_ref` | `Mapping[str, str]` 或 `None` | 图像资源引用；结构见 [Agent 图像资源引用](agent.md#4-runexecutionstate-资源合同与完整字段) | Agent 图像块 → ProviderClient.prepare → Runtime 比较；不公开 |
+| `_PreparedProviderCall.descriptor.asset_manifest.images[].observation_kind` | `str`；默认 `original` | `original`、`annotated` 或 `rendered` | Agent 图像块 → ProviderClient.prepare → Runtime 比较；不公开 |
+| `_PreparedProviderCall.descriptor.asset_manifest.images[].media_type` | `str`；必传 | 图像 MIME 类型 | Agent/Sources → ProviderClient.prepare → Runtime 比较；不公开 |
+| `_PreparedProviderCall.descriptor.asset_manifest.images[].byte_count` | 正 `int` | 实际附带的图像字节数 | ProviderClient.prepare → descriptor → Runtime 比较；不公开 |
+| `_PreparedProviderCall.descriptor.asset_manifest.images[].sha256` | SHA-256 `str`；必传 | 实际附带图像内容摘要 | ProviderClient.prepare → descriptor → Runtime 比较；不公开 |
 
 ### 本地上下文估算
 
