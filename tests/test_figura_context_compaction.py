@@ -12,6 +12,7 @@ from figura.agent.context_compaction import (
     calculate_context_history_budgets,
     eligible_compaction_runs,
     select_compaction_coverage,
+    selection_for_coverage,
 )
 from figura.runtime.coordinator import RunCoordinator
 from figura.runtime.errors import RunError, RunErrorCode
@@ -234,6 +235,36 @@ def _complete_two_interaction_run(coordinator, store, session_id, *, key="two-in
     return run
 
 
+def _active_two_interaction_run(
+    coordinator, store, session_id, *, key="active-two-interactions", run=None
+):
+    from figura.runtime.tool_execution import DurableToolExecutor
+
+    registry = _registry()
+    if run is None:
+        run = _create_followup_run(
+            coordinator, session_id, key=key, text="当前任务：完成两次有依据的观察。"
+        )
+    executor = DurableToolExecutor(store, registry)
+    for call_id, observation in (
+        ("active-early-call", "活动 Run 较早交互：识别第一组数据。"),
+        ("active-recent-call", "活动 Run 近期交互：核对第二组数据。"),
+    ):
+        _commit_tool_response(
+            coordinator,
+            session_id,
+            run.run_id,
+            registry,
+            _response(
+                content=observation,
+                calls=(ProviderToolCall(call_id, "inspect", '{"value":7}'),),
+                reason=FinishReason.TOOL_CALLS,
+            ),
+        )
+        executor.execute_pending(session_id, run.run_id)
+    return run
+
+
 def test_selector_can_split_one_run_only_between_complete_interactions(tmp_path):
     store, coordinator, _unused_session, _run = _app(tmp_path)
     session = coordinator.create_session()
@@ -271,6 +302,437 @@ def test_selector_preserves_single_oversized_newest_interaction_whole(tmp_path):
     assert selected.covered_record_sequence < state.checkpoint.last_committed_record_sequence
     # The newer interaction is retained as a whole, so summary coverage ends at the tool batch.
     assert selected.covered_tool_sequence == state.checkpoint.last_committed_tool_sequence
+
+
+def test_selector_compacts_only_the_older_complete_active_run_interaction(tmp_path):
+    store, coordinator, session, initial = _app(tmp_path)
+    run = _active_two_interaction_run(
+        coordinator, store, session.session_id, run=initial
+    )
+    state = coordinator.read_run_state(session.session_id, run.run_id)
+
+    selected = select_compaction_coverage(
+        (),
+        None,
+        5,
+        active_run_state=state,
+        estimate_tokens=lambda text: 7 if "较早交互" in text else 5,
+    )
+
+    assert selected is not None
+    assert selected.selected_run_states == (state,)
+    assert selected.covered_run_id == run.run_id
+    assert selected.covered_record_sequence < state.checkpoint.last_committed_record_sequence
+    assert selected.covered_tool_sequence < state.checkpoint.last_committed_tool_sequence
+
+
+def test_selector_shares_one_raw_tail_across_prior_and_active_run(tmp_path):
+    store, coordinator, session, initial = _app(tmp_path)
+    prior = _active_two_interaction_run(
+        coordinator, store, session.session_id, key="mixed-prior", run=initial
+    )
+    _complete_text_run(coordinator, session.session_id, prior.run_id, registry=_registry())
+    active = _active_two_interaction_run(
+        coordinator, store, session.session_id, key="mixed-active"
+    )
+    prior_state = coordinator.read_run_state(session.session_id, prior.run_id)
+    active_state = coordinator.read_run_state(session.session_id, active.run_id)
+
+    selected = select_compaction_coverage(
+        (prior_state,),
+        None,
+        5,
+        active_run_state=active_state,
+        estimate_tokens=lambda text: (
+            0 if "historical_run_context" in text
+            else 5 if "活动 Run 近期交互" in text
+            else 7
+        ),
+    )
+
+    assert selected is not None
+    assert selected.selected_run_states == (prior_state, active_state)
+    assert selected.covered_run_id == active.run_id
+    assert selected.covered_record_sequence < active_state.checkpoint.last_committed_record_sequence
+
+
+def test_selector_does_not_include_active_incomplete_tool_batch(tmp_path):
+    store, coordinator, session, run = _app(tmp_path)
+    registry = _registry()
+    _commit_tool_response(
+        coordinator,
+        session.session_id,
+        run.run_id,
+        registry,
+        _response(
+            content="这个工具批次尚未结束。",
+            calls=(ProviderToolCall("unfinished-active", "inspect", '{"value":1}'),),
+            reason=FinishReason.TOOL_CALLS,
+        ),
+    )
+    state = coordinator.read_run_state(session.session_id, run.run_id)
+
+    selected = select_compaction_coverage(
+        (), None, 0, active_run_state=state, estimate_tokens=lambda _text: 1
+    )
+
+    assert state.checkpoint.next_action.action_kind is ActionKind.TOOL_EXECUTION
+    assert selected is None
+
+
+def test_runtime_binds_active_checkpoint_to_frozen_operation_and_complete_boundary(tmp_path):
+    store, coordinator, session, initial = _app(tmp_path)
+    run = _active_two_interaction_run(
+        coordinator, store, session.session_id, run=initial
+    )
+    state = coordinator.read_run_state(session.session_id, run.run_id)
+    selected = select_compaction_coverage(
+        (), None, 5,
+        active_run_state=state,
+        estimate_tokens=lambda text: 7 if "较早交互" in text else 5,
+    )
+    assert selected is not None
+    operation_args = {
+        "session_id": session.session_id,
+        "target_run_id": run.run_id,
+        "base_record_sequence": state.checkpoint.last_committed_record_sequence,
+        "base_tool_sequence": state.checkpoint.last_committed_tool_sequence,
+        "input_checkpoint_revision": 0,
+        "covered_run_id": run.run_id,
+        "covered_run_ordinal": run.ordinal,
+        "covered_record_sequence": selected.covered_record_sequence,
+        "covered_tool_sequence": selected.covered_tool_sequence,
+    }
+
+    with pytest.raises(RunError) as error:
+        coordinator.get_or_create_context_compaction_operation(
+            **{
+                **operation_args,
+                "covered_record_sequence": state.checkpoint.last_committed_record_sequence + 1,
+            }
+        )
+    assert error.value.code in {RunErrorCode.STALE_CHECKPOINT, RunErrorCode.UNSUPPORTED_PAYLOAD}
+
+    unbound = SessionContextCheckpoint(
+        session_id=session.session_id,
+        revision=1,
+        covered_run_id=run.run_id,
+        covered_run_ordinal=run.ordinal,
+        covered_record_sequence=selected.covered_record_sequence,
+        covered_tool_sequence=selected.covered_tool_sequence,
+        summary_contract_version=2,
+        summary=_summary_v2(),
+        source_refs=(MessageSourceRef(run.run_id, run.input_record_id),),
+    )
+    with pytest.raises(RunError) as error:
+        coordinator.replace_session_context_checkpoint(unbound, expected_revision=0)
+    assert error.value.code is RunErrorCode.UNSUPPORTED_PAYLOAD
+
+    operation = coordinator.get_or_create_context_compaction_operation(**operation_args)
+    checkpoint = replace(unbound, compaction_operation_id=operation.operation_id)
+    stored = coordinator.replace_session_context_checkpoint(checkpoint, expected_revision=0)
+    read_back = coordinator.read_session_context_checkpoint(session.session_id)
+    assert read_back is not None
+    assert read_back.revision == stored.revision
+    assert read_back.covered_run_id == run.run_id
+    assert read_back.covered_record_sequence == selected.covered_record_sequence
+
+
+def test_active_summary_receives_full_input_text_attachment_ids_and_source_ref(tmp_path):
+    store, coordinator, session, initial, attachments, image_bytes, _image_path = _app_with_image(
+        tmp_path
+    )
+    run = _active_two_interaction_run(
+        coordinator, store, session.session_id, run=initial
+    )
+    state = coordinator.read_run_state(session.session_id, run.run_id)
+    attachment_id = attachments.list(session.session_id)[0].attachment_id
+    selection = select_compaction_coverage(
+        (), None, 5,
+        active_run_state=state,
+        estimate_tokens=lambda text: 7 if "较早交互" in text else 5,
+    )
+    assert selection is not None
+    builder = _agent(store, coordinator, _registry(), _FakeFactory([]))._requests
+
+    request, refs = builder.build_summary_request(
+        state,
+        selection.selected_run_states,
+        None,
+        coverage=selection,
+        context_capacity_tokens=100,
+        summary_budget_tokens=10,
+    )
+    payload = json.loads(request.messages[0].content)
+    source_input = payload["source_runs"][0]["input"]
+
+    assert source_input["text"] == "请分析图表。"
+    assert source_input["attachment_ids"] == [attachment_id]
+    assert source_input["reference"] == MessageSourceRef(
+        run.run_id, run.input_record_id
+    ).to_dict()
+    assert MessageSourceRef(run.run_id, run.input_record_id) in refs
+    assert image_bytes.decode("latin1") not in request.messages[0].content
+
+
+def test_agent_compacts_active_prefix_and_reuses_checkpoint_in_same_run(tmp_path, monkeypatch):
+    store, coordinator, session, initial = _app(tmp_path)
+    run = _active_two_interaction_run(
+        coordinator, store, session.session_id, run=initial
+    )
+    source_state = coordinator.read_run_state(session.session_id, run.run_id)
+    _set_capacity_and_estimates(monkeypatch, [90, 75, 45, 50])
+    factory = _FakeFactory([
+        _summary_response(source_state, "较早的观察已纳入活动 Run 摘要。"),
+        _response(
+            content="摘要后继续：请求补测。",
+            calls=(ProviderToolCall("post-summary-call", "inspect", '{"value":8}'),),
+            reason=FinishReason.TOOL_CALLS,
+        ),
+        _response(content="结合保留的近期过程完成分析。"),
+    ])
+    agent = _agent(store, coordinator, _registry(), factory)
+
+    after_summary = agent.execute_slice(session.session_id, run.run_id)
+    checkpoint = coordinator.read_session_context_checkpoint(session.session_id)
+
+    assert checkpoint is not None
+    assert checkpoint.covered_run_id == run.run_id
+    assert checkpoint.covered_record_sequence < source_state.checkpoint.last_committed_record_sequence
+    summary_payload = json.loads(factory.client.requests[0].messages[0].content)
+    assert summary_payload["source_runs"][0]["status"] == "running"
+    assert summary_payload["source_runs"][0]["input"]["text"] == "分析图表数据"
+    assert "不得把摘要覆盖边界当作 Run 的结束" in (
+        factory.client.requests[0].instructions[0].content
+    )
+    summary_messages = json.dumps(summary_payload["source_runs"][0]["messages"])
+    assert "active-early-call" in summary_messages
+    assert "active-recent-call" not in summary_messages
+
+    ordinary_request = factory.client.requests[1]
+    ordinary_message_text = json.dumps(
+        [message.content for message in ordinary_request.messages], ensure_ascii=False
+    )
+    assert "分析图表数据" in ordinary_message_text
+    assert "活动 Run 较早交互" not in ordinary_message_text
+    assert "活动 Run 近期交互" in ordinary_message_text
+    assert after_summary.checkpoint.next_action.action_kind is ActionKind.TOOL_EXECUTION
+
+    after_tool = agent.execute_slice(session.session_id, run.run_id)
+    assert after_tool.checkpoint.next_action.action_kind is ActionKind.MODEL
+    after_continuation = agent.execute_slice(session.session_id, run.run_id)
+    continuation_text = json.dumps(
+        [message.content for message in factory.client.requests[-1].messages],
+        ensure_ascii=False,
+    )
+    assert "分析图表数据" in continuation_text
+    assert "活动 Run 较早交互" not in continuation_text
+    assert "活动 Run 近期交互" in continuation_text
+    assert "摘要后继续：请求补测。" in continuation_text
+    assert after_continuation.checkpoint.next_action.action_kind is ActionKind.FINAL
+
+    completed = agent.execute_slice(session.session_id, run.run_id)
+    assert completed.run.status is RunStatus.COMPLETED
+    assert coordinator.read_session_context_checkpoint(session.session_id) == checkpoint
+
+    followup = _create_followup_run(
+        coordinator,
+        session.session_id,
+        key="after-active-compaction",
+        text="沿用刚才的分析继续回答。",
+    )
+    followup_state = coordinator.read_run_state(session.session_id, followup.run_id)
+    prior_states = coordinator.read_prior_run_states(session.session_id, followup.run_id)
+    projected = agent._requests.build(
+        followup_state,
+        _registry(),
+        prior_states,
+        context_checkpoint=checkpoint,
+    )
+    projected_text = json.dumps([message.content for message in projected.messages], ensure_ascii=False)
+    summary_instruction = next(
+        item.content for item in projected.instructions if "旧历史的自动摘要" in item.content
+    )
+    assert "分析图表数据" in projected_text
+    assert "活动 Run 较早交互" not in projected_text
+    assert "活动 Run 近期交互" in projected_text
+    assert '"status":"completed"' in summary_instruction
+
+
+def test_active_run_incremental_compaction_adds_only_new_process_after_checkpoint(
+    tmp_path, monkeypatch
+):
+    store, coordinator, session, initial = _app(tmp_path)
+    run = _active_two_interaction_run(
+        coordinator, store, session.session_id, run=initial
+    )
+    _set_capacity_and_estimates(monkeypatch, [90, 75, 45, 90, 75, 45])
+    factory = _FakeFactory([
+        _summary_response(
+            coordinator.read_run_state(session.session_id, run.run_id),
+            "活动 Run 的较早观察已摘要。",
+        ),
+        _response(
+            content="摘要后继续：请求补测。",
+            calls=(ProviderToolCall("incremental-active-call", "inspect", '{"value":8}'),),
+            reason=FinishReason.TOOL_CALLS,
+        ),
+        _summary_response(
+            coordinator.read_run_state(session.session_id, run.run_id),
+            "活动 Run 的近期观察也已摘要。",
+        ),
+        _response(content="增量压缩后完成分析。"),
+    ])
+    agent = _agent(store, coordinator, _registry(), factory)
+
+    after_first_model = agent.execute_slice(session.session_id, run.run_id)
+    first_checkpoint = coordinator.read_session_context_checkpoint(session.session_id)
+    assert first_checkpoint is not None and first_checkpoint.revision == 1
+    after_tool = agent.execute_slice(session.session_id, run.run_id)
+    assert after_tool.checkpoint.next_action.action_kind is ActionKind.MODEL
+    after_second_model = agent.execute_slice(session.session_id, run.run_id)
+
+    second_checkpoint = coordinator.read_session_context_checkpoint(session.session_id)
+    assert second_checkpoint is not None and second_checkpoint.revision == 2
+    assert second_checkpoint.covered_run_id == run.run_id
+    assert second_checkpoint.covered_record_sequence > first_checkpoint.covered_record_sequence
+    assert second_checkpoint.covered_record_sequence < after_tool.checkpoint.last_committed_record_sequence
+    second_summary = json.loads(factory.client.requests[2].messages[0].content)
+    assert second_summary["previous_summary"] is not None
+    assert second_summary["previous_source_refs"] == [
+        item.to_dict() for item in first_checkpoint.source_refs
+    ]
+    incremental_messages = json.dumps(
+        second_summary["source_runs"][0]["messages"], ensure_ascii=False
+    )
+    assert "active-early-call" not in incremental_messages
+    assert "active-recent-call" in incremental_messages
+    assert "incremental-active-call" not in incremental_messages
+
+    second_ordinary_text = json.dumps(
+        [message.content for message in factory.client.requests[3].messages],
+        ensure_ascii=False,
+    )
+    assert "分析图表数据" in second_ordinary_text
+    assert "活动 Run 较早交互" not in second_ordinary_text
+    assert "活动 Run 近期交互" not in second_ordinary_text
+    assert "摘要后继续：请求补测。" in second_ordinary_text
+    assert after_second_model.checkpoint.next_action.action_kind is ActionKind.FINAL
+
+    completed = agent.execute_slice(session.session_id, run.run_id)
+    assert completed.run.status is RunStatus.COMPLETED
+
+
+def test_interrupted_active_run_summary_reconstructs_the_frozen_prefix_after_restart(
+    tmp_path, monkeypatch
+):
+    store, coordinator, session, initial = _app(tmp_path)
+    run = _active_two_interaction_run(
+        coordinator, store, session.session_id, run=initial
+    )
+    active_state = coordinator.read_run_state(session.session_id, run.run_id)
+    _set_capacity_and_estimates(monkeypatch, [90, 80, 90, 45])
+    factory = _FakeFactory([
+        _summary_response(active_state, "活動 Run 的早期觀察。"),
+        _response(content="完成"),
+    ])
+
+    def interrupt_before_checkpoint(*_args, **_kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(
+        coordinator, "replace_session_context_checkpoint", interrupt_before_checkpoint
+    )
+    with pytest.raises(KeyboardInterrupt):
+        _agent(store, coordinator, _registry(), factory).execute_slice(
+            session.session_id, run.run_id
+        )
+
+    operation = coordinator.find_context_compaction_operation(
+        session.session_id,
+        run.run_id,
+        active_state.checkpoint.last_committed_record_sequence,
+        active_state.checkpoint.last_committed_tool_sequence,
+    )
+    assert operation is not None and operation.attempt_count == 1
+    original_binding = operation.request_binding
+    original_summary_request = factory.client.requests[0]
+
+    reopened = FiguraRunStore(tmp_path)
+    restarted_coordinator = RunCoordinator(reopened, coordinator._provider_factory)
+    restarted_factory = _FakeFactory([
+        _summary_response(active_state, "活动 Run 的早期觀察。"),
+        _response(content="恢复后继续完成。"),
+    ])
+    result = _agent(reopened, restarted_coordinator, _registry(), restarted_factory).execute_slice(
+        session.session_id, run.run_id
+    )
+    resumed = restarted_coordinator.read_context_compaction_operation(operation.operation_id)
+
+    assert resumed.status == "completed"
+    assert resumed.attempt_count == 2
+    assert resumed.request_binding == original_binding
+    assert restarted_factory.client.requests[0] == original_summary_request
+    assert result.provider_request_bindings[0].context_projection == "checkpoint"
+    checkpoint = restarted_coordinator.read_session_context_checkpoint(session.session_id)
+    assert checkpoint is not None and checkpoint.covered_run_id == run.run_id
+
+
+def test_active_run_checkpoint_survives_later_failure_and_refreshes_terminal_projection(
+    tmp_path, monkeypatch
+):
+    store, coordinator, session, initial = _app(tmp_path)
+    run = _active_two_interaction_run(
+        coordinator, store, session.session_id, run=initial
+    )
+    active_state = coordinator.read_run_state(session.session_id, run.run_id)
+    _set_capacity_and_estimates(monkeypatch, [90, 75, 45])
+    factory = _FakeFactory([
+        _summary_response(active_state, "早期观察已压缩。"),
+        _response(content="Run 尚有后续工作。"),
+    ])
+    agent = _agent(store, coordinator, _registry(), factory)
+    after_compaction = agent.execute_slice(session.session_id, run.run_id)
+    checkpoint = coordinator.read_session_context_checkpoint(session.session_id)
+    assert checkpoint is not None and checkpoint.covered_run_id == run.run_id
+
+    failed = coordinator.fail_run(
+        session.session_id,
+        run.run_id,
+        after_compaction.checkpoint.revision,
+    )
+    assert failed.status is RunStatus.FAILED
+    assert coordinator.read_session_context_checkpoint(session.session_id) == checkpoint
+
+    followup = _create_followup_run(
+        coordinator,
+        session.session_id,
+        key="after-active-failure",
+        text="继续处理尚未完成的工作。",
+    )
+    followup_state = coordinator.read_run_state(session.session_id, followup.run_id)
+    prior_states = coordinator.read_prior_run_states(session.session_id, followup.run_id)
+    projected = agent._requests.build(
+        followup_state,
+        _registry(),
+        prior_states,
+        context_checkpoint=checkpoint,
+    )
+    projected_text = json.dumps(
+        [message.content for message in projected.messages], ensure_ascii=False
+    )
+    summary_instruction = next(
+        item.content for item in projected.instructions if "旧历史的自动摘要" in item.content
+    )
+    execution_instruction = next(
+        item.content for item in projected.instructions if "本次请求的运行资源目录" in item.content
+    )
+
+    assert "活动 Run 较早交互" not in projected_text
+    assert "活动 Run 近期交互" in projected_text
+    assert "Run 尚有后续工作。" in projected_text
+    assert '"status":"failed"' in summary_instruction
+    assert '"status":"failed"' in execution_instruction
 
 
 def test_selector_aborts_instead_of_skipping_an_unestimated_history_run(tmp_path):

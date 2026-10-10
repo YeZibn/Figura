@@ -31,6 +31,7 @@ from figura.memory import (
     project_run_messages,
     project_session_history,
 )
+from figura.memory.projector import _project_run_messages
 from figura.providers import (
     MessageRole,
     ProviderContinuation,
@@ -93,7 +94,11 @@ class AgentRequestBuilder:
             if (
                 not isinstance(context_checkpoint, SessionContextCheckpoint)
                 or context_checkpoint.session_id != state.run.session_id
-                or context_checkpoint.covered_run_ordinal >= state.run.ordinal
+                or context_checkpoint.covered_run_ordinal > state.run.ordinal
+                or (
+                    context_checkpoint.covered_run_ordinal == state.run.ordinal
+                    and context_checkpoint.covered_run_id != state.run.run_id
+                )
             ):
                 raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
             history = replace(
@@ -112,8 +117,19 @@ class AgentRequestBuilder:
         execution_state = _prompt_resource_projection(
             full_execution_state, state, prior_run_states, context_checkpoint
         )
+        current_messages = project_run_messages(state)
+        if (
+            context_checkpoint is not None
+            and context_checkpoint.covered_run_id == state.run.run_id
+        ):
+            all_states = (*prior_run_states, state)
+            current_messages = tuple(
+                message for message in current_messages
+                if isinstance(message, UserMessage)
+                or _message_is_after_checkpoint(message, all_states, context_checkpoint)
+            )
         messages = self._provider_messages(
-            (*history.messages, *project_run_messages(state)),
+            (*history.messages, *current_messages),
             selected_provider=provider_id,
             continuations=_continuations_by_response((*prior_run_states, state)),
             registry=registry,
@@ -133,10 +149,17 @@ class AgentRequestBuilder:
         except (TypeError, ValueError):
             raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD) from None
 
+        prompt_checkpoint = (
+            _checkpoint_with_live_run_outcomes(
+                context_checkpoint, (*prior_run_states, state)
+            )
+            if context_checkpoint is not None
+            else None
+        )
         instructions = (
             build_static_instruction(),
             build_tool_instruction(registry),
-            *((build_context_summary_instruction(context_checkpoint),) if context_checkpoint else ()),
+            *((build_context_summary_instruction(prompt_checkpoint),) if prompt_checkpoint else ()),
             build_execution_instruction(execution_state, history.run_outcomes),
         )
         registry_projection = [{"name": d.name, "description": d.description,
@@ -200,12 +223,27 @@ class AgentRequestBuilder:
         )
         source_runs: list[dict[str, object]] = []
         for source_state in selected_run_states:
-            if (
-                source_state.run.session_id != state.run.session_id
-                or source_state.run.status is not RunStatus.COMPLETED
-            ):
+            is_active_source = source_state.run.run_id == state.run.run_id
+            if source_state.run.session_id != state.run.session_id:
                 raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
-            run_messages = project_run_messages(source_state)
+            if source_state.run.status is RunStatus.RUNNING:
+                if (
+                    not is_active_source
+                    or coverage is None
+                    or coverage.covered_run_id != source_state.run.run_id
+                    or coverage.covered_run_ordinal != source_state.run.ordinal
+                    or coverage.covered_record_sequence
+                    > source_state.checkpoint.last_committed_record_sequence
+                    or coverage.covered_tool_sequence
+                    > source_state.checkpoint.last_committed_tool_sequence
+                ):
+                    raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
+                incomplete_batches = []
+                run_messages = _project_run_messages(source_state, incomplete_batches)
+            elif source_state.run.status is RunStatus.COMPLETED:
+                run_messages = project_run_messages(source_state)
+            else:
+                raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
             input_messages = tuple(item for item in run_messages if isinstance(item, UserMessage))
             if len(input_messages) != 1:
                 raise RunError(RunErrorCode.INTEGRITY_ERROR)
@@ -437,6 +475,30 @@ def _historical_input_entries(
     return entries
 
 
+def _checkpoint_with_live_run_outcomes(
+    checkpoint: SessionContextCheckpoint,
+    states: tuple[RunState, ...],
+) -> SessionContextCheckpoint:
+    """Project canonical Run status over summary metadata that may predate termination."""
+    current_by_id = {state.run.run_id: state.run for state in states}
+    summary = dict(checkpoint.summary)
+    outcomes = summary.get("run_outcomes")
+    if isinstance(outcomes, (tuple, list)):
+        updated_outcomes = []
+        for item in outcomes:
+            if not isinstance(item, Mapping):
+                updated_outcomes.append(item)
+                continue
+            outcome = dict(item)
+            current_run = current_by_id.get(outcome.get("run_id"))
+            if current_run is not None:
+                outcome["status"] = current_run.status.value
+                outcome["terminal_code"] = current_run.terminal_code
+            updated_outcomes.append(outcome)
+        summary["run_outcomes"] = updated_outcomes
+    return replace(checkpoint, summary=MappingProxyType(summary))
+
+
 def _historical_user_inputs_message(
     entries: Mapping[str, Mapping[str, object]],
 ) -> ProviderMessage:
@@ -514,6 +576,7 @@ def _prompt_resource_projection(
     relevant_image_ids: set[str] = set()
     relevant_tool_refs: set[tuple[str, str]] = set()
     by_run_id = {run_state.run.run_id: run_state for run_state in (*prior, current)}
+    relevant_image_ids.update(_run_input_attachment_ids(current))
     for run_state in (*prior, current):
         if run_state.run.ordinal > checkpoint.covered_run_ordinal:
             relevant_image_ids.update(_run_input_attachment_ids(run_state))
@@ -616,14 +679,14 @@ def _run_input_attachment_ids(state: RunState) -> tuple[str, ...]:
 
 def _message_is_after_checkpoint(
     message: MemoryMessage,
-    prior: tuple[RunState, ...],
+    states: tuple[RunState, ...],
     checkpoint: SessionContextCheckpoint,
 ) -> bool:
     if message.run_ordinal > checkpoint.covered_run_ordinal:
         return True
     if message.run_ordinal < checkpoint.covered_run_ordinal:
         return False
-    state = next((item for item in prior if item.run.run_id == message.run_id), None)
+    state = next((item for item in states if item.run.run_id == message.run_id), None)
     if state is None:
         raise RunError(RunErrorCode.INTEGRITY_ERROR)
     if isinstance(message, ToolMessage):

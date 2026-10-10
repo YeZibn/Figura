@@ -475,6 +475,7 @@ class AgentExecutor:
                 prior_run_states,
                 previous_checkpoint,
                 budgets.raw_history_tokens,
+                active_run_state=state,
             )
             if candidate is None:
                 return (
@@ -525,7 +526,10 @@ class AgentExecutor:
             )
             return None, "fallback", operation.operation_id
         selection = selection_for_coverage(
-            prior_run_states, previous_checkpoint, operation
+            prior_run_states,
+            previous_checkpoint,
+            operation,
+            active_run_state=state,
         )
         if selection is None:
             self._coordinator.fallback_context_compaction_operation(

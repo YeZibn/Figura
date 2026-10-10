@@ -132,11 +132,12 @@ def _validate_ownership(
     if (
         covered is None
         or covered["ordinal"] != checkpoint.covered_run_ordinal
-        or covered["status"] == "running"
         or checkpoint.covered_record_sequence > covered["last_committed_record_sequence"]
         or checkpoint.covered_tool_sequence > covered["last_committed_tool_sequence"]
     ):
         raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
+    if covered["status"] != "completed":
+        _validate_active_coverage_operation(connection, checkpoint, covered["status"])
     _validate_coverage_boundary(
         connection,
         checkpoint.session_id,
@@ -185,6 +186,54 @@ def _validate_ownership(
                 and row["tool_sequence"] > checkpoint.covered_tool_sequence
             ):
                 raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
+
+
+def _validate_active_coverage_operation(
+    connection: sqlite3.Connection,
+    checkpoint: SessionContextCheckpoint,
+    covered_status: str,
+) -> None:
+    if checkpoint.compaction_operation_id is None:
+        raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
+    operation = connection.execute(
+        "SELECT o.session_id, o.target_run_id, o.base_record_sequence, o.base_tool_sequence, "
+        "o.covered_run_id, o.covered_run_ordinal, o.covered_record_sequence, "
+        "o.covered_tool_sequence, o.status, o.result_checkpoint_revision, "
+        "r.status AS target_status, c.last_committed_record_sequence, "
+        "c.last_committed_tool_sequence FROM session_context_compaction_operations o "
+        "JOIN runs r ON r.run_id = o.target_run_id "
+        "JOIN run_execution_checkpoints c ON c.run_id = o.target_run_id "
+        "WHERE o.operation_id = ? AND r.session_id = ?",
+        (checkpoint.compaction_operation_id, checkpoint.session_id),
+    ).fetchone()
+    if (
+        operation is None
+        or operation["session_id"] != checkpoint.session_id
+        or operation["target_run_id"] != checkpoint.covered_run_id
+        or operation["covered_run_id"] != checkpoint.covered_run_id
+        or operation["covered_run_ordinal"] != checkpoint.covered_run_ordinal
+        or operation["covered_record_sequence"] != checkpoint.covered_record_sequence
+        or operation["covered_tool_sequence"] != checkpoint.covered_tool_sequence
+        or operation["base_record_sequence"] < checkpoint.covered_record_sequence
+        or operation["base_tool_sequence"] < checkpoint.covered_tool_sequence
+        or operation["last_committed_record_sequence"] < operation["base_record_sequence"]
+        or operation["last_committed_tool_sequence"] < operation["base_tool_sequence"]
+    ):
+        raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
+    if operation["status"] == "preparing":
+        if (
+            covered_status != "running"
+            or operation["target_status"] != "running"
+            or operation["last_committed_record_sequence"] != operation["base_record_sequence"]
+            or operation["last_committed_tool_sequence"] != operation["base_tool_sequence"]
+            or operation["result_checkpoint_revision"] is not None
+        ):
+            raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
+    elif operation["status"] == "completed":
+        if operation["result_checkpoint_revision"] != checkpoint.revision:
+            raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
+    else:
+        raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
 
 
 def _validate_coverage_boundary(
@@ -471,11 +520,24 @@ class ContextCompactionOperationRepository:
                 ).fetchone()
                 if (
                     stored_covered is None
-                    or stored_covered["status"] == "running"
                     or stored_covered["ordinal"] != operation.covered_run_ordinal
-                    or operation.covered_run_ordinal >= target["ordinal"]
                     or operation.covered_record_sequence > stored_covered["last_committed_record_sequence"]
                     or operation.covered_tool_sequence > stored_covered["last_committed_tool_sequence"]
+                    or (
+                        operation.covered_run_id == target_run_id
+                        and (
+                            operation.covered_run_ordinal != target["ordinal"]
+                            or operation.covered_record_sequence > operation.base_record_sequence
+                            or operation.covered_tool_sequence > operation.base_tool_sequence
+                        )
+                    )
+                    or (
+                        operation.covered_run_id != target_run_id
+                        and (
+                            stored_covered["status"] == "running"
+                            or operation.covered_run_ordinal >= target["ordinal"]
+                        )
+                    )
                 ):
                     raise RunError(RunErrorCode.INTEGRITY_ERROR)
                 _validate_coverage_boundary(
@@ -491,13 +553,27 @@ class ContextCompactionOperationRepository:
                 "WHERE r.session_id = ? AND r.run_id = ?",
                 (session_id, covered_run_id),
             ).fetchone()
-            if covered is None or covered["status"] == "running":
+            if covered is None:
                 raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
             if (
                 covered["ordinal"] != covered_run_ordinal
-                or covered_run_ordinal >= target["ordinal"]
                 or covered_record_sequence > covered["last_committed_record_sequence"]
                 or covered_tool_sequence > covered["last_committed_tool_sequence"]
+                or (
+                    covered_run_id == target_run_id
+                    and (
+                        covered_run_ordinal != target["ordinal"]
+                        or covered_record_sequence > base_record_sequence
+                        or covered_tool_sequence > base_tool_sequence
+                    )
+                )
+                or (
+                    covered_run_id != target_run_id
+                    and (
+                        covered["status"] == "running"
+                        or covered_run_ordinal >= target["ordinal"]
+                    )
+                )
             ):
                 raise RunError(RunErrorCode.STALE_CHECKPOINT)
             _validate_coverage_boundary(

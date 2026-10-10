@@ -9,7 +9,7 @@ from figura.memory import AssistantMessage, MemoryMessage, ToolMessage, UserMess
 from figura.memory.projector import _project_run_messages
 from figura.providers import FinishReason, ProviderId, ProviderResponse
 from figura.providers.token_estimation import estimate_text_tokens
-from figura.runtime.models import RunStatus
+from figura.runtime.models import ActionKind, ProviderAttemptStatus, RunStatus
 from figura.runtime.records import (
     ContextCompactionOperation,
     RunState,
@@ -100,6 +100,7 @@ def select_compaction_coverage(
     previous_checkpoint: SessionContextCheckpoint | None,
     raw_history_budget_tokens: int,
     *,
+    active_run_state: RunState | None = None,
     estimate_tokens: Callable[[str], int | None] = estimate_text_tokens,
 ) -> CompactionSelection | None:
     """Choose a chronological summary prefix and a recent complete-interaction suffix."""
@@ -121,6 +122,25 @@ def select_compaction_coverage(
             if not _unit_is_after_checkpoint(unit, previous_checkpoint):
                 continue
             candidate_units.append(unit)
+
+    active_is_eligible = _active_run_is_eligible(
+        prior_run_states, active_run_state, previous_checkpoint, eligible
+    )
+    if active_is_eligible and active_run_state is not None:
+        active_units = _interaction_units(
+            active_run_state,
+            estimate_tokens,
+            committed_prefix=True,
+            include_input_locator=False,
+        )
+        if (
+            any(record.record_sequence > 1 for record in active_run_state.records)
+            and not active_units
+        ):
+            return None
+        for unit in active_units:
+            if _unit_is_after_checkpoint(unit, previous_checkpoint):
+                candidate_units.append(unit)
     if not candidate_units:
         return None
 
@@ -132,6 +152,11 @@ def select_compaction_coverage(
     protected_tokens = 0
     for state in protected_states:
         estimate = _estimate_protected_run(state, estimate_tokens)
+        if estimate is None:
+            return None
+        protected_tokens += estimate
+    if active_run_state is not None and not active_is_eligible:
+        estimate = _estimate_active_process(active_run_state, estimate_tokens)
         if estimate is None:
             return None
         protected_tokens += estimate
@@ -175,6 +200,8 @@ def selection_for_coverage(
     prior_run_states: tuple[RunState, ...],
     previous_checkpoint: SessionContextCheckpoint | None,
     operation: ContextCompactionOperation,
+    *,
+    active_run_state: RunState | None = None,
 ) -> CompactionSelection | None:
     """Rebuild an already-persisted selection without consulting current budgets."""
     if not isinstance(operation, ContextCompactionOperation):
@@ -184,6 +211,26 @@ def selection_for_coverage(
     candidate_units: list[_InteractionUnit] = []
     for state in eligible:
         for unit in _interaction_units(state, lambda _text: 0):
+            if _unit_is_after_checkpoint(unit, previous_checkpoint):
+                candidate_units.append(unit)
+    active_is_eligible = _active_run_is_eligible(
+        prior_run_states, active_run_state, previous_checkpoint, eligible
+    )
+    if (
+        active_is_eligible
+        and active_run_state is not None
+        and operation.target_run_id == active_run_state.run.run_id
+        and operation.base_record_sequence
+        == active_run_state.checkpoint.last_committed_record_sequence
+        and operation.base_tool_sequence
+        == active_run_state.checkpoint.last_committed_tool_sequence
+    ):
+        for unit in _interaction_units(
+            active_run_state,
+            lambda _text: 0,
+            committed_prefix=True,
+            include_input_locator=False,
+        ):
             if _unit_is_after_checkpoint(unit, previous_checkpoint):
                 candidate_units.append(unit)
     cutoff_index = next((
@@ -208,14 +255,34 @@ def selection_for_coverage(
 def _interaction_units(
     state: RunState,
     estimate_tokens: Callable[[str], int | None],
+    *,
+    committed_prefix: bool = False,
+    include_input_locator: bool = True,
 ) -> tuple[_InteractionUnit, ...]:
     incomplete_batches = []
     messages = _project_run_messages(
         state,
-        incomplete_batches if state.run.status is not RunStatus.COMPLETED else None,
+        incomplete_batches
+        if committed_prefix or state.run.status is not RunStatus.COMPLETED
+        else None,
     )
     if not messages:
         return ()
+    if committed_prefix:
+        record_limit = state.checkpoint.last_committed_record_sequence
+        tool_limit = state.checkpoint.last_committed_tool_sequence
+        messages = tuple(
+            message for message in messages
+            if isinstance(message, UserMessage)
+            or (
+                isinstance(message, AssistantMessage)
+                and _record_sequence(state, message.source_record_id) <= record_limit
+            )
+            or (
+                isinstance(message, ToolMessage)
+                and message.source_tool_sequence <= tool_limit
+            )
+        )
     groups = _group_interactions(messages)
     record_sequences = {record.record_id: record.record_sequence for record in state.records}
     facts_by_call: dict[str, list[ToolExecutionFact]] = {}
@@ -227,6 +294,17 @@ def _interaction_units(
     units: list[_InteractionUnit] = []
     prior_tool_sequence = 0
     for index, group in enumerate(groups):
+        assistant_messages = tuple(item for item in group if isinstance(item, AssistantMessage))
+        if committed_prefix and not assistant_messages:
+            continue
+        if committed_prefix and any(
+            call.call_id not in {
+                item.tool_call_id for item in group if isinstance(item, ToolMessage)
+            }
+            for assistant in assistant_messages
+            for call in assistant.tool_calls
+        ):
+            break
         record_sequence = max(
             record_sequences[message.source_record_id]
             for message in group
@@ -260,7 +338,9 @@ def _interaction_units(
         if type(token_count) is not int or token_count < 0:
             return ()
         input_locator_tokens = 0
-        if any(isinstance(item, (AssistantMessage, ToolMessage)) for item in messages):
+        if include_input_locator and any(
+            isinstance(item, (AssistantMessage, ToolMessage)) for item in messages
+        ):
             locator_estimate = estimate_tokens(json.dumps(
                 _historical_run_context_projection(state),
                 ensure_ascii=False,
@@ -275,6 +355,92 @@ def _interaction_units(
             input_locator_tokens,
         ))
     return tuple(units)
+
+
+def _active_run_is_eligible(
+    prior_run_states: tuple[RunState, ...],
+    active_run_state: RunState | None,
+    previous_checkpoint: SessionContextCheckpoint | None,
+    eligible_prior: tuple[RunState, ...],
+) -> bool:
+    if (
+        not isinstance(active_run_state, RunState)
+        or active_run_state.run.status is not RunStatus.RUNNING
+        or active_run_state.checkpoint.next_action is None
+        or active_run_state.checkpoint.next_action.action_kind not in {
+            ActionKind.MODEL,
+            ActionKind.PROVIDER_RETRY,
+        }
+        or any(
+            attempt.status is ProviderAttemptStatus.STARTED
+            for attempt in active_run_state.provider_attempts
+        )
+    ):
+        return False
+    if (
+        tuple(state.run.ordinal for state in prior_run_states)
+        != tuple(range(1, active_run_state.run.ordinal))
+        or any(
+            state.run.session_id != active_run_state.run.session_id
+            for state in prior_run_states
+        )
+    ):
+        return False
+    if previous_checkpoint is not None:
+        if previous_checkpoint.session_id != active_run_state.run.session_id:
+            return False
+        if previous_checkpoint.covered_run_ordinal > active_run_state.run.ordinal:
+            return False
+        if (
+            previous_checkpoint.covered_run_ordinal == active_run_state.run.ordinal
+            and previous_checkpoint.covered_run_id != active_run_state.run.run_id
+        ):
+            return False
+    prior_after_checkpoint = tuple(
+        state for state in prior_run_states
+        if state.run.ordinal >= (
+            previous_checkpoint.covered_run_ordinal if previous_checkpoint else 0
+        )
+    )
+    return len(eligible_prior) == len(prior_after_checkpoint)
+
+
+def _estimate_active_process(
+    state: RunState,
+    estimate_tokens: Callable[[str], int | None],
+) -> int | None:
+    units = _interaction_units(
+        state,
+        estimate_tokens,
+        committed_prefix=True,
+        include_input_locator=False,
+    )
+    total = sum(unit.estimated_tokens for unit in units)
+    incomplete_batches = []
+    _project_run_messages(state, incomplete_batches)
+    if incomplete_batches:
+        outcome = {
+            "run_id": state.run.run_id,
+            "status": state.run.status.value,
+            "incomplete_batches": [asdict(batch) for batch in incomplete_batches],
+        }
+        estimate = estimate_tokens(json.dumps(
+            outcome, ensure_ascii=False, allow_nan=False, separators=(",", ":")
+        ))
+        if type(estimate) is not int or estimate < 0:
+            return None
+        total += estimate
+    return total
+
+
+def _record_sequence(state: RunState, record_id: str) -> int:
+    sequence = next(
+        (record.record_sequence for record in state.records if record.record_id == record_id),
+        None,
+    )
+    if sequence is None:
+        raise ValueError("projected message references an unknown Run record")
+    return sequence
 
 
 def _group_interactions(messages: tuple[MemoryMessage, ...]) -> tuple[tuple[MemoryMessage, ...], ...]:
