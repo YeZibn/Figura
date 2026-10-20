@@ -21,6 +21,7 @@ from figura.runtime.run_lock import RunExecutionOwnership
 
 from .dispatcher import DispatcherFull, RunDispatcher
 from .session_deletion import FiguraSessionDeletion
+from .transient_events import TransientRunEventHub
 from .web_projection import (
     attachment,
     chart_render_summaries,
@@ -56,6 +57,7 @@ class FiguraGatewayApplication:
         session_deletion: FiguraSessionDeletion,
         *,
         allowed_origins: tuple[str, ...],
+        transient_events: TransientRunEventHub | None = None,
     ) -> None:
         self.coordinator = coordinator
         self.attachments = attachments
@@ -65,6 +67,7 @@ class FiguraGatewayApplication:
         self.providers = providers
         self.dispatcher = dispatcher
         self.session_deletion = session_deletion
+        self.transient_events = transient_events or TransientRunEventHub()
         self.allowed_origins = frozenset(allowed_origins)
 
     def _run_activity(self, run_id: str) -> str:

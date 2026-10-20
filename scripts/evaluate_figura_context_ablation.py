@@ -92,7 +92,12 @@ def fixture(case: str) -> tuple[list[dict], list[Fact]]:
     }
     rounds = []
     for index in range(12):
-        count = 80 if case == "dense_observations" else 72
+        if case == "dense_observations":
+            # Keep the targeted D004-068 lookup row while avoiding repeated
+            # 80-row tool payloads that push the summary request past 50k.
+            count = 70 if index == 4 else 30
+        else:
+            count = 72
         rows = [{"id": f"D{index:03d}-{j:03d}", "region": ("华北", "华东", "华南")[j % 3],
                  "category": f"渠道{j % 8 + 1}", "value": round(offset + 100 + index * 22.2 + j, 1),
                  "note": "工具候选观察，不等于已审核事实"} for j in range(count)]
@@ -248,6 +253,23 @@ def usage_dict(response):
     return asdict(response.usage) if response.usage is not None else None
 
 
+def request_fits_capacity(prepared, capacity: int) -> bool:
+    estimate = getattr(prepared, "context_estimate", None)
+    request = getattr(prepared, "request", None)
+    options = getattr(request, "options", None)
+    input_tokens = getattr(estimate, "input_tokens", None)
+    completion_tokens = getattr(options, "max_completion_tokens", None)
+    if (
+        type(capacity) is not int or capacity <= 0
+        or type(input_tokens) is not int or input_tokens < 0
+        or (completion_tokens is not None and (
+            type(completion_tokens) is not int or completion_tokens < 0
+        ))
+    ):
+        return False
+    return input_tokens + (completion_tokens or 0) <= capacity
+
+
 def tool_source_recovery(runtime, state, facts, refs):
     """Probe the real model-facing contract, including object-read fallback."""
     results = []
@@ -358,6 +380,7 @@ def aggregate(report):
     results["summary_generation"] = {"attempts": len(repetitions),
         "validated": sum(r.get("summary_status") == "validated" for r in repetitions),
         "contract_rejections": sum(r.get("summary_status") == "invalid_contract" for r in repetitions),
+        "capacity_exclusions": sum(r.get("summary_status") == "capacity_exceeded" for r in repetitions),
         "provider_failures": sum(r.get("summary_status") == "provider_failure" for r in repetitions),
         "provider_prompt_tokens": sum(u["prompt_tokens"] or 0 for u in summary_usages),
         "provider_completion_tokens": sum(u["completion_tokens"] or 0 for u in summary_usages)}
@@ -379,6 +402,81 @@ def aggregate(report):
     valid_before = sum(p["full_input_tokens"] for p in successful_pairs)
     valid_after = sum(p["summary_input_tokens"] for p in successful_pairs)
     results["validated_summary_initial_reduction_percent"] = reduction(valid_before, valid_after) if valid_before else None
+
+    completed_pairs = 0
+    full_prompt_tokens = 0
+    summary_answer_prompt_tokens = 0
+    summary_generation_prompt_tokens = 0
+    full_estimated_input_tokens = 0
+    summary_estimated_input_tokens = 0
+    summary_generation_estimated_input_tokens = 0
+    usage_complete = True
+    completed_repetitions = 0
+    for case in report["cases"]:
+        for repetition in case["repetitions"]:
+            if repetition.get("summary_status") != "validated":
+                continue
+            valid_pairs = []
+            for pair in repetition.get("questions", []):
+                full = pair.get("full")
+                compact = pair.get("summary")
+                if (
+                    not isinstance(full, dict) or not isinstance(compact, dict)
+                    or full.get("status") != "answered"
+                    or compact.get("status") != "answered"
+                    or full.get("correct") is not True
+                    or compact.get("correct") is not True
+                    or full.get("expected") != compact.get("expected")
+                ):
+                    continue
+                valid_pairs.append(pair)
+                completed_pairs += 1
+                full_estimated_input_tokens += pair.get("full_input_tokens", 0)
+                summary_estimated_input_tokens += pair.get("summary_input_tokens", 0)
+                for arm, total in ((full, "full"), (compact, "summary")):
+                    round_usages = [item.get("usage") for item in arm.get("rounds", [])]
+                    if not round_usages or any(
+                        not isinstance(usage, dict) or usage.get("prompt_tokens") is None
+                        for usage in round_usages
+                    ):
+                        usage_complete = False
+                    amount = sum(
+                        usage.get("prompt_tokens", 0)
+                        for usage in round_usages if isinstance(usage, dict)
+                    )
+                    if total == "full":
+                        full_prompt_tokens += amount
+                    else:
+                        summary_answer_prompt_tokens += amount
+            if not valid_pairs:
+                continue
+            completed_repetitions += 1
+            summary_usage = repetition.get("summary_usage")
+            if not isinstance(summary_usage, dict) or summary_usage.get("prompt_tokens") is None:
+                usage_complete = False
+            else:
+                summary_generation_prompt_tokens += summary_usage["prompt_tokens"]
+            summary_generation_estimated_input_tokens += repetition.get(
+                "summary_estimated_input_tokens", 0
+            )
+    summary_total_prompt_tokens = summary_answer_prompt_tokens + summary_generation_prompt_tokens
+    token_reduction = (
+        reduction(full_prompt_tokens, summary_total_prompt_tokens)
+        if usage_complete and full_prompt_tokens > 0 else None
+    )
+    results["completed_paired_task_provider_usage"] = {
+        "completed_questions": completed_pairs,
+        "completed_repetitions": completed_repetitions,
+        "full_answer_prompt_tokens": full_prompt_tokens,
+        "summary_answer_prompt_tokens": summary_answer_prompt_tokens,
+        "summary_generation_prompt_tokens_once_per_repetition": summary_generation_prompt_tokens,
+        "summary_total_prompt_tokens": summary_total_prompt_tokens,
+        "full_initial_estimated_input_tokens": full_estimated_input_tokens,
+        "summary_initial_estimated_input_tokens": summary_estimated_input_tokens,
+        "summary_generation_estimated_input_tokens_once_per_repetition": summary_generation_estimated_input_tokens,
+        "provider_prompt_token_reduction_percent": token_reduction,
+        "usage_complete": usage_complete,
+    }
     return results
 
 
@@ -534,38 +632,47 @@ def main():
                     )
                     prepared = capacity_client.prepare(request)
                     entry["summary_estimated_input_tokens"] = prepared.context_estimate.input_tokens
+                    entry["summary_reasoning"] = {
+                        "thinking_mode": prepared.request.options.thinking_mode,
+                        "reasoning_effort": prepared.request.options.reasoning_effort,
+                    }
                     start = time.monotonic()
                     checkpoint = None
-                    try:
-                        response = capacity_client.dispatch(prepared)
-                        summary, source_refs = validate_summary_response(response, provider_id=provider.value,
-                            model_id=MODEL_IDS[provider], allowed_refs=allowed, selected_runs=selected)
-                    except ProviderCallError as error:
-                        entry.update(summary_status="provider_failure", failure_code=error.failure.failure_code.value,
-                                     http_status=error.failure.http_status)
-                        print(f"{name} capacity={capacity} repeat={rep+1}: summary failed ({entry['failure_code']})", flush=True)
-                    except ValueError as error:
-                        entry.update(summary_status="invalid_contract", summary_usage=usage_dict(response),
-                                     validation_error=str(error), raw_summary=response.assistant_content,
-                                     finish_reason=response.finish_reason.value,
-                                     continuation_present=response.continuation is not None)
-                        print(f"{name} capacity={capacity} repeat={rep+1}: rejected summary, fallback to full ({error})", flush=True)
+                    if not request_fits_capacity(prepared, summary_capacity):
+                        entry.update(summary_status="capacity_exceeded")
+                        print(f"{name} capacity={capacity} repeat={rep+1}: summary request exceeds configured capacity; skipped", flush=True)
                     else:
-                        summary_json = _json(summary)
-                        entry.update(summary_status="validated", summary=summary,
-                                     summary_output_estimated_tokens=estimate_text_tokens(summary_json),
-                                     summary_usage=usage_dict(response))
-                        checkpoint = SessionContextCheckpoint(
-                            session_id=state.run.session_id,
-                            revision=1,
-                            covered_run_id=coverage.covered_run_id if coverage else selected[-1].run.run_id,
-                            covered_run_ordinal=coverage.covered_run_ordinal if coverage else selected[-1].run.ordinal,
-                            covered_record_sequence=coverage.covered_record_sequence if coverage else selected[-1].checkpoint.last_committed_record_sequence,
-                            covered_tool_sequence=coverage.covered_tool_sequence if coverage else selected[-1].checkpoint.last_committed_tool_sequence,
-                            summary_contract_version=2,
-                            summary=summary,
-                            source_refs=source_refs,
-                        )
+                        response = None
+                        try:
+                            response = capacity_client.dispatch(prepared)
+                            summary, source_refs = validate_summary_response(response, provider_id=provider.value,
+                                model_id=MODEL_IDS[provider], allowed_refs=allowed, selected_runs=selected)
+                        except ProviderCallError as error:
+                            entry.update(summary_status="provider_failure", failure_code=error.failure.failure_code.value,
+                                         http_status=error.failure.http_status)
+                            print(f"{name} capacity={capacity} repeat={rep+1}: summary failed ({entry['failure_code']})", flush=True)
+                        except ValueError as error:
+                            entry.update(summary_status="invalid_contract", summary_usage=usage_dict(response),
+                                         validation_error=str(error), raw_summary=response.assistant_content,
+                                         finish_reason=response.finish_reason.value,
+                                         continuation_present=response.continuation is not None)
+                            print(f"{name} capacity={capacity} repeat={rep+1}: rejected summary, fallback to full ({error})", flush=True)
+                        else:
+                            summary_json = _json(summary)
+                            entry.update(summary_status="validated", summary=summary,
+                                         summary_output_estimated_tokens=estimate_text_tokens(summary_json),
+                                         summary_usage=usage_dict(response))
+                            checkpoint = SessionContextCheckpoint(
+                                session_id=state.run.session_id,
+                                revision=1,
+                                covered_run_id=coverage.covered_run_id if coverage else selected[-1].run.run_id,
+                                covered_run_ordinal=coverage.covered_run_ordinal if coverage else selected[-1].run.ordinal,
+                                covered_record_sequence=coverage.covered_record_sequence if coverage else selected[-1].checkpoint.last_committed_record_sequence,
+                                covered_tool_sequence=coverage.covered_tool_sequence if coverage else selected[-1].checkpoint.last_committed_tool_sequence,
+                                summary_contract_version=2,
+                                summary=summary,
+                                source_refs=source_refs,
+                            )
                     entry["summary_seconds"] = time.monotonic() - start
                     entry["source_recovery_after_summary"] = source_recovery(history, state, facts, refs)
                     write_report(path, report)

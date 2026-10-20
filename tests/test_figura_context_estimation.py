@@ -8,13 +8,13 @@ import tiktoken
 from figura.providers.config import ProviderSettings
 from figura.providers.models import ProviderId, ProviderToolCall, FinishReason
 from figura.providers import token_estimation as tokens
-from figura.runtime.codecs.bindings import encode_binding, decode_binding
+from figura.runtime.codecs.provider_requests import encode_provider_request, decode_provider_request
 from figura.runtime.errors import RunError
 from figura.runtime.store import FiguraRunStore
 from figura.gateway.web_projection import run_summary, run_handle
 from tests.test_figura_provider import _factory, _request, FakeTransport, _response as wire_response
 from tests.test_figura_agent_executor import _app, _agent, _registry, _FakeFactory, _response
-from tests.test_figura_execution_policy import _binding, _temporary
+from tests.test_figura_execution_policy import _request_record, _temporary
 from tests.test_figura_gateway import _application, _create_run, _json
 
 
@@ -24,6 +24,16 @@ def encoding():
     if result is None:
         pytest.skip("Prepare the documented o200k_base cache for real tokenizer tests")
     return result
+
+
+def _agent_requests(state):
+    return tuple(item for item in state.provider_requests if item.purpose == "agent_turn")
+
+
+def _agent_request(state):
+    requests = _agent_requests(state)
+    assert requests
+    return requests[0]
 
 
 @pytest.mark.parametrize("text", ["中文图表分析", "English words", "def f(x): return x + 1",
@@ -100,48 +110,65 @@ def test_prepare_estimation_is_independent_of_fingerprint_and_usage(encoding, mo
     assert tokens.estimate_input(measured.payload, None, BrokenEncoding()) is None
 
 
-def test_binding_versions_preserve_legacy_encoding_and_validate_estimates(tmp_path):
+def test_provider_request_codec_round_trips_and_validates_estimates(tmp_path):
     store, coordinator, session, run = _app(tmp_path)
     agent = _agent(store, coordinator, _registry(), _FakeFactory([]))
     initial = coordinator.read_run_state(session.session_id, run.run_id)
-    legacy = _binding(agent, initial)
-    raw = encode_binding(legacy)
-    assert "context_estimate" not in json.loads(raw)
-    assert encode_binding(decode_binding(raw)) == raw
+    request = replace(_request_record(agent, initial), context_estimate=None)
+    raw = encode_provider_request(request)
+    assert encode_provider_request(decode_provider_request(raw)) == raw
     for estimate in (None, tokens.ContextEstimate(0, None), tokens.ContextEstimate(120, 256000)):
-        binding = replace(legacy, schema_version=2, context_estimate=estimate)
-        assert decode_binding(encode_binding(binding)) == binding
+        request_with_estimate = replace(request, context_estimate=estimate)
+        assert decode_provider_request(encode_provider_request(request_with_estimate)) == request_with_estimate
     for estimate in (tokens.ContextEstimate(True, None), tokens.ContextEstimate(-1, None),
                      tokens.ContextEstimate(1, 0), tokens.ContextEstimate(1, True), tokens.ContextEstimate(1, None, "")):
         with pytest.raises(RunError):
-            encode_binding(replace(legacy, schema_version=2, context_estimate=estimate))
+            encode_provider_request(replace(request, context_estimate=estimate))
     for field in ("input_tokens", "estimator_version"):
-        value = json.loads(encode_binding(replace(legacy, schema_version=2, context_estimate=tokens.ContextEstimate(1, None))))
+        value = json.loads(encode_provider_request(replace(request, context_estimate=tokens.ContextEstimate(1, None))))
         del value["context_estimate"][field]
         with pytest.raises(RunError):
-            decode_binding(json.dumps(value))
+            decode_provider_request(json.dumps(value))
 
 
-def test_binding_v3_pins_checkpoint_or_fallback_context_projection(tmp_path):
+def test_historical_provider_request_is_non_dispatchable_and_round_trips(tmp_path):
     store, coordinator, session, run = _app(tmp_path)
     agent = _agent(store, coordinator, _registry(), _FakeFactory([]))
     initial = coordinator.read_run_state(session.session_id, run.run_id)
-    base = replace(_binding(agent, initial), schema_version=3)
-    for binding in (
+    request = replace(
+        _request_record(agent, initial),
+        purpose="historical_import",
+        request_fingerprint="0" * 64,
+        endpoint_identity="0" * 64,
+        prompt_digest="0" * 64,
+        tool_registry_digest="0" * 64,
+        options={},
+        asset_manifest={},
+        generation_only=False,
+    )
+    assert decode_provider_request(encode_provider_request(request)) == request
+
+
+def test_provider_request_pins_checkpoint_or_fallback_context_projection(tmp_path):
+    store, coordinator, session, run = _app(tmp_path)
+    agent = _agent(store, coordinator, _registry(), _FakeFactory([]))
+    initial = coordinator.read_run_state(session.session_id, run.run_id)
+    base = _request_record(agent, initial)
+    for request in (
         replace(
             base,
             context_projection="checkpoint",
             context_checkpoint_revision=2,
-            context_compaction_operation_id="compact-op",
+            context_checkpoint_operation_id="compact-op",
         ),
         replace(
             base,
             context_projection="fallback",
-            context_compaction_operation_id="compact-op",
+            context_checkpoint_operation_id="compact-op",
         ),
     ):
-        assert decode_binding(encode_binding(binding)) == binding
-    for binding in (
+        assert decode_provider_request(encode_provider_request(request)) == request
+    for request in (
         replace(base, context_projection="checkpoint"),
         replace(base, context_projection="fallback"),
         replace(base, context_projection="other"),
@@ -152,7 +179,7 @@ def test_binding_v3_pins_checkpoint_or_fallback_context_projection(tmp_path):
         ),
     ):
         with pytest.raises(RunError):
-            encode_binding(binding)
+            encode_provider_request(request)
 
 
 def test_retry_and_restart_keep_original_estimate(tmp_path, monkeypatch, encoding):
@@ -161,13 +188,13 @@ def test_retry_and_restart_keep_original_estimate(tmp_path, monkeypatch, encodin
     factory = _FakeFactory([_temporary(), _response()])
     agent = _agent(store, coordinator, _registry(), factory)
     waiting = agent.execute_slice(session.session_id, run.run_id)
-    binding = waiting.provider_request_bindings[0]
-    assert binding.schema_version == 3 and binding.context_estimate.input_tokens > 0
-    assert FiguraRunStore(tmp_path).read_run_state(session.session_id, run.run_id).provider_request_bindings == (binding,)
+    request = _agent_request(waiting)
+    assert request.schema_version == 2 and request.context_estimate.input_tokens > 0
+    assert FiguraRunStore(tmp_path).read_run_state(session.session_id, run.run_id).provider_requests == (request,)
     monkeypatch.setattr("figura.providers.client.estimate_input", lambda *_: pytest.fail("retry re-estimated input"))
     finished = agent.execute(session.session_id, run.run_id)
     assert finished.run.status.value == "completed"
-    assert finished.provider_request_bindings == (binding,)
+    assert finished.provider_requests == (request,)
     assert len(finished.provider_attempts) == 2
 
 
@@ -175,11 +202,11 @@ def test_multiple_requests_use_latest_snapshot_and_missing_latest_has_no_fallbac
     store, coordinator, session, run = _app(tmp_path)
     factory = _FakeFactory([_response(calls=(ProviderToolCall("call-1", "inspect", '{"value":1}'),), reason=FinishReason.TOOL_CALLS), _response()])
     state = _agent(store, coordinator, _registry(), factory).execute(session.session_id, run.run_id)
-    first, latest = state.provider_request_bindings
+    first, latest = _agent_requests(state)
     assert latest.context_estimate.input_tokens > first.context_estimate.input_tokens
     public = run_summary(state)["contextUsage"]
     assert public == {"inputTokens": latest.context_estimate.input_tokens, "contextWindowTokens": None}
-    assert run_summary(replace(state, provider_request_bindings=(first, replace(latest, context_estimate=None))))["contextUsage"] is None
+    assert run_summary(replace(state, provider_requests=(first, replace(latest, context_estimate=None))))["contextUsage"] is None
     assert "contextUsage" not in run_handle(state.run)
 
 
@@ -190,8 +217,8 @@ def test_gateway_reads_bound_estimate_while_request_waits_and_after_failure(tmp_
         run = _create_run(coordinator, session.session_id)
         agent = _agent(store, coordinator, _registry(), _FakeFactory([]))
         state = coordinator.read_run_state(session.session_id, run.run_id)
-        binding = replace(_binding(agent, state), schema_version=2, context_estimate=tokens.ContextEstimate(120, 100))
-        attempt = coordinator.begin_provider_attempt(session.session_id, run.run_id, state.checkpoint.revision, binding=binding)
+        request = replace(_request_record(agent, state), context_estimate=tokens.ContextEstimate(120, 100))
+        attempt = coordinator.begin_provider_attempt(session.session_id, run.run_id, state.checkpoint.revision, request=request)
         monkeypatch.setattr("figura.providers.client.estimate_input", lambda *_: pytest.fail("read rebuilt request"))
         monkeypatch.setattr(tokens, "cached_encoding", lambda: pytest.fail("read loaded tokenizer"))
         path = f"/api/v1/sessions/{session.session_id}/runs/{run.run_id}/history"
@@ -205,19 +232,19 @@ def test_gateway_reads_bound_estimate_while_request_waits_and_after_failure(tmp_
         assert _json(app.handle("GET", f"/api/v1/sessions/{session.session_id}", {}, b""))["runs"][0]["contextUsage"] == expected
         reopened = FiguraRunStore(tmp_path).read_run_state(session.session_id, run.run_id)
         assert run_summary(reopened)["contextUsage"] == expected
-        assert "estimator_version" not in waiting.body.decode() and binding.request_fingerprint not in waiting.body.decode()
+        assert "estimator_version" not in waiting.body.decode() and request.request_fingerprint not in waiting.body.decode()
     finally:
         app.close()
 
 
-def test_legacy_retry_preserves_exact_binding_after_restart(tmp_path, monkeypatch):
+def test_retry_preserves_exact_provider_request_after_restart(tmp_path, monkeypatch):
     monkeypatch.setattr("figura.runtime.persistence.providers.retry_deadline", lambda *_: "2000-01-01T00:00:00Z")
     store, coordinator, session, run = _app(tmp_path)
     agent = _agent(store, coordinator, _registry(), _FakeFactory([]))
     initial = coordinator.read_run_state(session.session_id, run.run_id)
-    binding = _binding(agent, initial)
-    original = encode_binding(binding)
-    attempt = coordinator.begin_provider_attempt(session.session_id, run.run_id, 1, binding=binding)
+    request = _request_record(agent, initial)
+    original = encode_provider_request(request)
+    attempt = coordinator.begin_provider_attempt(session.session_id, run.run_id, 1, request=request)
     claimed = coordinator.read_run_state(session.session_id, run.run_id)
     coordinator.fail_provider_attempt(session.session_id, run.run_id, claimed.checkpoint.revision,
         attempt.attempt_id, outcome_unknown=False, failure_code="provider_rejected", transient=True)
@@ -225,8 +252,7 @@ def test_legacy_retry_preserves_exact_binding_after_restart(tmp_path, monkeypatc
     monkeypatch.setattr("figura.providers.client.estimate_input", lambda *_: pytest.fail("legacy binding was backfilled"))
     finished = _agent(reopened, coordinator, _registry(), _FakeFactory([_response()])).execute(session.session_id, run.run_id)
     assert finished.run.status.value == "completed"
-    assert encode_binding(finished.provider_request_bindings[0]) == original
-    assert finished.provider_request_bindings[0].context_estimate is None
+    assert encode_provider_request(_agent_request(finished)) == original
 
 
 def test_changed_capacity_does_not_rebase_recovered_request(tmp_path, monkeypatch, encoding):
@@ -237,20 +263,20 @@ def test_changed_capacity_does_not_rebase_recovered_request(tmp_path, monkeypatc
     monkeypatch.setattr("figura.runtime.persistence.providers.retry_deadline", lambda *_: "2000-01-01T00:00:00Z")
     store, coordinator, session, run = _app(tmp_path)
     waiting = _agent(store, coordinator, _registry(), _FakeFactory([_temporary()])).execute_slice(session.session_id, run.run_id)
-    binding = waiting.provider_request_bindings[0]
-    assert binding.context_estimate.context_window_tokens == 100000
+    request = _agent_request(waiting)
+    assert request.context_estimate.context_window_tokens == 100000
     capacity = 200000
     reopened = FiguraRunStore(tmp_path)
     state = _agent(reopened, coordinator, _registry(), _FakeFactory([_response()])).execute(session.session_id, run.run_id)
     assert state.run.status.value == "completed"
-    assert state.provider_request_bindings == (binding,)
+    assert state.provider_requests == (request,)
 
 
 def test_bad_estimate_claim_rolls_back_binding_and_attempt(tmp_path):
     store, coordinator, session, run = _app(tmp_path)
     agent = _agent(store, coordinator, _registry(), _FakeFactory([]))
     initial = coordinator.read_run_state(session.session_id, run.run_id)
-    binding = replace(_binding(agent, initial), schema_version=2, context_estimate=tokens.ContextEstimate(-1, None))
+    request = replace(_request_record(agent, initial), context_estimate=tokens.ContextEstimate(-1, None))
     with pytest.raises(RunError):
-        coordinator.begin_provider_attempt(session.session_id, run.run_id, 1, binding=binding)
+        coordinator.begin_provider_attempt(session.session_id, run.run_id, 1, request=request)
     assert coordinator.read_run_state(session.session_id, run.run_id) == initial

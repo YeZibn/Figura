@@ -65,6 +65,10 @@ def _app(tmp_path, *, environ: dict[str, str] | None = None):
     return store, RunCoordinator(store, _factory(environ))
 
 
+def _without_provider_progress(events):
+    return tuple(event for event in events if "provider_purpose" not in event.payload)
+
+
 def _commit_response(
     coordinator: RunCoordinator,
     session_id: str,
@@ -224,7 +228,7 @@ def test_v4_migration_adds_attachment_table_without_changing_run_state(tmp_path)
     after = migrated_store.read_run_state(session.session_id, run.run_id)
 
     with sqlite3.connect(store.database_path) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 12
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 13
         assert connection.execute("PRAGMA quick_check").fetchone()[0] == "ok"
         assert connection.execute(
             "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'attachments'"
@@ -259,7 +263,7 @@ def test_v5_migration_preserves_attachments_and_adds_panels(tmp_path) -> None:
     after = migrated_store.read_run_state(session.session_id, run.run_id)
 
     with sqlite3.connect(store.database_path) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 12
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 13
         assert connection.execute("PRAGMA quick_check").fetchone()[0] == "ok"
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
         assert connection.execute(
@@ -298,7 +302,7 @@ def test_v7_migration_adds_scoped_deletion_without_changing_run_facts(tmp_path) 
     after = migrated_store.read_run_state(session.session_id, run.run_id)
 
     with sqlite3.connect(store.database_path) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 12
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 13
         assert connection.execute(
             "SELECT session_id FROM session_deletion_scopes"
         ).fetchall() == []
@@ -585,7 +589,7 @@ def test_text_response_commit_advances_checkpoint_and_rejects_tool_payloads(tmp_
     assert len(state.records) == 1
     assert state.checkpoint.revision == 2
     assert state.provider_attempts[0].status.value == "started"
-    assert len(state.events) == 1
+    assert len(state.events) == 2
 
     valid_session = app.create_session()
     valid_run = app.create_run(_request(valid_session.session_id, key="valid-response"))
@@ -596,7 +600,7 @@ def test_text_response_commit_advances_checkpoint_and_rejects_tool_payloads(tmp_
     assert state.checkpoint.last_committed_record_sequence == 2
     assert state.checkpoint.next_action.action_kind is ActionKind.FINAL
     assert state.checkpoint.next_action.response_record_id == record.record_id
-    assert [event.event_sequence for event in state.events] == [1]
+    assert [event.event_sequence for event in state.events] == [1, 2]
     assert state.records[-1].payload.schema_version == 3
     assert state.records[-1].payload.continuation_ref is None
 
@@ -739,21 +743,15 @@ def test_reopened_continuation_can_be_replayed_and_survives_terminal_run(tmp_pat
     class CapturingTransport:
         def create(self, **request_payload: object) -> object:
             captured_requests.append(request_payload)
-            return SimpleNamespace(
-                id="replayed-response",
-                choices=(
-                    SimpleNamespace(
-                        index=0,
-                        message=SimpleNamespace(
-                            content="后续响应",
-                            reasoning_content=None,
-                            tool_calls=(),
-                        ),
-                        finish_reason="stop",
-                    ),
-                ),
-                usage=SimpleNamespace(prompt_tokens=3, completion_tokens=2, total_tokens=5),
-            )
+            return iter(({
+                "id": "replayed-response",
+                "choices": ({
+                    "index": 0,
+                    "delta": {"content": "后续响应"},
+                    "finish_reason": "stop",
+                },),
+                "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
+            },))
 
     replay_factory = ProviderFactory.from_env(
         {
@@ -907,7 +905,7 @@ def test_completion_commits_final_record_status_checkpoint_and_safe_event_togeth
     assert state.checkpoint.revision == 4
     assert state.checkpoint.last_committed_record_sequence == 3
     assert state.checkpoint.next_action is None
-    assert [event.event_sequence for event in state.events] == [1, 2]
+    assert [event.event_sequence for event in state.events] == [1, 2, 3]
     assert state.events[-1].event_kind is EventKind.RUN_COMPLETED
     assert state.events[-1].payload == {"final_artifact_refs": ()}
 
@@ -940,7 +938,7 @@ def test_invalid_finalization_rolls_back_final_record_and_terminal_event(tmp_pat
     assert invalid.value.code is RunErrorCode.INVALID_TRANSITION
     state = app.read_run_state(session.session_id, run.run_id)
     assert [record.record_kind.value for record in state.records] == ["input", "model_response"]
-    assert [event.event_kind for event in state.events] == [EventKind.RUN_CREATED]
+    assert [event.event_kind for event in _without_provider_progress(state.events)] == [EventKind.RUN_CREATED]
     assert state.checkpoint.next_action.action_kind is ActionKind.FINAL
 
 
@@ -1022,7 +1020,7 @@ def test_two_sqlite_writers_racing_on_the_same_revision_commit_only_one_record(t
     state = app.read_run_state(session.session_id, run.run_id)
     assert len(state.records) == 2
     assert state.checkpoint.revision == 3
-    assert len(state.events) == 1
+    assert len(state.events) == 2
 
 
 def test_cross_run_response_reference_is_rejected_without_partial_completion(tmp_path) -> None:
@@ -1054,8 +1052,9 @@ def test_cross_run_response_reference_is_rejected_without_partial_completion(tmp
             "SELECT COUNT(*) FROM run_execution_records WHERE run_id = ?", (first.run_id,)
         ).fetchone()[0] == 2
         assert connection.execute(
-            "SELECT COUNT(*) FROM run_stream_events WHERE run_id = ?", (first.run_id,)
-        ).fetchone()[0] == 1
+            "SELECT COUNT(*) FROM run_stream_events WHERE run_id = ? "
+            "AND event_kind IN ('run_completed', 'run_failed', 'run_interrupted')", (first.run_id,)
+        ).fetchone()[0] == 0
 
 
 def test_unknown_checkpoint_schema_version_fails_closed(tmp_path) -> None:
@@ -1197,7 +1196,7 @@ def test_schema9_preserves_explicit_deepseek_values_and_schema8_history(tmp_path
     assert new_state.provider_continuations[0].reasoning_content == reasoning
     assert 'private text' not in repr(new_state)
     with sqlite3.connect(store.database_path) as connection:
-        assert connection.execute('PRAGMA user_version').fetchone()[0] == 12
+        assert connection.execute('PRAGMA user_version').fetchone()[0] == 13
         assert connection.execute('PRAGMA foreign_key_check').fetchall() == []
         with pytest.raises(sqlite3.IntegrityError):
             connection.execute('DELETE FROM run_provider_continuations')

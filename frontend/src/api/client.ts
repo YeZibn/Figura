@@ -1,4 +1,4 @@
-import type { AgentRunEvent, Attachment, EvaluationCaseData, EvaluationDetail, EvaluationHistory, EvaluationHistoryDetails, EvaluationSummary, GatewayHealth, Provider, RunHandle, RunHistory, Session, SessionData } from '../types/protocol'
+import type { AgentRunEvent, AssistantTextDelta, Attachment, EvaluationCaseData, EvaluationDetail, EvaluationHistory, EvaluationHistoryDetails, EvaluationSummary, GatewayHealth, Provider, RunHandle, RunHistory, Session, SessionData } from '../types/protocol'
 
 export type RunStartOptions = { idempotencyKey?: string; retryOf?: string }
 export type RunResumeOptions = { idempotencyKey: string; cursorId?: string }
@@ -7,6 +7,7 @@ export type RunSubscription = { close(): void }
 
 export type RunEventCallbacks = {
   onEvent(event: AgentRunEvent): void
+  onAssistantDelta?(event: AssistantTextDelta): void
   onError(error: Error): void
   onComplete(): void
 }

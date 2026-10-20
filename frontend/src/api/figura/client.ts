@@ -1,4 +1,4 @@
-import type { AgentRunEvent } from '../../types/protocol'
+import type { AgentRunEvent, AssistantTextDelta } from '../../types/protocol'
 import type { RunSubscription } from '../client'
 import type {
   FiguraAttachmentDto,
@@ -209,7 +209,28 @@ export function createFiguraClient(baseUrl = defaultBaseUrl): FiguraClient {
           callbacks.onError(new FiguraClientError('invalid_gateway_event', 'Figura Gateway 返回了无效运行事件。', 502))
         }
       }
+      const receiveDelta = (raw: Event) => {
+        if (closed) return
+        try {
+          const event = JSON.parse((raw as MessageEvent<string>).data) as AssistantTextDelta
+          if (
+            event.runId !== runId
+            || typeof event.attemptId !== 'string'
+            || !event.attemptId
+            || !Number.isSafeInteger(event.deltaSequence)
+            || event.deltaSequence < 1
+            || typeof event.text !== 'string'
+            || !event.text
+          ) throw new Error('invalid assistant delta')
+          callbacks.onAssistantDelta?.(event)
+        } catch {
+          closed = true
+          source.close()
+          callbacks.onError(new FiguraClientError('invalid_gateway_event', 'Figura Gateway 返回了无效运行事件。', 502))
+        }
+      }
       ;['run_created', 'run_progress', 'run_completed', 'run_failed', 'run_interrupted'].forEach((kind) => source.addEventListener(kind, receive))
+      source.addEventListener('assistant_delta', receiveDelta)
       source.onerror = () => {
         if (closed) return
         closed = true

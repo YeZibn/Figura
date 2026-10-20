@@ -43,6 +43,12 @@ export function FiguraApp() {
   const [timelines, setTimelines] = useState<RunTimeline[]>([])
   const [toolTimelines, setToolTimelines] = useState<Record<string, FiguraToolTimelineSnapshotDto>>({})
   const [pendingUser, setPendingUser] = useState<ConversationItem | null>(null)
+  const [provisionalAssistant, setProvisionalAssistant] = useState<{
+    runId: string
+    attemptId: string
+    text: string
+    gap: boolean
+  } | null>(null)
   const [pending, setPending] = useState<PendingAttachment[]>([])
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [provider, setProvider] = useState<FiguraProviderId>('qwen')
@@ -134,8 +140,26 @@ export function FiguraApp() {
             activeRunRef.current.lastSequence = Math.max(activeRunRef.current.lastSequence, cursor)
           }
         },
+        onTransientReset(attemptId) {
+          setProvisionalAssistant(attemptId
+            ? { runId, attemptId, text: '', gap: false }
+            : null)
+        },
+        onAssistantDelta(event) {
+          setProvisionalAssistant((current) => {
+            if (current?.runId !== runId || current.attemptId !== event.attemptId) {
+              return { runId, attemptId: event.attemptId, text: event.text, gap: event.gap }
+            }
+            return {
+              ...current,
+              text: event.gap ? event.text : current.text + event.text,
+              gap: current.gap || event.gap,
+            }
+          })
+        },
         onState(state) { setRunState(state) },
         async onTerminal(history) {
+          setProvisionalAssistant(null)
           setPendingUser(null)
           setLoading(false)
           setActiveRunId('')
@@ -188,6 +212,7 @@ export function FiguraApp() {
     setPanels([])
     setTimelines([])
     setToolTimelines({})
+    setProvisionalAssistant(null)
     setActivePreview(null)
     setLoadingSession(true)
     void Promise.all([api.sessions.get(activeId), api.panels.list(activeId)]).then(async ([value, sessionPanels]) => {
@@ -218,6 +243,7 @@ export function FiguraApp() {
       const cursor = Math.max(...running.events.map((event) => event.sequence), 0)
       activeRunRef.current = { sessionId: activeId, runId, lastSequence: cursor }
       setActiveRunId(runId)
+      setProvisionalAssistant(null)
       setRunState('running')
       setLoading(true)
       trackRun(activeId, runId, cursor)
@@ -251,6 +277,7 @@ export function FiguraApp() {
     activeRunRef.current = null
     activeIdRef.current = sessionId
     setActiveRunId('')
+    setProvisionalAssistant(null)
     clearPending()
     setSelectedIds([])
     setPanels([])
@@ -430,6 +457,7 @@ export function FiguraApp() {
       }
       activeRunRef.current = { sessionId, runId: handle.runId, lastSequence: 0 }
       setActiveRunId(handle.runId)
+      setProvisionalAssistant(null)
       setSelectedIds([])
       setPendingUser({
         id: `${handle.runId}:user`,
@@ -521,6 +549,7 @@ export function FiguraApp() {
         data={data}
         timelines={timelines}
         pendingUser={pendingUser}
+        provisionalAssistant={provisionalAssistant?.runId === activeRunId ? provisionalAssistant : null}
         runState={runState}
         selectedAttachmentIds={selectedIds}
         activeSourceIds={[]}

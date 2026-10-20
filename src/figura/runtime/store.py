@@ -23,7 +23,7 @@ from .records import (
     ExecutionRecord,
     ModelResponseFact,
     ProviderAttempt,
-    ProviderRequestBinding,
+    ProviderRequestRecord,
     ContextCompactionOperation,
     RunInput,
     RunState,
@@ -136,9 +136,11 @@ class FiguraRunStore:
         checkpoint: SessionContextCheckpoint,
         *,
         expected_revision: int,
+        provider_attempt_id: str | None = None,
     ) -> SessionContextCheckpoint:
         return self._context.replace(
-            checkpoint, expected_revision=expected_revision
+            checkpoint, expected_revision=expected_revision,
+            provider_attempt_id=provider_attempt_id,
         )
 
     def get_or_create_context_compaction_operation(self, **values) -> ContextCompactionOperation:
@@ -155,13 +157,10 @@ class FiguraRunStore:
             session_id, target_run_id, base_record_sequence, base_tool_sequence
         )
 
-    def bind_context_compaction_request(
-        self, operation_id: str, binding: dict[str, object]
+    def link_context_compaction_request(
+        self, operation_id: str, request_id: str
     ) -> ContextCompactionOperation:
-        return self._context_operations.bind_request(operation_id, binding)
-
-    def begin_context_compaction_attempt(self, operation_id: str) -> int:
-        return self._context_operations.begin_attempt(operation_id)
+        return self._context_operations.link_provider_request(operation_id, request_id)
 
     def read_context_compaction_operation(self, operation_id: str) -> ContextCompactionOperation:
         return self._context_operations.read(operation_id)
@@ -216,14 +215,21 @@ class FiguraRunStore:
         run_id: str,
         expected_revision: int,
         attempt_id: str,
-        binding: ProviderRequestBinding | None = None,
+        request: ProviderRequestRecord | None = None,
+        auxiliary: bool = False,
+        request_bytes: int | None = None,
     ) -> ProviderAttempt:
         return self._providers.begin_provider_attempt(
             session_id=session_id,
             run_id=run_id,
             expected_revision=expected_revision,
-            attempt_id=attempt_id, binding=binding,
+            attempt_id=attempt_id, request=request, auxiliary=auxiliary,
+            request_bytes=request_bytes,
         )
+
+    @owned_claim
+    def update_provider_attempt_phase(self, **values) -> None:
+        self._providers.update_provider_attempt_phase(**values)
 
     @payload_scope
     @owned_claim
@@ -266,6 +272,7 @@ class FiguraRunStore:
         http_status: int | None = None,
         retry_after_seconds: float | None = None,
         failure_category: str | None = None,
+        cancelled: bool = False,
     ) -> Run:
         return self._providers.fail_provider_attempt(
             session_id=session_id,
@@ -273,7 +280,7 @@ class FiguraRunStore:
             expected_revision=expected_revision,
             attempt_id=attempt_id,
             outcome_unknown=outcome_unknown,
-            failure_code=failure_code, transient=transient, http_status=http_status, retry_after_seconds=retry_after_seconds, failure_category=failure_category,
+            failure_code=failure_code, transient=transient, http_status=http_status, retry_after_seconds=retry_after_seconds, failure_category=failure_category, cancelled=cancelled,
         )
 
     @owned_claim

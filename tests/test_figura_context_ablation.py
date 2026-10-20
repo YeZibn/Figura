@@ -1,12 +1,14 @@
 """Offline checks for paired history experiments; never invoke a real Provider."""
 from dataclasses import replace
 import json
+from types import SimpleNamespace
 
 import pytest
 
 from scripts.evaluate_figura_context_ablation import (
     CASE_NAMES, ROOT, aggregate, answer_value, content_answer, correct_answer,
-    model_answer, question_state, seed, source_recovery, tool_source_recovery,
+    fixture, model_answer, question_state, request_fits_capacity, seed, source_recovery,
+    tool_source_recovery,
 )
 from figura.agent.request import AgentRequestBuilder
 from figura.bootstrap import create_application
@@ -120,6 +122,30 @@ def test_aggregate_keeps_missing_answer_and_usage_unmeasured():
     assert summary["summary"]["usage_complete"] is False
 
 
+@pytest.mark.parametrize(
+    "input_tokens,completion_tokens,expected",
+    [(40_000, 8_192, True), (41_809, 8_192, False), (50_001, 0, False)],
+)
+def test_summary_request_capacity_includes_completion_budget(
+    input_tokens, completion_tokens, expected
+):
+    prepared = SimpleNamespace(
+        context_estimate=SimpleNamespace(input_tokens=input_tokens),
+        request=SimpleNamespace(options=SimpleNamespace(
+            max_completion_tokens=completion_tokens)),
+    )
+
+    assert request_fits_capacity(prepared, 50_000) is expected
+
+
+def test_dense_fixture_retains_target_row_with_smaller_aggregate_payload():
+    rounds, _facts = fixture("dense_observations")
+
+    assert len(rounds[4]["rows"]) == 70
+    assert rounds[4]["rows"][68]["id"] == "D004-068"
+    assert all(len(item["rows"]) == 30 for index, item in enumerate(rounds) if index != 4)
+
+
 def test_summary_rejection_is_counted_as_zero_saving_fallback():
     report = {"cases": [{"source_recovery": [], "repetitions": [
         {"summary_status": "validated", "questions": [{"full_input_tokens": 100, "summary_input_tokens": 30}]},
@@ -153,6 +179,44 @@ def test_cumulative_provider_usage_includes_summary_generation():
         "prompt_tokens": 30,
         "completion_tokens": 6,
         "total_tokens": 36,
+        "usage_complete": True,
+    }
+
+
+def test_completed_pair_usage_counts_summary_generation_once_and_excludes_wrong_answer():
+    usage = {"prompt_tokens": 50, "completion_tokens": 2, "total_tokens": 52}
+    compact_usage = {"prompt_tokens": 30, "completion_tokens": 1, "total_tokens": 31}
+    report = {"cases": [{"source_recovery": [], "repetitions": [{
+        "summary_status": "validated",
+        "summary_usage": {"prompt_tokens": 20, "completion_tokens": 3, "total_tokens": 23},
+        "summary_estimated_input_tokens": 25,
+        "questions": [
+            {"full_input_tokens": 100, "summary_input_tokens": 40,
+                 "full": {"correct": True, "status": "answered", "expected": "a", "tool_calls": [], "rounds": [
+                 {"estimated_input_tokens": 100, "usage": usage}]},
+                 "summary": {"correct": True, "status": "answered", "expected": "a", "tool_calls": [], "rounds": [
+                 {"estimated_input_tokens": 40, "usage": compact_usage}]}},
+            {"full_input_tokens": 100, "summary_input_tokens": 40,
+             "full": {"correct": True, "status": "answered", "expected": "b", "tool_calls": [], "rounds": [
+                 {"estimated_input_tokens": 100, "usage": usage}]},
+             "summary": {"correct": False, "status": "answered", "expected": "b", "tool_calls": [], "rounds": [
+                 {"estimated_input_tokens": 40, "usage": compact_usage}]}},
+        ],
+    }]}]}
+
+    usage_result = aggregate(report)["completed_paired_task_provider_usage"]
+
+    assert usage_result == {
+        "completed_questions": 1,
+        "completed_repetitions": 1,
+        "full_answer_prompt_tokens": 50,
+        "summary_answer_prompt_tokens": 30,
+        "summary_generation_prompt_tokens_once_per_repetition": 20,
+        "summary_total_prompt_tokens": 50,
+        "full_initial_estimated_input_tokens": 100,
+        "summary_initial_estimated_input_tokens": 40,
+        "summary_generation_estimated_input_tokens_once_per_repetition": 25,
+        "provider_prompt_token_reduction_percent": 0.0,
         "usage_complete": True,
     }
 

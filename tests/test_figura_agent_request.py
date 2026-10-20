@@ -289,7 +289,7 @@ def test_initial_request_uses_run_selection_fixed_instruction_and_tool_projectio
     assert len(request.messages) == 1
     assert request.messages[0].role is MessageRole.USER
     assert request.messages[0].content == "请分析以下图表数据。"
-    assert request.options.stream is False
+    assert not hasattr(request.options, "stream")
     assert request.options.max_completion_tokens is None
     assert [tool.name for tool in request.tools] == ["inspect"]
     assert coordinator.read_run_state(session.session_id, run.run_id).records == state.records

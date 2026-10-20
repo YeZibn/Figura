@@ -7,6 +7,7 @@ import re
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from time import monotonic, sleep
 from urllib.parse import parse_qs, urlsplit
+from queue import Empty
 
 from figura.shared.image_limits import MAX_IMAGE_BYTES
 from figura.runtime.errors import RunError
@@ -100,6 +101,9 @@ class FiguraRequestHandler(BaseHTTPRequestHandler):
                 self.application._error(403, "origin_not_allowed", "浏览器来源不受允许。", headers)
             )
             return
+        subscription_id, transient_queue = self.application.transient_events.subscribe(
+            session_id, run_id
+        )
         try:
             query = parse_qs(urlsplit(self.path).query, keep_blank_values=True)
             values = query.get("afterSequence", ["0"])
@@ -110,11 +114,13 @@ class FiguraRequestHandler(BaseHTTPRequestHandler):
                 raise ValueError
             state = self.application.coordinator.read_run_state(session_id, run_id)
         except ValueError:
+            self.application.transient_events.unsubscribe(session_id, run_id, subscription_id)
             self._write_response(
                 self.application._error(400, "invalid_request", "事件游标无效。", headers)
             )
             return
         except RunError as error:
+            self.application.transient_events.unsubscribe(session_id, run_id, subscription_id)
             response = self.application.handle(
                 "GET",
                 f"/api/v1/sessions/{session_id}/runs/{run_id}/history",
@@ -140,7 +146,16 @@ class FiguraRequestHandler(BaseHTTPRequestHandler):
             while True:
                 state = self.application.coordinator.read_run_state(session_id, run_id)
                 new_events = [event for event in state.events if event.event_sequence > cursor]
-                for event in new_events:
+
+                terminal_event = (
+                    state.events[-1]
+                    if state.run.status is not RunStatus.RUNNING and state.events
+                    else None
+                )
+                durable_events = [
+                    event for event in new_events if event is not terminal_event
+                ]
+                for event in durable_events:
                     data = json.dumps(
                         event_projection(state, event),
                         ensure_ascii=False,
@@ -155,7 +170,37 @@ class FiguraRequestHandler(BaseHTTPRequestHandler):
                     self.wfile.write(frame.encode("utf-8"))
                     self.wfile.flush()
                     cursor = event.event_sequence
+                while True:
+                    try:
+                        transient = transient_queue.get_nowait()
+                    except Empty:
+                        break
+                    data = json.dumps(
+                        transient,
+                        ensure_ascii=False,
+                        allow_nan=False,
+                        separators=(",", ":"),
+                    )
+                    self.wfile.write(
+                        f"event: assistant_delta\ndata: {data}\n\n".encode("utf-8")
+                    )
+                    self.wfile.flush()
                 if state.run.status is not RunStatus.RUNNING:
+                    if terminal_event is not None and terminal_event.event_sequence > cursor:
+                        data = json.dumps(
+                            event_projection(state, terminal_event),
+                            ensure_ascii=False,
+                            allow_nan=False,
+                            separators=(",", ":"),
+                        )
+                        self.wfile.write(
+                            (
+                                f"id: {event_id(state, terminal_event)}\n"
+                                f"event: {terminal_event.event_kind.value}\n"
+                                f"data: {data}\n\n"
+                            ).encode("utf-8")
+                        )
+                        self.wfile.flush()
                     return
                 now = monotonic()
                 if now - last_heartbeat >= 15:
@@ -165,6 +210,10 @@ class FiguraRequestHandler(BaseHTTPRequestHandler):
                 sleep(0.25)
         except (BrokenPipeError, ConnectionResetError, TimeoutError, OSError, RunError):
             return
+        finally:
+            self.application.transient_events.unsubscribe(
+                session_id, run_id, subscription_id
+            )
 
     def _write_response(self, response) -> None:
         self.send_response(response.status)

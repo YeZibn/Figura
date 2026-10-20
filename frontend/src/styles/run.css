@@ -207,6 +207,17 @@
   border-top: 1px solid var(--line-soft);
 }
 
+.provisional-result {
+  border-top-style: dashed;
+  opacity: .82;
+}
+
+.transient-gap {
+  margin: 0 0 10px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
 .figura-panels { max-width: 780px; margin: 10px auto; padding: 10px; border: 1px solid var(--line); border-radius: 7px; background: #fbfcfb; }
 .figura-panels-heading { display: flex; align-items: center; gap: 7px; color: var(--brand); font-size: 11px; }
 .figura-panels-heading span { margin-left: auto; color: var(--subtle); font-size: 10px; }

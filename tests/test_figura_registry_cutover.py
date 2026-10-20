@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
-from figura.bootstrap import create_application
+from figura.bootstrap import _ensure_registry_cutover_ready, create_application
 from figura.providers import FinishReason, MODEL_IDS, ProviderId, ProviderResponse, ProviderToolCall
 from figura.runtime.models import RunCreateRequest, RunStatus
 
@@ -61,3 +63,31 @@ def test_registry_v10_startup_allows_terminal_older_registry_history(tmp_path, o
         assert application.dispatcher._executor._tools.registry.version == "figura-web-v10"
     finally:
         application.close()
+
+
+def test_registry_v10_startup_ignores_context_compaction_contract_for_active_run() -> None:
+    active_run = SimpleNamespace(session_id="session", run_id="run")
+    state = SimpleNamespace(
+        run=SimpleNamespace(status=RunStatus.RUNNING),
+        tool_facts=(),
+        provider_requests=(
+            SimpleNamespace(
+                purpose="agent_turn",
+                asset_manifest={"registry_version": "figura-web-v10"},
+            ),
+            SimpleNamespace(
+                purpose="context_compaction",
+                asset_manifest={"registry_version": "context-compaction-v2"},
+            ),
+        ),
+    )
+
+    class Coordinator:
+        def list_running_runs(self):
+            return (active_run,)
+
+        def read_run_state(self, session_id, run_id):
+            assert (session_id, run_id) == ("session", "run")
+            return state
+
+    _ensure_registry_cutover_ready(Coordinator(), "figura-web-v10")

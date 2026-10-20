@@ -146,6 +146,13 @@ export type AgentRunEvent = {
   payload: Record<string, unknown>
 }
 
+export type AssistantTextDelta = {
+  runId: string
+  attemptId: string
+  deltaSequence: number
+  text: string
+}
+
 export type HistoryIntegrity = {
   status: 'complete' | 'redacted' | 'truncated' | 'unavailable' | string
   source?: string

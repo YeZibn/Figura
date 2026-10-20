@@ -188,7 +188,8 @@ def test_unknown_provider_with_stop_is_not_redispatched(tmp_path):
     factory = _FakeFactory([])
     result = _agent(store, co, _registry(), factory).execute(session.session_id, run.run_id)
     assert result.run.status is RunStatus.INTERRUPTED
-    assert result.provider_attempts[0].status.value == 'outcome_unknown'
+    assert result.provider_attempts[0].status.value == 'cancelled'
+    assert result.provider_attempts[0].failure_category == 'temporary_unknown'
     assert not factory.client.requests
     assert _create_followup_run(co, session.session_id).ordinal == 2
 
@@ -356,7 +357,7 @@ def test_v9_migration_preserves_facts_and_adds_empty_stop_controls(tmp_path):
     reopened = FiguraRunStore(tmp_path)
     assert reopened.read_run_state(session.session_id, run.run_id) == before
     with reopened.database.read() as connection:
-        assert connection.execute('PRAGMA user_version').fetchone()[0] == 12
+        assert connection.execute('PRAGMA user_version').fetchone()[0] == 13
         assert not connection.execute('SELECT * FROM run_stop_requests').fetchall()
         assert not connection.execute('PRAGMA foreign_key_check').fetchall()
 
@@ -447,7 +448,9 @@ def test_provider_failure_competes_with_stop_without_losing_outcome(tmp_path, kn
     factory.client.before_dispatch = lambda: co.request_stop(session.session_id, run.run_id)
     result = _agent(store, co, _registry(), factory).execute(session.session_id, run.run_id)
     assert result.run.status is RunStatus.INTERRUPTED
-    assert result.provider_attempts[0].status.value == ('known_failure' if known else 'outcome_unknown')
+    attempt = result.provider_attempts[0]
+    assert attempt.status.value == 'cancelled'
+    assert attempt.failure_code == ('provider_rejected' if known else 'timeout')
     assert len(factory.client.requests) == 1
 
 

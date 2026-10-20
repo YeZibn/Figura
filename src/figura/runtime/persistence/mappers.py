@@ -5,6 +5,9 @@ from __future__ import annotations
 import json
 import sqlite3
 
+from figura.providers.models import ProviderUsage
+from figura.shared.payloads import decode_json
+
 from ..codecs.records import (
     decode_payload,
     validate_provider_continuation_fact,
@@ -118,10 +121,20 @@ def _provider_attempt_from_row(row: sqlite3.Row) -> ProviderAttempt:
         status = ProviderAttemptStatus(row["status"])
     except ValueError:
         raise RunError(RunErrorCode.INTEGRITY_ERROR) from None
+    raw_usage = row["usage_json"]
+    usage_value = decode_json(raw_usage, maximum=1024) if raw_usage is not None else None
+    if usage_value is not None and (
+        not isinstance(usage_value, dict)
+        or set(usage_value) != {"prompt_tokens", "completion_tokens", "total_tokens"}
+    ):
+        raise RunError(RunErrorCode.INTEGRITY_ERROR)
     return ProviderAttempt(
         attempt_id=row["attempt_id"],
         run_id=row["run_id"],
+        request_id=row["request_id"],
         attempt_sequence=row["attempt_sequence"],
+        run_attempt_sequence=row["run_attempt_sequence"],
+        request_attempt_number=row["attempt_sequence"],
         base_record_sequence=row["base_record_sequence"],
         base_tool_sequence=row["base_tool_sequence"],
         status=status,
@@ -129,12 +142,21 @@ def _provider_attempt_from_row(row: sqlite3.Row) -> ProviderAttempt:
         failure_code=row["failure_code"],
         started_at=row["started_at"],
         finished_at=row["finished_at"],
-        operation_id=row["operation_id"],
-        operation_attempt_number=row["operation_attempt_number"],
         retry_of_attempt_id=row["retry_of_attempt_id"],
         failure_category=row["failure_category"],
         http_status=row["http_status"],
         next_eligible_at=row["next_eligible_at"],
+        phase=row["phase"],
+        connected_at=row["connected_at"],
+        request_sent_at=row["request_sent_at"],
+        response_headers_at=row["response_headers_at"],
+        first_event_at=row["first_event_at"],
+        last_activity_at=row["last_activity_at"],
+        failure_phase=row["failure_phase"],
+        provider_request_id=row["provider_request_id"],
+        request_bytes=row["request_bytes"],
+        response_bytes=row["response_bytes"],
+        usage=ProviderUsage(**usage_value) if usage_value is not None else None,
     )
 
 

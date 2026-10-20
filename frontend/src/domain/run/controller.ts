@@ -1,10 +1,14 @@
 import type { ChartAgentClient, RunSubscription } from '../../api/client'
-import type { AgentRunEvent, RunHistory, RunState } from '../../types/protocol'
+import type { AgentRunEvent, AssistantTextDelta, RunHistory, RunState } from '../../types/protocol'
+
+export type RunAssistantDelta = AssistantTextDelta & { gap: boolean }
 
 export type RunControllerCallbacks = {
   isCurrent: () => boolean
   onEvent: (event: AgentRunEvent) => void
   onHistory: (history: RunHistory) => void
+  onAssistantDelta?: (event: RunAssistantDelta) => void
+  onTransientReset?: (attemptId?: string) => void
   onState: (state: RunState) => void
   onTerminal: (history: RunHistory) => void | Promise<void>
   onUnavailable: (error: Error) => void
@@ -44,6 +48,16 @@ export function createRunController(options: RunControllerOptions): RunControlle
   let activityTimer: ReturnType<typeof setInterval> | undefined
   let activityReadPending = false
   let connectionGeneration = 0
+  let provisionalAttemptId: string | null = null
+  let provisionalSequence = 0
+  let transientSuppressed = false
+
+  const resetTransient = (attemptId?: string) => {
+    provisionalAttemptId = attemptId ?? null
+    provisionalSequence = 0
+    transientSuppressed = false
+    options.callbacks.onTransientReset?.(attemptId)
+  }
 
   const isCurrent = () => !closed && options.callbacks.isCurrent()
 
@@ -78,6 +92,7 @@ export function createRunController(options: RunControllerOptions): RunControlle
     applyHistory(history)
     const state = terminalStatus(history.run.status)
     if (!state || !isCurrent()) return false
+    resetTransient()
     options.callbacks.onState(state)
     void options.callbacks.onTerminal(history)
     close()
@@ -92,6 +107,7 @@ export function createRunController(options: RunControllerOptions): RunControlle
       return
     }
     reconnectAttempts += 1
+    resetTransient()
     options.callbacks.onState('reconnecting')
     const backoff = Math.min(8000, 400 * (2 ** (reconnectAttempts - 1))) + Math.floor(Math.random() * 200)
     reconnectTimer = setTimeout(() => {
@@ -128,7 +144,33 @@ export function createRunController(options: RunControllerOptions): RunControlle
       onEvent(event) {
         if (!isCurrent() || generation !== connectionGeneration) return
         cursor = Math.max(cursor, event.sequence)
+        if (
+          event.kind === 'run_progress'
+          && event.payload.providerPurpose === 'agent_turn'
+          && event.payload.providerPhase === 'connecting'
+          && typeof event.payload.attemptId === 'string'
+          && event.payload.attemptId !== provisionalAttemptId
+        ) resetTransient(event.payload.attemptId)
         options.callbacks.onEvent(event)
+      },
+      onAssistantDelta(event) {
+        if (!isCurrent() || generation !== connectionGeneration || event.runId !== options.runId) return
+        let gap = false
+        if (event.attemptId !== provisionalAttemptId) {
+          gap = event.deltaSequence !== 1
+          resetTransient(event.attemptId)
+          transientSuppressed = gap
+        } else if (event.deltaSequence !== provisionalSequence + 1) {
+          gap = true
+          resetTransient(event.attemptId)
+          transientSuppressed = true
+        }
+        provisionalSequence = event.deltaSequence
+        options.callbacks.onAssistantDelta?.({
+          ...event,
+          text: transientSuppressed ? '' : event.text,
+          gap: gap || transientSuppressed,
+        })
       },
       onError(reason) {
         void handleDisconnect(reason, generation, afterSequence)

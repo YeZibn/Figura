@@ -14,6 +14,7 @@ from figura.sources.repository import SourcesRepository
 from figura.gateway.application import FiguraGatewayApplication
 from figura.gateway.dispatcher import RunDispatcher
 from figura.gateway.session_deletion import FiguraSessionDeletion
+from figura.gateway.transient_events import TransientRunEventHub
 from figura.agent.execution_images import RunExecutionImageReader
 from figura.agent.execution_state import RunExecutionStateService
 from figura.memory.retrieval import SessionHistorySearch
@@ -87,12 +88,14 @@ def create_application(
     runtime = ToolRuntime(registry)
     lock = PerRunExecutionLock(store.data_root)
     tools = DurableToolExecutor(store, registry, runtime, execution_lock=lock)
+    transient_events = TransientRunEventHub()
     agent = AgentExecutor(
         coordinator,
         factory,
         tools,
         lock,
         AgentRequestBuilder(execution_state, execution_images),
+        stream_sink=transient_events.publish,
     )
     dispatcher = RunDispatcher(agent, max_workers=max_workers, max_queued=max_queued)
     return FiguraGatewayApplication(
@@ -105,6 +108,7 @@ def create_application(
         dispatcher,
         session_deletion,
         allowed_origins=allowed_origins,
+        transient_events=transient_events,
     )
 
 
@@ -126,7 +130,8 @@ def _ensure_registry_cutover_ready(coordinator: RunCoordinator, registry_version
         }
         bound_versions.update(
             manifest.get("registry_version")
-            for binding in state.provider_request_bindings
+            for binding in state.provider_requests
+            if binding.purpose == "agent_turn"
             if isinstance((manifest := binding.asset_manifest), Mapping)
             and isinstance(manifest.get("registry_version"), str)
         )

@@ -943,7 +943,11 @@ def test_progress_history_and_sse_expose_only_checkpoint_revision(tmp_path):
             {},
         )
         events = _json(history)["events"]
-        progress = next(event for event in events if event["kind"] == "run_progress")
+        progress = next(
+            event for event in events
+            if event["kind"] == "run_progress"
+            and "providerPurpose" not in event["payload"]
+        )
         assert progress["payload"] == {"checkpointRevision": 3}
         assert "PRIVATE_ARGUMENT" not in history.body.decode()
 
@@ -962,6 +966,55 @@ def test_progress_history_and_sse_expose_only_checkpoint_revision(tmp_path):
         assert "event: run_progress" in body
         assert '"payload":{"checkpointRevision":3}' in body
         assert "PRIVATE_ARGUMENT" not in body
+    finally:
+        if thread.is_alive():
+            server.shutdown()
+        server.server_close()
+        app.close()
+
+
+def test_sse_delivers_transient_text_before_terminal_event_without_persisting_it(tmp_path):
+    app, _, coordinator, _, _ = _application(tmp_path)
+    server = FiguraHTTPServer(("127.0.0.1", 0), app)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    try:
+        session = coordinator.create_session()
+        run = _create_run(coordinator, session.session_id, key="transient-before-terminal")
+        thread.start()
+        connection = HTTPConnection("127.0.0.1", server.server_port, timeout=3)
+        connection.request(
+            "GET",
+            f"/api/v1/sessions/{session.session_id}/runs/{run.run_id}/events?afterSequence=0",
+            headers={"Origin": ORIGIN},
+        )
+        response = connection.getresponse()
+        assert response.status == 200
+
+        app.transient_events.publish(
+            session.session_id, run.run_id, "attempt-live", 1, "provisional preview"
+        )
+        current = coordinator.read_run_state(session.session_id, run.run_id)
+        coordinator.fail_run(
+            session.session_id,
+            run.run_id,
+            current.checkpoint.revision,
+            terminal_code=TerminalCode.EXECUTION_FAILED,
+        )
+        body = response.read().decode("utf-8")
+        connection.close()
+
+        delta_position = body.index("event: assistant_delta")
+        terminal_position = body.index("event: run_failed")
+        assert delta_position < terminal_position
+        delta_frame = body[delta_position:body.index("\n\n", delta_position)]
+        assert "id:" not in delta_frame
+        assert '"text":"provisional preview"' in delta_frame
+        history = app.handle(
+            "GET",
+            f"/api/v1/sessions/{session.session_id}/runs/{run.run_id}/history",
+            {},
+        )
+        assert "provisional preview" not in history.body.decode("utf-8")
     finally:
         server.shutdown()
         server.server_close()

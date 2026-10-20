@@ -341,6 +341,7 @@ class SessionContextCheckpointRepository:
         checkpoint: SessionContextCheckpoint,
         *,
         expected_revision: int,
+        provider_attempt_id: str | None = None,
     ) -> SessionContextCheckpoint:
         if type(expected_revision) is not int or expected_revision < 0:
             raise RunError(RunErrorCode.INVALID_REQUEST)
@@ -408,7 +409,7 @@ class SessionContextCheckpointRepository:
                     raise RunError(RunErrorCode.STALE_CHECKPOINT)
             if updated.compaction_operation_id is not None:
                 operation = connection.execute(
-                    "SELECT session_id, status FROM session_context_compaction_operations "
+                    "SELECT session_id, status, provider_request_id FROM session_context_compaction_operations "
                     "WHERE operation_id = ?",
                     (updated.compaction_operation_id,),
                 ).fetchone()
@@ -416,7 +417,31 @@ class SessionContextCheckpointRepository:
                     operation is None
                     or operation["session_id"] != updated.session_id
                     or operation["status"] != "preparing"
+                    or operation["provider_request_id"] is None
+                    or not isinstance(provider_attempt_id, str)
                 ):
+                    raise RunError(RunErrorCode.INVALID_TRANSITION)
+                attempt = connection.execute(
+                    "SELECT a.status, a.request_id, q.purpose, q.compaction_operation_id "
+                    "FROM run_provider_attempts a JOIN run_provider_requests q USING(request_id) "
+                    "WHERE a.run_id = (SELECT target_run_id FROM session_context_compaction_operations WHERE operation_id = ?) "
+                    "AND a.attempt_id = ?",
+                    (updated.compaction_operation_id, provider_attempt_id),
+                ).fetchone()
+                if (
+                    attempt is None
+                    or attempt["status"] != "started"
+                    or attempt["request_id"] != operation["provider_request_id"]
+                    or attempt["purpose"] != "context_compaction"
+                    or attempt["compaction_operation_id"] != updated.compaction_operation_id
+                ):
+                    raise RunError(RunErrorCode.INVALID_TRANSITION)
+                attempt_cursor = connection.execute(
+                    "UPDATE run_provider_attempts SET status = 'response_committed', finished_at = ? "
+                    "WHERE attempt_id = ? AND status = 'started'",
+                    (updated.updated_at, provider_attempt_id),
+                )
+                if attempt_cursor.rowcount != 1:
                     raise RunError(RunErrorCode.INVALID_TRANSITION)
                 connection.execute(
                     "UPDATE session_context_compaction_operations SET status = 'completed', "
@@ -444,7 +469,7 @@ class ContextCompactionOperationRepository:
         covered_run_ordinal: int,
         covered_record_sequence: int,
         covered_tool_sequence: int,
-        selection_binding: Mapping[str, object] | None = None,
+        selection_plan: Mapping[str, object] | None = None,
     ) -> ContextCompactionOperation:
         for identity in (session_id, target_run_id, covered_run_id):
             _validate_id(identity)
@@ -465,15 +490,12 @@ class ContextCompactionOperationRepository:
             or covered_tool_sequence < 0
         ):
             raise RunError(RunErrorCode.INVALID_REQUEST)
-        selection_json = None
-        if selection_binding is not None:
-            if not isinstance(selection_binding, Mapping):
+        selection_json = "{}"
+        if selection_plan is not None:
+            if not isinstance(selection_plan, Mapping):
                 raise RunError(RunErrorCode.INVALID_REQUEST)
             try:
-                selection_json = encode_json({
-                    "plan": dict(selection_binding),
-                    "summary_contract_version": 2,
-                }, maximum=262144)
+                selection_json = encode_json(dict(selection_plan), maximum=4096)
             except (PayloadError, TypeError, ValueError):
                 raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD) from None
 
@@ -509,6 +531,7 @@ class ContextCompactionOperationRepository:
                 if (
                     operation.session_id != session_id
                     or operation.input_checkpoint_revision != input_checkpoint_revision
+                    or (selection_plan is not None and dict(operation.selection_plan) != dict(selection_plan))
                 ):
                     raise RunError(RunErrorCode.INTEGRITY_ERROR)
                 stored_covered = connection.execute(
@@ -587,9 +610,9 @@ class ContextCompactionOperationRepository:
                 "INSERT INTO session_context_compaction_operations(" 
                 "operation_id, session_id, target_run_id, base_record_sequence, base_tool_sequence, "
                 "input_checkpoint_revision, covered_run_id, covered_run_ordinal, "
-                "covered_record_sequence, covered_tool_sequence, status, request_binding_json, "
-                "attempt_count, result_checkpoint_revision, failure_code, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'preparing', ?, 0, NULL, NULL, ?, ?)",
+                "covered_record_sequence, covered_tool_sequence, status, selection_plan_json, "
+                "provider_request_id, result_checkpoint_revision, failure_code, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'preparing', ?, NULL, NULL, NULL, ?, ?)",
                 (
                     operation_id,
                     session_id,
@@ -612,14 +635,11 @@ class ContextCompactionOperationRepository:
             ).fetchone()
             return _operation_from_row(created)
 
-    def bind_request(
-        self, operation_id: str, binding: Mapping[str, object]
+    def link_provider_request(
+        self, operation_id: str, request_id: str
     ) -> ContextCompactionOperation:
         _validate_id(operation_id)
-        try:
-            binding_json = encode_json(binding, maximum=262144)
-        except (PayloadError, TypeError, ValueError):
-            raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD) from None
+        _validate_id(request_id)
         with self._database.write() as connection:
             row = connection.execute(
                 "SELECT * FROM session_context_compaction_operations WHERE operation_id = ?",
@@ -630,34 +650,14 @@ class ContextCompactionOperationRepository:
             operation = _operation_from_row(row)
             if operation.status != "preparing":
                 raise RunError(RunErrorCode.INVALID_TRANSITION)
-            if row["request_binding_json"] is not None:
-                if row["request_binding_json"] != binding_json:
-                    current = dict(operation.request_binding or {})
-                    incoming = dict(binding)
-                    if (
-                        current.get("descriptor") is None
-                        and incoming.get("descriptor") is not None
-                        and current.get("plan") == incoming.get("plan")
-                        and current.get("summary_contract_version") == incoming.get("summary_contract_version")
-                        and set(incoming) == {"plan", "summary_contract_version", "descriptor"}
-                    ):
-                        connection.execute(
-                            "UPDATE session_context_compaction_operations SET request_binding_json = ?, "
-                            "updated_at = ? WHERE operation_id = ? AND status = 'preparing' "
-                            "AND request_binding_json = ?",
-                            (binding_json, _utc_now(), operation_id, row["request_binding_json"]),
-                        )
-                        updated = connection.execute(
-                            "SELECT * FROM session_context_compaction_operations WHERE operation_id = ?",
-                            (operation_id,),
-                        ).fetchone()
-                        return _operation_from_row(updated)
+            if operation.provider_request_id is not None:
+                if operation.provider_request_id != request_id:
                     raise RunError(RunErrorCode.INTEGRITY_ERROR)
                 return operation
             connection.execute(
-                "UPDATE session_context_compaction_operations SET request_binding_json = ?, updated_at = ? "
-                "WHERE operation_id = ? AND status = 'preparing' AND request_binding_json IS NULL",
-                (binding_json, _utc_now(), operation_id),
+                "UPDATE session_context_compaction_operations SET provider_request_id = ?, updated_at = ? "
+                "WHERE operation_id = ? AND status = 'preparing' AND provider_request_id IS NULL",
+                (request_id, _utc_now(), operation_id),
             )
             updated = connection.execute(
                 "SELECT * FROM session_context_compaction_operations WHERE operation_id = ?",
@@ -703,26 +703,6 @@ class ContextCompactionOperationRepository:
             raise RunError(RunErrorCode.RUN_NOT_FOUND)
         return _operation_from_row(row)
 
-    def begin_attempt(self, operation_id: str) -> int:
-        _validate_id(operation_id)
-        with self._database.write() as connection:
-            row = connection.execute(
-                "SELECT status, request_binding_json, attempt_count "
-                "FROM session_context_compaction_operations WHERE operation_id = ?",
-                (operation_id,),
-            ).fetchone()
-            if row is None:
-                raise RunError(RunErrorCode.RUN_NOT_FOUND)
-            if row["status"] != "preparing" or row["request_binding_json"] is None:
-                raise RunError(RunErrorCode.INVALID_TRANSITION)
-            attempt_count = int(row["attempt_count"]) + 1
-            connection.execute(
-                "UPDATE session_context_compaction_operations SET attempt_count = ?, updated_at = ? "
-                "WHERE operation_id = ? AND status = 'preparing'",
-                (attempt_count, _utc_now(), operation_id),
-            )
-            return attempt_count
-
     def mark_fallback(
         self, operation_id: str, failure_code: str | None
     ) -> ContextCompactionOperation:
@@ -754,9 +734,8 @@ class ContextCompactionOperationRepository:
 
 def _operation_from_row(row: sqlite3.Row) -> ContextCompactionOperation:
     try:
-        raw_binding = row["request_binding_json"]
-        binding = None if raw_binding is None else decode_json(raw_binding, maximum=262144)
-        if binding is not None and not isinstance(binding, dict):
+        plan = decode_json(row["selection_plan_json"], maximum=4096)
+        if not isinstance(plan, dict):
             raise ValueError
         return ContextCompactionOperation(
             operation_id=row["operation_id"],
@@ -770,8 +749,8 @@ def _operation_from_row(row: sqlite3.Row) -> ContextCompactionOperation:
             covered_record_sequence=row["covered_record_sequence"],
             covered_tool_sequence=row["covered_tool_sequence"],
             status=row["status"],
-            request_binding=None if binding is None else MappingProxyType(binding),
-            attempt_count=row["attempt_count"],
+            selection_plan=MappingProxyType(plan),
+            provider_request_id=row["provider_request_id"],
             result_checkpoint_revision=row["result_checkpoint_revision"],
             failure_code=row["failure_code"],
             created_at=row["created_at"],

@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
-from datetime import datetime, timezone
 import json
 import sqlite3
 import threading
@@ -18,7 +17,6 @@ from figura.providers.models import ProviderOptions, ProviderToolCall, FinishRea
 from figura.providers.retries import classify_failure, retry_after
 from figura.runtime.errors import RunError
 from figura.runtime.models import ActionKind, RunStatus, RecordKind, TerminalCode
-from figura.runtime.records import ProviderRequestBinding
 from figura.runtime.store import FiguraRunStore
 from figura.runtime.run_lock import RunExecutionOwnership
 from figura.shared.payloads import ExecutionPayloadLimits
@@ -37,13 +35,17 @@ def no_backoff(monkeypatch):
     monkeypatch.setattr("figura.runtime.persistence.providers.retry_deadline", lambda *_: _utc_now())
 
 
-def _binding(agent, state):
+def _request_record(agent, state):
     request = agent._requests.build(state, agent._tools.registry)
     prepared = agent._provider_factory.create(state.run.provider, state.run.model).prepare(request)
-    return ProviderRequestBinding(operation_id="operation-1", run_id=state.run.run_id,
+    from figura.agent.executor import _provider_request_record
+    return _provider_request_record(
+        prepared,
+        run_id=state.run.run_id,
         base_record_sequence=state.checkpoint.last_committed_record_sequence,
         base_tool_sequence=state.checkpoint.last_committed_tool_sequence,
-        created_at=_utc_now(), **prepared.descriptor)
+        purpose="agent_turn",
+    )
 
 
 @pytest.mark.parametrize("known", [False, True])
@@ -55,8 +57,8 @@ def test_retry_success_preserves_unknown_or_failed_fact(tmp_path, no_backoff, kn
     first, second = state.provider_attempts
     assert first.status.value == ("known_failure" if known else "outcome_unknown")
     assert second.retry_of_attempt_id == first.attempt_id
-    assert [a.operation_attempt_number for a in state.provider_attempts] == [1, 2]
-    assert len(state.provider_request_bindings) == 1
+    assert [a.request_attempt_number for a in state.provider_attempts] == [1, 2]
+    assert len(state.provider_requests) == 1
     assert len([r for r in state.records if r.record_kind is RecordKind.MODEL_RESPONSE]) == 1
     assert factory.client.requests[0] == factory.client.requests[1]
 
@@ -72,7 +74,7 @@ def test_four_attempts_exhaust_without_reset_after_reopen(tmp_path, no_backoff):
     assert state.run.status is RunStatus.FAILED
     assert state.run.terminal_code == TerminalCode.PROVIDER_OUTCOME_UNKNOWN.value
     assert state.provider_attempts[-1].next_eligible_at is None
-    assert len({a.operation_id for a in state.provider_attempts}) == 1
+    assert len({a.request_id for a in state.provider_attempts}) == 1
 
 
 def test_durable_wait_rejects_early_claim_and_stop_bypasses_due(tmp_path):
@@ -82,9 +84,9 @@ def test_durable_wait_rejects_early_claim_and_stop_bypasses_due(tmp_path):
     waiting = agent.execute_slice(session.session_id, run.run_id)
     assert waiting.checkpoint.next_action.action_kind is ActionKind.PROVIDER_RETRY
     assert agent.retry_delay(waiting) > 3500
-    binding = waiting.provider_request_bindings[0]
+    binding = waiting.provider_requests[0]
     with pytest.raises(RunError):
-        coordinator.begin_provider_attempt(session.session_id, run.run_id, waiting.checkpoint.revision, binding=binding)
+        coordinator.begin_provider_attempt(session.session_id, run.run_id, waiting.checkpoint.revision, request=binding)
     with RunDispatcher(agent, max_workers=1, max_queued=0, scan_interval=60) as dispatcher:
         assert dispatcher.ensure_scheduled(run) is False
         assert dispatcher.activity(run.run_id) is None
@@ -105,8 +107,8 @@ def test_orphan_claim_consumes_attempt_and_late_response_rejected(tmp_path, no_b
     factory = _FakeFactory([_response()])
     agent = _agent(store, coordinator, _registry(), factory)
     initial = coordinator.read_run_state(session.session_id, run.run_id)
-    binding = _binding(agent, initial)
-    first = coordinator.begin_provider_attempt(session.session_id, run.run_id, initial.checkpoint.revision, binding=binding)
+    binding = _request_record(agent, initial)
+    first = coordinator.begin_provider_attempt(session.session_id, run.run_id, initial.checkpoint.revision, request=binding)
     claimed = coordinator.read_run_state(session.session_id, run.run_id)
     with RunExecutionOwnership(tmp_path).acquire(run.run_id):
         unchanged = agent.execute_slice(session.session_id, run.run_id)
@@ -128,24 +130,27 @@ def test_claim_race_has_one_winner_and_binding_is_immutable(tmp_path):
     store, coordinator, session, run = _app(tmp_path)
     agent = _agent(store, coordinator, _registry(), _FakeFactory([]))
     initial = coordinator.read_run_state(session.session_id, run.run_id)
-    binding = _binding(agent, initial)
+    binding = _request_record(agent, initial)
     def claim(_):
         try:
-            return coordinator.begin_provider_attempt(session.session_id, run.run_id, 1, binding=binding)
+            return coordinator.begin_provider_attempt(session.session_id, run.run_id, 1, request=binding)
         except RunError:
             return None
     with ThreadPoolExecutor(2) as pool:
         assert sum(a is not None for a in pool.map(claim, range(2))) == 1
     with sqlite3.connect(store.database_path) as connection:
         with pytest.raises(sqlite3.IntegrityError):
-            connection.execute("UPDATE run_provider_request_bindings SET payload_json = '{}' WHERE operation_id = ?", (binding.operation_id,))
+            connection.execute(
+                "UPDATE run_provider_requests SET request_json = '{}' WHERE request_id = ?",
+                (binding.request_id,),
+            )
 
 
 def test_full_transition_guard_rejects_atomically_and_history_read_ceiling(tmp_path):
     store, coordinator, session, run = _app(tmp_path)
     agent = _agent(store, coordinator, _registry(), _FakeFactory([]))
     initial = coordinator.read_run_state(session.session_id, run.run_id)
-    attempt = coordinator.begin_provider_attempt(session.session_id, run.run_id, 1, binding=_binding(agent, initial))
+    attempt = coordinator.begin_provider_attempt(session.session_id, run.run_id, 1, request=_request_record(agent, initial))
     claimed = coordinator.read_run_state(session.session_id, run.run_id)
     low = FiguraRunStore(tmp_path, payload_limits=ExecutionPayloadLimits(2500))
     calls = tuple(ProviderToolCall("长" * 100 + str(index), "inspect", json.dumps({"x": "x" * 300})) for index in range(3))
@@ -206,6 +211,10 @@ def test_quota_tls_dns_and_internal_errors_do_not_retry():
     error = APIConnectionError(request=response.request)
     error.__cause__ = httpx.ConnectTimeout("private")
     assert classify_failure(error).outcome_known and classify_failure(error).transient
+    remote_protocol = classify_failure(httpx.RemoteProtocolError("private"))
+    assert remote_protocol.failure_code.value == "connection_error"
+    assert not remote_protocol.outcome_known and remote_protocol.transient
+    assert remote_protocol.category == "temporary_unknown"
     assert not classify_failure(RuntimeError("private")).transient
     assert retry_after({"retry-after": "nan"}) is None
     assert retry_after({"retry-after": "-2"}) is None
@@ -225,7 +234,7 @@ def test_fourteen_sessions_receive_action_quanta_without_starvation(tmp_path, no
             local = _FakeFactory([_response(calls=(ProviderToolCall("call-1", "inspect", '{"value":1}'),), reason=FinishReason.TOOL_CALLS), _response()])
             # Infer first vs later requests from the durable history.
             client = local.create(provider_id, model_id)
-            def dispatch(prepared):
+            def dispatch(prepared, *, on_stream_event=None):
                 return _response() if any(m.role.value == "tool" for m in prepared.request.messages) else local.client.outcomes[0]
             client.dispatch = dispatch
             return client
@@ -239,8 +248,12 @@ def test_fourteen_sessions_receive_action_quanta_without_starvation(tmp_path, no
     assert all(coordinator.read_run_state(r.session_id, r.run_id).run.status is RunStatus.COMPLETED for r in runs)
 
 
-@pytest.mark.parametrize("content", [b'{"choices":[],"choices":[]}', b'{"x":NaN}', b'{"x":"' + b'x' * 1024 + b'"}'])
-def test_sdk_body_is_bounded_and_strict_before_normalization(content):
+@pytest.mark.parametrize("content", [
+    b'data: {"choices":[],"choices":[]}\n\n',
+    b'data: {"x":NaN}\n\n',
+    b'data: {"x":"' + b'x' * 1024 + b'"}\n\n',
+])
+def test_sdk_sse_data_is_bounded_and_strict_before_normalization(content):
     from figura.providers.transport import OpenAISDKTransport, _bound_response
     from tests.test_figura_provider import _environment
     from figura.providers.config import ProviderSettings
@@ -258,7 +271,7 @@ def test_sdk_body_is_bounded_and_strict_before_normalization(content):
     from figura.shared.payloads import use_payload_limits
     from figura.providers.errors import ProviderProtocolError
     with use_payload_limits(limits), pytest.raises(ProviderProtocolError):
-        transport.create(model="test", messages=[{"role": "user", "content": "test"}])
+        list(transport.create(model="test", messages=[{"role": "user", "content": "test"}], stream=True))
     assert len(sends) == 1
     transport.close()
 
@@ -270,15 +283,19 @@ def test_frozen_options_survive_default_changes_and_endpoint_drift_is_detectable
     first_client = _factory(FakeTransport()).create(ProviderId.QWEN, original_request.model_id)
     first = first_client.prepare(original_request)
     assert "max_completion_tokens" not in first.payload
-    new_factory = _factory(FakeTransport(), {**_environment(), "FIGURA_QWEN_MAX_COMPLETION_TOKENS": "900000", "FIGURA_QWEN_TIMEOUT_SECONDS": "900", "FIGURA_QWEN_REASONING_EFFORT": "high"})
-    same = new_factory.create(ProviderId.QWEN, original_request.model_id).prepare(first.request, frozen_options=True, frozen_timeout_seconds=first.descriptor["options"]["timeout_seconds"])
+    new_factory = _factory(FakeTransport(), {**_environment(), "FIGURA_QWEN_MAX_COMPLETION_TOKENS": "900000", "FIGURA_QWEN_CONNECT_TIMEOUT_SECONDS": "900", "FIGURA_QWEN_REASONING_EFFORT": "high"})
+    same = new_factory.create(ProviderId.QWEN, original_request.model_id).prepare(
+        first.request, frozen_options=True, frozen_timeout_policy=first.timeout_policy
+    )
     assert same.descriptor == first.descriptor
-    changed = _factory(FakeTransport(), {**_environment(), "FIGURA_QWEN_BASE_URL": "https://other.test/v1"}).create(ProviderId.QWEN, original_request.model_id).prepare(first.request, frozen_options=True, frozen_timeout_seconds=first.descriptor["options"]["timeout_seconds"])
-    assert changed.descriptor["endpoint_binding"] != first.descriptor["endpoint_binding"]
+    changed = _factory(FakeTransport(), {**_environment(), "FIGURA_QWEN_BASE_URL": "https://other.test/v1"}).create(ProviderId.QWEN, original_request.model_id).prepare(
+        first.request, frozen_options=True, frozen_timeout_policy=first.timeout_policy
+    )
+    assert changed.descriptor["endpoint_identity"] != first.descriptor["endpoint_identity"]
     with pytest.raises(TypeError):
         first.payload["messages"][0]["content"] = "tampered"
     with pytest.raises(TypeError):
-        first.descriptor["options"]["stream"] = True
+        first.descriptor["options"]["write_timeout_seconds"] = 1
 
 
 def test_long_call_identity_roundtrips_failure_then_model_redecision(tmp_path):
@@ -312,36 +329,16 @@ def test_payload_read_ceiling_increases_monotonically_and_new_writes_use_lower_g
         assert connection.execute("SELECT read_ceiling FROM execution_payload_metadata").fetchone()[0] == 40 * 1024 * 1024
 
 
-def test_schema10_upgrade_is_atomic_and_preserves_legacy_rows(tmp_path, monkeypatch):
+def test_schema12_stream_migration_is_atomic_and_preserves_legacy_rows(tmp_path, monkeypatch):
     from figura.storage import schema
     store, coordinator, session, run = _app(tmp_path)
     before = store.read_run_state(session.session_id, run.run_id)
-    # Restore actual v10 bounded DDL, not just its version number.
+    # Simulate the pre-stream Provider ledger while preserving committed Run facts.
     with sqlite3.connect(store.database_path) as connection:
         connection.execute("PRAGMA foreign_keys = OFF")
-        triggers = connection.execute("SELECT name, sql FROM sqlite_master WHERE type = 'trigger'").fetchall()
-        for name, _ in triggers:
-            connection.execute(f'DROP TRIGGER "{name}"')
-        connection.execute("DROP TABLE run_provider_request_bindings")
+        connection.execute("DROP TABLE run_provider_requests")
         connection.execute("DROP TABLE execution_payload_metadata")
-        for table, ddl in (
-            ("run_execution_records", schema._CORE_SCHEMA[2]),
-            ("run_tool_execution_facts", schema._TOOL_SCHEMA[0]),
-            ("run_provider_continuations", schema._CONTINUATION_SCHEMA[0]),
-            ("run_provider_attempts", schema._PROVIDER_ATTEMPT_SCHEMA[0]),
-        ):
-            connection.execute(ddl.replace(f"CREATE TABLE {table}", f"CREATE TABLE {table}_old"))
-            columns = ", ".join(row[1] for row in connection.execute(f"PRAGMA table_info({table}_old)"))
-            connection.execute(f"INSERT INTO {table}_old ({columns}) SELECT {columns} FROM {table}")
-            connection.execute(f"DROP TABLE {table}")
-            connection.execute(f"ALTER TABLE {table}_old RENAME TO {table}")
-        for name, ddl in triggers:
-            if name not in {"immutable_provider_binding_update", "immutable_provider_binding_delete", "provider_attempt_matches_binding"}:
-                # v10 transition triggers do not reference the new attempt columns.
-                if name == "provider_attempt_has_one_terminal_transition":
-                    ddl = next(sql for sql in schema._PROVIDER_ATTEMPT_SCHEMA if "CREATE TRIGGER provider_attempt_has_one_terminal_transition" in sql)
-                connection.execute(ddl)
-        connection.execute("PRAGMA user_version = 10")
+        connection.execute("PRAGMA user_version = 12")
     validate = schema._validate_migration
     def fail(connection):
         validate(connection)
@@ -350,11 +347,96 @@ def test_schema10_upgrade_is_atomic_and_preserves_legacy_rows(tmp_path, monkeypa
     with pytest.raises(RuntimeError):
         FiguraRunStore(tmp_path)
     with sqlite3.connect(store.database_path) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 10
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 12
         assert connection.execute("SELECT 1 FROM sqlite_master WHERE name = 'execution_payload_metadata'").fetchone() is None
     monkeypatch.setattr(schema, "_validate_migration", validate)
     upgraded = FiguraRunStore(tmp_path)
     assert upgraded.read_run_state(session.session_id, run.run_id) == before
+    with sqlite3.connect(store.database_path) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 13
+
+
+def test_schema12_migration_keeps_run_active_after_resolved_retry(tmp_path):
+    store, coordinator, session, run = _app(tmp_path)
+    from datetime import datetime, timedelta, timezone
+    started = datetime.now(timezone.utc)
+    first_started = started.isoformat(timespec="microseconds").replace("+00:00", "Z")
+    retry_started = (started + timedelta(seconds=2)).isoformat(timespec="microseconds").replace("+00:00", "Z")
+    retry_finished = (started + timedelta(seconds=3)).isoformat(timespec="microseconds").replace("+00:00", "Z")
+    operation_id = "resolved-retry-operation"
+    first_attempt_id = "resolved-retry-attempt-1"
+    second_attempt_id = "resolved-retry-attempt-2"
+    payload = json.dumps({
+        "provider_id": run.provider,
+        "model_id": run.model,
+        "base_record_sequence": 1,
+        "base_tool_sequence": 0,
+        "created_at": first_started,
+        "context_estimate": None,
+    }, separators=(",", ":"))
+    with sqlite3.connect(store.database_path) as connection:
+        connection.execute("PRAGMA foreign_keys = OFF")
+        connection.execute("DROP TRIGGER IF EXISTS immutable_provider_request_update")
+        connection.execute("DROP TRIGGER IF EXISTS immutable_provider_request_delete")
+        connection.execute("DROP TABLE run_provider_requests")
+        for trigger in (
+            "provider_attempt_response_matches_model_response",
+            "provider_attempt_has_one_terminal_transition",
+            "immutable_run_provider_attempt_delete",
+        ):
+            connection.execute(f"DROP TRIGGER IF EXISTS {trigger}")
+        connection.execute("DROP TABLE run_provider_attempts")
+        connection.execute("""CREATE TABLE run_provider_request_bindings (
+            operation_id TEXT PRIMARY KEY,
+            run_id TEXT NOT NULL,
+            base_record_sequence INTEGER NOT NULL,
+            base_tool_sequence INTEGER NOT NULL,
+            payload_json TEXT NOT NULL
+        )""")
+        connection.execute(
+            "INSERT INTO run_provider_request_bindings VALUES (?, ?, 1, 0, ?)",
+            (operation_id, run.run_id, payload),
+        )
+        connection.execute("""CREATE TABLE run_provider_attempts (
+            attempt_id TEXT PRIMARY KEY,
+            run_id TEXT NOT NULL,
+            attempt_sequence INTEGER NOT NULL,
+            base_record_sequence INTEGER NOT NULL,
+            base_tool_sequence INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            response_record_id TEXT NULL,
+            failure_code TEXT NULL,
+            operation_id TEXT NULL,
+            operation_attempt_number INTEGER NULL,
+            retry_of_attempt_id TEXT NULL,
+            failure_category TEXT NULL,
+            http_status INTEGER NULL,
+            next_eligible_at TEXT NULL,
+            started_at TEXT NOT NULL,
+            finished_at TEXT NULL
+        )""")
+        connection.executemany(
+            "INSERT INTO run_provider_attempts VALUES (?, ?, ?, 1, 0, ?, NULL, ?, ?, ?, ?, ?, NULL, ?, ?, ?)",
+            (
+                (first_attempt_id, run.run_id, 1, "outcome_unknown", "connection_error", operation_id, 1,
+                 None, "temporary_unknown", "2000-01-01T00:00:00Z", first_started, first_started),
+                (second_attempt_id, run.run_id, 2, "response_committed", None, operation_id, 2,
+                 first_attempt_id, None, None, retry_started, retry_finished),
+            ),
+        )
+        connection.execute("DROP TABLE execution_payload_metadata")
+        connection.execute("PRAGMA user_version = 12")
+        connection.commit()
+
+    migrated = FiguraRunStore(tmp_path).read_run_state(session.session_id, run.run_id)
+    assert migrated.run.status is RunStatus.RUNNING
+    assert migrated.checkpoint.next_action.action_kind is ActionKind.MODEL
+    assert [item.status.value for item in migrated.provider_attempts] == [
+        "outcome_unknown", "response_committed"
+    ]
+    assert migrated.provider_attempts[0].next_eligible_at == "2000-01-01T00:00:00Z"
+    assert migrated.provider_attempts[1].retry_of_attempt_id == first_attempt_id
+    assert all(item.purpose == "historical_import" for item in migrated.provider_requests)
 
 
 def test_concurrent_first_open_and_migration_has_consistent_schema(tmp_path):
@@ -362,7 +444,7 @@ def test_concurrent_first_open_and_migration_has_consistent_schema(tmp_path):
         stores = list(pool.map(lambda _: FiguraRunStore(tmp_path), range(4)))
     for store in stores:
         with store.database.read() as connection:
-            assert connection.execute("PRAGMA user_version").fetchone()[0] == 12
+            assert connection.execute("PRAGMA user_version").fetchone()[0] == 13
             assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
 
 
@@ -384,16 +466,16 @@ def test_recovery_claim_limit_applies_directly_before_terminal(tmp_path):
     assert len(store.read_run_state(session.session_id, run.run_id).tool_facts) == 4
 
 
-def test_stop_orphan_binding_closes_unknown_with_valid_metadata(tmp_path):
+def test_stop_orphan_request_closes_cancelled_with_valid_metadata(tmp_path):
     store, co, session, run = _app(tmp_path)
     agent = _agent(store, co, _registry(), _FakeFactory([]))
     initial = co.read_run_state(session.session_id, run.run_id)
-    co.begin_provider_attempt(session.session_id, run.run_id, 1, binding=_binding(agent, initial))
+    co.begin_provider_attempt(session.session_id, run.run_id, 1, request=_request_record(agent, initial))
     co.request_stop(session.session_id, run.run_id)
     stopped = agent.execute_slice(session.session_id, run.run_id)
     assert stopped.run.status is RunStatus.INTERRUPTED
-    assert stopped.provider_attempts[0].status.value == "outcome_unknown"
-    assert stopped.provider_attempts[0].failure_category == "permanent"
+    assert stopped.provider_attempts[0].status.value == "cancelled"
+    assert stopped.provider_attempts[0].failure_category == "temporary_unknown"
 
 
 def test_cancellation_storage_failure_propagates_without_dispatch_or_fake_result(tmp_path, monkeypatch):
@@ -456,7 +538,7 @@ def test_long_run_network_recovery_model_redecision_restart_stop_and_delete(tmp_
         reopened.delete_session_runs(connection, session.session_id)
         reopened.complete_session_deletion(connection, session.session_id)
     with reopened.database.read() as connection:
-        assert connection.execute("SELECT COUNT(*) FROM run_provider_request_bindings").fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM run_provider_requests").fetchone()[0] == 0
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
 
 
@@ -495,7 +577,7 @@ def test_multiple_processes_first_open_share_one_atomic_migration(tmp_path):
     from concurrent.futures import ProcessPoolExecutor
     with ProcessPoolExecutor(3, mp_context=multiprocessing.get_context("spawn")) as pool:
         results = list(pool.map(_open_store_process, [str(tmp_path)] * 3))
-    assert results == [(12, [])] * 3
+    assert results == [(13, [])] * 3
 
 
 def test_multiple_retry_waiters_use_no_queue_capacity_and_ready_run_completes(tmp_path):
@@ -526,15 +608,21 @@ def test_multiple_retry_waiters_use_no_queue_capacity_and_ready_run_completes(tm
 def test_bound_image_digest_and_identity_detect_content_or_source_changes():
     from tests.test_figura_provider import _factory, _request, FakeTransport
     from figura.providers.models import ProviderId, ProviderMessage, MessageRole, ImageBlock
-    from figura.runtime.codecs.bindings import encode_binding, decode_binding
+    from figura.runtime.codecs.provider_requests import encode_provider_request, decode_provider_request
     from types import MappingProxyType
+    from figura.agent.executor import _provider_request_record
     client = _factory(FakeTransport()).create(ProviderId.QWEN, "qwen3.8-flash")
     image = ImageBlock("image/png", b"image bytes", MappingProxyType({"kind": "attachment", "id": "attachment-1"}))
     request = replace(_request(ProviderId.QWEN), messages=(ProviderMessage(MessageRole.USER, (image,)),))
     prepared = client.prepare(request)
-    binding = ProviderRequestBinding(operation_id="operation-1", run_id="run-1", base_record_sequence=1,
-        base_tool_sequence=0, created_at=_utc_now(), **prepared.descriptor)
-    assert decode_binding(encode_binding(binding)) == binding
+    request_record = _provider_request_record(
+        prepared,
+        run_id="r" * 32,
+        base_record_sequence=1,
+        base_tool_sequence=0,
+        purpose="agent_turn",
+    )
+    assert decode_provider_request(encode_provider_request(request_record)) == request_record
     changed_bytes = client.prepare(replace(request, messages=(ProviderMessage(MessageRole.USER, (replace(image, image_bytes=b"different bytes"),)),)))
     changed_ref = client.prepare(replace(request, messages=(ProviderMessage(MessageRole.USER, (replace(image, source_ref={"kind": "attachment", "id": "attachment-2"}),)),)))
     assert changed_bytes.descriptor["request_fingerprint"] != prepared.descriptor["request_fingerprint"]

@@ -67,12 +67,10 @@ def _validate_request(request: ProviderRequest, expected_provider: ProviderId) -
     options = request.options
     if not isinstance(options, ProviderOptions):
         raise fail(ProviderFailureCode.INVALID_REQUEST, "模型请求必须包含有效的 options。")
-    if options.schema_version not in {1, 2}:
+    if options.schema_version != 2:
         raise fail(ProviderFailureCode.INVALID_REQUEST, "不支持此版本的模型请求选项。")
     if options.max_completion_tokens is not None and (type(options.max_completion_tokens) is not int or options.max_completion_tokens <= 0):
         raise fail(ProviderFailureCode.INVALID_REQUEST, "max_completion_tokens 超出允许范围。")
-    if type(options.stream) is not bool:
-        raise fail(ProviderFailureCode.INVALID_REQUEST, "stream 必须是布尔值。")
     if options.thinking_mode is not None and type(options.thinking_mode) is not bool:
         raise fail(ProviderFailureCode.INVALID_REQUEST, "thinking_mode 必须是布尔值。")
     if options.reasoning_effort is not None and not isinstance(options.reasoning_effort, str):

@@ -35,6 +35,7 @@ class ProviderAttemptStatus(str, Enum):
     RESPONSE_COMMITTED = "response_committed"
     KNOWN_FAILURE = "known_failure"
     OUTCOME_UNKNOWN = "outcome_unknown"
+    CANCELLED = "cancelled"
 
 
 class ToolFactKind(str, Enum):

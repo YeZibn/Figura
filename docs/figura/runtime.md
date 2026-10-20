@@ -1,10 +1,10 @@
 # Run Runtime：执行事实与恢复
 
-> 更新日期：2026-10-10。[返回总览](../figura-implementation-overview.md)。范围：当前 `src/figura/runtime/` 的工作树实现。这里的“事实”指已提交的执行内容；Checkpoint 是推进控制，事件是安全投影。Session 上下文摘要只是一份可替换的派生检查点，完整历史事实仍保留。完整字段表在第 4 节。
+> 更新日期：2026-10-19。[返回总览](../figura-implementation-overview.md)。范围：当前 `src/figura/runtime/` 的工作树实现。这里的“事实”指已提交的执行内容；Checkpoint 是推进控制，事件是安全投影。Session 上下文摘要只是一份可替换的派生检查点，完整历史事实仍保留。完整字段表在第 4 节。
 
 ## 1. 职责与边界
 
-RunCoordinator 校验并推进 Session/Run；`FiguraRunStore` 是 Runtime 仓储的组合入口；DurableToolExecutor 记录工具尝试与结果。同一 Session 同时最多有一个 running Run。Runtime 向 Agent 提供目标 Run 前的终态 RunState 一致快照，供[Session Memory](memory.md)构造规范对话，并从专属表提供 `SessionContextCheckpoint` 与摘要操作状态。摘要只缩减 Provider 请求投影，不修改 Run、消息或工具事实。Runtime 也向 Gateway 提供 Session 列表聚合、Session 全量读取快照和 running Run 恢复列表。Agent 只能通过协调入口推进 Run，不能绕过 Checkpoint 直接更新执行历史。Provider 凭据、图片字节、调用期普通请求和 Memory 消息投影不进入 Run 事实；压缩请求 binding 是独立操作表内的安全描述，不含原始 payload/凭据。附件与 Panel 元数据由[Sources](sources.md)管理；OCR、统一 `measure_chart`、ChartFigure 和 ChartRender 的完整调用/结果继续使用通用 `ToolCallFact`、`ToolAttemptStartedFact` 与 `ToolResultFact`。Agent 的 `RunExecutionStateService` 从这些已提交事实及 Sources 元数据重建包含六种资源类型的调用期目录；它不增加 RunState 字段、fact kind、Figure 表或渲染表。完整 OCR/测量结果仍在 ToolResultFact 与 Memory ToolMessage 中；ChartFigure 从成功调用参数和配对结果重建；PNG 字节由 Sources 保存，渲染摘要从成功结果重建。完整目录和按需历史读取的归属见[Agent](agent.md#4-runexecutionstate-资源合同与完整字段)与[Memory](memory.md)。`RunStreamEvent` 保存生命周期事件和安全进度标记；`run_progress` 与事实提交、Checkpoint 推进处于同一事务，Gateway 用它触发工具时间线刷新，不把工具 payload 复制到 SSE。公开投影见[网页端边界](web.md)。
+RunCoordinator 校验并推进 Session/Run；`FiguraRunStore` 是 Runtime 仓储的组合入口；DurableToolExecutor 记录工具尝试与结果。同一 Session 同时最多有一个 running Run。Runtime 向 Agent 提供目标 Run 前的终态 RunState 一致快照，供[Session Memory](memory.md)构造规范对话，并从专属表提供 `SessionContextCheckpoint` 与摘要操作状态。摘要只缩减 Provider 请求投影，不修改 Run、消息或工具事实。Runtime 也向 Gateway 提供 Session 列表聚合、Session 全量读取快照和 running Run 恢复列表。Agent 只能通过协调入口推进 Run，不能绕过 Checkpoint 直接更新执行历史。Provider 凭据、图片字节、调用期普通请求和 Memory 消息投影不进入 Run 事实；压缩操作只保存覆盖、选择计划和共享 Provider 请求 ID；ProviderRequestRecord 不含原始 payload/凭据。附件与 Panel 元数据由[Sources](sources.md)管理；OCR、统一 `measure_chart`、ChartFigure 和 ChartRender 的完整调用/结果继续使用通用 `ToolCallFact`、`ToolAttemptStartedFact` 与 `ToolResultFact`。Agent 的 `RunExecutionStateService` 从这些已提交事实及 Sources 元数据重建包含六种资源类型的调用期目录；它不增加 RunState 字段、fact kind、Figure 表或渲染表。完整 OCR/测量结果仍在 ToolResultFact 与 Memory ToolMessage 中；ChartFigure 从成功调用参数和配对结果重建；PNG 字节由 Sources 保存，渲染摘要从成功结果重建。完整目录和按需历史读取的归属见[Agent](agent.md#4-runexecutionstate-资源合同与完整字段)与[Memory](memory.md)。`RunStreamEvent` 保存生命周期事件和安全进度标记；`run_progress` 与事实提交、Checkpoint 推进处于同一事务，Gateway 用它触发工具时间线刷新，不把工具 payload 复制到 SSE。公开投影见[网页端边界](web.md)。
 
 ```mermaid
 flowchart LR
@@ -25,7 +25,7 @@ flowchart LR
     ToolRepo --> Database
     TransitionRepo --> Database
     SourceRepo[SourcesRepository] --> Database
-    Database --> SQLite[(one SQLite file / schema v12)]
+    Database --> SQLite[(one SQLite file / schema v13)]
     RunRepo --> Run[(Run and initial input)]
     RunRepo --> State[RunState hydration]
     SnapshotRepo -->|Session / prior Run snapshots| Store
@@ -57,21 +57,21 @@ flowchart LR
     State --> Agent[AgentExecutor]
 ```
 
-Runtime 按模型归属和事务职责保持中等粒度：[`runtime/models.py`](../../src/figura/runtime/models.py) 定义 Session/Run、Checkpoint 和枚举；[`runtime/records.py`](../../src/figura/runtime/records.py) 定义持久事实及 Run/Session 读取视图；[`runtime/validation.py`](../../src/figura/runtime/validation.py) 校验 Run 状态不变量，[`runtime/record_validation.py`](../../src/figura/runtime/record_validation.py) 校验持久事实字段和限制。共享 [`storage/database.py`](../../src/figura/storage/database.py) 管理 SQLite 连接和读写事务，[`storage/schema.py`](../../src/figura/storage/schema.py) 管理 schema v12。
+Runtime 按模型归属和事务职责保持中等粒度：[`runtime/models.py`](../../src/figura/runtime/models.py) 定义 Session/Run、Checkpoint 和枚举；[`runtime/records.py`](../../src/figura/runtime/records.py) 定义持久事实及 Run/Session 读取视图；[`runtime/validation.py`](../../src/figura/runtime/validation.py) 校验 Run 状态不变量，[`runtime/record_validation.py`](../../src/figura/runtime/record_validation.py) 校验持久事实字段和限制。共享 [`storage/database.py`](../../src/figura/storage/database.py) 管理 SQLite 连接和读写事务，[`storage/schema.py`](../../src/figura/storage/schema.py) 管理 schema v13。
 
 <a id="schema-migration"></a>
-### SQLite schema v12 迁移
+### SQLite schema v13 迁移
 
-当前版本为 **v12**：v12 新增 `session_context_checkpoints` 和 `session_context_compaction_operations`，分别保存每 Session 当前有效的派生摘要及一次摘要请求的稳定身份/重试状态。v10 增加独立停止请求表；v11 增加持久 Provider 请求绑定与 attempt 关联字段，调整执行载荷的存储检查，并增加私有 `execution_payload_metadata` 读上限记录。v7 增加 `run_progress`；v8 引入 `session_deletion_scopes` 与仅允许 Session 整体删除的条件触发器；v9 允许 DeepSeek continuation 保存显式空字符串和 SQL NULL。新库直接建立当前表结构；已有 v1–v11 在 `BEGIN IMMEDIATE` 写锁内迁移，随后验证外键、SQLite 完整性和已存 RunState，并提交 `user_version=12`。失败则回滚，未知未来版本拒绝读取。
+当前版本为 **v13**：v12 新增 `session_context_checkpoints` 和 `session_context_compaction_operations`，分别保存 Session 派生摘要和压缩操作状态；v13 将 Provider 请求合同与物理 attempt 阶段诊断统一到 `run_provider_requests` 和 `run_provider_attempts`。v10 增加独立停止请求表；v11 增加旧 Provider 请求绑定及 attempt 关联字段、执行载荷读上限记录；v7 增加 `run_progress`；v8 引入 `session_deletion_scopes` 与仅允许 Session 整体删除的条件触发器；v9 允许 DeepSeek continuation 保存显式空字符串和 SQL NULL。新库直接建立当前表结构；已有 v1–v12 在 `BEGIN IMMEDIATE` 写锁内迁移，随后验证外键、SQLite 完整性和已存 RunState，并提交 `user_version=13`。v12→v13 一次性迁移旧请求和 attempt；对旧 wire 合同下无法安全恢复的在途尝试记录未知结果并中断对应 Run。新运行时只读取当前请求合同；迁移失败则整体回滚，未知未来版本拒绝读取。
 
 - v1–v4 补建附件及 Panel 表；v5 只补建 Panel 表；既有 Sources 表与内容保留。
 - 实际迁移代码对 v1–v7 重建事件表，复制原事件身份、序号、payload 和时间，并恢复触发器；v7 也会重建，不能把“已是 v7”当作迁移已完成。
 - v3–v8 重建 continuation 表以放宽 DeepSeek 空/null 值约束，保留既有值、ID 和响应关联；更早版本直接建立当前 continuation 表。不为缺失历史推理伪造 payload。
 - 删除 scope 表及六类条件删除触发器在升级路径统一安装；普通事实更新仍被禁止。scope 只在整会话删除事务内建立并移除，不是持久垃圾队列。
 
-v12 的上下文表以 Session 为授权边界，不把摘要混入 Run 事实或现有 Checkpoint。检查点替换使用 `expected_revision` CAS；来源引用在同一 Session、覆盖 ordinal 和已提交 record/tool 序号内核对。压缩操作唯一绑定目标 Run 与其当前 record/tool 前缀，并冻结摘要请求描述及 retry count。迁移不改变 Run 终态、Checkpoint 或已提交内容，也不创建补偿模型响应。版本合同以 [`schema.py`](../../src/figura/storage/schema.py) 为准；当前表结构和 continuation 合同不适合直接交给旧版本解释。
+v12 的上下文表以 Session 为授权边界，不把摘要混入 Run 事实或现有 Checkpoint。检查点替换使用 `expected_revision` CAS；来源引用在同一 Session、覆盖 ordinal 和已提交 record/tool 序号内核对。压缩操作唯一绑定目标 Run 与其当前 record/tool 前缀，并冻结覆盖范围和选择计划；Provider 请求及重试次数由共享 Provider 请求/attempt 表拥有。迁移不改变 Run 终态、Checkpoint 或已提交内容，也不创建补偿模型响应。版本合同以 [`schema.py`](../../src/figura/storage/schema.py) 为准；当前表结构和 continuation 合同不适合直接交给旧版本解释。
 
-持久化按提交边界拆分：[`sessions.py`](../../src/figura/runtime/persistence/sessions.py) 写 Session 与列表聚合；[`runs.py`](../../src/figura/runtime/persistence/runs.py) 创建 Run、幂等映射并读取 RunState；[`snapshots.py`](../../src/figura/runtime/persistence/snapshots.py) 在一致读事务中加载完整 Session 和先前 Run 快照；[`context.py`](../../src/figura/runtime/persistence/context.py) 校验并替换 Session 摘要检查点、冻结压缩请求绑定、计数 attempt 并记录 fallback/completion；[`providers.py`](../../src/figura/runtime/persistence/providers.py) 提交 Provider attempt/响应/continuation；[`tools.py`](../../src/figura/runtime/persistence/tools.py) 提交工具调用、attempt 和结果；[`run_transitions.py`](../../src/figura/runtime/persistence/run_transitions.py) 提交完成及失败/中断终态；[`controls.py`](../../src/figura/runtime/persistence/controls.py) 独立提交停止请求与通知。`mappers.py` 负责 SQLite 行映射，`runtime/codecs/` 按 record、tool fact 和 event payload 分组。
+持久化按提交边界拆分：[`sessions.py`](../../src/figura/runtime/persistence/sessions.py) 写 Session 与列表聚合；[`runs.py`](../../src/figura/runtime/persistence/runs.py) 创建 Run、幂等映射并读取 RunState；[`snapshots.py`](../../src/figura/runtime/persistence/snapshots.py) 在一致读事务中加载完整 Session 和先前 Run 快照；[`context.py`](../../src/figura/runtime/persistence/context.py) 校验并替换 Session 摘要检查点、写入压缩操作、关联共享 Provider 请求并记录 fallback/completion；[`providers.py`](../../src/figura/runtime/persistence/providers.py) 提交 Provider attempt/响应/continuation；[`tools.py`](../../src/figura/runtime/persistence/tools.py) 提交工具调用、attempt 和结果；[`run_transitions.py`](../../src/figura/runtime/persistence/run_transitions.py) 提交完成及失败/中断终态；[`controls.py`](../../src/figura/runtime/persistence/controls.py) 独立提交停止请求与通知。`mappers.py` 负责 SQLite 行映射，`runtime/codecs/` 按 record、tool fact 和 event payload 分组。
 
 Sources 的附件与 Panel 元数据由 [`SourcesRepository`](../../src/figura/sources/repository.py) 管理，并与 Runtime 共用同一数据库；图像文件由 Sources 自己管理。Run 创建时的附件归属校验仍在 Run 创建写事务内执行。Agent 的 `RunExecutionStateService` 从 Runtime 快照、已提交工具事实与 Sources 资源重建统一派生目录，见[Agent 资源目录](agent.md#4-runexecutionstate-资源合同与完整字段)。`FiguraRunStore` 保留为 Runtime 的组成入口并委托各仓储，不负责文件操作或 Source CRUD。
 
@@ -80,7 +80,7 @@ Sources 的附件与 Panel 元数据由 [`SourcesRepository`](../../src/figura/s
 1. **创建**：`RunCreateRequest` 带 Session、文本、显式 provider/model、幂等键及有序附件 ID。Coordinator 校验请求；`RunRepository` 在一个写事务内先查幂等映射，匹配则返回原 Run；否则若 Session 已有 running Run 则拒绝新建。事务随后校验附件属于该 Session，并写 `Run`、唯一 input `ExecutionRecord`（payload 为 `RunInput`）、初始 `ExecutionCheckpoint`、幂等映射及 created event。图片只以 ID 引用，字段见[Sources](sources.md#3-完整模型字段)。
 2. **读取历史 Run**：Agent 在每个 model action 前请求目标 Run 的 `read_prior_run_states`。`SnapshotRepository` 在一个 SQLite 读快照中按 Session ordinal 查询全部较早 Run，校验 ordinal 从 1 连续、先前 Run 已终态、RunState 完整且附件元数据仍属该 Session，再返回完整 tuple。图像文件可读性在显式图像读取或最新批次回看时由 ImageReader 验证；纯历史投影不自动加载每个历史文件。此读取不写历史副本；消息投影由[Session Memory](memory.md)负责。
 3. **网页读取**：Gateway 的 Session 列表使用 `SessionListEntry`，由 `SessionRepository` 的 SQL 聚合计算每个 Session 的 Run 数与最近活动时间，不逐个 hydrate `RunState`。Session 详情使用 `SnapshotRepository.read_session_snapshot`，在同一个 SQLite 读快照中读取 Session、按 ordinal 排列的完整 RunState 和 Sources 管理的附件元数据；Repository 检查 Run ordinal 连续、输入形状有效、附件都归属该 Session。Gateway 再把快照转换为有限 Web DTO；HTTP/SSE 与前端接口见[网页端边界](web.md#3-http-与前端接口)，完整 DTO 字段见[第 4 节](web.md#4-web-dto-字段)。
-4. **模型尝试**：Agent 将完整历史、当前 Run 已提交前缀、图像清单及最新工具批次所需的原图、OCR/测量标注图或成功渲染的 ChartFigure PNG 组装成 `ProviderRequest`，由 ProviderClient.prepare 完成全量限制校验与 Provider 专属 payload 准备。只有准备通过并在锁内复查 checkpoint 后，才经 `FiguraRunStore` 委托 `ProviderRepository` claim `ProviderAttempt` 并发送请求。成功时，响应事实、私有 `ProviderContinuationFact`（如有）、工具调用意图、attempt 状态及下一 checkpoint 在同一 Provider 写事务中提交；若响应包含工具调用，该事务同时追加 `run_progress`，payload 只包含新的 checkpoint revision；纯文本响应不追加进度事件。确定失败与未知结果走不同状态；读取不重发已启动请求。prepare 失败无 attempt，Run 以 `execution_failed` 终结；已知拒绝映射为 `PREPARATION_MESSAGES` 白名单文案，其他错误使用通用说明。既有 `terminal_message` 保存原因，SSE 仍只投影 terminal code。完整消息不得为满足 Provider 限制而裁剪，超限时不 claim。
+4. **模型尝试**：Agent 将完整历史、当前 Run 已提交前缀、图像清单及最新工具批次所需的原图、OCR/测量标注图或成功渲染的 ChartFigure PNG 组装成 `ProviderRequest`，由 ProviderClient.prepare 完成全量限制校验与 Provider 专属 payload 准备。只有准备通过并在锁内复查 checkpoint 后，才经 `FiguraRunStore` 委托 `ProviderRepository` claim `ProviderAttempt` 并发送请求。流式阶段更新 attempt 的阶段与活动字段；临时文本增量不成为执行事实。成功时，只有完整且校验通过的响应、私有 `ProviderContinuationFact`（如有）、工具调用意图、attempt 状态及下一 checkpoint 才在同一 Provider 写事务中提交；若响应包含工具调用，该事务同时追加 `run_progress`，payload 只包含新的 checkpoint revision；纯文本响应不追加进度事件。确定失败与未知结果走不同状态；恢复绝不再次发送同一个 attempt。只有旧执行 owner 已退出、旧 attempt 已关闭且冻结请求绑定仍匹配时，协调器才可按重试策略创建替代 attempt。prepare 失败无 attempt，Run 以 `execution_failed` 终结；已知拒绝映射为 `PREPARATION_MESSAGES` 白名单文案，其他错误使用通用说明。既有 `terminal_message` 保存原因，SSE 仍只投影 terminal code。完整消息不得为满足 Provider 限制而裁剪，超限时不 claim。
 5. **工具尝试**：`ToolCallFact` 是模型提出的逻辑调用；`ToolAttemptStartedFact` 表示执行尝试已领取、即将调用 handler；孤立 start 不能证明 handler 未执行或已完成；`ToolResultFact` 记录成功或有界失败。DurableToolExecutor 执行 handler 并通过 `ToolRepository` 追加事实和推进 checkpoint；每次写入工具调用、开始 attempt 或提交结果时，同一事务还追加携带新 checkpoint revision 的 `run_progress`。该事件让 Web 重新读取只读时间线，不承载工具参数或结果。批次完成后才继续模型轮次。Sources 保存 Panel PNG 与元数据；只有成功分割结果事实提交后，Panel 才进入 Agent 的资源目录和 Web 列表。`extract_text` 与十类 `measure_chart` family 读取被授权的 Attachment 或 Panel；完整 OCR、schema v3 测量结果以及安全错误均随通用 `ToolResultFact` 保存。ChartSpec v2、ChartFigure v2 与统一测量结果通过 v10 Registry 接入；仍绑定 v9 的活动 Run 会阻止启动新 Registry。历史 schema_version 2 测量事实原样留存在 Runtime，不由当前 schema v3 类型化投影转换。`assemble_chart_figure` 复用同一事实模型：完整 Figure 位于原调用参数，成功配对后由 Agent 重建为 `ChartFigureContent`。`render_chart_figure` 将已接受 Figure 引用写入 ToolCallFact，ToolResultFact 仅保存 Figure digest、PNG SHA-256、media type、byte count 和尺寸，不保存图片字节；PNG 私有文件由 [Sources](sources.md#4-存储失败与访问边界) 管理。Agent 将 OCR、当前测量、Figure 与渲染结果一并重建为有类型引用的资源内容，避免建立并行的结果投影模型。OCR/测量标注图由 Agent 临时重建，不成为 Runtime 事实。图像读取、OCR、测量与 Figure 组装为 `replay_safe`；Panel 分割和 PNG 文件保存按调用身份幂等恢复。
 6. **终结与恢复**：Checkpoint 的 `revision` 用于拒绝过期推进；`next_action` 指明 model、provider_retry、provider_attempt、tool_execution、tool_attempt 或 final。`RunTransitionRepository` 提交 `FinalAnswerFact` 或失败/中断状态，并写安全终态事件。Gateway 启动及周期扫描时通过 `RunRepository.list_running_runs` 按 Session ID、ordinal 稳定排序发现 running Run，并通过有界 Dispatcher 交给既有 Agent 恢复路径。`RunRepository` 从 SQLite 重建 `RunState`；事件、历史展示和未来评测从已提交事实投影，不反向成为权威状态。
 
@@ -88,7 +88,7 @@ Sources 的附件与 Panel 元数据由 [`SourcesRepository`](../../src/figura/s
 
 ### Session 摘要检查点与压缩操作
 
-Agent 仅在选定 Provider 容量 `C` 有效、准备后的普通请求估算达到约 80% 时启动压缩；它分别用 `floor(C/10)` 作为 raw-process 选择预算与摘要近似长度目标，把符合条件的先前 completed Run 过程和当前 Run 已提交完整交互组成一条时间序列，在完整交互边界选择覆盖范围。活动 Run 仅在 `checkpoint.next_action` 为 `MODEL` 或 `PROVIDER_RETRY` 且不存在已启动 Provider attempt 时参与；当前输入始终保留为原生用户消息，未提交记录、未完成工具批次和未解决动作留在 raw projection。raw-process 估算含保留过程和每个先前 Run 的输入定位消息，不含另行发送的完整历史用户输入正文。摘要目标会随冻结容量渲染进本次摘要 Markdown 指令，作为软目标而非输出长度限制。普通请求仍完整携带所有先前 Run 的用户输入、附件 ID 和来源引用，实际 prepare 估算包含该区块。覆盖截止点可位于最新已完成 Run 中间，也可位于当前目标 Run 的冻结提交前缀内；operation 冻结目标 Run 的 record/tool base、精确覆盖游标与请求绑定，恢复时不按新增事实或变化后的 Provider 配置扩大范围。摘要生成本身不消耗普通 Run 的 `ProviderAttempt`，但它作为同一次 Agent model action 内的独立 Provider 请求拥有稳定 `ContextCompactionOperation`：先绑定已 prepare 的安全 descriptor，再递增 dispatch attempt。派发前 Provider prepare 必须提供有效输入估算，且输入估算加最大 completion tokens 不超过 operation 冻结的容量；不满足时不发送摘要请求，operation 进入 fallback。临时 Provider 失败按既有 retry policy 重发同一摘要请求，最多四次；永久失败、响应不合约、source reference 未授权或达到次数后置为 fallback。
+Agent 仅在选定 Provider 容量 `C` 有效、准备后的普通请求估算达到约 80% 时启动压缩；它分别用 `floor(C/10)` 作为 raw-process 选择预算与摘要近似长度目标，把符合条件的先前 completed Run 过程和当前 Run 已提交完整交互组成一条时间序列，在完整交互边界选择覆盖范围。活动 Run 仅在 `checkpoint.next_action` 为 `MODEL` 或 `PROVIDER_RETRY` 且不存在已启动 Provider attempt 时参与；当前输入始终保留为原生用户消息，未提交记录、未完成工具批次和未解决动作留在 raw projection。raw-process 估算含保留过程和每个先前 Run 的输入定位消息，不含另行发送的完整历史用户输入正文。摘要目标会随冻结容量渲染进本次摘要 Markdown 指令，作为软目标而非输出长度限制。普通请求仍完整携带所有先前 Run 的用户输入、附件 ID 和来源引用，实际 prepare 估算包含该区块。覆盖截止点可位于最新已完成 Run 中间，也可位于当前目标 Run 的冻结提交前缀内；operation 冻结目标 Run 的 record/tool base、精确覆盖游标与选择计划，恢复时不按新增事实或变化后的 Provider 配置扩大范围。摘要调用也使用共享的 `ProviderRequestRecord` 与 `ProviderAttempt`：请求合同记录 purpose=context_compaction 并关联 operation，物理发送及重试由 ProviderRepository 统一持久化。派发前 Provider prepare 必须提供有效输入估算，且输入估算加最大 completion tokens 不超过 operation 冻结的容量；不满足时不发送摘要请求，operation 进入 fallback。临时 Provider 失败按既有 retry policy 重发同一摘要请求，最多四次；永久失败、响应不合约、source reference 未授权或达到次数后置为 fallback。
 
 摘要成功时，Context Repository 检查 Session 归属、完整交互边界、来源 record/tool sequence 和 expected revision，再原子写入/替换 checkpoint 并将 operation 标为 completed。覆盖末尾若是先前 Run，该 Run 必须已终结且早于目标 Run；若末尾就是目标活动 Run，则必须由同一 operation 授权，目标仍为 running，覆盖序号不得超过冻结的 record/tool base。覆盖游标之前的原始交互由摘要替代，同一 Run 游标之后的交互仍留在原文中。活动 Run 后续失败或中断不会撤销已提交前缀；后续请求从 Runtime 当前状态刷新终态投影，并保留未覆盖过程。旧检查点被替换而不是追加成多版本摘要；它引用的 canonical facts 不变。失败时只把 operation 标为 fallback，已有检查点不变；当前普通请求回退到完整规范历史。Session 删除通过同一授权删除聚合清除两张上下文表。该过程不发 SSE，不改变 Run 的工具/记录游标，也不形成独立历史消息。
 
@@ -97,7 +97,7 @@ Agent 仅在选定 Provider 容量 `C` 有效、准备后的普通请求估算�
 删除由 Gateway 的 `FiguraSessionDeletion` 协调，Runtime 不自行操作图片文件。它先按 Run 顺序取得全部执行 owner，确认前序执行者释放，再持有同一个 SQLite 写事务，经 `SessionRepository.assert_deletable` 核对 Session 存在且没有 running Run，再取出该 Session 的全部渲染调用身份；Sources 在该事务中列出附件/Panel 身份并暂存文件。然后按以下顺序处理数据库：
 
 1. 建立 `session_deletion_scopes` 授权行，允许该 Session 的不可变事实整体删除；其他 Session 仍受删除触发器保护。
-2. 删除其停止请求、幂等映射、continuation、Provider attempts、request bindings、checkpoint、事件、工具事实和执行记录。
+2. 删除其停止请求、幂等映射、continuation、Provider attempts、Provider 请求、checkpoint、事件、工具事实和执行记录。
 3. Sources 删除 Panel/附件元数据；Runtime 删除 Run 行，最后移除 scope 并删除 Session。
 4. SQLite 提交成功后才丢弃暂存图片；事务失败时行全部回滚，并由 Gateway 恢复图片。恢复失败报安全 storage error；重启可继续对账。完整文件步骤见 [Web 删除协调](web.md#会话删除与恢复) 与 [Sources 文件生命周期](sources.md#2-内部流转与不变量)。
 
@@ -111,7 +111,7 @@ Runtime 提供较早 Run 的一致读取，不负责将其转成消息。`Sessio
 
 以下字段表按当前 Python dataclass 的全部声明字段列出。表内“默认”是构造默认值；`—` 表示构造时必传，不代表值在业务上可任意为空。时间是存储的 UTC 文本。每个模型小节的写入/权威/读取边界适用于其全部字段，字段行再注明例外。
 
-字段表中的写入者按实际负责 SQLite 提交的 Repository 标注；RunCoordinator 与 DurableToolExecutor 是调用入口，`FiguraRunStore` 只组合并委托仓储。Session 与列表聚合对应 `SessionRepository`；Run、初始输入、幂等查找和 RunState hydration 对应 `RunRepository`；SessionSnapshot 与先前 Run 快照对应 `SnapshotRepository`；Session 上下文摘要检查点和压缩操作对应 `SessionContextCheckpointRepository` 与 `ContextCompactionOperationRepository`；Provider 尝试、响应及同响应提交的工具调用意图对应 `ProviderRepository`；独立工具调用追加、attempt 和结果对应 `ToolRepository`；终态事实与事件对应 `RunTransitionRepository`。`AttachmentMetadata` 由 Sources 持久化；`SessionSnapshot.attachments` 是 SnapshotRepository 从 Sources 表读取的值。以下字段按当前 schema v12 与代码列出；跨 Run 续接重放只读取源事实，不把源 continuation 写到新 Run。Session 整体删除是不可变事实禁止单独删除的受控例外。
+字段表中的写入者按实际负责 SQLite 提交的 Repository 标注；RunCoordinator 与 DurableToolExecutor 是调用入口，`FiguraRunStore` 只组合并委托仓储。Session 与列表聚合对应 `SessionRepository`；Run、初始输入、幂等查找和 RunState hydration 对应 `RunRepository`；SessionSnapshot 与先前 Run 快照对应 `SnapshotRepository`；Session 上下文摘要检查点和压缩操作对应 `SessionContextCheckpointRepository` 与 `ContextCompactionOperationRepository`；Provider 尝试、响应及同响应提交的工具调用意图对应 `ProviderRepository`；独立工具调用追加、attempt 和结果对应 `ToolRepository`；终态事实与事件对应 `RunTransitionRepository`。`AttachmentMetadata` 由 Sources 持久化；`SessionSnapshot.attachments` 是 SnapshotRepository 从 Sources 表读取的值。以下字段按当前 schema v13 与代码列出；跨 Run 续接重放只读取源事实，不把源 continuation 写到新 Run。Session 整体删除是不可变事实禁止单独删除的受控例外。
 
 ## 4. 完整模型字段
 
@@ -208,54 +208,32 @@ Session 详情的一致读取视图，不独立持久化。**写入/构建者：
 | ProviderContinuationFact.reasoning_content | str \| None | 必传，无默认 | 私有续接原值，最多 512 KiB UTF-8；DeepSeek 允许空字符串/SQL NULL，其他 Provider 要求非空文本；缺失对象不等于 null | `ProviderRepository`（经 RunCoordinator） → run_provider_continuations 表 → 后续请求重建；不公开 reasoning_content |
 | ProviderContinuationFact.created_at | str | 必传 | 创建时的 UTC 时间 | `ProviderRepository`（经 RunCoordinator） → run_provider_continuations 表 → 后续请求重建；不公开 reasoning_content |
 
-### ProviderRequestBinding
+### ProviderRequestRecord
 
-Runtime 拥有逻辑网络操作的不可变身份；Agent 从 Provider prepared descriptor 构造，初次 claim 在同一 SQLite 事务写入。凭据、原文、图像字节、原生 payload 不入绑定。Provider/model、原 record/tool prefix 与冻结选项共同确定重建请求；摘要不进入 prompt、HTTP/SSE 或日志。
+一次逻辑模型请求的不可变合同，Agent 普通回合与上下文摘要共用。请求合同、首次 attempt 与 Checkpoint 在同一 SQLite 事务中提交；每次物理发送都引用同一 request_id。正文、图片字节、密钥和 reasoning 不进入该记录。权威表为 run_provider_requests，运行时只解码当前请求结构。[定义](../../src/figura/runtime/records.py)，校验与编码见 [provider_requests.py](../../src/figura/runtime/codecs/provider_requests.py)。
 
-| 完整字段路径 | 类型 | 默认 | 语义与校验 | 写入 → 权威 → 读取/公开 |
-|---|---|---|---|---|
-| ProviderRequestBinding.operation_id | str | 必传 | 逻辑请求唯一身份 | Agent/ProviderRepository → run_provider_request_bindings.payload_json → Agent 重建/Runtime 校验；私有不可修订 |
-| ProviderRequestBinding.run_id | str | 必传 | 所属 Run | Agent/ProviderRepository → run_provider_request_bindings.payload_json → Agent 重建/Runtime 校验；私有不可修订 |
-| ProviderRequestBinding.base_record_sequence | int | 必传 | 绑定的记录前缀，正数 | Agent/ProviderRepository → run_provider_request_bindings.payload_json → Agent 重建/Runtime 校验；私有不可修订 |
-| ProviderRequestBinding.base_tool_sequence | int | 必传 | 绑定的工具前缀，非负 | Agent/ProviderRepository → run_provider_request_bindings.payload_json → Agent 重建/Runtime 校验；私有不可修订 |
-| ProviderRequestBinding.provider_id | str | 必传 | Run 固定 Provider | Agent/ProviderRepository → run_provider_request_bindings.payload_json → Agent 重建/Runtime 校验；私有不可修订 |
-| ProviderRequestBinding.model_id | str | 必传 | Run 固定 model | Agent/ProviderRepository → run_provider_request_bindings.payload_json → Agent 重建/Runtime 校验；私有不可修订 |
-| ProviderRequestBinding.request_fingerprint | str | 必传 | 准备后的 SDK payload、POST/path 与 endpoint binding 的 canonical SHA-256 | Agent/ProviderRepository → run_provider_request_bindings.payload_json → Agent 重建/Runtime 校验；私有不可修订 |
-| ProviderRequestBinding.endpoint_binding | str | 必传 | 规范配置 base URL 加 /chat/completions 的 SHA-256；不存原 URL | Agent/ProviderRepository → run_provider_request_bindings.payload_json → Agent 重建/Runtime 校验；私有不可修订 |
-| ProviderRequestBinding.options | Mapping[str, object] | 必传 | 冻结的四个 Provider 选项与 timeout_seconds；stream=false | Agent/ProviderRepository → run_provider_request_bindings.payload_json → Agent 重建/Runtime 校验；私有不可修订 |
-| ProviderRequestBinding.asset_manifest | Mapping[str, object] | 必传 | 提示、Registry、Adapter 和有序图片身份/digest | Agent/ProviderRepository → run_provider_request_bindings.payload_json → Agent 重建/Runtime 校验；私有不可修订 |
-| ProviderRequestBinding.created_at | str | 必传 | 初次绑定的 UTC 时间 | Agent/ProviderRepository → run_provider_request_bindings.payload_json → Agent 重建/Runtime 校验；私有不可修订 |
-| ProviderRequestBinding.request_contract_version | int | 1 | 当前可重建 wire 合同版本 | Agent/ProviderRepository → run_provider_request_bindings.payload_json → Agent 重建/Runtime 校验；私有不可修订 |
-| ProviderRequestBinding.schema_version | int | 1；新请求写3 | 绑定 envelope 版本；v1 无 estimate，v2 增加 estimate，v3 增加 context projection/checkpoint/operation 绑定 | Agent/ProviderRepository → run_provider_request_bindings.payload_json → Agent 重建/Runtime 校验；私有不可修订 |
-| ProviderRequestBinding.generation_only | bool | True | 仅生成请求可替代 unknown | Agent/ProviderRepository → run_provider_request_bindings.payload_json → Agent 重建/Runtime 校验；私有不可修订 |
-| ProviderRequestBinding.max_attempts | int | 4 | 固定首次加最多三次，不是 Run 总次数 | Agent/ProviderRepository → run_provider_request_bindings.payload_json → Agent 重建/Runtime 校验；私有不可修订 |
-| ProviderRequestBinding.retry_policy_version | int | 1 | 持久重试政策版本 | Agent/ProviderRepository → run_provider_request_bindings.payload_json → Agent 重建/Runtime 校验；私有不可修订 |
-| ProviderRequestBinding.context_estimate | ContextEstimate 或 None | None | v2+ 聚合估算快照；input_tokens 非负、容量正整数或 null、estimator_version 非空；v1 不编码此键 | prepare → 首次 claim 同事务存 JSON → Gateway 公开两个数字；重试/恢复不修改，旧记录不回填 |
-| ProviderRequestBinding.context_projection | str | full | v3 请求历史投影：`full`、`checkpoint` 或 `fallback`；旧版本解码为 `full` | Agent → 私有 binding → provider retry/recovery 重建相同上下文投影；不公开 |
-| ProviderRequestBinding.context_checkpoint_revision | int 或 None | None | `checkpoint` 投影要求正版本；`full`/`fallback` 必须为空 | Agent → 私有 binding → 精确读取并核对 SessionContextCheckpoint；不公开 |
-| ProviderRequestBinding.context_compaction_operation_id | str 或 None | None | 指向生成摘要或确认 fallback 的压缩操作；`checkpoint`/`fallback` 必须有值，`full` 必须为空 | Agent → 私有 binding → Runtime 核对操作状态；不公开 |
-
-`options` 是只读 Mapping，精确包含下面五个字段；未知字段拒绝。它不沿用 ProviderOptions 的 schema_version 字段，绑定 envelope 自身拥有版本。`asset_manifest` 同样只读，不存路径、endpoint 原文或原图。
-
-| 完整字段路径 | 类型/约束 | 写入 → 权威 → 读取/公开 |
-|---|---|---|
-| ProviderRequestBinding.options.max_completion_tokens | int 或 null；正数或未设 | Provider prepare → 私有 binding JSON → 重建 ProviderOptions；不公开 |
-| ProviderRequestBinding.options.stream | false | Provider prepare → 私有 binding JSON → generation-only 重试校验 |
-| ProviderRequestBinding.options.thinking_mode | bool | Provider prepare 解析默认值 → binding → 重建时冻结 |
-| ProviderRequestBinding.options.reasoning_effort | str 或 null | Provider prepare 解析默认值 → binding → 重建时冻结 |
-| ProviderRequestBinding.options.timeout_seconds | 有限正 int/float，默认60 | Provider profile → binding → 每次 SDK 请求显式覆盖 timeout；不受改变后的默认值影响 |
-| ProviderRequestBinding.asset_manifest.prompt_digest | SHA-256 | Agent 三层完整指令 → binding → 重建比较 |
-| ProviderRequestBinding.asset_manifest.registry_version | 非空 str | Registry → binding → 重建比较 |
-| ProviderRequestBinding.asset_manifest.registry_digest | SHA-256 | Agent 完整 definitions（含参数/结果 Schema 与 replay effect）→ binding → 重建比较 |
-| ProviderRequestBinding.asset_manifest.adapter_contract_version | int，1 | Provider prepare → binding → 重建比较 |
-| ProviderRequestBinding.asset_manifest.images | 有序只读 tuple | Agent 图片块 → Provider prepare → binding → 重建比较；无图片为空 |
-| ProviderRequestBinding.asset_manifest.images[].source_ref | original 为 {kind: attachment/panel, id}；annotated 为 {kind: ocr/measurement, run_id, call_id}；rendered 为 {kind: chart_render, run_id, call_id} | Agent 授权资源引用 → binding → 图片身份比较；引用完整合同见 [Agent](agent.md) |
-| ProviderRequestBinding.asset_manifest.images[].observation_kind | original/annotated/rendered | Agent 图像回看 → binding → 重建比较 |
-| ProviderRequestBinding.asset_manifest.images[].media_type | 允许的 image MIME | Sources/Agent → binding → 重建比较 |
-| ProviderRequestBinding.asset_manifest.images[].byte_count | 正 int | Provider 对真实图像取长度 → binding → 重建比较 |
-| ProviderRequestBinding.asset_manifest.images[].sha256 | SHA-256 | Provider 对真实图像取 digest → binding → 重建比较 |
-
-
+| 完整字段路径 | 类型 | 默认 | 含义与写入/读取边界 |
+|---|---|---|---|
+| ProviderRequestRecord.request_id / run_id | str | 必传 | 逻辑请求 ID 与所属 Run；request_id 为主键 |
+| ProviderRequestRecord.purpose | str | 必传 | agent_turn、context_compaction 或仅用于导入既有尝试的 historical_import |
+| ProviderRequestRecord.compaction_operation_id | str 或 None | None | context_compaction 时关联压缩操作，其他用途必须为空 |
+| ProviderRequestRecord.base_record_sequence / base_tool_sequence | int | 必传 | 构造请求所依据的已提交记录与工具事实前缀 |
+| ProviderRequestRecord.provider_id / model_id | str | 必传 | 固定 Provider 与模型身份 |
+| ProviderRequestRecord.request_fingerprint | SHA-256 str | 必传 | 已准备 wire 请求的指纹；不保存原生 payload |
+| ProviderRequestRecord.endpoint_identity | SHA-256 str | 必传 | Provider endpoint 的脱敏身份，不保存 URL |
+| ProviderRequestRecord.prompt_digest / tool_registry_digest | SHA-256 str | 必传 | 指令投影和工具定义合同摘要 |
+| ProviderRequestRecord.options | Mapping[str, object] | 必传 | 精确字段：max_completion_tokens、thinking_mode、reasoning_effort、connect_timeout_seconds、write_timeout_seconds；没有 stream 开关 |
+| ProviderRequestRecord.asset_manifest | Mapping[str, object] | 必传 | 精确字段：prompt_digest、registry_version、registry_digest、adapter_contract_version、images；每张图按请求顺序记录 source_ref、observation_kind、media_type、byte_count、sha256，不含图像字节 |
+| ProviderRequestRecord.created_at | UTC str | 必传 | 请求合同创建时间 |
+| ProviderRequestRecord.request_contract_version / stream_contract_version | int | 2 / 1 | Provider wire 合同与统一 stream event 合同版本 |
+| ProviderRequestRecord.timeout_policy_version / retry_policy_version | int | 1 / 1 | 连接/写入阶段策略与重试规则版本 |
+| ProviderRequestRecord.schema_version | int | 2 | 持久请求 JSON 合同版本 |
+| ProviderRequestRecord.generation_only | bool | True | 只有完整生成请求可在结果未知后按策略重放 |
+| ProviderRequestRecord.max_attempts | int | 4 | 每逻辑请求最多四次物理发送，不是 Run 累计额度 |
+| ProviderRequestRecord.context_estimate | ContextEstimate 或 None | None | 首次准备的 token/容量估算快照；Gateway 只公开聚合数字 |
+| ProviderRequestRecord.context_projection | str | full | full、checkpoint 或 fallback；冻结本次历史投影 |
+| ProviderRequestRecord.context_checkpoint_revision | int 或 None | None | checkpoint 投影的摘要 revision；其他投影为空 |
+| ProviderRequestRecord.context_checkpoint_operation_id | str 或 None | None | 关联生成摘要或已确认 fallback 的压缩操作 |
 
 ### SessionContextCheckpoint
 
@@ -273,67 +251,51 @@ Runtime 拥有逻辑网络操作的不可变身份；Agent 从 Provider prepared
 | SessionContextCheckpoint.summary | Mapping[str, object] | 必传；`repr=False` | 深度冻结 JSON 摘要；序列化上限 512 KiB；文本为不可信历史数据 | Agent 摘要验证 → `summary_json` → Agent prompt/检索；不进入规范消息或公开 API |
 | SessionContextCheckpoint.source_refs | tuple[HistorySourceRef, ...] | () | 按稳定顺序去重；持久有效值须非空，只能是 message/tool_result；编码上限 256 KiB | Agent → `source_refs_json` → 精简资源提示与历史检索；完整引用字段归[Memory](memory.md#4-完整模型字段) |
 | SessionContextCheckpoint.updated_at | str | 空字符串 | 替换成功时由 Repository 覆盖为 UTC 时间 | Repository → 表 → 内部读取；不公开 |
-| SessionContextCheckpoint.compaction_operation_id | str 或 None | None | 生成该 revision 的摘要操作；提交时操作必须处于 preparing | Agent/Context Repository → 表 → retry binding 核对；不公开 |
+| SessionContextCheckpoint.compaction_operation_id | str 或 None | None | 生成该 revision 的摘要操作；提交时操作必须处于 preparing | Agent/Context Repository → 表 → 压缩操作状态核对；不公开 |
 
 ### ContextCompactionOperation
 
-一次摘要生成请求的可恢复身份、输入前缀、动态历史预算和有限重试状态。覆盖末尾可以是较早的已终结 Run，也可以是目标活动 Run 冻结的已提交前缀；后者的覆盖序号不能超过对应 base。状态为 `preparing`、`completed` 或 `fallback`；失败只固定 fallback 原因，不覆盖上次有效摘要。操作创建时 `request_binding` 保存冻结计划；实际 Provider descriptor 在摘要请求成功准备后补入。Agent 对摘要 Provider 请求最多 dispatch 四次。**写入/构建者：**Agent 与 `ContextCompactionOperationRepository`。**权威位置：**`session_context_compaction_operations` 表。**读取：**Agent；不公开。[定义](../../src/figura/runtime/records.py)。
+一次摘要的覆盖范围、选择预算、生命周期和结果 revision。Provider 请求细节与 attempt 次数从 ProviderRequestRecord 和 ProviderAttempt 读取；此对象不重复保存请求描述或 attempt_count。[定义](../../src/figura/runtime/records.py)，权威表为 session_context_compaction_operations。
 
-| 完整字段路径 | 类型 | 构造默认 | 含义与约束 | 写入 → 权威 → 读取/公开 |
-|---|---|---|---|---|
-| ContextCompactionOperation.operation_id | str | 必传 | 压缩操作 opaque ID | Context Repository → 表主键 → Agent/request binding；不公开 |
-| ContextCompactionOperation.session_id | str | 必传 | 操作所属 Session | Agent → 表 → 同 Session 校验；不公开 |
-| ContextCompactionOperation.target_run_id | str | 必传 | 触发并拥有当前活动前缀的 Run | Agent → 表/FK → Agent 恢复；不公开 |
-| ContextCompactionOperation.base_record_sequence | int | 必传 | 创建操作时目标 Run 已提交的记录前缀；创建后冻结 | Agent → 表唯一键 → 防止跨前缀复用操作与限制活动 Run 覆盖；不公开 |
-| ContextCompactionOperation.base_tool_sequence | int | 必传 | 创建操作时目标 Run 已提交的工具事实前缀；创建后冻结 | Agent → 表唯一键 → 防止跨前缀复用操作与限制活动 Run 覆盖；不公开 |
-| ContextCompactionOperation.input_checkpoint_revision | int | 必传 | 创建摘要时上一检查点版本；无旧检查点为 0 | Agent → 表 → 提交 CAS 与恢复校验；不公开 |
-| ContextCompactionOperation.covered_run_id | str | 必传 | 本次摘要覆盖区间末尾 Run；可只覆盖 Run 中较早的完整交互 | Agent → 表 → 来源与覆盖范围校验；不公开 |
-| ContextCompactionOperation.covered_run_ordinal | int | 必传 | 覆盖末尾 Run 的 Session 顺序；小于目标 Run 表示已终结历史，等于目标 Run 仅适用于覆盖目标的冻结前缀 | Agent → 表 → 不能越过目标 Run；不公开 |
-| ContextCompactionOperation.covered_record_sequence | int | 必传 | 覆盖末尾 Run 的最后一条已覆盖交互记录；须为闭合边界，同目标 Run 时不得超过 `base_record_sequence` | Agent → 表 → Context Repository 完整交互前缀核验；不公开 |
-| ContextCompactionOperation.covered_tool_sequence | int | 必传 | 覆盖范围内最后一个完整工具批次的精确 tool 游标；同目标 Run 时不得超过 `base_tool_sequence`，且不能停在 call/attempt 与其 result 之间 | Agent → 表 → Context Repository 完整工具批次核验；不公开 |
-| ContextCompactionOperation.status | str | 必传 | `preparing` / `completed` / `fallback` 生命周期状态 | Context Repository → 表 → Agent 重试/恢复；不公开 |
-| ContextCompactionOperation.request_binding | Mapping[str, object] 或 None | None；`repr=False` | 持久压缩 JSON envelope，最多 256 KiB，不含原文、凭据或图片 payload；精确键结构及每个子字段见下表 | Agent 创建/prepare → Context Repository → Agent 重试；不公开 |
-| ContextCompactionOperation.attempt_count | int | 0 | 已开始的摘要 Provider dispatch 次数；达到 4 次后 Agent fallback | Context Repository → 表 → Agent 重试策略；不公开 |
-| ContextCompactionOperation.result_checkpoint_revision | int 或 None | None | 成功摘要生成后的 SessionContextCheckpoint revision；completed 时必有 | Context Repository 与摘要检查点同事务写入 → 表 → Agent 核对；不公开 |
-| ContextCompactionOperation.failure_code | str 或 None | None | fallback 的安全原因码，UTF-8 最多 64 字节；成功时为空 | Context Repository → 表 → Agent fallback 核验；不公开 |
-| ContextCompactionOperation.created_at | str | 空字符串 | 创建时的 UTC 时间 | Context Repository → 表 → 内部生命周期读取；不公开 |
-| ContextCompactionOperation.updated_at | str | 空字符串 | 最近状态变更时的 UTC 时间 | Context Repository → 表 → 内部生命周期读取；不公开 |
-
-非空 `request_binding` 首次持久化时精确包含 `plan` 和 `summary_contract_version`；Provider request 成功 prepare 后只允许再加入 `descriptor`，冻结的计划和版本不能改变。以下子字段均保存在同一 JSON envelope 中：
-
-| 完整字段路径 | 类型/默认 | 含义与约束 | 写入 → 权威 → 读取/公开 |
+| 完整字段路径 | 类型 | 默认 | 含义与写入/读取边界 |
 |---|---|---|---|
-| `ContextCompactionOperation.request_binding.plan` | `Mapping[str, int]`；必传 | 精确包含下列四个冻结字段，不允许在重试时重算 | Agent → `request_binding_json` → Agent 恢复；不公开 |
-| `ContextCompactionOperation.request_binding.plan.context_capacity_tokens` | `int`；必传 | 创建 operation 时选定 Provider 的正整数容量 `C` | Agent → `request_binding_json` → 摘要请求预检与恢复；不公开 |
-| `ContextCompactionOperation.request_binding.plan.raw_history_budget_tokens` | `int`；必传 | 必须等于 `floor(C/10)`；选择近期原文后缀 | Agent → `request_binding_json` → 恢复校验；不公开 |
-| `ContextCompactionOperation.request_binding.plan.summary_budget_tokens` | `int`；必传 | 必须等于 `floor(C/10)`；随冻结容量渲染为摘要完整 JSON 的近似长度参考，属于软目标，不是输出上限 | Agent → `request_binding_json` → 摘要提示与恢复校验；不公开 |
-| `ContextCompactionOperation.request_binding.plan.coverage_version` | `int`；当前为 `1` | 选择与重建精确覆盖游标的规则版本 | Agent → `request_binding_json` → 恢复校验；不公开 |
-| `ContextCompactionOperation.request_binding.summary_contract_version` | `int`；当前为 `2` | 本次摘要 JSON 合同版本；summary prompt 不接收该内部存储版本 | Agent → `request_binding_json` → 摘要验证与恢复校验；不公开 |
-| `ContextCompactionOperation.request_binding.descriptor` | `Mapping[str, object]`；prepare 后存在 | 完整值复用 Provider 的安全 `_PreparedProviderCall.descriptor`，字段唯一合同见 [Provider 专题](provider.md)；不含原生 payload 或凭据 | ProviderClient.prepare → Context Repository 单向补入 → Agent 重建并比较；不公开 |
+| ContextCompactionOperation.operation_id / session_id | str | 必传 | 压缩操作与所属 Session 身份 |
+| ContextCompactionOperation.target_run_id | str | 必传 | 执行本次压缩的目标 Run |
+| ContextCompactionOperation.base_record_sequence / base_tool_sequence | int | 必传 | 目标 Run 中冻结的输入前缀 |
+| ContextCompactionOperation.input_checkpoint_revision | int | 必传 | 请求组装时看到的摘要 revision |
+| ContextCompactionOperation.covered_run_id / covered_run_ordinal | str / int | 必传 | 本次摘要覆盖历史的末尾 Run |
+| ContextCompactionOperation.covered_record_sequence / covered_tool_sequence | int | 必传 | 覆盖末尾的闭合记录与工具批次边界 |
+| ContextCompactionOperation.status | str | 必传 | preparing、completed 或 fallback |
+| ContextCompactionOperation.selection_plan | Mapping[str, object] | {} | 冻结容量、raw/summary 近似预算及覆盖选择规则；不含对话原文 |
+| ContextCompactionOperation.provider_request_id | str 或 None | None | 关联共享 ProviderRequestRecord；未完成请求准备前为空 |
+| ContextCompactionOperation.result_checkpoint_revision | int 或 None | None | completed 时指向新摘要 revision |
+| ContextCompactionOperation.failure_code | str 或 None | None | 有界摘要失败类别；不保存被拒绝的摘要正文 |
+| ContextCompactionOperation.created_at / updated_at | UTC str | 空字符串 | 操作创建及最近状态变更时间 |
 
 ### ProviderAttempt
 
-一次已 claim 的模型请求尝试及确定性状态。 **写入/构建者：**`ProviderRepository`（经 RunCoordinator）。**权威位置：**run_provider_attempts 表。**读取与公开：**Agent 恢复与预算；只公开安全状态。[定义](../../src/figura/runtime/records.py)。
+一个逻辑请求的一次物理发送。claim、phase 更新、最终响应提交或失败关闭由 ProviderRepository 写入 run_provider_attempts；尝试不保存文本增量、reasoning、工具参数或原始错误正文。Gateway 只投影 allowlist 的 purpose、attempt_id 和 phase。[定义](../../src/figura/runtime/records.py)。
 
-| 完整字段路径 | 类型 | 构造默认 | 含义与约束 | 写入 → 权威 → 读取/公开 |
-|---|---|---|---|---|
-| ProviderAttempt.attempt_id | str | 必传 | 一次 Provider 请求尝试的身份 | `ProviderRepository`（经 RunCoordinator） → run_provider_attempts 表 → Agent 恢复与预算；只公开安全状态 |
-| ProviderAttempt.run_id | str | 必传 | 所属 Run 的不透明身份 | `ProviderRepository`（经 RunCoordinator） → run_provider_attempts 表 → Agent 恢复与预算；只公开安全状态 |
-| ProviderAttempt.attempt_sequence | int | 必传 | Run 内 Provider 尝试顺序号 | `ProviderRepository`（经 RunCoordinator） → run_provider_attempts 表 → Agent 恢复与预算；只公开安全状态 |
-| ProviderAttempt.base_record_sequence | int | 必传 | claim 时已提交的执行记录游标 | `ProviderRepository`（经 RunCoordinator） → run_provider_attempts 表 → Agent 恢复与预算；只公开安全状态 |
-| ProviderAttempt.base_tool_sequence | int | 必传 | claim 时已提交的工具事实游标 | `ProviderRepository`（经 RunCoordinator） → run_provider_attempts 表 → Agent 恢复与预算；只公开安全状态 |
-| ProviderAttempt.status | ProviderAttemptStatus | 必传 | 本对象的生命周期状态；值见本页枚举 | `ProviderRepository`（经 RunCoordinator） → run_provider_attempts 表 → Agent 恢复与预算；只公开安全状态 |
-| ProviderAttempt.response_record_id | str \| None | 必传 | 所关联的模型响应记录 ID；可空时表示尚未提交 | `ProviderRepository`（经 RunCoordinator） → run_provider_attempts 表 → Agent 恢复与预算；只公开安全状态 |
-| ProviderAttempt.failure_code | str \| None | 必传 | 安全失败码；成功或未定时为空 | `ProviderRepository`（经 RunCoordinator） → run_provider_attempts 表 → Agent 恢复与预算；只公开安全状态 |
-| ProviderAttempt.started_at | str | 必传 | 开始执行的 UTC 时间 | `ProviderRepository`（经 RunCoordinator） → run_provider_attempts 表 → Agent 恢复与预算；只公开安全状态 |
-| ProviderAttempt.finished_at | str \| None | 必传 | 终态时间；运行中为空 | `ProviderRepository`（经 RunCoordinator） → run_provider_attempts 表 → Agent 恢复与预算；只公开安全状态 |
-
-| ProviderAttempt.operation_id | str \| None | None | 逻辑请求 binding 的身份；legacy 空 | ProviderRepository → run_provider_attempts → Agent/Dispatcher；私有，不进入 prompt 或公共 DTO |
-| ProviderAttempt.operation_attempt_number | int \| None | None | 绑定操作内连续 1–4；legacy 空 | ProviderRepository → run_provider_attempts → Agent/Dispatcher；私有，不进入 prompt 或公共 DTO |
-| ProviderAttempt.retry_of_attempt_id | str \| None | None | 前一个已关闭 attempt；初次/legacy 空 | ProviderRepository → run_provider_attempts → Agent/Dispatcher；私有，不进入 prompt 或公共 DTO |
-| ProviderAttempt.failure_category | str \| None | None | temporary_unsent / temporary_rejected / temporary_unknown / permanent / invalid_response / internal_error；started/accepted 空 | ProviderRepository → run_provider_attempts → Agent/Dispatcher；私有，不进入 prompt 或公共 DTO |
-| ProviderAttempt.http_status | int \| None | None | 安全 HTTP 状态码，100–599 | ProviderRepository → run_provider_attempts → Agent/Dispatcher；私有，不进入 prompt 或公共 DTO |
-| ProviderAttempt.next_eligible_at | str \| None | None | 可重试关闭后的 UTC 到期时间；非重试和第4次为空 | ProviderRepository → run_provider_attempts → Agent/Dispatcher；私有，不进入 prompt 或公共 DTO |
+| 完整字段路径 | 类型 | 默认 | 含义与约束 |
+|---|---|---|---|
+| ProviderAttempt.attempt_id / run_id / request_id | str | 必传 | 物理尝试、所属 Run 与逻辑 Provider 请求身份 |
+| ProviderAttempt.attempt_sequence / run_attempt_sequence | int | 必传 | 请求内序号及 Run 内全局 Provider 尝试序号 |
+| ProviderAttempt.request_attempt_number | int 或 None | None | 请求内重试序号；没有可重建请求合同的历史导入记录可为空 |
+| ProviderAttempt.base_record_sequence / base_tool_sequence | int | 必传 | 发送时绑定的事实前缀 |
+| ProviderAttempt.status | ProviderAttemptStatus | 必传 | started、response_committed、known_failure、outcome_unknown 或 cancelled |
+| ProviderAttempt.response_record_id | str 或 None | None | 完整且原子提交的模型响应记录；仅成功时存在 |
+| ProviderAttempt.failure_code / failure_category | str 或 None | None | 安全错误码与临时/永久/未知结果类别；不保存原始 Provider 错误 |
+| ProviderAttempt.started_at / finished_at | UTC str / str 或 None | 必传 / None | 发送开始与关闭时间 |
+| ProviderAttempt.phase | str | sending | connecting、sending、awaiting_response 或 streaming |
+| ProviderAttempt.connected_at / request_sent_at / response_headers_at | UTC str 或 None | None | 对应网络阶段观测时间；不根据其他阶段推测 |
+| ProviderAttempt.first_event_at / last_activity_at | UTC str 或 None | None | 首个真实 Provider stream event 与最近活动；heartbeat 只推进 last_activity_at |
+| ProviderAttempt.failure_phase | str 或 None | None | 失败时最后确认的连接、发送、等待或流式阶段 |
+| ProviderAttempt.provider_request_id | str 或 None | None | 有界 Provider request ID |
+| ProviderAttempt.request_bytes / response_bytes | int 或 None | None | 已知的请求与响应字节计数 |
+| ProviderAttempt.usage | ProviderUsage 或 None | None | Provider 返回的有界用量信息 |
+| ProviderAttempt.retry_of_attempt_id | str 或 None | None | 本次重试所替代的前一关闭尝试 |
+| ProviderAttempt.http_status | int 或 None | None | 有效 HTTP 状态码 |
+| ProviderAttempt.next_eligible_at | UTC str 或 None | None | 持久退避到期时间；不可重试时为空 |
 
 ### FinalAnswerFact
 
@@ -465,11 +427,11 @@ Run 唯一推进点和 CAS 修订。 **写入/构建者：**Runtime 提交仓储
 
 ### 停止、所有权与恢复事务
 
-SQLite 从 v9 升至 v10 增加控制表和保护触发器；已有 Run 事实保持原样，旧 Run 读取为无停止请求。schema v11 增加持久 Provider 请求绑定、扩展物理 attempt 合同和执行载荷读上限元数据；schema v12 再增加 Session 上下文检查点与压缩操作表。v11 详情见[持久重试和 schema v11](#持久重试和-schema-v11)。新数据中的控制事件、Provider bindings 与摘要表不承诺由旧二进制读取，回退需要升级前备份。schema v9 已有的 continuation 迁移规则继续保留。
+SQLite 从 v9 升至 v10 增加控制表和保护触发器；schema v11 增加旧 Provider 请求/attempt 持久字段与执行载荷读上限；schema v12 增加 Session 上下文检查点与压缩操作；schema v13 一次性替换 Provider 请求与 attempt 合同。新数据不承诺由旧二进制读取，回退需要升级前备份。schema v9 已有的 continuation 迁移规则继续保留。
 
 全任务 `RunExecutionOwnership` 使用 `.run-owner-locks` 中的非阻塞 OS 锁，动作锁仍位于 `.run-locks`。安全路径、目录权限和进程退出释放规则相同；顺序为 owner → action → SQLite。统一 Agent 入口全程持有 owner，内部 owned 路径避免重复获取；公开 interrupt/fail/complete、工具恢复入口、新 Run 创建和 Session 删除均协调 owner。锁忙只等待，不能提前宣告 handler 已退出。终态 owner 尚未释放时新 Run 创建仍会冲突；既有幂等重放可返回原 Run。
 
-Provider claim、初始/replay tool claim 和 completion 在写事务内检查控制表。stop-first 禁止新动作；claim-first 允许真实结果提交，下一边界再 interrupted；completion-first 保持 completed。终结与 Provider outcome 同事务提交，interrupted 可保留 known_failure 或 outcome_unknown，并保持原 checkpoint next_action 说明中断位置。有请求绑定的 generation-only 未知 Provider 可在原 owner 退出后创建新 attempt；legacy 无绑定保守终结；未知工具依据原 registry/replay 分类：安全读与本地幂等写可自动 replay，同逻辑调用最多两次 replay，持久 attempt_number 达 3 后失败。没有可信 adapter 的 reconcile_required、Registry 不兼容分别以 tool_outcome_unknown、tool_recovery_unavailable 失败；预算耗尽为 tool_recovery_exhausted。错误均为固定中文白名单。
+Provider claim、初始/replay tool claim 和 completion 在写事务内检查控制表。stop-first 禁止新动作；claim-first 允许真实结果提交，下一边界再 interrupted；completion-first 保持 completed。终结与 Provider outcome 同事务提交，interrupted 可保留 known_failure 或 outcome_unknown，并保持原 checkpoint next_action 说明中断位置。带 generation-only 共享请求合同的未知 Provider 可在原 owner 退出后创建新 attempt；无法重建请求合同的历史未知结果保守终结；未知工具依据原 registry/replay 分类：安全读与本地幂等写可自动 replay，同逻辑调用最多两次 replay，持久 attempt_number 达 3 后失败。没有可信 adapter 的 reconcile_required、Registry 不兼容分别以 tool_outcome_unknown、tool_recovery_unavailable 失败；预算耗尽为 tool_recovery_exhausted。错误均为固定中文白名单。
 
 停止通知允许当前 revision 不递增，事件序号递增。校验要求该通知与持久请求时间对应且唯一；普通 progress 仍严格递增。请求字段不装入 SSE payload，客户端通过有界读取刷新 DTO。线程 handler 不返回时 owner 保持，Run 仍 running/stopping，不能强制中止或删除 Session。
 
@@ -488,7 +450,7 @@ Provider claim、初始/replay tool claim 和 completion 在写事务内检查�
 | RunState.provider_continuations | tuple[ProviderContinuationFact, ...] | () | 与已提交响应关联的私有续接事实 | RunRepository.read_run_state（经 FiguraRunStore） → 调用期内存；各成员各有权威存储 → Agent；整体不公开 |
 | RunState.provider_attempts | tuple[ProviderAttempt, ...] | () | 已 claim 的模型尝试记录 | RunRepository.read_run_state（经 FiguraRunStore） → 调用期内存；各成员各有权威存储 → Agent；整体不公开 |
 
-| RunState.provider_request_bindings | tuple[ProviderRequestBinding, ...] | () | 原子读取的请求绑定，按前缀排列 | RunRepository → 私有 binding 表 → Agent；整个对象不公开 |
+| RunState.provider_requests | tuple[ProviderRequestRecord, ...] | () | 原子读取的逻辑 Provider 请求合同 | RunRepository → run_provider_requests → Agent；整个对象不公开 |
 
 ### RunCreateRequest
 
@@ -506,17 +468,17 @@ Provider claim、初始/replay tool claim 和 completion 在写事务内检查�
 ## 5. 非 dataclass 合同与依据
 
 - `RunStatus`：`running`、`completed`、`failed`、`interrupted`。`RecordKind`：`input`、`model_response`、`final_answer`。`ActionKind`：`model`、`provider_retry`、`provider_attempt`、`tool_execution`、`tool_attempt`、`final`。
-- `ProviderAttemptStatus`：`started`、`response_committed`、`known_failure`、`outcome_unknown`。`ToolFactKind`：`tool_call`、`tool_attempt_started`、`tool_result`。`EventKind`：`run_created`、`run_progress`、`run_completed`、`run_failed`、`run_interrupted`。
+- `ProviderAttemptStatus`：`started`、`response_committed`、`known_failure`、`outcome_unknown`、`cancelled`。`ToolFactKind`：`tool_call`、`tool_attempt_started`、`tool_result`。`EventKind`：`run_created`、`run_progress`、`run_completed`、`run_failed`、`run_interrupted`。
 - `TerminalCode`：`execution_failed`、`invalid_response`、`storage_error`、`interrupted`、`provider_outcome_unknown`、`tool_outcome_unknown`、`tool_recovery_unavailable`、`tool_recovery_exhausted`。创建幂等映射是 `RunRepository` 的内部存储合同，不存在同名 dataclass；不能把它当成 `RunInput` 的另一个字段。
 - `PREPARATION_MESSAGES` 是固定安全文案映射：`missing_deepseek_continuation`、`invalid_request`、`unsupported_capability`、`invalid_configuration`、`configuration_missing`。Agent 在 prepare 失败时只选用白名单文案；Runtime 只允许 `execution_failed` 携带这些覆盖文本，读写双方均校验，不保存原始 Provider 错误或私有续接引用。
 - 代码：[核心模型](../../src/figura/runtime/models.py)、[持久事实与快照模型](../../src/figura/runtime/records.py)、[运行状态校验](../../src/figura/runtime/validation.py)、[持久记录校验](../../src/figura/runtime/record_validation.py)、[Runtime 组合入口](../../src/figura/runtime/store.py)、[SQLite 连接与事务](../../src/figura/storage/database.py)、[SQLite schema](../../src/figura/storage/schema.py)、[Session Repository](../../src/figura/runtime/persistence/sessions.py)、[Run Repository](../../src/figura/runtime/persistence/runs.py)、[Snapshot Repository](../../src/figura/runtime/persistence/snapshots.py)、[上下文持久化 Repository](../../src/figura/runtime/persistence/context.py)、[Provider Repository](../../src/figura/runtime/persistence/providers.py)、[Tool Repository](../../src/figura/runtime/persistence/tools.py)、[终态 Repository](../../src/figura/runtime/persistence/run_transitions.py)、[工具执行](../../src/figura/runtime/tool_execution.py)。主规格：[Run 核心](../../openspec/figura/openspec/specs/run-execution-core/spec.md)、[Session Memory](../../openspec/figura/openspec/specs/session-memory/spec.md)、[上下文压缩](../../openspec/figura/openspec/specs/session-context-compaction/spec.md)、[历史检索](../../openspec/figura/openspec/specs/session-context-retrieval/spec.md)、[Agent ReAct](../../openspec/figura/openspec/specs/agent-react-execution/spec.md)、[耐久工具执行](../../openspec/figura/openspec/specs/durable-tool-execution/spec.md)、[Provider continuation](../../openspec/figura/openspec/specs/provider-continuation-persistence/spec.md)。
 
-## 持久重试和 schema v11
+## Provider 请求重试和 schema v13
 
-初次 claim 在 owner/action lock 内用 checkpoint CAS 事务提交 binding、attempt1、provider_attempt checkpoint；直接 Store claim 同样验证独占权。临时失败闭合旧 attempt，并按 full jitter `[0,1]`、`[0,2]`、`[0,4]` 秒（指数 cap 30 秒）与有效 Retry-After 的较大值保存 `next_eligible_at`、provider_retry checkpoint 和 revision-only progress；没有 Run 累计重试配额。到期 claim 验证原 binding/prefix、上一状态、连续序号、retry link、四次 allowance 和 stop，创建新 attempt。第4次失败终结；成功只允许提交一个 response、continuation 和 ordered batch。旧 unknown 不改成成功。active owner 不能被替代，late response 被旧 identity/CAS 拒绝。
+初次 claim 在 owner/action lock 内用 checkpoint CAS 事务提交 ProviderRequestRecord、attempt1 与 provider_attempt checkpoint；直接 Store claim 同样验证独占权。临时失败闭合旧 attempt，并按 full jitter `[0,1]`、`[0,2]`、`[0,4]` 秒（指数 cap 30 秒）与有效 Retry-After 的较大值保存 `next_eligible_at`、provider_retry checkpoint 和 revision-only progress；没有 Run 累计重试配额。到期 claim 验证原请求合同/prefix、上一状态、连续序号、retry link、四次 allowance 和 stop，创建新 attempt。第4次失败终结；成功只允许提交一个 response、continuation 和 ordered batch。旧 unknown 不改成成功。active owner 不能被替代，late response 被旧 identity/CAS 拒绝。
 
-schema 10→11 在 SQLite writer lock 下原子重建 record、tool fact、continuation 和 attempts 表，保留原行/游标/时间和 FK；删除 payload 小 CHECK 与 Run attempt<=8，增加操作分组唯一索引、immutable binding 和新字段。迁移失败整个事务回滚，支持旧 schema1–10。Session 删除先删 attempts（重试链同一批删除），再删 bindings，其余 aggregate 删除 scope 继续保护。
+schema 12→13 在 SQLite writer lock 下原子迁移旧 Provider 请求绑定和 attempts 到 run_provider_requests 与新结构的 run_provider_attempts；保留已提交 Run 事实、Checkpoint、上下文摘要和闭合 attempts。旧合同下无法安全重放的在途工作以 outcome_unknown 关闭并中断对应 Run。迁移失败时整体回滚。Session 删除通过整体删除 scope 一并移除请求、attempt 及其 Run 事实。
 
 新版 writers：RunInput2、ModelResponse3、FinalAnswer2、ToolCall/Started/Result2、continuation envelope2、checkpoint2；Provider 私有 continuation format 仍是1。旧 decoder 保留旧合同且原值不变。`execution_payload_metadata` 的 `singleton=1`、`read_ceiling` 是存储内部合同：成功写事务把 ceiling 单调提高到当时配置；读取只使用 max(当前写 guard, 已记录 ceiling)，降低配置不会损坏既有大事实。此 metadata 不公开，读取快照不修改它。
 
-升级前停服务并用 SQLite backup API 保存完整数据库，连同 Sources 私有文件保留；不要仅复制运行中的主数据库文件而遗漏 WAL。升级到 schema12 后，旧 runtime 无法读取新数据库；回退需要恢复同一次备份中的数据库与文件。迁移或校验失败保留旧数据库，修复原因再打开。
+升级前停服务并用 SQLite backup API 保存完整数据库，连同 Sources 私有文件保留；不要仅复制运行中的主数据库文件而遗漏 WAL。升级到 schema v13 后，旧 runtime 无法读取新数据库；回退需要恢复同一次备份中的数据库与文件。迁移或校验失败保留旧数据库，修复原因再打开。

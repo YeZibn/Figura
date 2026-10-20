@@ -43,15 +43,27 @@ Figura SHALL translate its bounded call input into the selected provider's suppo
 - **THEN** Figura sends it using that Provider's actual parameter contract rather than a universal maximum
 
 ### Requirement: Provider responses have a normalized shape
-Figura SHALL normalize streaming and non-streaming completions into the same response shape containing assistant content, ordered tool calls, finish reason, and bounded usage metadata when provided. Normalized responses SHALL NOT retain an unrestricted raw SDK response as a persistence contract.
+Figura SHALL send every Provider request through the streaming response contract. Each configured Provider/model pair SHALL explicitly declare streaming support; a Provider without that capability SHALL be rejected before network dispatch. Figura SHALL assemble a successful terminal stream into one normalized response containing assistant content, ordered complete tool calls, finish reason, bounded usage metadata when provided, and private continuation data when provided. A response SHALL be accepted only after a valid terminal event. Figura SHALL NOT retain an unrestricted SDK response or partial stream as a persistence contract, and SHALL NOT use a non-streaming fallback.
 
-#### Scenario: Non-streaming completion is normalized
-- **WHEN** a provider returns a non-streaming completion
-- **THEN** Figura returns the normalized content, tool calls in provider order, finish reason, and available bounded usage counters
+#### Scenario: Normalize a complete assistant stream
+- **WHEN** a supported Provider emits assistant content and a valid terminal event
+- **THEN** Figura returns one normalized response with ordered content, finish reason, and available bounded usage metadata
 
-#### Scenario: Streaming completion is assembled
-- **WHEN** a provider returns content and tool-call deltas as a stream
-- **THEN** Figura assembles the deltas into the same normalized response shape and preserves tool-call ordering
+#### Scenario: Assemble fragmented tool calls
+- **WHEN** a supported Provider emits tool-call IDs, names, and JSON arguments across multiple stream events
+- **THEN** Figura assembles them by Provider call index, preserves call order, and returns only complete tool calls in the normalized response
+
+#### Scenario: Reject a Provider without streaming capability
+- **WHEN** a selected Provider/model pair does not declare support for the streaming contract
+- **THEN** Figura rejects the request before network dispatch and does not fall back to a non-streaming request
+
+#### Scenario: Reject an incomplete stream
+- **WHEN** the transport closes or the stream ends without a valid terminal event
+- **THEN** Figura returns a bounded incomplete-stream failure and does not expose a normalized response
+
+#### Scenario: Keep Provider-private continuation data separate
+- **WHEN** a complete stream includes Provider-private continuation data
+- **THEN** Figura returns it only in the private continuation field and excludes it from assistant text and public stream events
 
 ### Requirement: Provider-private continuation data remains private and replayable
 When a provider returns private reasoning content required or recommended for a later multi-turn request, Figura SHALL retain it as a provider-scoped continuation payload and SHALL pass it back unmodified when the next call requires it. Continuation data SHALL be excluded from ordinary assistant content, public events, and diagnostic logs. This provider layer SHALL expose continuation data only through its private call/result contract; durable storage is owned by a later execution-record change.

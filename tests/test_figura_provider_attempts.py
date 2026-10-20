@@ -145,7 +145,7 @@ def test_provider_attempt_failure_and_run_terminalize_atomically(
     assert state.events[-1].payload == {"terminal_code": terminal_code.value}
 
 
-def test_orphaned_provider_attempt_requires_run_lock_then_fails_without_resend(tmp_path) -> None:
+def test_orphaned_provider_attempt_requires_run_lock_then_becomes_retryable(tmp_path) -> None:
     store, app, session, run = _app(tmp_path)
     attempt = app.begin_provider_attempt(session.session_id, run.run_id, 1)
     lock = PerRunExecutionLock(store.data_root)
@@ -161,10 +161,12 @@ def test_orphaned_provider_attempt_requires_run_lock_then_fails_without_resend(t
 
     recovered = app.resolve_orphaned_provider_attempt(session.session_id, run.run_id)
 
-    assert recovered.run.status is RunStatus.FAILED
-    assert recovered.run.terminal_code == TerminalCode.PROVIDER_OUTCOME_UNKNOWN.value
+    assert recovered.run.status is RunStatus.RUNNING
     assert recovered.provider_attempts[0].status is ProviderAttemptStatus.OUTCOME_UNKNOWN
+    assert recovered.provider_attempts[0].failure_category == "temporary_unknown"
+    assert recovered.provider_attempts[0].next_eligible_at is not None
     assert recovered.provider_attempts[0].attempt_id == attempt.attempt_id
+    assert recovered.checkpoint.next_action.action_kind is ActionKind.PROVIDER_RETRY
 
 
 def test_v3_migration_preserves_committed_responses_without_synthetic_attempts(tmp_path) -> None:
@@ -207,6 +209,9 @@ def test_v3_migration_preserves_committed_responses_without_synthetic_attempts(t
 
     database = sqlite3.connect(store.database_path)
     database.execute("DROP TABLE run_provider_attempts")
+    database.execute("DROP TRIGGER immutable_provider_request_update")
+    database.execute("DROP TRIGGER immutable_provider_request_delete")
+    database.execute("DROP TABLE run_provider_requests")
     database.execute("DROP INDEX panels_by_session")
     database.execute("DROP TRIGGER immutable_panel_update")
     database.execute("DROP TRIGGER immutable_panel_delete")

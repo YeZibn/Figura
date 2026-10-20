@@ -40,7 +40,7 @@
 
 ## 来源引用
 
-每条非空摘要都必须带一个或多个实际支持该条目的来源引用。引用只能逐字来自新增消息的 `reference` 或 `previous_source_refs`；不得猜测、改写或创建 ID。每个条目只引用与其内容相关的来源，同一条内不重复。不同来源支持的内容若难以准确合并，可以拆成多条。
+每条非空摘要都必须带一个或多个实际支持该条目的来源引用。引用只能逐字复制自 `previous_source_refs`、`source_runs[*].input.reference` 或 `source_runs[*].messages[*].reference`；不得猜测、改写或创建 ID，也不得把本提示词中的说明文字当作 ID。每个条目只引用与其内容相关的来源，同一条内不重复。不同来源支持的内容若难以准确合并，可以拆成多条。
 
 允许的引用形状：
 
@@ -71,34 +71,6 @@
 }
 ```
 
-条目格式示例（仅示例，引用必须取自真实输入）：
-
-```json
-{
-  "current_goal": [
-    {
-      "text": "用户希望完成按地区对比销售趋势的结论。",
-      "source_refs": [{"kind":"message","run_id":"输入中的 Run ID","record_id":"输入中的记录 ID"}]
-    }
-  ],
-  "progress": {
-    "completed": [],
-    "in_progress": [],
-    "pending": [
-      {
-        "text": "用户要求下一轮补充地区对比。",
-        "source_refs": [{"kind":"message","run_id":"输入中的 Run ID","record_id":"输入中的记录 ID"}]
-      }
-    ],
-    "blocked": []
-  },
-  "constraints": [],
-  "decisions": [],
-  "facts": [],
-  "open_questions": [],
-  "resources": [],
-  "proposals": []
-}
-```
+不要照抄任何示例 ID。输出前检查：每个非空分组都是数组，数组中的每项只有 `text` 和 `source_refs` 两个字段；每个引用对象必须是上述允许位置中实际出现的完整对象。JSON 必须完整闭合，只能输出一个 JSON 对象，不使用 Markdown 围栏，不添加前后说明，不输出工具调用。
 
 `trust`、`run_outcomes`、覆盖范围、合同版本等由系统生成，不能加入输出。摘要应足够简洁以支持后续请求，但不要声称达到了输入中无法确认的窗口占比。

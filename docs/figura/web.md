@@ -1,6 +1,6 @@
 # Web：Local Gateway 与 React Figura
 
-> 更新日期：2026-10-07。[返回系统总览](../figura-implementation-overview.md)。范围：当前 `src/figura/gateway/`、`src/figura/bootstrap.py`、`frontend/src/api/figura/` 与 `frontend/src/FiguraApp.tsx` 实现；附件和 Panel 源模型归[Sources](sources.md)，Agent 派生清单归[Agent](agent.md)，本篇拥有 Web DTO 与公开路由合同。主规格见 [Gateway](../../openspec/figura/openspec/specs/figura-web-gateway/spec.md) 和 [React Client](../../openspec/figura/openspec/specs/figura-web-client/spec.md)。`connect-figura-web-frontend`、`add-figura-panel-image-tools`、`add-figura-cartesian-chart-measurements`、`add-figura-scoped-chart-observation`、`add-figura-chart-rendering` 与模块结构调整 change 均已归档。
+> 更新日期：2026-10-19。[返回系统总览](../figura-implementation-overview.md)。范围：当前 `src/figura/gateway/`、`src/figura/bootstrap.py`、`frontend/src/api/figura/` 与 `frontend/src/FiguraApp.tsx` 实现；附件和 Panel 源模型归[Sources](sources.md)，Agent 派生清单归[Agent](agent.md)，本篇拥有 Web DTO 与公开路由合同。主规格见 [Gateway](../../openspec/figura/openspec/specs/figura-web-gateway/spec.md) 和 [React Client](../../openspec/figura/openspec/specs/figura-web-client/spec.md)。`connect-figura-web-frontend`、`add-figura-panel-image-tools`、`add-figura-cartesian-chart-measurements`、`add-figura-scoped-chart-observation`、`add-figura-chart-rendering` 与模块结构调整 change 均已归档。
 
 ## 1. 职责与边界
 
@@ -43,8 +43,8 @@ Gateway 只绑定 loopback，并验证浏览器 Origin 白名单。启动时进�
 2. **读取 Provider 与 Session**：`GET /health` 返回三个 allowlist Provider 的配置可用性及固定 model ID，不探测远端网络。Session 列表使用 Runtime 的 SQL 聚合；创建 Session 后，网页读取 Session 详情以取得消息、附件及 Run 投影。Web DTO 字段见[第 4 节](#4-web-dto-字段)，Runtime 的聚合读取值见[Run Runtime](runtime.md#4-完整模型字段)。
 3. **上传、管理及读取分区图像**：浏览器向 Session attachment endpoint 上传原始字节并通过 query 传文件名；Gateway 委托 Sources 做媒体内容验证、大小限制、文件名净化和私有存储。浏览器只能在所属 Session 中列出、预览或删除；已被 Run 引用的附件不能删除。Run 输入保留有序附件 ID，图片字节不进入 Runtime 输入或 Web DTO。Panel 使用独立 Session-scoped list/content 路由；Agent 的 RunExecutionState 根据已提交成功分割结果筛选列表，Sources 提供 metadata 和 PNG 内容；图像读取返回 `image/png` 且不缓存。
 4. **创建 Run**：浏览器提交 `text`、有序 `attachmentIds`、allowlist `providerId` 和 `Idempotency-Key`。浏览器不提交 model ID。Gateway 从 Provider allowlist 解析固定 model，Runtime 原子写入 Run、RunInput、初始 Checkpoint、幂等映射和创建事件后，Gateway 将其交给有界 Dispatcher 并返回 `202` Run handle。一个 Session 同时最多一个 running Run；同 key 同 payload 重放返回原 Run，key 冲突或 Session 已有不同 running Run 时返回安全错误。若本地 Dispatcher 暂时满，Run 可能已持久化而请求返回有界 `503`；使用原幂等键重试会复用该 Run 并尝试调度。
-5. **执行与恢复**：Dispatcher 默认 3 worker、8 queued，通过 `execute_slice` 每次执行一个外部动作。启动、周期扫描和有进展的 worker 退出共用 `scan_ready`；按 `(session_id, run_id)` 稳定排序并沿 cursor 轮转，长 Run 重新进入队尾。未到 `next_eligible_at` 的重试者不占队列/worker，停止通知绕过到期筛选。多进程由 Runtime OS owner 和 action lock 仲裁；锁忙或 worker 无进展时等下一次周期补偿，不 busy loop。网络恢复读取不可变请求绑定；未知工具遵循原版本、effect 和持久恢复次数。
-6. **读取历史、工具时间线、图片产物和事件**：Session detail 从一个 Runtime SQLite 读快照生成消息、附件和 Run 投影；前端另调 Panel list route，按 `runId` 将 Panels 放到对应 Run 下，浏览器通过 Session-scoped content URL 懒加载 Panel PNG。Run DTO/history 的 `chartRenders` 只含成功提交的渲染元数据；Gallery 将所有成功预览按渲染所在 Run 分组，并通过 Session/Run/render-call-scoped 内容 URL 懒加载 PNG；每张均能打开大图并下载。展开 Run 时，前端读取时间线列表；展开某一步时再读安全详情，成功 OCR/测量项可通过受授权 URL 查看观察图。Gateway 核对所属 Session、已提交结果和来源引用后才返回 `image/png`。Run history 按 `afterSequence` 返回更大的事件序号；SSE 先重放游标后的持久事件，再跟随后续事件，并以 `runId:sequence` 作为事件 ID。`run_progress` 只携带 Checkpoint revision，前端收到后重新读取时间线。终态事件送达后关闭流。前端 RunController 负责历史补读、游标合并和终态收敛；终态后重新加载 Session detail 与 Panel list。
+5. **执行与恢复**：Dispatcher 默认 3 worker、8 queued，通过 `execute_slice` 每次执行一个外部动作。启动、周期扫描和有进展的 worker 退出共用 `scan_ready`；按 `(session_id, run_id)` 稳定排序并沿 cursor 轮转，长 Run 重新进入队尾。未到 `next_eligible_at` 的重试者不占队列/worker，停止通知绕过到期筛选。多进程由 Runtime OS owner 和 action lock 仲裁；锁忙或 worker 无进展时等下一次周期补偿，不 busy loop。网络恢复读取不可变 Provider 请求合同；未知工具遵循原版本、effect 和持久恢复次数。
+6. **读取历史、工具时间线、图片产物和事件**：Session detail 从一个 Runtime SQLite 读快照生成消息、附件和 Run 投影；前端另调 Panel list route，按 `runId` 将 Panels 放到对应 Run 下，浏览器通过 Session-scoped content URL 懒加载 Panel PNG。Run DTO/history 的 `chartRenders` 只含成功提交的渲染元数据；Gallery 将所有成功预览按渲染所在 Run 分组，并通过 Session/Run/render-call-scoped 内容 URL 懒加载 PNG；每张均能打开大图并下载。展开 Run 时，前端读取时间线列表；展开某一步时再读安全详情，成功 OCR/测量项可通过受授权 URL 查看观察图。Gateway 核对所属 Session、已提交结果和来源引用后才返回 `image/png`。Run history 按 `afterSequence` 返回更大的事件序号；SSE 先重放游标后的持久事件，再跟随后续事件，并以 `runId:sequence` 作为事件 ID。`run_progress` 携带 Checkpoint revision；Provider 进度还会带 allowlist 的 purpose、attempt ID 和 phase，前端收到后刷新时间线或清空新 attempt 的临时文本。流可在同一连接发送无 durable ID 的 assistant_delta；它按 attempt 内 deltaSequence 排序且不写历史。终态事件排在已排空的临时增量之后再发送，送达后关闭流。前端 RunController 负责历史补读、游标合并和终态收敛；终态后重新加载 Session detail 与 Panel list。
 
 Session Web message projection 与 Agent 的 [Session Memory](memory.md) 分离：前者仅显示每个 Run 的持久用户输入和已接受最终答案；后者还会把模型响应中的工具调用、工具结果投影成完整 Provider 对话，二者均从 Runtime 权威事实读取，但消费者和公开范围不同。
 
@@ -110,7 +110,7 @@ Gateway 拒绝不在明确白名单中的浏览器 Origin；Origin guard 对无 
 | `FiguraClient.getRunTimeline(sessionId: string, runId: string)` | `Promise<FiguraToolTimelineSnapshotDto>` | 读取一个 Run 的工具步骤摘要 |
 | `FiguraClient.getRunTimelineCall(sessionId: string, runId: string, callId: string)` | `Promise<FiguraToolCallDetailDto>` | 按需读取单个工具调用的安全详情 |
 | `FiguraClient.getChartRenderContent(sessionId: string, runId: string, callId: string)` | `Promise<Blob>` | 下载已提交渲染的 PNG；校验 HTTP 成功、媒体类型及非空内容 |
-| `FiguraClient.subscribeRun(sessionId: string, runId: string, callbacks: { onEvent(event: AgentRunEvent): void; onError(error: Error): void; onComplete(): void }, afterSequence?: number)` | `RunSubscription` | 返回可关闭的 SSE 订阅 |
+| `FiguraClient.subscribeRun(sessionId: string, runId: string, callbacks: { onEvent(event: AgentRunEvent): void; onAssistantDelta?(event: AssistantTextDelta): void; onError(error: Error): void; onComplete(): void }, afterSequence?: number)` | `RunSubscription` | 返回可关闭的 SSE 订阅 |
 | `FiguraClient.attachmentContentUrl(sessionId: string, attachmentId: string)` | `string` | 生成 Session-scoped image content URL，不取代 Gateway ownership check |
 | `FiguraClient.chartRenderContentUrl(sessionId: string, runId: string, callId: string)` | `string` | 生成按 Session、渲染 Run 与调用 ID 定位的 PNG 内容 URL；Gateway 仍核对成功事实和摘要 |
 | `FiguraClient.panelContentUrl(sessionId: string, panelId: string)` | `string` | 生成 Session-scoped Panel PNG URL，读取时由 Gateway 校验 Session 归属 |
@@ -246,20 +246,20 @@ Session 详情的用户可见对话投影，不是 Agent Session Memory。由 `w
 | `FiguraRunDto.terminalMessage` | `string \| null` | 必填，可空 | 安全终态说明，包括本地 prepare 拒绝的白名单中文原因 | run projection → `Run.terminal_message` → UI；无终态时为空，不含原始 SDK 错误或私有续接 |
 | `FiguraRunDto.executionState` | `'active' \| 'needs_reconciliation' \| 'queued' \| 'executing' \| 'recovering' \| 'stopping' \| 'terminal'` | 必填 | 优先级：terminal → stopping → 本地 queued/executing/recovering → 外部 owner active → queued；旧值保留兼容 | `run_summary` → Run + ExecutionCheckpoint → UI reconciliation 状态；纯派生，不写回 Runtime |
 | `FiguraRunDto.chartRenders` | `ChartRenderSummary[]` | 必填 | 当前 Run 成功提交的渲染摘要；无成功渲染时为空数组 | `run_summary` → Agent 资源目录的成功 ChartRenderContent 与被引用 ChartFigureContent → React Gallery；PNG 字节另走受授权路由 |
-| `FiguraRunDto.contextUsage` | `ContextUsage \| null` | Gateway 必填且可空；前端类型可缺省以兼容旧 DTO | 最新 Provider 请求的本地估算；无估算时为 null | `run_summary` → Runtime `ProviderRequestBinding.context_estimate` → composer 指示器；只公开下表两个数字 |
+| `FiguraRunDto.contextUsage` | `ContextUsage \| null` | Gateway 必填且可空 | 最新 Provider 请求的本地估算；无估算时为 null | `run_summary` → Runtime `ProviderRequestRecord.context_estimate` → composer 指示器；只公开下表两个数字 |
 
 `FiguraRunHandleDto = Omit<FiguraRunDto, 'executionState' | 'chartRenders' | 'stopRequestedAt' | 'availableActions' | 'contextUsage'>` 的完整字段为 `runId`、`sessionId`、`ordinal`、`status`、`provider`、`model`、`createdAt`、`startedAt`、`finishedAt`、`terminalCode`、`terminalMessage`；每字段类型、来源与公开规则与 `FiguraRunDto` 相同。Handle 由 `web_projection.run_handle` 从 `Run` 生成。停止与可用动作字段见[下方合同](#协作停止与客户端生命周期)。
 
 ### 最近请求的上下文占比
 
-`ContextUsage` 是 Web DTO 内联对象，不是持久模型；Gateway 在 Run 摘要中返回该对象或 null，`FiguraRunHandleDto` 不返回。它只转发 Provider prepare 时建立、Runtime 首次 claim 时固化的估算快照；Provider owner 定义及估算规则见 [Provider](provider.md#contextestimate)，持久字段见 [Runtime](runtime.md#providerrequestbinding)。只有两个数字公开，不返回 reasoning、原文、图片或指纹。
+`ContextUsage` 是 Web DTO 内联对象，不是持久模型；Gateway 在 Run 摘要中返回该对象或 null，`FiguraRunHandleDto` 不返回。它只转发 Provider prepare 时建立、Runtime 首次 claim 时固化的估算快照；Provider owner 定义及估算规则见 [Provider](provider.md#contextestimate)，持久字段见 [Runtime](runtime.md#providerrequestrecord)。只有两个数字公开，不返回 reasoning、原文、图片或指纹。
 
 | 完整字段路径 | JSON 类型 | 必填/默认 | 含义与约束 | 写入者 → 权威来源 → 读取/公开规则 |
 |---|---|---|---|---|
-| `ContextUsage.inputTokens` | `number` | `ContextUsage` 对象中必填 | 非负整数；实际 prepared input 的本地近似计数 | Provider estimator → Runtime binding snapshot → `run_summary` / workspace `mapRun` → 上下文指示器 |
-| `ContextUsage.contextWindowTokens` | `number \| null` | `ContextUsage` 对象中必填，可空 | 配置的正整数窗口；null 表示未知，不能据此计算占比 | Provider profile → Runtime binding snapshot → `run_summary` / workspace `mapRun` → 可选显示分母 |
+| `ContextUsage.inputTokens` | `number` | `ContextUsage` 对象中必填 | 非负整数；实际 prepared input 的本地近似计数 | Provider estimator → Runtime ProviderRequestRecord snapshot → `run_summary` / workspace `mapRun` → 上下文指示器 |
+| `ContextUsage.contextWindowTokens` | `number \| null` | `ContextUsage` 对象中必填，可空 | 配置的正整数窗口；null 表示未知，不能据此计算占比 | Provider profile → Runtime ProviderRequestRecord snapshot → `run_summary` / workspace `mapRun` → 可选显示分母 |
 
-读取不调用模型、tokenizer 或图片读取器。最新 binding 无估算时不退回旧值；前端选择 active Run，无 active Run 时选择 ordinal 最新 Run。输入区的可展开指示器显示“上下文 ≈”，无容量时仅 token 数，无值时待估算；保持原模型分母，不计草稿、输出流或累计 usage，重试不累加。通过现有 controller 的 activity polling/history compensation 更新，没有新增轮询 owner 或 SSE token 事件。
+读取不调用模型、tokenizer 或图片读取器。最新 ProviderRequestRecord 无估算时不退回旧值；前端选择 active Run，无 active Run 时选择 ordinal 最新 Run。输入区的可展开指示器显示“上下文 ≈”，无容量时仅 token 数，无值时待估算；保持原模型分母，不计草稿、输出流或累计 usage，重试不累加。通过现有 controller 的 activity polling/history compensation 更新，没有新增轮询 owner 或 SSE token 事件。
 
 ### `ChartRenderSummary`
 
@@ -331,10 +331,21 @@ Event DTO 由 `web_projection.event_projection` 生成，Runtime [`RunStreamEven
 | `FiguraEventDto.sequence` | `number` | 必填 | Run 内单调事件序号 | event projection → `RunStreamEvent.event_sequence` → history/SSE cursor |
 | `FiguraEventDto.kind` | `string` | 必填；`run_created`、`run_progress`、`run_completed`、`run_failed`、`run_interrupted` | 生命周期或安全进度事件 kind | event projection → `RunStreamEvent.event_kind` → UI 更新 Run 或刷新工具时间线；其值集合见 Runtime 枚举 |
 | `FiguraEventDto.timestamp` | `string` | 必填 | 事件创建时间 | event projection → `RunStreamEvent.created_at` → timeline |
-| `FiguraEventDto.payload` | `Record<string, unknown>` | 必填 | allowlist payload：created 为 `{ordinal}`，progress 为 `{checkpointRevision}`，completed 为空对象，failed/interrupted 为 `{terminalCode}`；progress revision 为正整数 | event projection → Runtime 安全事件 + Run summary → UI；不含 input、模型内容、工具 payload 或 continuation |
+| `FiguraEventDto.payload` | `Record<string, unknown>` | 必填 | allowlist payload：created 为 `{ordinal}`，progress 为 `{checkpointRevision}`，Provider phase progress 可附加 `{providerPurpose, attemptId, providerPhase}`，completed 为空对象，failed/interrupted 为 `{terminalCode}`；progress revision 为正整数 | event projection → Runtime 安全事件 + Run summary → UI；不含 input、模型内容、工具 payload 或 continuation；只允许声明的 Provider 进度元数据 |
 | `FiguraRunHistoryDto.run` | `FiguraRunDto` | 必填 | 与历史一起返回的安全 Run summary | `run_history` → RunState → timeline；字段见上方 `FiguraRunDto` |
 | `FiguraRunHistoryDto.events` | `FiguraEventDto[]` | 必填 | `sequence > afterSequence` 的事件，保持升序 | `run_history` → RunState.events → RunController merge；当前实现保留全部持久事件 |
 | `FiguraRunHistoryDto.historyGap` | `boolean` | 必填；当前固定 `false` | 当前实现不剪裁事件历史，因此不会报告 history gap | `run_history` → 当前全量 Runtime event list → RunController；若未来改成有界保留需同步合同 |
+
+### `AssistantTextDelta`
+
+SSE 专用的临时 assistant 可见文本事件。它不属于 `FiguraEventDto`，没有 durable `id` 行，不增加 Run event sequence，也不进入 history 或 SQLite。`TransientRunEventHub` 按 Session 与 Run 隔离，以有界队列向多个订阅者分发；队列溢出可能形成 deltaSequence 缺口，RunController 会丢弃不完整临时文本，之后以已提交响应为准。
+
+| 完整字段路径 | JSON 类型 | 必填 | 含义与约束 |
+|---|---|---|---|
+| `AssistantTextDelta.runId` | `string` | 是 | Session 所属的目标 Run |
+| `AssistantTextDelta.attemptId` | `string` | 是 | 当前 Provider 物理尝试；重试时更换 |
+| `AssistantTextDelta.deltaSequence` | `number` | 是 | 当前 attempt 内从 1 递增的文本分片序号，与 durable event sequence 分离 |
+| `AssistantTextDelta.text` | `string` | 是 | 临时可见 assistant 文本；不含 reasoning 和工具调用片段 |
 
 ### 错误响应与 `FiguraClientError`
 

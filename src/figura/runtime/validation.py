@@ -223,7 +223,7 @@ def _validate_state(state: RunState) -> None:
         provider_attempts=state.provider_attempts,
         tool_facts=tool_facts,
         calls_by_sequence=calls_by_sequence,
-        bindings=state.provider_request_bindings,
+        provider_requests=state.provider_requests,
     )
 
     unresolved_action: NextAction | None = None
@@ -302,25 +302,45 @@ def _validate_state(state: RunState) -> None:
     else:
         expected_action = NextAction(ActionKind.MODEL)
 
-    if state.provider_attempts and state.provider_attempts[-1].status is ProviderAttemptStatus.STARTED:
-        expected_action = NextAction(
-            ActionKind.PROVIDER_ATTEMPT,
-            attempt_id=state.provider_attempts[-1].attempt_id,
-        )
-    elif (
-        run.status in {RunStatus.FAILED, RunStatus.INTERRUPTED}
-        and state.provider_attempts
-        and state.provider_attempts[-1].status
-        in {ProviderAttemptStatus.KNOWN_FAILURE, ProviderAttemptStatus.OUTCOME_UNKNOWN}
+    request_by_id = {item.request_id: item for item in state.provider_requests}
+    latest_attempt = state.provider_attempts[-1] if state.provider_attempts else None
+    latest_request = request_by_id.get(latest_attempt.request_id) if latest_attempt else None
+    latest_is_primary = latest_request is not None and latest_request.purpose == "agent_turn"
+
+    if (
+        latest_attempt is not None
+        and latest_is_primary
+        and latest_attempt.status is ProviderAttemptStatus.STARTED
     ):
         expected_action = NextAction(
             ActionKind.PROVIDER_ATTEMPT,
-            attempt_id=state.provider_attempts[-1].attempt_id,
+            attempt_id=latest_attempt.attempt_id,
         )
+    elif (
+        latest_attempt is not None
+        and latest_is_primary
+        and run.status in {RunStatus.FAILED, RunStatus.INTERRUPTED}
+        and latest_attempt.status
+        in {
+            ProviderAttemptStatus.KNOWN_FAILURE,
+            ProviderAttemptStatus.OUTCOME_UNKNOWN,
+            ProviderAttemptStatus.CANCELLED,
+        }
+    ):
+        # Provider terminalization clears the checkpoint action atomically;
+        # the closed attempt remains available in the durable attempt ledger.
+        expected_action = None
 
-    if (state.provider_attempts and state.provider_attempts[-1].next_eligible_at is not None
-            and state.provider_attempts[-1].status in {ProviderAttemptStatus.KNOWN_FAILURE, ProviderAttemptStatus.OUTCOME_UNKNOWN}):
-        expected_action = NextAction(ActionKind.PROVIDER_RETRY, attempt_id=state.provider_attempts[-1].attempt_id)
+    if (
+        latest_attempt is not None
+        and latest_is_primary
+        and latest_attempt.next_eligible_at is not None
+        and latest_attempt.status in {
+            ProviderAttemptStatus.KNOWN_FAILURE,
+            ProviderAttemptStatus.OUTCOME_UNKNOWN,
+        }
+    ):
+        expected_action = NextAction(ActionKind.PROVIDER_RETRY, attempt_id=latest_attempt.attempt_id)
 
     if run.status is RunStatus.RUNNING:
         if (
@@ -377,9 +397,12 @@ def _validate_state(state: RunState) -> None:
     stop_notifications = 0
     for event in progress_events:
         revision = event.payload.get("checkpoint_revision")
+        provider_progress = set(event.payload) == {
+            "checkpoint_revision", "provider_purpose", "attempt_id", "phase"
+        }
         if (
             event.event_kind is not EventKind.RUN_PROGRESS
-            or set(event.payload) != {"checkpoint_revision"}
+            or (set(event.payload) != {"checkpoint_revision"} and not provider_progress)
             or type(revision) is not int
             or revision < previous_revision
             or revision > checkpoint.revision
@@ -390,7 +413,7 @@ def _validate_state(state: RunState) -> None:
             if stop_notifications:
                 raise RunError(RunErrorCode.INTEGRITY_ERROR)
             stop_notifications += 1
-        elif revision == previous_revision:
+        elif revision == previous_revision and not provider_progress:
             raise RunError(RunErrorCode.INTEGRITY_ERROR)
         previous_revision = revision
     if stop is not None and stop_notifications != 1:

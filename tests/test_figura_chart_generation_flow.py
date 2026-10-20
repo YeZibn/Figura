@@ -30,7 +30,27 @@ class ScriptTransport:
 
     def create(self, **payload):
         self.calls.append(payload)
-        return self.responses.pop(0)
+        completed = self.responses.pop(0)
+        choice = completed["choices"][0]
+        message = choice["message"]
+        delta = {}
+        if "content" in message:
+            delta["content"] = message["content"]
+        if "reasoning_content" in message:
+            delta["reasoning_content"] = message["reasoning_content"]
+        if "tool_calls" in message:
+            delta["tool_calls"] = tuple(
+                {"index": index, **tool_call}
+                for index, tool_call in enumerate(message["tool_calls"])
+            )
+        return iter(({
+            "id": "scripted-stream-response",
+            "choices": ({
+                "index": 0,
+                "delta": delta,
+                "finish_reason": choice["finish_reason"],
+            },),
+        },))
 
 
 def response(name=None, arguments=None, *, call_id='call', reasoning='private', present=True):

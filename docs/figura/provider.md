@@ -1,6 +1,6 @@
 # Provider：模型请求与响应边界
 
-> 更新日期：2026-10-10。[返回总览](../figura-implementation-overview.md)。本篇拥有模型服务的调用期合同、配置、适配与规范化失败；持久 `ProviderAttempt` 和 `ProviderContinuationFact` 由[Run Runtime](runtime.md#4-完整模型字段)定义。
+> 更新日期：2026-10-19。[返回总览](../figura-implementation-overview.md)。本篇拥有模型服务的调用期合同、配置、适配与规范化失败；持久化的 `ProviderRequestRecord`、`ProviderAttempt` 和 `ProviderContinuationFact` 由[Run Runtime](runtime.md#4-完整模型字段)定义。
 
 ## 1. 职责与边界
 
@@ -11,14 +11,44 @@
 1. **可用性与选择**：`ProviderSettings` 为三个 allowlist provider 各保存一份 profile；Factory 对 provider/model、配置及能力进行检查，并可返回安全的 `ProviderAvailability`。Web Gateway 的 health 路由消费该值，只返回 provider ID、固定 model ID、配置是否可用和有界 reason code，不发起 Provider 网络请求；HTTP 字段定义见[Web 边界](web.md#4-web-dto-字段)。
 2. **本地准备**：Agent 组装 `ProviderRequest` 并创建固定 provider/model 的 client，然后调用 `prepare(request)`。该方法先校验消息、工具、图像和字节限制，再核对模型并执行 adapter 的 `build_payload`；DeepSeek thinking 工具历史的 continuation 要求也在此阶段检查。它使用统一本地 tokenizer 估算真实输入，并从可选 `ProviderProfile.context_window_tokens` 附上显示分母。有效容量和估算只供 Agent 判断是否做上下文压缩，不作为准入或输出预算。成功返回私有 `_PreparedProviderCall`，不发送网络请求，也不 claim attempt。图片字节、原生 payload 与续接内容仅留在调用期内存。
 3. **领取并发送**：Agent 在锁内复查 checkpoint 并提交 ProviderAttempt claim，随后调用同一个 client 的 `dispatch(prepared)`。客户端校验 prepared 的来源 token，然后发送已经准备好的 payload 一次；不重新构造请求。其他 client 创建的 prepared 会被拒绝。Prepared 不可序列化、不持久化、不进入日志或公开 DTO。
-4. **响应**：adapter 将模型内容、工具调用、finish reason、usage 与可选 continuation 归一化。公开响应投影省略私有 continuation；Runtime 将其与已提交响应绑定为私有持久事实。Agent 后续可按精确来源响应重建兼容续接，详见[Memory 消费边界](memory.md#3-内部流转与失败边界)。
-5. **失败与释放**：配置、输入、远端与传输失败映射到有界 `ProviderFailure`；`outcome_known` 供 Runtime/Agent 区分确定失败与结果未知。本地 prepare 失败不产生 attempt；已领取后的明确/未知失败由 Runtime 提交。client 在调用结束或失败后关闭 transport；Provider 不自行重发已启动请求。
+4. **响应**：adapter 逐事件消费 SSE，并累积文本、按 index 组装工具调用、用量、结束原因与 Provider continuation。只有检测到合法终止事件并通过响应校验，才返回完整 `ProviderResponse`；公开响应省略私有 continuation，Runtime 将完整结果与 response record 原子提交。Agent 后续按精确来源响应重建兼容续接，详见[Memory 消费边界](memory.md#3-内部流转与失败边界)。
+5. **失败与释放**：配置、输入、远端与传输失败映射到有界 `ProviderFailure`；失败阶段与 `outcome_known` 供 Runtime 区分确定未发送、明确拒绝和结果未知。本地 prepare 失败不产生 attempt；已领取后的流中失败由共享 coordinator 持久化并按冻结策略处理。取消会关闭本地流；SDK、HTTP transport 与 Provider adapter 均不做隐藏重试。
 
 ### DeepSeek 续接值的三个状态
 
 adapter 区分服务端实际返回字段与 SDK 默认属性：未返回 `reasoning_content` 时 `ProviderResponse.continuation=None`；实际返回空字符串或显式 null 时创建 continuation，并原样保留 `""` 或 `None`。非字符串且非 null 的值拒绝。流式字符串按顺序拼接，null 片段不贡献文本；仅 null 保持 null，没有实际字段仍保持缺失。Qwen/MiMo 继续仅保留非空续接文本。
 
 当前 DeepSeek adapter 在 thinking 模式且请求含工具定义时，检查请求中的每条 assistant 消息都具有兼容 continuation，包括没有 tool calls 的 assistant；空字符串与 null 是已存在的值，不能被当成缺失，payload 也不把 null 改写为空字符串。公共消息编码器对任何已附加 continuation 原样发送 `reasoning_content`；关闭 thinking 只免除上述强制存在校验。匹配规则是 provider 相同且格式版本为 1，不要求源 Run 与目标 Run 相同；数据仍留在源 Run 私有表中。
+
+### 统一流式响应合同
+
+所有 Provider dispatch 均发送 stream=true。Adapter 将原生碎片归一为 response_started、text_delta、reasoning_delta、tool_call_delta、usage、heartbeat、completed 或 failed。`completed` 只在收到有效终止事件并完成本地校验后产生；EOF、缺失 finish reason、畸形 JSON 或不完整工具参数都不能生成可提交的 ProviderResponse。Agent 只把 text_delta 作为本次 attempt 的临时文本发给 Gateway；reasoning_delta 与 tool_call_delta 保留在 Provider/Agent 内部。完整响应、continuation、工具调用批次和 checkpoint 在同一个 Runtime 提交边界写入。
+
+### Provider 能力声明
+
+ProviderCapabilities 按固定 Provider/model profile 声明 `streaming`、`usage_streaming`、`heartbeat_streaming` 与 `continuation_streaming`。当前适配器须支持 streaming；不支持时在本地准备阶段拒绝，不退回非流式请求。可选事件只在真实收到时记录，不能从沉默推断 Provider 仍在计算。
+
+### ProviderCapabilities 与 ProviderStreamEvent
+
+这两个对象是调用期合同；它们不进入 Runtime 事实。能力来自 ProviderProfile，事件由 adapter 归一化并交给 Agent/Runtime coordinator。[定义](../../src/figura/providers/models.py)。
+
+| 完整字段路径 | 类型 | 构造默认 | 含义与边界 |
+|---|---|---|---|
+| ProviderCapabilities.streaming | bool | 必传 | 必须为 true 才允许本次 Provider 调用 |
+| ProviderCapabilities.usage_streaming | bool | 必传 | Provider 是否会在流中发送 usage event |
+| ProviderCapabilities.heartbeat_streaming | bool | 必传 | Provider/transport 是否可能产生 heartbeat 活动 |
+| ProviderCapabilities.continuation_streaming | bool | 必传 | Provider 是否能在 stream 中携带 continuation 内容 |
+| ProviderStreamEvent.kind | ProviderStreamEventKind | 必传 | 统一事件种类，见本节枚举；reasoning/tool 参数事件仅内部使用 |
+| ProviderStreamEvent.text | str 或 None | None | 可见文本或内部 reasoning 分片；只 text_delta 可投影到临时 assistant 文本 |
+| ProviderStreamEvent.call_index | int 或 None | None | 工具调用在当前响应内的稳定索引 |
+| ProviderStreamEvent.call_id | str 或 None | None | 工具调用 ID 分片 |
+| ProviderStreamEvent.tool_name | str 或 None | None | 工具名分片；不能单独触发工具执行 |
+| ProviderStreamEvent.arguments | str 或 None | None | 工具参数 JSON 分片；必须等待完整响应并整体校验 |
+| ProviderStreamEvent.usage | ProviderUsage 或 None | None | 可选 Provider 用量快照 |
+| ProviderStreamEvent.provider_request_id | str 或 None | None | 有界 Provider 请求身份 |
+| ProviderStreamEvent.http_status | int 或 None | None | response_started 或明确失败时的 HTTP 状态 |
+| ProviderStreamEvent.failure_code | str 或 None | None | 有界失败原因码；不携带 Provider 原文 |
+| ProviderStreamEvent.response_bytes | int 或 None | None | 当前规范化累计响应字节估计 |
 
 ## 3. 模型关系与共同规则
 
@@ -83,10 +113,10 @@ ProviderClient 私有的冻结调用封套，`repr=False` 且禁止序列化；�
 | `_PreparedProviderCall.owner` | `object` | 必传；`repr=False` | 当前 client 的进程内身份 token；dispatch 必须按对象身份匹配 | ProviderClient.prepare → 私有内存 → 同 client.dispatch；不公开、不持久化或修订 |
 | `_PreparedProviderCall.request` | `ProviderRequest` | 必传；`repr=False` | 已通过校验的规范请求，供响应归一化使用 | ProviderClient.prepare → 私有内存 → dispatch/adapter；字段合同见本页，不另存副本 |
 | `_PreparedProviderCall.payload` | `Mapping[str, Any]` | 必传；`repr=False` | adapter 已准备的原生请求参数，可含图像和私有续接；作为本次 transport.create 的参数 | adapter.build_payload / prepare → 私有内存 → dispatch/transport；无公开或独立修订入口 |
-| `_PreparedProviderCall.descriptor` | `Mapping[str, Any]` | 必传；`repr=False` | 冻结的安全描述：provider/model、endpoint SHA-256、prepared payload（含 timeout）、POST/path 与 endpoint binding 的 canonical SHA-256、resolved options（包括冻结的 phase timeout）与完整 asset manifest | prepare → 私有内存 → Runtime binding；各持久字段见 [Runtime](runtime.md#providerrequestbinding)，不公开 |
-| `_PreparedProviderCall.context_estimate` | `ContextEstimate` 或 None | None | 独立输入估算；重试 prepare 跳过，不参与 descriptor 或 payload | prepare → 首次 Runtime binding；只公开数字 |
+| `_PreparedProviderCall.descriptor` | `Mapping[str, Any]` | 必传；`repr=False` | 冻结的安全描述：provider/model、endpoint SHA-256、prepared payload、POST/path 与 endpoint identity 的 canonical SHA-256、resolved phase timeouts 与完整 asset manifest | prepare → 私有内存 → Runtime ProviderRequestRecord；各持久字段见 [Runtime](runtime.md#providerrequestrecord)，不公开 |
+| `_PreparedProviderCall.context_estimate` | `ContextEstimate` 或 None | None | 独立输入估算；重试 prepare 跳过，不参与 descriptor 或 payload | prepare → 首次 Runtime ProviderRequestRecord；只公开数字 |
 
-`descriptor` 是允许持久化的安全指纹，不是 payload 副本；其顶层结构及嵌套字段如下。Runtime 的 `ProviderRequestBinding` 与 `ContextCompactionOperation` 都引用这一 Provider 合同，不重复定义字段。
+`descriptor` 是允许持久化的安全指纹，不是 payload 副本；其顶层结构及嵌套字段如下。Runtime 的 `ProviderRequestRecord` 与 `ContextCompactionOperation` 共同记录这一请求身份，不重复定义字段。
 
 | 完整字段路径 | 类型/默认 | 含义与约束 | 写入 → 权威 → 读取/公开 |
 |---|---|---|---|
@@ -96,10 +126,10 @@ ProviderClient 私有的冻结调用封套，`repr=False` 且禁止序列化；�
 | `_PreparedProviderCall.descriptor.request_fingerprint` | SHA-256 `str`；必传 | 对 method、path、endpoint binding 与完整 prepared payload 的 canonical digest | ProviderClient.prepare → 私有 descriptor → Runtime 比较；不公开 |
 | `_PreparedProviderCall.descriptor.options` | `Mapping[str, object]`；必传 | 精确包含下列五个已解析选项 | ProviderClient.prepare → 私有 descriptor → Runtime 重建时冻结；不公开 |
 | `_PreparedProviderCall.descriptor.options.max_completion_tokens` | `int` 或 `None` | 已解析的单请求 completion 上限 | ProviderClient.prepare → descriptor → Runtime 重建；不公开 |
-| `_PreparedProviderCall.descriptor.options.stream` | `bool` | 当前 Agent 固定为 `False` | ProviderClient.prepare → descriptor → Runtime 重建；不公开 |
 | `_PreparedProviderCall.descriptor.options.thinking_mode` | `bool` 或 `None` | 已解析的思考模式 | ProviderClient.prepare → descriptor → Runtime 重建；不公开 |
 | `_PreparedProviderCall.descriptor.options.reasoning_effort` | `str` 或 `None` | 已解析的推理强度 | ProviderClient.prepare → descriptor → Runtime 重建；不公开 |
-| `_PreparedProviderCall.descriptor.options.timeout_seconds` | 有限正 `int`/`float` | 已解析并冻结的请求超时 | ProviderClient.prepare → descriptor → Runtime 重建；不公开 |
+| `_PreparedProviderCall.descriptor.options.connect_timeout_seconds` | 有限正 `int`/`float` | 连接阶段超时 | ProviderClient.prepare → descriptor → Runtime 重建；不公开 |
+| `_PreparedProviderCall.descriptor.options.write_timeout_seconds` | 有限正 `int`/`float` | 请求发送阶段超时；响应阶段没有总时限 | ProviderClient.prepare → descriptor → Runtime 重建；不公开 |
 | `_PreparedProviderCall.descriptor.asset_manifest` | `Mapping[str, object]`；必传 | Agent 提供的 asset contract 加 Provider adapter 版本及有序图片指纹 | Agent/ProviderClient.prepare → 私有 descriptor → Runtime 比较；不公开 |
 | `_PreparedProviderCall.descriptor.asset_manifest.prompt_digest` | SHA-256 `str`；必传 | 实际指令投影摘要 | Agent `asset_contract` 或 Provider 默认投影 → descriptor → Runtime 比较；不公开 |
 | `_PreparedProviderCall.descriptor.asset_manifest.registry_version` | 非空 `str`；必传 | 当前工具合同版本；摘要请求无工具时使用 `context-compaction-v2` | Agent `asset_contract` 或 Provider 默认值 → descriptor → Runtime 比较；不公开 |
@@ -114,17 +144,17 @@ ProviderClient 私有的冻结调用封套，`repr=False` 且禁止序列化；�
 
 ### 本地上下文估算
 
-本地上下文估算使用实际 prepared payload 的 messages/tools 投影，统一采用 `tiktoken/o200k_base`；图片每次出现近似为 1,024 tokens，不分词 URL/base64。编码缓存初始化失败只禁用估算。该值不参与请求指纹、准入、输出预算或 Provider usage 校准。Agent 在 estimate 有值、context capacity 是正整数且比例达到约 80% 时，才可能发起一条额外摘要请求；此阈值策略由 [Agent](agent.md#上下文压缩与请求投影)拥有。容量缺失或估算失败时不自动压缩。摘要请求仍通过此 Provider 的 `prepare/dispatch`，其普通 Run `ProviderAttempt` 不会被摘要调用占用；摘要自身的 operation/retry 身份由 [Runtime](runtime.md#contextcompactionoperation)持久化。
+本地上下文估算使用实际 prepared payload 的 messages/tools 投影，统一采用 `tiktoken/o200k_base`；图片每次出现近似为 1,024 tokens，不分词 URL/base64。编码缓存初始化失败只禁用估算。该值不参与请求指纹、准入、输出预算或 Provider usage 校准。Agent 在 estimate 有值、context capacity 是正整数且比例达到约 80% 时，才可能发起一条额外摘要请求；此阈值策略由 [Agent](agent.md#上下文压缩与请求投影)拥有。容量缺失或估算失败时不自动压缩。摘要请求与普通 Run 请求使用同一 Provider `prepare/dispatch`、`ProviderRequestRecord` 和 `ProviderAttempt` 合同：摘要请求以 `purpose=context_compaction` 关联 `ContextCompactionOperation`，每个逻辑摘要请求有独立请求记录和最多四次物理发送；operation 只保存请求 ID、冻结的压缩范围与生命周期，不重复维护 attempt 次数或重试身份。恢复沿用冻结的请求 options 与 payload binding。详见 [Runtime](runtime.md#contextcompactionoperation) 与 [Agent](agent.md#上下文压缩与请求投影)。
 
 ### ContextEstimate
 
-定义于 `providers/token_estimation.py`，prepare 写入；首次 claim 后由 Runtime binding 保存原快照，Gateway 仅公开两个聚合数字。
+定义于 `providers/token_estimation.py`，prepare 写入；首次 claim 后由 Runtime ProviderRequestRecord 保存原快照，ProviderRequestRecord 固定原始估算快照，Gateway 仅公开两个聚合数字。
 
 | 完整字段路径 | 类型 | 构造默认 | 含义与约束 | 写入 → 权威 → 读取/公开 |
 |---|---|---|---|---|
-| ContextEstimate.input_tokens | int | 必传 | 非负输入估算，含文本结构与图像近似 | prepare → binding → Gateway inputTokens |
-| ContextEstimate.context_window_tokens | int 或 None | 必传 | 正整数容量或未知，不控制执行 | ProviderProfile → binding → Gateway contextWindowTokens |
-| ContextEstimate.estimator_version | str | tiktoken-o200k-v1 | 非空规则版本；调整计量规则时更换 | estimator → binding → 私有读取 |
+| ContextEstimate.input_tokens | int | 必传 | 非负输入估算，含文本结构与图像近似 | prepare → ProviderRequestRecord → Gateway inputTokens |
+| ContextEstimate.context_window_tokens | int 或 None | 必传 | 正整数容量或未知，不控制执行 | ProviderProfile → ProviderRequestRecord → Gateway contextWindowTokens |
+| ContextEstimate.estimator_version | str | tiktoken-o200k-v1 | 非空规则版本；调整计量规则时更换 | estimator → ProviderRequestRecord → 私有读取 |
 
 ### ProviderMessage
 
@@ -152,15 +182,14 @@ ProviderClient 私有的冻结调用封套，`repr=False` 且禁止序列化；�
 
 ### ProviderOptions
 
-本次 Provider 请求的选项。 **写入者：**AgentRequestBuilder / Provider adapter。**权威位置：**调用期 ProviderRequest。**读取与公开：**Provider adapter；prepare 时解析，复制到 Runtime 私有请求绑定。[定义](../../src/figura/providers/models.py)。
+本次 Provider 请求可由 Agent 调整的选项。流式能力是固定 Provider 合同，不属于可切换选项。**写入者：**AgentRequestBuilder / Provider adapter。**权威位置：**调用期 ProviderRequest。**读取与公开：**Provider adapter；prepare 时解析，由 Runtime ProviderRequestRecord 冻结。[定义](../../src/figura/providers/models.py)。
 
 | 完整字段路径 | 类型 | 构造默认 | 含义与约束 | 写入 → 权威 → 读取/公开 |
 |---|---|---|---|---|
-| ProviderOptions.max_completion_tokens | int \| None | None | 可选单请求输出上限；未设则省略 wire 参数 | AgentRequestBuilder / Provider adapter → 调用期 ProviderRequest → Provider adapter；prepare 时解析，复制到 Runtime 私有请求绑定 |
-| ProviderOptions.stream | bool | False | 是否流式；当前 Agent 固定 false | AgentRequestBuilder / Provider adapter → 调用期 ProviderRequest → Provider adapter；prepare 时解析，复制到 Runtime 私有请求绑定 |
-| ProviderOptions.thinking_mode | bool \| None | None | 本次请求的可选思考模式 | AgentRequestBuilder / Provider adapter → 调用期 ProviderRequest → Provider adapter；prepare 时解析，复制到 Runtime 私有请求绑定 |
-| ProviderOptions.reasoning_effort | str \| None | None | 本次请求的可选推理强度 | AgentRequestBuilder / Provider adapter → 调用期 ProviderRequest → Provider adapter；prepare 时解析，复制到 Runtime 私有请求绑定 |
-| ProviderOptions.schema_version | int | 2 | 该值或 payload 的版本号 | AgentRequestBuilder / Provider adapter → 调用期 ProviderRequest → Provider adapter；prepare 时解析，复制到 Runtime 私有请求绑定 |
+| ProviderOptions.max_completion_tokens | int \| None | None | 可选单请求输出上限；未设则省略 wire 参数 | AgentRequestBuilder / Provider adapter → 调用期 ProviderRequest → Provider adapter；prepare 时解析，由 Runtime ProviderRequestRecord 冻结 |
+| ProviderOptions.thinking_mode | bool \| None | None | 本次请求的可选思考模式 | AgentRequestBuilder / Provider adapter → 调用期 ProviderRequest → Provider adapter；prepare 时解析，由 Runtime ProviderRequestRecord 冻结 |
+| ProviderOptions.reasoning_effort | str \| None | None | 本次请求的可选推理强度 | AgentRequestBuilder / Provider adapter → 调用期 ProviderRequest → Provider adapter；prepare 时解析，由 Runtime ProviderRequestRecord 冻结 |
+| ProviderOptions.schema_version | int | 2 | 该值或 payload 的版本号 | AgentRequestBuilder / Provider adapter → 调用期 ProviderRequest → Provider adapter；prepare 时解析，由 Runtime ProviderRequestRecord 冻结 |
 
 ### ProviderRequest
 
@@ -222,13 +251,15 @@ ProviderClient 私有的冻结调用封套，`repr=False` 且禁止序列化；�
 | ProviderProfile.model_id | str | 必传 | 固定或响应中的模型身份 | ProviderSettings.from_env → 进程内，不入 Run → ProviderFactory；密钥与 endpoint 不公开 |
 | ProviderProfile.api_key | str \| None | 必传 | 私有 API 凭据；不入 Run/日志/公开投影 | ProviderSettings.from_env → 进程内，不入 Run → ProviderFactory；密钥与 endpoint 不公开 |
 | ProviderProfile.base_url | str \| None | 必传 | 经校验的私有 Provider endpoint | ProviderSettings.from_env → 进程内，不入 Run → ProviderFactory；密钥与 endpoint 不公开 |
-| ProviderProfile.timeout_seconds | float | 必传 | I/O phase 超时，默认60秒；有限正数，无600秒上限 | ProviderSettings.from_env → 进程配置 → prepare 冻结到私有 binding；每次发送显式传入 SDK |
+| ProviderProfile.connect_timeout_seconds | float | 10.0 | 连接阶段有限正超时；环境变量 FIGURA_<PROVIDER>_CONNECT_TIMEOUT_SECONDS | ProviderSettings.from_env → 进程配置 → ProviderRequestRecord.options → transport；不公开 |
+| ProviderProfile.write_timeout_seconds | float | 30.0 | 请求发送阶段有限正超时；环境变量 FIGURA_<PROVIDER>_WRITE_TIMEOUT_SECONDS | ProviderSettings.from_env → 进程配置 → ProviderRequestRecord.options → transport；不公开 |
 | ProviderProfile.thinking_mode | bool | 必传 | 从进程配置解析的思考模式布尔值 | ProviderSettings.from_env → 进程内，不入 Run → ProviderFactory；密钥与 endpoint 不公开 |
 | ProviderProfile.reasoning_effort | str \| None | 必传 | 进程配置中的可选推理强度 | ProviderSettings.from_env → 进程内，不入 Run → ProviderFactory；密钥与 endpoint 不公开 |
 | ProviderProfile.configuration_error | ProviderFailureCode \| None | None | 配置校验失败码；可空 | ProviderSettings.from_env → 进程内，不入 Run → ProviderFactory；密钥与 endpoint 不公开 |
+| ProviderProfile.capabilities | ProviderCapabilities | streaming enabled; optional stream data false by default | 当前 Provider/model 的流式、usage、heartbeat、continuation 能力声明 | Provider profile → ProviderFactory/adapter；不写入 Run DTO |
 
 | ProviderProfile.max_completion_tokens | int \| None | None | 每 Provider 可选默认输出 token 数，正整数；prepare 固定到本次 resolved options | 配置 → 进程内 profile → prepare；不直接公开 |
-| ProviderProfile.context_window_tokens | int 或 None | None | 模型显示容量；FIGURA_<PROVIDER>_CONTEXT_WINDOW_TOKENS 的有效正整数，无效或缺失为未知，不影响 availability | 配置 → prepare estimate → 首次 binding → 公开显示分母 |
+| ProviderProfile.context_window_tokens | int 或 None | None | 模型显示容量；FIGURA_<PROVIDER>_CONTEXT_WINDOW_TOKENS 的有效正整数，无效或缺失为未知，不影响 availability | 配置 → prepare estimate → 首次 ProviderRequestRecord → 公开显示分母 |
 
 ### ProviderSettings
 
@@ -250,20 +281,21 @@ ProviderClient 私有的冻结调用封套，`repr=False` 且禁止序列化；�
 | ProviderFailure.safe_message | str | 必传 | 可安全展示的有界失败说明 | ProviderClient / adapter → 调用期；安全 code 可入 Attempt → Agent；不包含原始 SDK payload |
 | ProviderFailure.http_status | int \| None | None | 可选 HTTP 状态码 | ProviderClient / adapter → 调用期；安全 code 可入 Attempt → Agent；不包含原始 SDK payload |
 
-| ProviderFailure.retry_after_seconds | float \| None | None | 安全解析 Retry-After 的秒数；非法、非有限或不可表示日期忽略 | 网络分类 → 调用期 → Runtime deadline；不保留原 header/body |
+| ProviderFailure.retry_after_seconds | float \| None | None | 安全解析 Retry-After 的秒数；非法、非有限或不可表示日期忽略 | 网络分类 → 调用期 → ProviderRequestRecord retry scheduling；不保留原 header/body |
 | ProviderFailure.category | str 或 None（构造后为 str） | None → 按 safe code/known/transient/status 推导 | temporary_unsent / temporary_rejected / temporary_unknown / permanent / invalid_response / internal_error | Provider 分类 → 调用期 → Runtime Attempt.failure_category；只保存安全类别 |
 
 ### 网络与物理边界
 
-SDK `max_retries=0`、HTTP transport `retries=0`。原始 HTTP 字节流在 SDK JSON 解析前检查 Content-Length 与累计接收量；完整 JSON 严格拒绝重复 keys、非有限值和非法 Unicode。已有直接 stream 也限制 raw SSE 累计字节、单事件 JSON 与规范化整体；Agent 仍为 non-streaming，不给部分 stream 补发。
+SDK `max_retries=0`、HTTP transport `retries=0`；请求只走流式 transport。响应 `Content-Length` 与累计字节在消费前受执行载荷上限保护；SSE 使用严格 UTF-8 解码，并逐事件校验 JSON 与累计规范化响应。只有 Provider 终止事件及本地合同校验通过后，才允许提交响应或执行完整工具调用批次。
 
-Provider 的通用 messages/instructions/tools/calls/文本和图片数量上限已删除。结构化请求以图片 media type、byte count、SHA-256 占位计 JSON；真实 data URL 计入 wire fingerprint，图像仍另有 single/total bytes guard。响应正文、全部 tool calls 和 continuation 一并检查。DeepSeek continuation、strict Schema、thinking、vision 能力保持 adapter 的实际合同。
+配置分别提供 connect 与 write 超时，默认 10 秒和 30 秒；请求发送后不设 response/read/total generation timeout。连接仍然存活时保持等待，阶段和最近活动用于诊断；用户可以停止 Run。Heartbeat 更新活动时间，但不代表生成文本。连接关闭、reset、明确错误响应或已确认的传输故障才结束当前 attempt。
 
-408/429/500/502/503/504 可按已知性进入临时恢复；quota/balance 429、认证、配置、TLS、确定性 DNS、无效响应、length 与内部异常不恢复。Connect/Pool timeout 是可证明 no-send；read/write timeout 和临时断连为 outcome unknown。Runtime 拥有重试次数、deadline 和替代 attempt，Provider 本身每次仅发送一次。未知请求可能已在服务端生成并计费，替代请求无法保证远端 exactly-once。
+请求发送前确认失败属于已知未发送；显式 HTTP 错误属于已知拒绝；请求可能送达后发生超时、EOF 或 stream reset 且没有终止事件时，结果为未知。共享 Runtime coordinator 对同一冻结请求最多调度四次，按退避和有效 `Retry-After` 决定下一次；未知结果重放可能产生重复 Provider 费用，但部分文本或工具调用不会执行。超出总等待时间本身不构成失败。
 
 ## 5. 枚举与依据
 
 - `ProviderId`：`qwen`、`deepseek`、`mimo`；固定模型分别为 `qwen3.8-flash`、`deepseek-flash`、`mimo-v2.6-flash`。`InstructionRole`：`system`、`developer`。`MessageRole`：`user`、`assistant`、`tool`。`FinishReason`：`stop`、`tool_calls`、`length`、`content_filter`、`other`。
+- `ProviderStreamEventKind`：`response_started`、`text_delta`、`reasoning_delta`、`tool_call_delta`、`usage`、`heartbeat`、`completed`、`failed`。
 - `ProviderFailureCode`：`configuration_missing`、`invalid_configuration`、`unsupported_provider`、`unsupported_model`、`invalid_request`、`unsupported_capability`、`provider_rejected`、`provider_unavailable`、`timeout`、`connection_error`、`incomplete_stream`、`invalid_provider_response`、`transport_error`。
 - `ContentBlock = TextBlock | ImageBlock`，`MessageContent = str | tuple[ContentBlock, ...]`。Exception 类携带的错误状态由 `ProviderFailure` 或安全错误码表达，不作为另一个持久事实。
 - 代码：[模型](../../src/figura/providers/models.py)、[配置](../../src/figura/providers/config.py)、[Client/Factory](../../src/figura/providers/client.py)、[适配器](../../src/figura/providers/adapters/base.py)、[错误](../../src/figura/providers/errors.py)；主规格：[model-provider](../../openspec/figura/openspec/specs/model-provider/spec.md)、[continuation 持久化](../../openspec/figura/openspec/specs/provider-continuation-persistence/spec.md)。

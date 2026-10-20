@@ -138,10 +138,18 @@ class RunTransitionRepository:
                 terminal_code = TerminalCode.INTERRUPTED
                 message = TERMINAL_MESSAGES[terminal_code]
                 event_kind = EventKind.RUN_INTERRUPTED
+            cancelled_primary_attempt = False
             if status is RunStatus.INTERRUPTED:
+                cancelled_primary_attempt = connection.execute(
+                    "UPDATE run_provider_attempts SET status = 'cancelled', failure_category = 'temporary_unknown', finished_at = ?, failure_phase = phase "
+                    "WHERE run_id = ? AND status = 'started' "
+                    "AND request_id IN (SELECT request_id FROM run_provider_requests WHERE purpose = 'agent_turn')",
+                    (now, run_id),
+                ).rowcount > 0
                 connection.execute(
-                    "UPDATE run_provider_attempts SET status = 'outcome_unknown', failure_category = 'permanent', finished_at = ? "
-                    "WHERE run_id = ? AND status = 'started'", (now, run_id),
+                    "UPDATE run_provider_attempts SET status = 'cancelled', failure_category = 'temporary_unknown', finished_at = ?, failure_phase = phase "
+                    "WHERE run_id = ? AND status = 'started' ",
+                    (now, run_id),
                 )
             if run.status is not RunStatus.RUNNING:
                 raise RunError(RunErrorCode.INVALID_TRANSITION)
@@ -155,9 +163,10 @@ class RunTransitionRepository:
             if cursor.rowcount != 1:
                 raise RunError(RunErrorCode.INVALID_TRANSITION)
             cursor = connection.execute(
-                "UPDATE run_execution_checkpoints SET schema_version = 2, revision = revision + 1, updated_at = ? "
+                "UPDATE run_execution_checkpoints SET schema_version = 2, revision = revision + 1, "
+                "next_action_json = CASE WHEN ? THEN NULL ELSE next_action_json END, updated_at = ? "
                 "WHERE run_id = ? AND revision = ?",
-                (now, run_id, expected_revision),
+                (int(cancelled_primary_attempt), now, run_id, expected_revision),
             )
             if cursor.rowcount != 1:
                 raise RunError(RunErrorCode.STALE_CHECKPOINT)

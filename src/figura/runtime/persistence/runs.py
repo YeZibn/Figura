@@ -99,15 +99,15 @@ def _read_run_state_from_connection(
         (run_id,),
     ).fetchall()
     provider_attempt_rows = connection.execute(
-        "SELECT * FROM run_provider_attempts WHERE run_id = ? ORDER BY attempt_sequence",
+        "SELECT * FROM run_provider_attempts WHERE run_id = ? ORDER BY run_attempt_sequence",
         (run_id,),
     ).fetchall()
     from .controls import read_stop_request
-    from ..codecs.bindings import decode_binding
+    from ..codecs.provider_requests import decode_provider_request
 
     state = RunState(
         stop_request=read_stop_request(connection, run_id),
-        provider_request_bindings=tuple(decode_binding(row[0]) for row in connection.execute("SELECT payload_json FROM run_provider_request_bindings WHERE run_id = ? ORDER BY base_record_sequence", (run_id,))),
+        provider_requests=tuple(decode_provider_request(row[0]) for row in connection.execute("SELECT request_json FROM run_provider_requests WHERE run_id = ? ORDER BY created_at, request_id", (run_id,))),
         run=_run_from_row(run_row),
         records=tuple(_record_from_row(row) for row in record_rows),
         checkpoint=_checkpoint_from_row(checkpoint_row),
@@ -331,7 +331,7 @@ class RunRepository:
             "run_stop_requests",
             "run_provider_continuations",
             "run_provider_attempts",
-            "run_provider_request_bindings",
+            "run_provider_requests",
             "run_execution_checkpoints",
             "run_stream_events",
             "run_tool_execution_facts",

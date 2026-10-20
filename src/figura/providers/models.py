@@ -40,6 +40,42 @@ class FinishReason(str, Enum):
     OTHER = "other"
 
 
+class ProviderStreamEventKind(str, Enum):
+    RESPONSE_STARTED = "response_started"
+    TEXT_DELTA = "text_delta"
+    REASONING_DELTA = "reasoning_delta"
+    TOOL_CALL_DELTA = "tool_call_delta"
+    USAGE = "usage"
+    HEARTBEAT = "heartbeat"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+@dataclass(frozen=True)
+class ProviderCapabilities:
+    streaming: bool
+    usage_streaming: bool
+    heartbeat_streaming: bool
+    continuation_streaming: bool
+
+
+@dataclass(frozen=True)
+class ProviderStreamEvent:
+    """Normalized incremental Provider event; private fields never enter public SSE."""
+
+    kind: ProviderStreamEventKind
+    text: str | None = None
+    call_index: int | None = None
+    call_id: str | None = None
+    tool_name: str | None = None
+    arguments: str | None = None
+    usage: "ProviderUsage | None" = None
+    provider_request_id: str | None = None
+    http_status: int | None = None
+    failure_code: str | None = None
+    response_bytes: int | None = None
+
+
 @dataclass(frozen=True)
 class InstructionBlock:
     role: InstructionRole
@@ -109,7 +145,6 @@ class FunctionTool:
 @dataclass(frozen=True)
 class ProviderOptions:
     max_completion_tokens: int | None = None
-    stream: bool = False
     thinking_mode: bool | None = None
     reasoning_effort: str | None = None
     schema_version: int = 2

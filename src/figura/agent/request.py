@@ -177,7 +177,6 @@ class AgentRequestBuilder:
             instructions=instructions,
             messages=messages,
             options=ProviderOptions(
-                stream=False,
             ),
             tools=tools,
             asset_contract=asset_contract,
@@ -333,7 +332,7 @@ class AgentRequestBuilder:
                 summary_budget_tokens=summary_budget_tokens,
             ),)
         except PromptAssetError:
-            raise ValueError("summary prompt asset cannot be loaded") from None
+            raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD) from None
         tools: tuple = ()
         instruction_projection = [
             {"role": item.role.value, "content": item.content} for item in instructions
@@ -351,7 +350,14 @@ class AgentRequestBuilder:
                 MessageRole.USER,
                 json.dumps(source_payload, ensure_ascii=False, separators=(",", ":")),
             ),),
-            options=ProviderOptions(stream=False),
+            options=(
+                ProviderOptions(
+                    thinking_mode=True,
+                    reasoning_effort="medium",
+                )
+                if state.run.provider == ProviderId.DEEPSEEK.value
+                else ProviderOptions()
+            ),
             tools=tools,
             asset_contract=asset_contract,
         )

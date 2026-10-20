@@ -53,7 +53,51 @@ class FakeTransport:
         self.calls.append(payload)
         if self.error is not None:
             raise self.error
-        return self.response
+        response = self.response
+        if isinstance(response, (tuple, list)):
+            return response
+        # Most tests describe a provider response compactly as a completion
+        # fixture. Convert it to one terminal stream chunk; dedicated stream
+        # tests continue to supply fragmented chunks directly.
+        choices = _value(response, "choices", ()) or ()
+        if not choices:
+            return response
+        choice = choices[0]
+        message = _value(choice, "message")
+        if message is None:
+            return response
+        delta: dict[str, object] = {"content": _value(message, "content")}
+        reasoning = _value(message, "reasoning_content", _UNSET)
+        fields_set = getattr(message, "model_fields_set", None)
+        extra_fields = getattr(message, "model_extra", None) or {}
+        if fields_set is not None and "reasoning_content" not in fields_set and "reasoning_content" not in extra_fields:
+            reasoning = _UNSET
+        if reasoning is not _UNSET:
+            delta["reasoning_content"] = reasoning
+        tools = _value(message, "tool_calls", ()) or ()
+        if tools:
+            delta["tool_calls"] = [
+                {
+                    "index": index,
+                    "id": _value(call, "id"),
+                    "function": {
+                        "name": _value(_value(call, "function"), "name"),
+                        "arguments": _value(_value(call, "function"), "arguments"),
+                    },
+                }
+                for index, call in enumerate(tools)
+            ]
+        return [
+            {
+                "id": _value(response, "id"),
+                "choices": [{
+                    "index": 0,
+                    "delta": delta,
+                    "finish_reason": _value(choice, "finish_reason"),
+                }],
+                "usage": _value(response, "usage"),
+            }
+        ]
 
 
 def _response(
@@ -73,6 +117,15 @@ def _response(
         choices=(SimpleNamespace(index=0, message=message, finish_reason=finish_reason),),
         usage=SimpleNamespace(prompt_tokens=12, completion_tokens=5, total_tokens=17),
     )
+
+
+_UNSET = object()
+
+
+def _value(obj, key, default=None):
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+    return getattr(obj, key, default)
 
 
 def _call(name: str, call_id: str, arguments: str) -> object:
@@ -108,8 +161,8 @@ def _request(
     instructions: tuple[InstructionBlock, ...] = (),
     messages: tuple[ProviderMessage, ...] | None = None,
     tools: tuple[FunctionTool, ...] = (),
-    stream: bool = False,
     thinking_mode: bool | None = None,
+    reasoning_effort: str | None = None,
 ) -> ProviderRequest:
     return ProviderRequest(
         provider_id=provider_id,
@@ -118,8 +171,8 @@ def _request(
         messages=messages or (ProviderMessage(MessageRole.USER, "hello"),),
         options=ProviderOptions(
             max_completion_tokens=256,
-            stream=stream,
             thinking_mode=thinking_mode,
+            reasoning_effort=reasoning_effort,
         ),
         tools=tools,
     )
@@ -418,7 +471,7 @@ def test_mimo_strict_requires_closed_objects_and_all_declared_properties_require
     assert len(transport.calls) == 1
 
 
-def test_nonstreaming_response_normalizes_order_usage_and_hides_continuation() -> None:
+def test_terminal_stream_assembles_order_usage_and_hides_continuation() -> None:
     transport = FakeTransport(
         _response(
             content="visible",
@@ -498,7 +551,7 @@ def test_streaming_response_normalizes_text_and_interleaved_tool_calls() -> None
     transport = FakeTransport(events)
     result = _invoke(
         _factory(transport).create(ProviderId.MIMO, MODEL_IDS[ProviderId.MIMO]),
-        _request(ProviderId.MIMO, stream=True),
+        _request(ProviderId.MIMO),
     )
 
     assert result.assistant_content == "answer"
@@ -551,7 +604,8 @@ def test_mimo_custom_token_plan_url_and_key_are_used_as_a_profile_pair() -> None
         **_environment(),
         "FIGURA_MIMO_BASE_URL": "https://token-plan.example.test/openai/v1",
         "FIGURA_MIMO_API_KEY": "token-plan-key",
-        "FIGURA_MIMO_TIMEOUT_SECONDS": "90",
+        "FIGURA_MIMO_CONNECT_TIMEOUT_SECONDS": "90",
+        "FIGURA_MIMO_WRITE_TIMEOUT_SECONDS": "45",
         "FIGURA_MIMO_THINKING_MODE": "false",
     }
     captured_profiles = []
@@ -566,7 +620,8 @@ def test_mimo_custom_token_plan_url_and_key_are_used_as_a_profile_pair() -> None
     profile = captured_profiles[0]
     assert profile.base_url == "https://token-plan.example.test/openai/v1"
     assert profile.api_key == "token-plan-key"
-    assert profile.timeout_seconds == 90
+    assert profile.connect_timeout_seconds == 90
+    assert profile.write_timeout_seconds == 45
     assert transport.calls[0]["extra_body"]["thinking"] == {"type": "disabled"}
 
 
@@ -605,6 +660,25 @@ def test_deepseek_does_not_invent_an_absent_reasoning_field(sdk) -> None:
     assert _invoke(client, _request(ProviderId.DEEPSEEK)).continuation is None
 
 
+def test_deepseek_medium_reasoning_option_is_sent_explicitly() -> None:
+    transport = FakeTransport(_response())
+    client = _factory(transport).create(
+        ProviderId.DEEPSEEK, MODEL_IDS[ProviderId.DEEPSEEK]
+    )
+
+    _invoke(
+        client,
+        _request(
+            ProviderId.DEEPSEEK,
+            thinking_mode=True,
+            reasoning_effort="medium",
+        ),
+    )
+
+    assert transport.calls[0]["extra_body"]["thinking"] == {"type": "enabled"}
+    assert transport.calls[0]["reasoning_effort"] == "medium"
+
+
 @pytest.mark.parametrize("parts, expected, present", [
     ([], None, False), ([None], None, True), ([""], "", True),
     ([None, "", "a", None, "b"], "ab", True),
@@ -613,21 +687,18 @@ def test_deepseek_stream_keeps_reasoning_presence(parts, expected, present) -> N
     events = [{"choices": [{"delta": {"reasoning_content": part}, "finish_reason": None}]} for part in parts]
     events.append({"choices": [{"delta": {"content": "ok"}, "finish_reason": "stop"}]})
     client = _factory(FakeTransport(events)).create(ProviderId.DEEPSEEK, MODEL_IDS[ProviderId.DEEPSEEK])
-    response = _invoke(client, _request(ProviderId.DEEPSEEK, stream=True))
+    response = _invoke(client, _request(ProviderId.DEEPSEEK))
     assert (response.continuation is not None) is present
     if present:
         assert response.continuation.reasoning_content == expected
 
 
-@pytest.mark.parametrize("stream", [False, True])
 @pytest.mark.parametrize("reasoning", [0, False, [], {}])
-def test_deepseek_rejects_malformed_reasoning(reasoning, stream) -> None:
-    raw = [{"choices": [{"delta": {"reasoning_content": reasoning}, "finish_reason": "stop"}]}] if stream else {
-        "choices": [{"message": {"content": "ok", "reasoning_content": reasoning}, "finish_reason": "stop"}]
-    }
+def test_deepseek_rejects_malformed_reasoning(reasoning) -> None:
+    raw = [{"choices": [{"delta": {"reasoning_content": reasoning}, "finish_reason": "stop"}]}]
     client = _factory(FakeTransport(raw)).create(ProviderId.DEEPSEEK, MODEL_IDS[ProviderId.DEEPSEEK])
     with pytest.raises(ProviderCallError):
-        _invoke(client, _request(ProviderId.DEEPSEEK, stream=stream))
+        _invoke(client, _request(ProviderId.DEEPSEEK))
 
 
 def test_deepseek_sdk_unset_default_null_is_absent():
@@ -649,6 +720,6 @@ def test_deepseek_stream_sdk_extra_field_preserves_value(reasoning):
         'created':0, 'model':MODEL_IDS[ProviderId.DEEPSEEK], 'choices':[{'index':0,
         'delta':{'content':'ok', 'reasoning_content':reasoning}, 'finish_reason':'stop'}]})
     client = _factory(FakeTransport([event])).create(ProviderId.DEEPSEEK, MODEL_IDS[ProviderId.DEEPSEEK])
-    response = _invoke(client, _request(ProviderId.DEEPSEEK, stream=True))
+    response = _invoke(client, _request(ProviderId.DEEPSEEK))
     assert response.continuation is not None
     assert response.continuation.reasoning_content == reasoning

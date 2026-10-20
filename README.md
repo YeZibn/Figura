@@ -84,7 +84,8 @@ cp .env.example .env
 ```dotenv
 FIGURA_DEEPSEEK_API_KEY=your_api_key
 FIGURA_DEEPSEEK_BASE_URL=https://api.deepseek.com
-FIGURA_DEEPSEEK_TIMEOUT_SECONDS=60
+FIGURA_DEEPSEEK_CONNECT_TIMEOUT_SECONDS=10
+FIGURA_DEEPSEEK_WRITE_TIMEOUT_SECONDS=30
 FIGURA_DEEPSEEK_THINKING_MODE=true
 ```
 
@@ -96,7 +97,7 @@ Figura 的模型配置使用 `FIGURA_*` 环境变量。至少配置一个 Provid
 | DeepSeek | `deepseek-flash` | `FIGURA_DEEPSEEK_API_KEY` | `FIGURA_DEEPSEEK_BASE_URL`，默认 `https://api.deepseek.com` |
 | MiMo | `mimo-v2.6-flash` | `FIGURA_MIMO_API_KEY` | `FIGURA_MIMO_BASE_URL`，默认 `https://api.xiaomimimo.com/v1`；使用其他套餐时同时配置匹配的地址和 key |
 
-各 Provider 可设置 `FIGURA_<PROVIDER>_TIMEOUT_SECONDS` 和 `FIGURA_<PROVIDER>_THINKING_MODE`，默认分别为 `60` 和 `true`。还可按 Provider 设置 `FIGURA_<PROVIDER>_MAX_COMPLETION_TOKENS`；它只配置单次模型请求的输出上限，不形成 Run 累计预算。Qwen、DeepSeek 还可配置 `REASONING_EFFORT`，具体取值见 [.env.example](.env.example)。网页按本地配置显示可用 Provider；这个检查不会验证远端连通性、额度或请求是否能成功。
+各 Provider 可分别设置连接超时 `FIGURA_<PROVIDER>_CONNECT_TIMEOUT_SECONDS`（默认 10 秒）和请求发送超时 `FIGURA_<PROVIDER>_WRITE_TIMEOUT_SECONDS`（默认 30 秒），两者都必须为正数。请求发送后没有总生成超时：只要连接仍然存活，Figura 会继续等待流式响应；静默期间会显示等待状态，用户仍可停止 Run。SDK 与 HTTP 隐式重试已关闭，重试由 Runtime 根据已记录的请求阶段统一调度。各 Provider 还可设置 `FIGURA_<PROVIDER>_THINKING_MODE`（默认 `true`）及 `FIGURA_<PROVIDER>_MAX_COMPLETION_TOKENS`；后者只配置单次模型请求的输出上限，不形成 Run 累计预算。Qwen、DeepSeek 还可配置 `REASONING_EFFORT`，具体取值见 [.env.example](.env.example)。网页按本地配置显示可用 Provider；这个检查不会验证远端连通性、额度或请求是否能成功。
 
 #### 可选：显示上下文占比
 
@@ -240,7 +241,8 @@ Run 没有累计模型调用次数、工具调用次数、运行时长或输出 
 | `FIGURA_WEB_ORIGINS` | 端口 `1421` 的本地 HTTP Origins | Gateway 浏览器来源白名单；启动器自动补入当前前端端口的 loopback Origins |
 | `FIGURA_CONDA_ENV` | `agent` | 启动器使用的 Conda 环境 |
 | `FIGURA_CONDA_EXECUTABLE` | `conda` | 启动器使用的 Conda 可执行程序 |
-| `FIGURA_<PROVIDER>_TIMEOUT_SECONDS` | `60` | Provider 请求超时 |
+| `FIGURA_<PROVIDER>_CONNECT_TIMEOUT_SECONDS` | `10` 秒 | 建立连接阶段的超时 |
+| `FIGURA_<PROVIDER>_WRITE_TIMEOUT_SECONDS` | `30` 秒 | 发送请求阶段的超时；收到响应后不设总生成时限 |
 | `FIGURA_<PROVIDER>_THINKING_MODE` | `true` | Provider 思考模式开关；实际支持取决于对应适配器 |
 | `FIGURA_<PROVIDER>_REASONING_EFFORT` | 未设置 | Qwen、DeepSeek 可选项；取值见 `.env.example`，MiMo 不支持此项 |
 | `FIGURA_<PROVIDER>_MAX_COMPLETION_TOKENS` | 未设置 | 单次请求输出 token 配置，不是 Run 总预算 |

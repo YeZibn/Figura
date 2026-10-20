@@ -7,7 +7,7 @@ import copy
 from dataclasses import asdict
 from figura.shared.payloads import PayloadError, encode_json, current_payload_limits, utf8_size
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
 from ..config import ProviderProfile
@@ -24,10 +24,13 @@ from ..models import (
     ProviderOptions,
     ProviderRequest,
     ProviderResponse,
+    ProviderStreamEvent,
+    ProviderStreamEventKind,
     ProviderToolCall,
     ProviderUsage,
     TextBlock,
 )
+from ..transport import TransportNotice
 from ..validation import (
     fail,
     validate_request,
@@ -87,45 +90,11 @@ class ProviderPolicy:
     def build_payload(self, request: ProviderRequest) -> dict[str, Any]:
         raise NotImplementedError
 
-    def normalize(self, raw_response: Any, request: ProviderRequest) -> ProviderResponse:
-        choices = value(raw_response, "choices", ()) or ()
-        choice = next(
-            (candidate for candidate in choices if value(candidate, "index", 0) == 0),
-            None,
-        )
-        if choice is None:
-            raise ProviderProtocolError()
-        message = value(choice, "message")
-        if message is None:
-            raise ProviderProtocolError()
-        content = value(message, "content") or ""
-        reasoning = (
-            _reasoning_value(message) if self.provider_id is ProviderId.DEEPSEEK
-            else value(message, "reasoning_content") or ""
-        )
-        if not isinstance(content, str):
-            raise ProviderProtocolError()
-        tool_calls = tuple(
-            _normalized_tool_call(
-                value(call, "id"),
-                value(value(call, "function"), "name"),
-                value(value(call, "function"), "arguments"),
-            )
-            for call in (value(message, "tool_calls", ()) or ())
-        )
-        return _response(
-            self.provider_id,
-            request.model_id,
-            content,
-            tool_calls,
-            _finish_reason(value(choice, "finish_reason")),
-            _usage(value(raw_response, "usage")),
-            _bounded_response_id(value(raw_response, "id")),
-            reasoning,
-        )
-
     def normalize_stream(
-        self, events: Iterable[Any], request: ProviderRequest
+        self,
+        events: Iterable[Any],
+        request: ProviderRequest,
+        on_stream_event: Callable[[ProviderStreamEvent], None] | None = None,
     ) -> ProviderResponse:
         content_parts: list[str] = []
         reasoning_parts: list[str] = []
@@ -136,7 +105,26 @@ class ProviderPolicy:
         usage: ProviderUsage | None = None
 
         aggregate_bytes = 0
-        for event in events:
+        try:
+            stream = iter(events)
+        except TypeError:
+            raise ProviderProtocolError() from None
+        for event in stream:
+            if isinstance(event, TransportNotice):
+                if on_stream_event is not None:
+                    if event.kind == "response_opened":
+                        on_stream_event(ProviderStreamEvent(
+                            ProviderStreamEventKind.RESPONSE_STARTED,
+                            provider_request_id=_bounded_response_id(event.provider_request_id),
+                            http_status=event.http_status,
+                            response_bytes=aggregate_bytes,
+                        ))
+                    elif event.kind == "heartbeat":
+                        on_stream_event(ProviderStreamEvent(
+                            ProviderStreamEventKind.HEARTBEAT,
+                            response_bytes=aggregate_bytes,
+                        ))
+                continue
             try:
                 raw_event = event.model_dump(mode="json") if hasattr(event, "model_dump") else _event_json(event)
                 aggregate_bytes += utf8_size(encode_json(raw_event))
@@ -150,6 +138,12 @@ class ProviderPolicy:
             event_usage = _usage(value(event, "usage"))
             if event_usage is not None:
                 usage = event_usage
+                if on_stream_event is not None:
+                    on_stream_event(ProviderStreamEvent(
+                        ProviderStreamEventKind.USAGE,
+                        usage=event_usage,
+                        response_bytes=aggregate_bytes,
+                    ))
             choices = value(event, "choices", ()) or ()
             for choice in choices:
                 if value(choice, "index", 0) != 0:
@@ -158,6 +152,12 @@ class ProviderPolicy:
                 text = value(delta, "content")
                 if isinstance(text, str):
                     content_parts.append(text)
+                    if text and on_stream_event is not None:
+                        on_stream_event(ProviderStreamEvent(
+                            ProviderStreamEventKind.TEXT_DELTA,
+                            text=text,
+                            response_bytes=aggregate_bytes,
+                        ))
                 reasoning = (
                     _reasoning_value(delta) if self.provider_id is ProviderId.DEEPSEEK
                     else value(delta, "reasoning_content")
@@ -168,6 +168,12 @@ class ProviderPolicy:
                         raise ProviderProtocolError()
                 if isinstance(reasoning, str):
                     reasoning_parts.append(reasoning)
+                    if reasoning and on_stream_event is not None:
+                        on_stream_event(ProviderStreamEvent(
+                            ProviderStreamEventKind.REASONING_DELTA,
+                            text=reasoning,
+                            response_bytes=aggregate_bytes,
+                        ))
                 for fallback_index, tool_delta in enumerate(value(delta, "tool_calls", ()) or ()):
                     index = value(tool_delta, "index")
                     if type(index) is not int or index < 0:
@@ -183,6 +189,17 @@ class ProviderPolicy:
                         entry["name"] += name
                     if isinstance(arguments, str):
                         entry["arguments"] += arguments
+                    if on_stream_event is not None and any(
+                        isinstance(part, str) and part for part in (call_id, name, arguments)
+                    ):
+                        on_stream_event(ProviderStreamEvent(
+                            ProviderStreamEventKind.TOOL_CALL_DELTA,
+                            call_index=index,
+                            call_id=call_id if isinstance(call_id, str) else None,
+                            tool_name=name if isinstance(name, str) else None,
+                            arguments=arguments if isinstance(arguments, str) else None,
+                            response_bytes=aggregate_bytes,
+                        ))
                 raw_finish = value(choice, "finish_reason")
                 if raw_finish is not None:
                     finish_reason = _finish_reason(raw_finish)
@@ -202,7 +219,7 @@ class ProviderPolicy:
             reasoning_content = (
                 reasoning_content if reasoning_parts else None
             ) if reasoning_present else _MISSING
-        return _response(
+        response = _response(
             self.provider_id,
             request.model_id,
             "".join(content_parts),
@@ -212,6 +229,14 @@ class ProviderPolicy:
             provider_response_id,
             reasoning_content,
         )
+        if on_stream_event is not None:
+            on_stream_event(ProviderStreamEvent(
+                ProviderStreamEventKind.COMPLETED,
+                provider_request_id=provider_response_id,
+                usage=usage,
+                response_bytes=aggregate_bytes,
+            ))
+        return response
 
     def _base_payload(
         self,
@@ -231,7 +256,7 @@ class ProviderPolicy:
         payload: dict[str, Any] = {
             "model": request.model_id,
             "messages": messages,
-            "stream": request.options.stream,
+            "stream": True,
         }
         completion = request.options.max_completion_tokens
         if completion is not None:

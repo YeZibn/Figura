@@ -1,6 +1,6 @@
 import type { RunSummary } from '../../types/protocol'
 import type { AgentRunEvent, Attachment, ChartRenderSummary, RunHandle, RunHistory, Session, SessionData } from '../../types/protocol'
-import type { RunSubscription } from '../client'
+import type { RunEventCallbacks, RunSubscription } from '../client'
 
 export type FiguraProviderId = 'qwen' | 'deepseek' | 'mimo'
 export type FiguraProviderAvailability = {
@@ -147,7 +147,7 @@ export type FiguraClient = {
   getRunTimeline(sessionId: string, runId: string): Promise<FiguraToolTimelineSnapshotDto>
   getRunTimelineCall(sessionId: string, runId: string, callId: string): Promise<FiguraToolCallDetailDto>
   getChartRenderContent(sessionId: string, runId: string, callId: string): Promise<Blob>
-  subscribeRun(sessionId: string, runId: string, callbacks: { onEvent(event: AgentRunEvent): void; onError(error: Error): void; onComplete(): void }, afterSequence?: number): RunSubscription
+  subscribeRun(sessionId: string, runId: string, callbacks: RunEventCallbacks, afterSequence?: number): RunSubscription
   attachmentContentUrl(sessionId: string, attachmentId: string): string
   panelContentUrl(sessionId: string, panelId: string): string
   chartRenderContentUrl(sessionId: string, runId: string, callId: string): string
@@ -178,7 +178,7 @@ export type FiguraWorkspaceApi = {
     timeline(sessionId: string, runId: string): Promise<FiguraToolTimelineSnapshotDto>
     timelineCall(sessionId: string, runId: string, callId: string): Promise<FiguraToolCallDetailDto>
     chartRenderContent(sessionId: string, runId: string, callId: string): Promise<Blob>
-    subscribe(sessionId: string, runId: string, callbacks: { onEvent(event: AgentRunEvent): void; onError(error: Error): void; onComplete(): void }, afterSequence?: number): RunSubscription
+    subscribe(sessionId: string, runId: string, callbacks: RunEventCallbacks, afterSequence?: number): RunSubscription
     chartRenderContentUrl(sessionId: string, runId: string, callId: string): string
     timelineObservationUrl(sessionId: string, runId: string, callId: string): string
   }

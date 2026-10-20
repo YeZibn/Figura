@@ -10,14 +10,15 @@ from typing import Mapping
 from urllib.parse import urlsplit
 
 from .errors import ProviderFailureCode
-from .models import MODEL_IDS, ProviderAvailability, ProviderId
+from .models import MODEL_IDS, ProviderAvailability, ProviderCapabilities, ProviderId
 
 
 _DEFAULT_BASE_URLS = {
     ProviderId.DEEPSEEK: "https://api.deepseek.com",
     ProviderId.MIMO: "https://api.xiaomimimo.com/v1",
 }
-_DEFAULT_TIMEOUT_SECONDS = 60.0
+_DEFAULT_CONNECT_TIMEOUT_SECONDS = 10.0
+_DEFAULT_WRITE_TIMEOUT_SECONDS = 30.0
 
 
 @dataclass(frozen=True)
@@ -26,12 +27,21 @@ class ProviderProfile:
     model_id: str
     api_key: str | None = field(repr=False)
     base_url: str | None = field(repr=False)
-    timeout_seconds: float
+    connect_timeout_seconds: float
+    write_timeout_seconds: float
     thinking_mode: bool
     reasoning_effort: str | None
     configuration_error: ProviderFailureCode | None = None
     max_completion_tokens: int | None = None
     context_window_tokens: int | None = None
+    capabilities: ProviderCapabilities = field(
+        default_factory=lambda: ProviderCapabilities(
+            streaming=True,
+            usage_streaming=False,
+            heartbeat_streaming=False,
+            continuation_streaming=False,
+        )
+    )
 
     def availability(self) -> ProviderAvailability:
         reason = self.configuration_error
@@ -98,14 +108,18 @@ def _profile_from_env(
             valid_url = False
         if not valid_url:
             configuration_error = ProviderFailureCode.INVALID_CONFIGURATION
-    raw_timeout = environ.get(f"{prefix}_TIMEOUT_SECONDS", "60").strip()
-    try:
-        timeout_seconds = float(raw_timeout)
-        if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
-            raise ValueError
-    except (TypeError, ValueError):
-        timeout_seconds = _DEFAULT_TIMEOUT_SECONDS
+    connect_timeout_seconds = _positive_timeout(
+        environ.get(f"{prefix}_CONNECT_TIMEOUT_SECONDS", "10"),
+        _DEFAULT_CONNECT_TIMEOUT_SECONDS,
+    )
+    write_timeout_seconds = _positive_timeout(
+        environ.get(f"{prefix}_WRITE_TIMEOUT_SECONDS", "30"),
+        _DEFAULT_WRITE_TIMEOUT_SECONDS,
+    )
+    if connect_timeout_seconds is None or write_timeout_seconds is None:
         configuration_error = ProviderFailureCode.INVALID_CONFIGURATION
+        connect_timeout_seconds = connect_timeout_seconds or _DEFAULT_CONNECT_TIMEOUT_SECONDS
+        write_timeout_seconds = write_timeout_seconds or _DEFAULT_WRITE_TIMEOUT_SECONDS
 
     raw_thinking = environ.get(f"{prefix}_THINKING_MODE", "true").strip().lower()
     if raw_thinking in {"1", "true", "yes", "on"}:
@@ -140,10 +154,27 @@ def _profile_from_env(
         model_id=MODEL_IDS[provider_id],
         api_key=api_key,
         base_url=base_url,
-        timeout_seconds=timeout_seconds,
+        connect_timeout_seconds=connect_timeout_seconds,
+        write_timeout_seconds=write_timeout_seconds,
         thinking_mode=thinking_mode,
         reasoning_effort=reasoning_effort,
         configuration_error=configuration_error,
         max_completion_tokens=completion,
         context_window_tokens=capacity,
+        capabilities=ProviderCapabilities(
+            streaming=True,
+            usage_streaming=True,
+            heartbeat_streaming=False,
+            continuation_streaming=provider_id is ProviderId.DEEPSEEK,
+        ),
     )
+
+
+def _positive_timeout(raw: object, default: float) -> float | None:
+    try:
+        value = float(raw)
+        if not math.isfinite(value) or value <= 0:
+            return None
+        return value
+    except (TypeError, ValueError):
+        return None

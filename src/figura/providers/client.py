@@ -32,6 +32,8 @@ from .models import (
     ImageBlock,
     ProviderRequest,
     ProviderResponse,
+    ProviderStreamEvent,
+    ProviderStreamEventKind,
 )
 from .transport import CompletionTransport, OpenAISDKTransport
 from .token_estimation import ContextEstimate, cached_encoding, estimate_input
@@ -52,6 +54,8 @@ class _PreparedProviderCall:
     payload: Mapping[str, Any] = field(repr=False)
     descriptor: Mapping[str, Any] = field(repr=False)
     context_estimate: ContextEstimate | None = None
+    timeout_policy: Mapping[str, float] = field(default_factory=dict, repr=False)
+    request_bytes: int = 0
 
     def __reduce__(self) -> object:
         raise TypeError("Prepared provider calls cannot be serialized")
@@ -77,8 +81,10 @@ class ProviderClient:
         self._encoding = cached_encoding()
 
     @payload_scope
-    def prepare(self, request: ProviderRequest, *, frozen_options: bool = False, frozen_timeout_seconds: float | None = None, estimate_context: bool = True) -> _PreparedProviderCall:
+    def prepare(self, request: ProviderRequest, *, frozen_options: bool = False, frozen_timeout_policy: Mapping[str, float] | None = None, estimate_context: bool = True) -> _PreparedProviderCall:
         """Validate and build one provider payload without contacting the service."""
+        if not self._profile.capabilities.streaming:
+            raise fail(ProviderFailureCode.UNSUPPORTED_CAPABILITY, "当前模型服务商不支持流式响应。")
         validate_request(request, self.provider_id)
         if request.model_id != self.model_id:
             raise fail(
@@ -93,13 +99,19 @@ class ProviderClient:
         effective_policy = type(self._policy)(replace(self._profile, thinking_mode=thinking,
             reasoning_effort=effort, max_completion_tokens=completion))
         payload = effective_policy.build_payload(request)
-        timeout = self._profile.timeout_seconds if frozen_timeout_seconds is None else frozen_timeout_seconds
-        if not isinstance(timeout, (int, float)) or isinstance(timeout, bool) or not math.isfinite(timeout) or timeout <= 0:
-            raise fail(ProviderFailureCode.INVALID_REQUEST, "模型请求超时配置无效。")
-        payload["timeout"] = timeout
+        timeout_policy = dict(frozen_timeout_policy or {
+            "connect_timeout_seconds": self._profile.connect_timeout_seconds,
+            "write_timeout_seconds": self._profile.write_timeout_seconds,
+        })
+        if (
+            set(timeout_policy) != {"connect_timeout_seconds", "write_timeout_seconds"}
+            or any(not isinstance(value, (int, float)) or isinstance(value, bool)
+                   or not math.isfinite(value) or value <= 0 for value in timeout_policy.values())
+        ):
+            raise fail(ProviderFailureCode.INVALID_REQUEST, "模型连接或写入超时配置无效。")
         endpoint = str(httpx.URL((self._profile.base_url or "").rstrip("/") + "/chat/completions"))
         endpoint_binding = hashlib.sha256(endpoint.encode()).hexdigest()
-        fingerprint_input = {"method": "POST", "path": "/chat/completions", "endpoint_binding": endpoint_binding, "payload": payload}
+        fingerprint_input = {"method": "POST", "path": "/chat/completions", "endpoint_binding": endpoint_binding, "payload": payload, "timeout_policy": timeout_policy}
         digest = hashlib.sha256()
         for chunk in json.JSONEncoder(ensure_ascii=False, allow_nan=False, sort_keys=True, separators=(",", ":")).iterencode(fingerprint_input):
             digest.update(chunk.encode("utf-8"))
@@ -121,17 +133,23 @@ class ProviderClient:
         }
         manifest = {**contract, "adapter_contract_version": 1, "images": images}
         descriptor = {"provider_id": self.provider_id.value, "model_id": self.model_id,
-            "endpoint_binding": endpoint_binding,
+            "endpoint_identity": endpoint_binding,
             "request_fingerprint": digest.hexdigest(),
-            "options": {"max_completion_tokens": completion, "stream": request.options.stream,
-                "thinking_mode": thinking, "reasoning_effort": effort, "timeout_seconds": timeout},
+            "options": {"max_completion_tokens": completion,
+                "thinking_mode": thinking, "reasoning_effort": effort,
+                **timeout_policy},
             "asset_manifest": manifest}
         encode_json(descriptor)
         estimate = estimate_input(payload, self._profile.context_window_tokens, self._encoding) if estimate_context else None
-        return _PreparedProviderCall(self._preparation_token, request, _freeze(payload), _freeze(descriptor), estimate)
+        return _PreparedProviderCall(self._preparation_token, request, _freeze(payload), _freeze(descriptor), estimate, _freeze(timeout_policy), len(encode_json(payload).encode("utf-8")))
 
     @payload_scope
-    def dispatch(self, prepared: _PreparedProviderCall) -> ProviderResponse:
+    def dispatch(
+        self,
+        prepared: _PreparedProviderCall,
+        *,
+        on_stream_event: Callable[[ProviderStreamEvent], None] | None = None,
+    ) -> ProviderResponse:
         """Send the exact locally prepared payload once."""
         if (
             not isinstance(prepared, _PreparedProviderCall)
@@ -143,11 +161,18 @@ class ProviderClient:
             )
         request = prepared.request
         try:
-            raw_response = self._transport.create(**_thaw(prepared.payload))
-            if request.options.stream:
-                return self._policy.normalize_stream(raw_response, request)
-            return self._policy.normalize(raw_response, request)
+            timeout = httpx.Timeout(
+                None,
+                connect=prepared.timeout_policy["connect_timeout_seconds"],
+                write=prepared.timeout_policy["write_timeout_seconds"],
+                read=None,
+                pool=prepared.timeout_policy["connect_timeout_seconds"],
+            )
+            raw_response = self._transport.create(timeout=timeout, **_thaw(prepared.payload))
+            return self._policy.normalize_stream(raw_response, request, on_stream_event)
         except ProviderCallError:
+            if on_stream_event is not None:
+                on_stream_event(ProviderStreamEvent(ProviderStreamEventKind.FAILED))
             raise
         except ProviderProtocolError as error:
             failure = ProviderFailure(
@@ -165,6 +190,13 @@ class ProviderClient:
         close = getattr(self._transport, "close", None)
         if callable(close):
             close()
+
+    def interrupt(self) -> None:
+        interrupt = getattr(self._transport, "interrupt", None)
+        if callable(interrupt):
+            interrupt()
+        else:
+            self.close()
 
 
 class ProviderFactory:

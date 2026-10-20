@@ -44,7 +44,9 @@ def classify_failure(error: Exception) -> ProviderFailure:
     known, transient, status, after = False, False, None, None
     if isinstance(error, APIStatusError):
         status = error.status_code if type(error.status_code) is int and 100 <= error.status_code <= 599 else None
-        known = status is not None and status < 500 and status != 408
+        # Receiving an HTTP error response is definitive evidence that the
+        # Provider rejected this request, even when the status is retryable.
+        known = status is not None
         code = ProviderFailureCode.PROVIDER_REJECTED if known else ProviderFailureCode.PROVIDER_UNAVAILABLE
         transient = status in {408, 429, 500, 502, 503, 504}
         # Whitelist metadata only; neither body nor its message is persisted.
@@ -67,6 +69,13 @@ def classify_failure(error: Exception) -> ProviderFailure:
         no_send = any(isinstance(item, (httpx.ConnectTimeout, httpx.PoolTimeout, httpx.ConnectError, socket.gaierror)) for item in chain)
         known = permanent or no_send
         transient = not permanent and (isinstance(error, APITimeoutError) or any(isinstance(item, (httpx.NetworkError, httpx.TimeoutException)) or (isinstance(item, socket.gaierror) and item.errno == socket.EAI_AGAIN) for item in chain))
+    elif isinstance(error, httpx.RemoteProtocolError):
+        # The remote peer closed or violated the HTTP exchange without a
+        # definitive response. Treat this as an unknown, temporary connection
+        # outcome so the durable owner can apply its bounded retry policy.
+        code = ProviderFailureCode.CONNECTION_ERROR
+        known = False
+        transient = True
     message = {
         ProviderFailureCode.TIMEOUT: "等待模型服务商响应超时。",
         ProviderFailureCode.CONNECTION_ERROR: "与模型服务商的连接失败。",

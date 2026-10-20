@@ -72,6 +72,49 @@ try {
   // A new Run uses a new controller after the previous abnormal terminal.
   current = { ...run, runId: 'next', executionState: 'executing' }
   assert.equal((await api.runs.history('session', 'next')).run.executionState, 'executing')
+
+  const transientSubscriptions = []
+  const deltas = []
+  const resets = []
+  let transientHistoryRun = { ...run }
+  const transientController = createRunController({
+    client: {
+      getRunHistory: async () => ({ run: transientHistoryRun, events: [], historyGap: false }),
+      subscribeRun(_sessionId, _runId, callbacks) {
+        transientSubscriptions.push(callbacks)
+        return { close() {} }
+      },
+    },
+    sessionId: 'session', runId: 'run', maxReconnectAttempts: 1,
+    callbacks: {
+      isCurrent: () => true,
+      onEvent() {}, onHistory() {}, onAssistantDelta(event) { deltas.push(event) },
+      onTransientReset(attemptId) { resets.push(attemptId) },
+      onState() {}, onTerminal() {}, onUnavailable() {},
+    },
+  })
+  transientController.start()
+  const firstStream = transientSubscriptions[0]
+  firstStream.onAssistantDelta({ runId: 'run', attemptId: 'attempt-1', deltaSequence: 1, text: 'first' })
+  firstStream.onAssistantDelta({ runId: 'run', attemptId: 'attempt-1', deltaSequence: 2, text: ' chunk' })
+  assert.deepEqual(deltas.slice(0, 2).map(({ text }) => text), ['first', ' chunk'])
+  firstStream.onEvent({ runId: 'run', sequence: 1, kind: 'run_progress', timestamp: 'now', payload: { providerPurpose: 'agent_turn', providerPhase: 'connecting', attemptId: 'attempt-2' } })
+  assert.equal(resets.at(-1), 'attempt-2', 'a retry discards the prior attempt buffer')
+  firstStream.onAssistantDelta({ runId: 'run', attemptId: 'attempt-2', deltaSequence: 1, text: 'retry' })
+  assert.equal(deltas.at(-1).text, 'retry')
+  firstStream.onError(new Error('stream disconnected'))
+  await waitFor(() => transientSubscriptions.length === 2)
+  const resumedStream = transientSubscriptions[1]
+  resumedStream.onAssistantDelta({ runId: 'run', attemptId: 'attempt-2', deltaSequence: 3, text: ' missing prefix' })
+  assert.equal(deltas.at(-1).gap, true)
+  assert.equal(deltas.at(-1).text, '', 'a reconnect gap suppresses partial text')
+  resumedStream.onAssistantDelta({ runId: 'run', attemptId: 'attempt-2', deltaSequence: 4, text: ' still incomplete' })
+  assert.equal(deltas.at(-1).gap, true)
+  assert.equal(deltas.at(-1).text, '')
+  transientHistoryRun = { ...run, status: 'completed' }
+  resumedStream.onComplete()
+  await waitFor(() => resets.at(-1) === undefined)
+  transientController.close()
 } finally {
   globalThis.fetch = originalFetch
 }

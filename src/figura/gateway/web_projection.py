@@ -161,7 +161,7 @@ def run_summary(
     activity: str | None = None,
 ) -> dict[str, object]:
     run = state.run
-    binding = max(state.provider_request_bindings, key=lambda item: item.base_record_sequence, default=None)
+    binding = max(state.provider_requests, key=lambda item: item.base_record_sequence, default=None)
     estimate = binding.context_estimate if binding else None
     return {
         "runId": run.run_id,
@@ -227,6 +227,12 @@ def event_projection(state: RunState, event: RunStreamEvent) -> dict[str, object
         payload = {"ordinal": state.run.ordinal}
     elif event.event_kind is EventKind.RUN_PROGRESS:
         payload = {"checkpointRevision": event.payload["checkpoint_revision"]}
+        if "provider_purpose" in event.payload:
+            payload.update({
+                "providerPurpose": event.payload["provider_purpose"],
+                "attemptId": event.payload["attempt_id"],
+                "providerPhase": event.payload["phase"],
+            })
     elif event.event_kind is EventKind.RUN_COMPLETED:
         payload = {}
     else:

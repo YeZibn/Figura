@@ -83,6 +83,8 @@ def _app(tmp_path):
         {
             "FIGURA_QWEN_API_KEY": "qwen-secret",
             "FIGURA_QWEN_BASE_URL": "https://qwen.example.test/v1",
+            "FIGURA_DEEPSEEK_API_KEY": "deepseek-secret",
+            "FIGURA_DEEPSEEK_BASE_URL": "https://deepseek.example.test/v1",
         },
         transport_factory=lambda _profile: None,
     )
@@ -157,22 +159,15 @@ class _PayloadTransport:
         if self.before_create is not None:
             self.before_create()
         self.calls.append(payload)
-        message = SimpleNamespace(
-            content="分析完成",
-            reasoning_content=None,
-            tool_calls=None,
-        )
-        return SimpleNamespace(
+        return [SimpleNamespace(
             id="deepseek-response",
-            choices=(
-                SimpleNamespace(
-                    index=0,
-                    message=message,
-                    finish_reason="stop",
-                ),
-            ),
+            choices=(SimpleNamespace(
+                index=0,
+                delta=SimpleNamespace(content="分析完成", reasoning_content=None, tool_calls=None),
+                finish_reason="stop",
+            ),),
             usage=None,
-        )
+        )]
 
 
 class _FakeClient:
@@ -186,7 +181,7 @@ class _FakeClient:
         self.after_prepare = None
         self.before_dispatch = None
 
-    def prepare(self, request, *, frozen_options=False, frozen_timeout_seconds=None, estimate_context=True):
+    def prepare(self, request, *, frozen_options=False, frozen_timeout_policy=None, estimate_context=True):
         self.prepared_requests.append(request)
         validate_request(request, self.provider_id)
         if request.model_id != self.model_id:
@@ -198,10 +193,12 @@ class _FakeClient:
             f"FIGURA_{self.provider_id.value.upper()}_BASE_URL": "https://provider.example.test/v1",
         }, transport_factory=lambda _profile: None)
         factory.payload_limits = self.payload_limits
-        prepared = factory.create(self.provider_id, self.model_id).prepare(request, frozen_options=frozen_options, frozen_timeout_seconds=frozen_timeout_seconds, estimate_context=estimate_context)
+        prepared = factory.create(self.provider_id, self.model_id).prepare(request, frozen_options=frozen_options, frozen_timeout_policy=frozen_timeout_policy, estimate_context=estimate_context)
         return prepared
 
-    def dispatch(self, prepared):
+    def dispatch(self, prepared, *, on_stream_event=None):
+        from figura.providers.models import ProviderStreamEvent, ProviderStreamEventKind
+
         request = prepared.request
         self.requests.append(request)
         if self.before_dispatch is not None:
@@ -209,6 +206,17 @@ class _FakeClient:
         outcome = self.outcomes.pop(0)
         if isinstance(outcome, Exception):
             raise outcome
+        if on_stream_event is not None:
+            on_stream_event(ProviderStreamEvent(ProviderStreamEventKind.RESPONSE_STARTED))
+            if outcome.assistant_content:
+                on_stream_event(ProviderStreamEvent(
+                    ProviderStreamEventKind.TEXT_DELTA,
+                    text=outcome.assistant_content,
+                ))
+            on_stream_event(ProviderStreamEvent(
+                ProviderStreamEventKind.COMPLETED,
+                usage=outcome.usage,
+            ))
         return outcome
 
     def close(self):
@@ -285,13 +293,21 @@ def _commit_tool_response(coordinator, session_id, run_id, registry, response):
     )
 
 
-def _create_followup_run(coordinator, session_id, *, key="agent-followup", text="继续分析"):
+def _create_followup_run(
+    coordinator,
+    session_id,
+    *,
+    key="agent-followup",
+    text="继续分析",
+    provider_id=ProviderId.QWEN,
+):
+    provider_id = ProviderId(provider_id)
     return coordinator.create_run(
         RunCreateRequest(
             session_id=session_id,
             text=text,
-            provider_id=ProviderId.QWEN.value,
-            model_id=MODEL_IDS[ProviderId.QWEN],
+            provider_id=provider_id.value,
+            model_id=MODEL_IDS[provider_id],
             idempotency_key=key,
         )
     )
@@ -671,9 +687,25 @@ def test_known_provider_failure_is_persisted_without_provider_fallback(tmp_path)
     assert factory.selections == [(ProviderId.QWEN.value, MODEL_IDS[ProviderId.QWEN])]
 
 
-def test_started_provider_attempt_is_resolved_unknown_without_dispatch(tmp_path) -> None:
+def test_orphaned_started_request_is_retried_from_frozen_contract_after_restart(
+    tmp_path, monkeypatch
+) -> None:
+    import figura.runtime.persistence.providers as provider_persistence
+
+    monkeypatch.setattr(provider_persistence, "retry_deadline", lambda *_: "2000-01-01T00:00:00Z")
     store, coordinator, session, run = _app(tmp_path)
-    coordinator.begin_provider_attempt(session.session_id, run.run_id, 1)
+    interrupted_factory = _FakeFactory([_response()])
+    interrupted_factory.client.before_dispatch = lambda: (_ for _ in ()).throw(KeyboardInterrupt())
+
+    with pytest.raises(KeyboardInterrupt):
+        _agent(store, coordinator, _registry(), interrupted_factory).execute_slice(
+            session.session_id, run.run_id
+        )
+
+    orphaned = coordinator.read_run_state(session.session_id, run.run_id)
+    assert orphaned.provider_attempts[0].status.value == "started"
+    assert len(orphaned.provider_requests) == 1
+    frozen_request = orphaned.provider_requests[0]
 
     reopened_store = FiguraRunStore(store.data_root)
     reopened_factory = ProviderFactory.from_env(
@@ -684,23 +716,29 @@ def test_started_provider_attempt_is_resolved_unknown_without_dispatch(tmp_path)
         transport_factory=lambda _profile: None,
     )
     reopened_coordinator = RunCoordinator(reopened_store, reopened_factory)
-    factory = _FakeFactory([])
-
-    state = _agent(reopened_store, reopened_coordinator, _registry(), factory).execute(
+    retry_factory = _FakeFactory([_response()])
+    state = _agent(reopened_store, reopened_coordinator, _registry(), retry_factory).execute(
         session.session_id, run.run_id
     )
 
-    assert state.run.status is RunStatus.FAILED
-    assert state.run.terminal_code == TerminalCode.PROVIDER_OUTCOME_UNKNOWN.value
-    assert factory.client.requests == []
-    assert factory.selections == []
+    assert state.run.status is RunStatus.COMPLETED
+    assert len(state.provider_requests) == 1
+    assert state.provider_requests[0] == frozen_request
+    assert [attempt.status.value for attempt in state.provider_attempts] == [
+        "outcome_unknown", "response_committed"
+    ]
+    assert state.provider_attempts[1].retry_of_attempt_id == state.provider_attempts[0].attempt_id
+    assert retry_factory.client.requests[0] == interrupted_factory.client.requests[0]
 
 
-def test_unexpected_provider_exception_after_claim_fails_unknown_without_resend(
-    tmp_path,
+def test_unexpected_provider_exception_uses_bounded_durable_retry(
+    tmp_path, monkeypatch,
 ) -> None:
+    import figura.runtime.persistence.providers as provider_persistence
+
+    monkeypatch.setattr(provider_persistence, "retry_deadline", lambda *_: "2000-01-01T00:00:00Z")
     store, coordinator, session, run = _app(tmp_path)
-    factory = _FakeFactory([RuntimeError("transport interrupted")])
+    factory = _FakeFactory([RuntimeError("transport interrupted") for _ in range(4)])
 
     state = _agent(store, coordinator, _registry(), factory).execute(
         session.session_id, run.run_id
@@ -708,10 +746,16 @@ def test_unexpected_provider_exception_after_claim_fails_unknown_without_resend(
 
     assert state.run.status is RunStatus.FAILED
     assert state.run.terminal_code == TerminalCode.PROVIDER_OUTCOME_UNKNOWN.value
-    assert state.provider_attempts[0].status.value == "outcome_unknown"
-    assert state.provider_attempts[0].failure_code is None
-    assert len(factory.client.requests) == 1
-    assert len(factory.selections) == 1
+    assert [attempt.status.value for attempt in state.provider_attempts] == ["outcome_unknown"] * 4
+    assert [attempt.retry_of_attempt_id for attempt in state.provider_attempts] == [
+        None,
+        state.provider_attempts[0].attempt_id,
+        state.provider_attempts[1].attempt_id,
+        state.provider_attempts[2].attempt_id,
+    ]
+    assert len(state.provider_requests) == 1
+    assert len(factory.client.requests) == 4
+    assert len(factory.selections) == 4
 
 
 def test_orphan_tool_attempt_recovers_and_continues(tmp_path) -> None:

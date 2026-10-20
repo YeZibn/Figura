@@ -1,12 +1,19 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import datetime, timezone
 
 import pytest
 
 from figura.providers.models import MODEL_IDS, ProviderId
 from figura.runtime.errors import RunError, RunErrorCode
-from figura.runtime.records import ModelResponseFact, RunInput, SessionContextCheckpoint
+from figura.runtime.codecs.provider_requests import encode_provider_request
+from figura.runtime.records import (
+    ModelResponseFact,
+    ProviderRequestRecord,
+    RunInput,
+    SessionContextCheckpoint,
+)
 from figura.runtime.store import FiguraRunStore
 from figura.shared.source_refs import MessageSourceRef
 
@@ -64,6 +71,41 @@ def _context_checkpoint(session_id: str, state, *, revision: int = 1):
             MessageSourceRef(state.run.run_id, state.records[0].record_id),
             MessageSourceRef(state.run.run_id, state.records[1].record_id),
         ),
+    )
+
+
+def _compaction_request(target_state, operation):
+    prompt_digest = "a" * 64
+    registry_digest = "b" * 64
+    return ProviderRequestRecord(
+        request_id=f"request-{operation.operation_id}",
+        run_id=target_state.run.run_id,
+        purpose="context_compaction",
+        compaction_operation_id=operation.operation_id,
+        base_record_sequence=target_state.checkpoint.last_committed_record_sequence,
+        base_tool_sequence=target_state.checkpoint.last_committed_tool_sequence,
+        provider_id=target_state.run.provider,
+        model_id=target_state.run.model,
+        request_fingerprint="c" * 64,
+        endpoint_identity="d" * 64,
+        prompt_digest=prompt_digest,
+        tool_registry_digest=registry_digest,
+        options={
+            "max_completion_tokens": 1024,
+            "thinking_mode": True,
+            "reasoning_effort": None,
+            "connect_timeout_seconds": 10.0,
+            "write_timeout_seconds": 30.0,
+        },
+        asset_manifest={
+            "prompt_digest": prompt_digest,
+            "registry_version": "test-v1",
+            "registry_digest": registry_digest,
+            "adapter_contract_version": 1,
+            "images": [],
+        },
+        created_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        context_projection="full",
     )
 
 
@@ -149,7 +191,7 @@ def test_schema_v11_migrates_additive_context_checkpoint_table(tmp_path):
 
     upgraded = FiguraRunStore(tmp_path)
     with sqlite3.connect(upgraded.database_path) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 12
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 13
         assert connection.execute(
             "SELECT name FROM sqlite_master WHERE type = 'table' "
             "AND name = 'session_context_checkpoints'"
@@ -157,7 +199,7 @@ def test_schema_v11_migrates_additive_context_checkpoint_table(tmp_path):
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
 
 
-def test_compaction_operation_binding_and_attempt_count_survive_restart(tmp_path):
+def test_compaction_request_and_attempt_survive_restart(tmp_path):
     store = FiguraRunStore(tmp_path)
     session = store.create_session()
     source = _completed_run(store, session.session_id)
@@ -184,16 +226,29 @@ def test_compaction_operation_binding_and_attempt_count_survive_restart(tmp_path
         "covered_tool_sequence": source_checkpoint.checkpoint.last_committed_tool_sequence,
     }
 
-    operation = store.get_or_create_context_compaction_operation(**operation_args)
-    binding = {"request_fingerprint": "e" * 64, "provider_id": "qwen"}
-    store.bind_context_compaction_request(operation.operation_id, binding)
-    assert store.begin_context_compaction_attempt(operation.operation_id) == 1
+    operation = store.get_or_create_context_compaction_operation(
+        **operation_args, selection_plan={"context_capacity_tokens": 200_000}
+    )
+    request = _compaction_request(target_state, operation)
+    attempt = store.begin_provider_attempt(
+        session_id=session.session_id,
+        run_id=target.run_id,
+        expected_revision=target_state.checkpoint.revision,
+        attempt_id="attempt-summary-1",
+        request=request,
+        auxiliary=True,
+    )
 
     restarted = FiguraRunStore(tmp_path)
-    resumed = restarted.get_or_create_context_compaction_operation(**operation_args)
+    resumed = restarted.get_or_create_context_compaction_operation(
+        **operation_args, selection_plan={"context_capacity_tokens": 200_000}
+    )
+    resumed_state = restarted.read_run_state(session.session_id, target.run_id)
     assert resumed.operation_id == operation.operation_id
-    assert resumed.attempt_count == 1
-    assert resumed.request_binding == binding
+    assert resumed.provider_request_id == request.request_id
+    assert resumed.selection_plan == {"context_capacity_tokens": 200_000}
+    assert encode_provider_request(resumed_state.provider_requests[0]) == encode_provider_request(request)
+    assert resumed_state.provider_attempts == (attempt,)
 
 
 def test_compaction_operation_and_summary_checkpoint_commit_atomically(tmp_path):
@@ -222,9 +277,14 @@ def test_compaction_operation_and_summary_checkpoint_commit_atomically(tmp_path)
         covered_record_sequence=source_checkpoint.checkpoint.last_committed_record_sequence,
         covered_tool_sequence=source_checkpoint.checkpoint.last_committed_tool_sequence,
     )
-    store.bind_context_compaction_request(
-        operation.operation_id,
-        {"request_fingerprint": "f" * 64, "provider_id": "qwen"},
+    request = _compaction_request(target_state, operation)
+    attempt = store.begin_provider_attempt(
+        session_id=session.session_id,
+        run_id=target.run_id,
+        expected_revision=target_state.checkpoint.revision,
+        attempt_id="attempt-summary-atomic",
+        request=request,
+        auxiliary=True,
     )
     checkpoint = SessionContextCheckpoint(
         **{
@@ -233,10 +293,17 @@ def test_compaction_operation_and_summary_checkpoint_commit_atomically(tmp_path)
         }
     )
 
-    stored = store.replace_session_context_checkpoint(checkpoint, expected_revision=0)
+    stored = store.replace_session_context_checkpoint(
+        checkpoint,
+        expected_revision=0,
+        provider_attempt_id=attempt.attempt_id,
+    )
     persisted_operation = store.read_context_compaction_operation(operation.operation_id)
 
     assert stored.revision == 1
     assert stored.compaction_operation_id == operation.operation_id
     assert persisted_operation.status == "completed"
+    assert persisted_operation.provider_request_id == request.request_id
     assert persisted_operation.result_checkpoint_revision == stored.revision
+    resumed_state = FiguraRunStore(tmp_path).read_run_state(session.session_id, target.run_id)
+    assert resumed_state.provider_attempts[0].status.value == "response_committed"

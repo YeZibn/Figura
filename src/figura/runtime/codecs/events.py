@@ -20,7 +20,10 @@ def encode_event_payload(kind: EventKind, payload: dict[str, object]) -> str:
         EventKind.RUN_FAILED: {"terminal_code"},
         EventKind.RUN_INTERRUPTED: {"terminal_code"},
     }[kind]
-    if set(payload) != expected:
+    is_provider_progress = kind is EventKind.RUN_PROGRESS and set(payload) == {
+        "checkpoint_revision", "provider_purpose", "attempt_id", "phase"
+    }
+    if set(payload) != expected and not is_provider_progress:
         raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
     safe: dict[str, object]
     if kind is EventKind.RUN_CREATED:
@@ -33,6 +36,16 @@ def encode_event_payload(kind: EventKind, payload: dict[str, object]) -> str:
         if type(revision) is not int or revision < 1:
             raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
         safe = {"checkpoint_revision": revision}
+        if is_provider_progress:
+            purpose = _bounded_string(payload["provider_purpose"], 32)
+            phase = _bounded_string(payload["phase"], 32)
+            if purpose not in {"agent_turn", "context_compaction"} or phase not in {"connecting", "sending", "awaiting_response", "streaming"}:
+                raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
+            safe.update({
+                "provider_purpose": purpose,
+                "attempt_id": _bounded_string(payload["attempt_id"], 128),
+                "phase": phase,
+            })
     elif kind is EventKind.RUN_COMPLETED:
         refs = payload["final_artifact_refs"]
         if not isinstance(refs, (list, tuple)) or len(refs) != 0:
@@ -55,7 +68,11 @@ def decode_event_payload(kind: EventKind, raw: str) -> dict[str, object]:
         EventKind.RUN_FAILED: {"terminal_code"},
         EventKind.RUN_INTERRUPTED: {"terminal_code"},
     }[kind]
-    _require_keys(value, expected)
+    is_provider_progress = kind is EventKind.RUN_PROGRESS and set(value) == {
+        "checkpoint_revision", "provider_purpose", "attempt_id", "phase"
+    }
+    if not is_provider_progress:
+        _require_keys(value, expected)
     encoded = encode_event_payload(kind, value)
     normalized = json.loads(encoded)
     if kind is EventKind.RUN_COMPLETED:

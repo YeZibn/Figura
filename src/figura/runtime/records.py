@@ -62,8 +62,8 @@ class ContextCompactionOperation:
     covered_record_sequence: int
     covered_tool_sequence: int
     status: str
-    request_binding: Mapping[str, object] | None = field(default=None, repr=False)
-    attempt_count: int = 0
+    selection_plan: Mapping[str, object] = field(default_factory=dict, repr=False)
+    provider_request_id: str | None = None
     result_checkpoint_revision: int | None = None
     failure_code: str | None = None
     created_at: str = ""
@@ -109,7 +109,10 @@ class ProviderContinuationFact:
 class ProviderAttempt:
     attempt_id: str
     run_id: str
+    request_id: str | None
     attempt_sequence: int
+    run_attempt_sequence: int
+    request_attempt_number: int | None
     base_record_sequence: int
     base_tool_sequence: int
     status: ProviderAttemptStatus
@@ -117,36 +120,51 @@ class ProviderAttempt:
     failure_code: str | None
     started_at: str
     finished_at: str | None
-    operation_id: str | None = None
-    operation_attempt_number: int | None = None
     retry_of_attempt_id: str | None = None
     failure_category: str | None = None
     http_status: int | None = None
     next_eligible_at: str | None = None
+    phase: str = "sending"
+    connected_at: str | None = None
+    request_sent_at: str | None = None
+    response_headers_at: str | None = None
+    first_event_at: str | None = None
+    last_activity_at: str | None = None
+    failure_phase: str | None = None
+    provider_request_id: str | None = None
+    request_bytes: int | None = None
+    response_bytes: int | None = None
+    usage: ProviderUsage | None = None
 
 
 @dataclass(frozen=True)
-class ProviderRequestBinding:
-    operation_id: str
+class ProviderRequestRecord:
+    request_id: str
     run_id: str
+    purpose: str
+    compaction_operation_id: str | None
     base_record_sequence: int
     base_tool_sequence: int
     provider_id: str
     model_id: str
     request_fingerprint: str
-    endpoint_binding: str
+    endpoint_identity: str
+    prompt_digest: str
+    tool_registry_digest: str
     options: Mapping[str, object] = field(repr=False)
     asset_manifest: Mapping[str, object] = field(repr=False)
     created_at: str
-    request_contract_version: int = 1
-    schema_version: int = 1
+    request_contract_version: int = 2
+    stream_contract_version: int = 1
+    timeout_policy_version: int = 1
+    schema_version: int = 2
     generation_only: bool = True
     max_attempts: int = 4
     retry_policy_version: int = 1
     context_estimate: ContextEstimate | None = None
     context_projection: str = "full"
     context_checkpoint_revision: int | None = None
-    context_compaction_operation_id: str | None = None
+    context_checkpoint_operation_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -251,4 +269,4 @@ class RunState:
     provider_continuations: tuple[ProviderContinuationFact, ...] = field(default=(), repr=False)
     provider_attempts: tuple[ProviderAttempt, ...] = field(default=(), repr=False)
     stop_request: RunStopRequest | None = None
-    provider_request_bindings: tuple[ProviderRequestBinding, ...] = field(default=(), repr=False)
+    provider_requests: tuple[ProviderRequestRecord, ...] = field(default=(), repr=False)

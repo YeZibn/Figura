@@ -7,7 +7,12 @@ from dataclasses import asdict, dataclass
 import json
 from figura.memory import AssistantMessage, MemoryMessage, ToolMessage, UserMessage
 from figura.memory.projector import _project_run_messages
-from figura.providers import FinishReason, ProviderId, ProviderResponse
+from figura.providers import (
+    FinishReason,
+    ProviderContinuation,
+    ProviderId,
+    ProviderResponse,
+)
 from figura.providers.token_estimation import estimate_text_tokens
 from figura.runtime.models import ActionKind, ProviderAttemptStatus, RunStatus
 from figura.runtime.records import (
@@ -36,6 +41,18 @@ _SUMMARY_FIELDS = (
 )
 _PROGRESS_FIELDS = ("completed", "in_progress", "pending", "blocked")
 _SUMMARY_ITEM_FIELDS = {"text", "source_refs"}
+
+
+class SummaryValidationError(ValueError):
+    """A safe, content-free reason code for a rejected summary response."""
+
+    def __init__(self, failure_code: str) -> None:
+        self.failure_code = failure_code
+        super().__init__(failure_code)
+
+
+class _DuplicateSummaryJSONKey(ValueError):
+    pass
 
 
 @dataclass(frozen=True)
@@ -214,7 +231,12 @@ def selection_for_coverage(
             if _unit_is_after_checkpoint(unit, previous_checkpoint):
                 candidate_units.append(unit)
     active_is_eligible = _active_run_is_eligible(
-        prior_run_states, active_run_state, previous_checkpoint, eligible
+        prior_run_states,
+        active_run_state,
+        previous_checkpoint,
+        eligible,
+        pending_compaction_request_id=operation.provider_request_id,
+        compaction_operation_id=operation.operation_id,
     )
     if (
         active_is_eligible
@@ -362,7 +384,35 @@ def _active_run_is_eligible(
     active_run_state: RunState | None,
     previous_checkpoint: SessionContextCheckpoint | None,
     eligible_prior: tuple[RunState, ...],
+    *,
+    pending_compaction_request_id: str | None = None,
+    compaction_operation_id: str | None = None,
 ) -> bool:
+    active_attempts = (
+        tuple(
+            attempt for attempt in active_run_state.provider_attempts
+            if attempt.status is ProviderAttemptStatus.STARTED
+        )
+        if isinstance(active_run_state, RunState)
+        else ()
+    )
+    if active_attempts:
+        request = next(
+            (
+                item for item in active_run_state.provider_requests
+                if item.request_id == pending_compaction_request_id
+            ),
+            None,
+        )
+        if (
+            pending_compaction_request_id is None
+            or len(active_attempts) != 1
+            or active_attempts[0].request_id != pending_compaction_request_id
+            or request is None
+            or request.purpose != "context_compaction"
+            or request.compaction_operation_id != compaction_operation_id
+        ):
+            return False
     if (
         not isinstance(active_run_state, RunState)
         or active_run_state.run.status is not RunStatus.RUNNING
@@ -371,10 +421,6 @@ def _active_run_is_eligible(
             ActionKind.MODEL,
             ActionKind.PROVIDER_RETRY,
         }
-        or any(
-            attempt.status is ProviderAttemptStatus.STARTED
-            for attempt in active_run_state.provider_attempts
-        )
     ):
         return False
     if (
@@ -576,19 +622,27 @@ def validate_summary_response(
         or response.model_id != model_id
         or response.finish_reason is not FinishReason.STOP
         or response.tool_calls
-        or response.continuation is not None
         or not isinstance(response.assistant_content, str)
     ):
-        raise ValueError("summary response did not satisfy the text completion contract")
+        raise SummaryValidationError("summary_response_contract")
+    continuation = response.continuation
+    if continuation is not None and (
+        response.provider_id is not ProviderId.DEEPSEEK
+        or not isinstance(continuation, ProviderContinuation)
+        or continuation.provider_id is not ProviderId.DEEPSEEK
+    ):
+        raise SummaryValidationError("summary_response_contract")
     try:
         value = json.loads(response.assistant_content, object_pairs_hook=_unique_object)
+    except _DuplicateSummaryJSONKey:
+        raise SummaryValidationError("summary_duplicate_json_key") from None
     except (TypeError, ValueError, json.JSONDecodeError):
-        raise ValueError("summary response is not valid JSON") from None
+        raise SummaryValidationError("summary_invalid_json") from None
     if not isinstance(value, dict) or set(value) != set(_SUMMARY_FIELDS):
-        raise ValueError("summary response has an invalid top-level contract")
+        raise SummaryValidationError("summary_top_level_fields")
     progress = value["progress"]
     if not isinstance(progress, dict) or set(progress) != set(_PROGRESS_FIELDS):
-        raise ValueError("summary response has an invalid progress contract")
+        raise SummaryValidationError("summary_progress_fields")
 
     authorized = set(allowed_refs)
     used_refs: list[HistorySourceRef] = []
@@ -633,11 +687,11 @@ def _validate_summary_items(
     used_refs: list[HistorySourceRef],
 ) -> list[dict[str, object]]:
     if not isinstance(value, list):
-        raise ValueError("summary section must be a list")
+        raise SummaryValidationError("summary_section_not_array")
     items: list[dict[str, object]] = []
     for item in value:
         if not isinstance(item, dict) or set(item) != _SUMMARY_ITEM_FIELDS:
-            raise ValueError("summary item has an invalid shape")
+            raise SummaryValidationError("summary_item_fields")
         text = item["text"]
         refs_value = item["source_refs"]
         if (
@@ -646,12 +700,17 @@ def _validate_summary_items(
             or not isinstance(refs_value, list)
             or not refs_value
         ):
-            raise ValueError("summary item must contain text and source references")
+            raise SummaryValidationError("summary_item_content")
         refs: list[HistorySourceRef] = []
         for raw_ref in refs_value:
-            ref = source_ref_from_dict(raw_ref)
-            if ref not in authorized or ref in refs:
-                raise ValueError("summary item references an unauthorized or duplicate source")
+            try:
+                ref = source_ref_from_dict(raw_ref)
+            except (TypeError, ValueError):
+                raise SummaryValidationError("summary_source_ref_shape") from None
+            if ref not in authorized:
+                raise SummaryValidationError("summary_source_ref_unauthorized")
+            if ref in refs:
+                raise SummaryValidationError("summary_source_ref_duplicate")
             refs.append(ref)
             if ref not in used_refs:
                 used_refs.append(ref)
@@ -663,6 +722,6 @@ def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
     value: dict[str, object] = {}
     for key, item in pairs:
         if key in value:
-            raise ValueError("duplicate JSON key")
+            raise _DuplicateSummaryJSONKey()
         value[key] = item
     return value

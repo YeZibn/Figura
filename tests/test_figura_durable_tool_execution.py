@@ -105,12 +105,17 @@ def _app(tmp_path):
     return store, coordinator, session, run
 
 
+def _without_provider_progress(events):
+    return tuple(event for event in events if "provider_purpose" not in event.payload)
+
+
 def _block_run_progress_events(store: FiguraRunStore) -> None:
     with sqlite3.connect(store.database_path) as connection:
         connection.execute(
             "CREATE TRIGGER reject_run_progress_event "
             "BEFORE INSERT ON run_stream_events "
             "WHEN NEW.event_kind = 'run_progress' "
+            "AND json_extract(NEW.payload_json, '$.provider_purpose') IS NULL "
             "BEGIN SELECT RAISE(ABORT, 'progress event rejected'); END"
         )
 
@@ -334,6 +339,7 @@ def _create_v2_database(data_root):
         )
         connection.execute("DROP TABLE run_provider_continuations")
         connection.execute("DROP TABLE run_provider_attempts")
+        connection.execute("DROP TABLE run_provider_requests")
         connection.execute("DROP TRIGGER immutable_panel_update")
         connection.execute("DROP TRIGGER immutable_panel_delete")
         connection.execute("DROP INDEX panels_by_session")
@@ -375,7 +381,7 @@ def _snapshot_run_rows(connection: sqlite3.Connection, *, session_id: str, run_i
     }
 
 
-def test_fresh_store_creates_schema_v12_context_attachment_and_execution_tables(tmp_path) -> None:
+def test_fresh_store_creates_schema_v13_context_provider_and_execution_tables(tmp_path) -> None:
     store = FiguraRunStore(tmp_path)
 
     with sqlite3.connect(store.database_path) as connection:
@@ -402,7 +408,7 @@ def test_fresh_store_creates_schema_v12_context_attachment_and_execution_tables(
             for row in connection.execute("PRAGMA table_info(attachments)")
         }
 
-    assert version == 12
+    assert version == 13
     assert quick_check == "ok"
     assert "run_provider_continuations" in tables
     assert "run_provider_attempts" in tables
@@ -451,7 +457,7 @@ def test_v6_migration_preserves_events_and_accepts_run_progress(tmp_path) -> Non
         foreign_key_violations = connection.execute("PRAGMA foreign_key_check").fetchall()
 
     assert migrated.events == before.events
-    assert version == 12
+    assert version == 13
     assert "run_progress" in event_schema
     assert quick_check == "ok"
     assert foreign_key_violations == []
@@ -465,7 +471,7 @@ def test_v6_migration_preserves_events_and_accepts_run_progress(tmp_path) -> Non
         registry_version="registry-v1",
     )
     progressed = upgraded_store.read_run_state(session.session_id, run.run_id)
-    assert [event.event_kind for event in progressed.events] == [
+    assert [event.event_kind for event in _without_provider_progress(progressed.events)] == [
         EventKind.RUN_CREATED,
         EventKind.RUN_PROGRESS,
     ]
@@ -507,9 +513,10 @@ def test_tool_call_response_commits_core_record_and_ordered_tool_facts_atomicall
     assert [fact.payload.call_id for fact in state.tool_facts] == ["call-1", "call-2"]
     assert all(fact.payload.response_record_id == record.record_id for fact in state.tool_facts)
     assert state.run.status is RunStatus.RUNNING
-    assert [event.event_kind for event in state.events] == [EventKind.RUN_CREATED, EventKind.RUN_PROGRESS]
-    assert state.events[-1].payload == {"checkpoint_revision": 3}
-    assert set(state.events[-1].payload) == {"checkpoint_revision"}
+    lifecycle_events = _without_provider_progress(state.events)
+    assert [event.event_kind for event in lifecycle_events] == [EventKind.RUN_CREATED, EventKind.RUN_PROGRESS]
+    assert lifecycle_events[-1].payload == {"checkpoint_revision": 3}
+    assert set(lifecycle_events[-1].payload) == {"checkpoint_revision"}
     assert store.database_path.exists()
 
 
@@ -542,8 +549,8 @@ def test_attempt_start_precedes_handler_and_success_result_advances_to_model(tmp
         tool_call_sequence=1,
         attempt_id="attempt-1",
     )
-    assert started_state.events[-1].event_kind is EventKind.RUN_PROGRESS
-    assert started_state.events[-1].payload == {"checkpoint_revision": 4}
+    assert _without_provider_progress(started_state.events)[-1].event_kind is EventKind.RUN_PROGRESS
+    assert _without_provider_progress(started_state.events)[-1].payload == {"checkpoint_revision": 4}
 
     result = store.commit_tool_result(
         session_id=session.session_id,
@@ -564,13 +571,14 @@ def test_attempt_start_precedes_handler_and_success_result_advances_to_model(tmp
     assert state.checkpoint.last_committed_tool_sequence == 3
     assert state.checkpoint.next_action == NextAction(ActionKind.MODEL)
     assert state.tool_facts[-1].payload.result == {"value": 1}
-    assert [event.event_kind for event in state.events] == [
+    lifecycle_events = _without_provider_progress(state.events)
+    assert [event.event_kind for event in lifecycle_events] == [
         EventKind.RUN_CREATED,
         EventKind.RUN_PROGRESS,
         EventKind.RUN_PROGRESS,
         EventKind.RUN_PROGRESS,
     ]
-    assert [event.payload for event in state.events[1:]] == [
+    assert [event.payload for event in lifecycle_events[1:]] == [
         {"checkpoint_revision": 3},
         {"checkpoint_revision": 4},
         {"checkpoint_revision": 5},
@@ -644,7 +652,7 @@ def test_progress_event_failure_rolls_back_its_tool_transition(tmp_path, transit
     assert state.checkpoint.revision == expected[0]
     assert len(state.records) == expected[1]
     assert len(state.tool_facts) == expected[2]
-    assert [event.event_kind for event in state.events] == expected[3]
+    assert [event.event_kind for event in _without_provider_progress(state.events)] == expected[3]
 
 
 def test_tool_batch_results_advance_serially_and_persist_known_failures(tmp_path) -> None:
@@ -901,7 +909,7 @@ def test_v1_migration_preserves_run_records_checkpoint_events_and_idempotency(tm
             )
         }
 
-    assert version == 12
+    assert version == 13
     assert quick_check == "ok"
     assert foreign_key_violations == []
     assert idempotency == ("legacy-session", "a" * 64, "b" * 64, "legacy-run")
@@ -956,7 +964,7 @@ def test_v2_migration_preserves_existing_run_facts_checkpoint_events_and_idempot
         foreign_key_violations = connection.execute("PRAGMA foreign_key_check").fetchall()
 
     state = store.read_run_state(session.session_id, run.run_id)
-    assert version == 12
+    assert version == 13
     assert quick_check == "ok"
     assert foreign_key_violations == []
     assert after == before
@@ -1014,7 +1022,7 @@ def test_v2_migration_failure_rolls_back_new_schema_and_can_retry(tmp_path) -> N
     store = FiguraRunStore(tmp_path)
     assert store.read_run_state(session.session_id, run.run_id).run.run_id == run.run_id
     with sqlite3.connect(database_path) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 12
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 13
 
 
 def test_v1_migration_rolls_back_schema_version_and_added_column_on_failure(tmp_path) -> None:
@@ -1678,7 +1686,8 @@ def test_completion_rejects_corrupt_final_action_with_pending_or_unknown_tool_wo
             (run.run_id,),
         ).fetchone()[0]
         event_count = connection.execute(
-            "SELECT COUNT(*) FROM run_stream_events WHERE run_id = ?",
+            "SELECT COUNT(*) FROM run_stream_events WHERE run_id = ? "
+            "AND json_extract(payload_json, '$.provider_purpose') IS NULL",
             (run.run_id,),
         ).fetchone()[0]
     assert status == "running"
@@ -1763,7 +1772,7 @@ def test_recovery_replays_replay_safe_attempt_after_acquiring_run_lock(tmp_path)
     assert [item.attempt_number for item in starts] == [1, 2]
     assert [item.replay_effect for item in starts] == [ReplayEffect.REPLAY_SAFE] * 2
     assert state.checkpoint.next_action == NextAction(ActionKind.MODEL)
-    assert [event.payload["checkpoint_revision"] for event in state.events[1:]] == [3, 4, 5, 6]
+    assert [event.payload["checkpoint_revision"] for event in _without_provider_progress(state.events)[1:]] == [3, 4, 5, 6]
 
 
 def test_idempotent_local_write_replay_reuses_stable_key_and_original_result(tmp_path) -> None:

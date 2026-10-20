@@ -40,7 +40,7 @@ from .records import (
     ExecutionRecord,
     ModelResponseFact,
     ProviderAttempt,
-    ProviderRequestBinding,
+    ProviderRequestRecord,
     RunInput,
     RunState,
     SessionContextCheckpoint,
@@ -104,9 +104,11 @@ class RunCoordinator:
         checkpoint: SessionContextCheckpoint,
         *,
         expected_revision: int,
+        provider_attempt_id: str | None = None,
     ) -> SessionContextCheckpoint:
         return self._store.replace_session_context_checkpoint(
-            checkpoint, expected_revision=expected_revision
+            checkpoint, expected_revision=expected_revision,
+            provider_attempt_id=provider_attempt_id,
         )
 
     def get_or_create_context_compaction_operation(
@@ -125,13 +127,10 @@ class RunCoordinator:
             session_id, target_run_id, base_record_sequence, base_tool_sequence
         )
 
-    def bind_context_compaction_request(
-        self, operation_id: str, binding: dict[str, object]
+    def link_context_compaction_request(
+        self, operation_id: str, request_id: str
     ) -> ContextCompactionOperation:
-        return self._store.bind_context_compaction_request(operation_id, binding)
-
-    def begin_context_compaction_attempt(self, operation_id: str) -> int:
-        return self._store.begin_context_compaction_attempt(operation_id)
+        return self._store.link_context_compaction_request(operation_id, request_id)
 
     def read_context_compaction_operation(
         self, operation_id: str
@@ -209,7 +208,9 @@ class RunCoordinator:
         return self._store.read_prior_run_states(session_id, run_id)
 
     def begin_provider_attempt(
-        self, session_id: str, run_id: str, expected_revision: int, *, binding: ProviderRequestBinding | None = None
+        self, session_id: str, run_id: str, expected_revision: int, *,
+        request: ProviderRequestRecord | None = None, auxiliary: bool = False,
+        request_bytes: int | None = None,
     ) -> ProviderAttempt:
         if type(expected_revision) is not int or expected_revision < 1:
             raise RunError(RunErrorCode.INVALID_REQUEST)
@@ -217,8 +218,12 @@ class RunCoordinator:
             session_id=session_id,
             run_id=run_id,
             expected_revision=expected_revision,
-            attempt_id=uuid.uuid4().hex, binding=binding,
+            attempt_id=uuid.uuid4().hex, request=request, auxiliary=auxiliary,
+            request_bytes=request_bytes,
         )
+
+    def update_provider_attempt_phase(self, **values) -> None:
+        self._store.update_provider_attempt_phase(**values)
 
     @payload_scope
     def commit_model_response(
@@ -287,6 +292,7 @@ class RunCoordinator:
         http_status: int | None = None,
         retry_after_seconds: float | None = None,
         failure_category: str | None = None,
+        cancelled: bool = False,
     ) -> Run:
         if type(expected_revision) is not int or expected_revision < 1:
             raise RunError(RunErrorCode.INVALID_REQUEST)
@@ -297,6 +303,7 @@ class RunCoordinator:
             attempt_id=attempt_id,
             outcome_unknown=outcome_unknown,
             failure_code=failure_code, transient=transient, http_status=http_status, retry_after_seconds=retry_after_seconds, failure_category=failure_category,
+            cancelled=cancelled,
         )
 
     def resolve_orphaned_provider_attempt(self, session_id: str, run_id: str) -> RunState:
@@ -319,13 +326,17 @@ class RunCoordinator:
                     return state
                 if action.attempt_id is None:
                     raise RunError(RunErrorCode.INTEGRITY_ERROR)
+                attempt = next((item for item in state.provider_attempts if item.attempt_id == action.attempt_id), None)
+                request = next((item for item in state.provider_requests if attempt and item.request_id == attempt.request_id), None)
                 self._store.fail_provider_attempt(
                     session_id=session_id,
                     run_id=run_id,
                     expected_revision=state.checkpoint.revision,
                     attempt_id=action.attempt_id,
                     outcome_unknown=True,
-                    failure_code=None, transient=state.provider_attempts[-1].operation_id is not None,
+                    failure_code=None,
+                    transient=bool(request and request.generation_only),
+                    failure_category="temporary_unknown" if request and request.generation_only else "permanent",
                 )
                 return self._store.read_run_state(session_id, run_id)
         except RunExecutionLockUnavailable:

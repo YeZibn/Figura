@@ -136,11 +136,11 @@ Figura SHALL compact eligible committed process messages across prior Runs and t
 - **THEN** all original Run records, tool calls, tool results, and resource data remain available unchanged
 
 ### Requirement: Compaction operations freeze their budgets and exact coverage for recovery
-When Figura starts a compaction operation, it SHALL durably bind the selected context capacity, both derived history budgets, summary contract version, target Run's committed base record/tool sequences, exact Run/record/tool coverage coordinates, and—after preparation—the summary Provider request descriptor, including the rendered summary instruction and its digest. Coverage MAY end within the active target Run but SHALL NOT extend beyond its frozen committed base prefix. A retry or restart SHALL reconstruct the same source slice and request identity even if Provider capacity configuration, Run status, or prompt assets change afterward. The checkpoint SHALL advance only after a valid summary is generated and the existing expected-revision compare-and-swap succeeds. The existing valid checkpoint SHALL remain unchanged when preparation, dispatch, or validation fails.
+When Figura starts a compaction operation, it SHALL durably bind the selected context capacity, both derived history budgets, summary contract version, target Run's committed base record/tool sequences, and exact Run/record/tool coverage coordinates. Coverage MAY end within the active target Run but SHALL NOT extend beyond its frozen committed base prefix. Once the summary request is prepared, Figura SHALL create a canonical Provider logical request record that freezes the rendered summary instruction and digest, prepared request fingerprint, Provider/model, stream contract, timeout and retry policy identities, and context estimate. The compaction operation SHALL reference that logical request rather than maintain a second Provider binding or attempt counter. A retry or restart SHALL reconstruct the same source slice and request identity even if Provider capacity configuration, Run status, or prompt assets change afterward. The checkpoint SHALL advance only after a valid terminal stream, summary validation, and the existing expected-revision compare-and-swap succeed. The existing valid checkpoint SHALL remain unchanged when preparation, dispatch, or validation fails.
 
 #### Scenario: Resume after capacity configuration changes
 - **WHEN** a compaction operation is interrupted and the selected Provider capacity changes before restart
-- **THEN** Figura resumes with the operation's persisted capacity, budgets, cutoff, base prefix, and request descriptor rather than selecting a new slice
+- **THEN** Figura resumes with the operation's persisted capacity, budgets, cutoff, base prefix, and canonical Provider request record rather than selecting a new slice
 
 #### Scenario: Resume an active-Run summary after interruption
 - **WHEN** an active-Run compaction operation is resumed after process restart
@@ -200,7 +200,7 @@ Figura SHALL keep the complete same-Session `RunExecutionState` catalog availabl
 - **THEN** the Agent can discover its reference through history/resource search and read it through the typed resource interface
 
 ### Requirement: Compaction failure preserves the existing request path
-If the summary request fails or produces an invalid summary, Figura SHALL leave any previous valid summary unchanged and SHALL NOT discard or truncate the original history projection. When the uncompressed request remains valid under existing payload and Provider protocol rules, Figura SHALL continue ordinary request preparation with that projection. Otherwise, it SHALL use the existing request-preparation failure behavior before claiming an ordinary Provider attempt.
+If the summary request fails or produces an invalid summary, Figura SHALL leave any previous valid summary unchanged and SHALL NOT discard or truncate the original history projection. When the uncompressed request remains valid under existing payload and Provider protocol rules, Figura SHALL continue ordinary request preparation with that projection. Otherwise, it SHALL use the existing request-preparation failure behavior before claiming an ordinary Provider attempt. For invalid summary responses, Runtime SHALL persist a content-free reason category covering the response envelope, JSON syntax, duplicate keys, top-level/progress fields, section/item shape, and source-reference shape or authorization; it SHALL NOT persist the rejected summary text for diagnosis.
 
 #### Scenario: Fall back after a failed summary request
 - **WHEN** the additional summary request fails but the uncompressed request remains valid
@@ -209,6 +209,10 @@ If the summary request fails or produces an invalid summary, Figura SHALL leave 
 #### Scenario: Reject an invalid generated summary
 - **WHEN** the summary output lacks valid source references or violates the summary contract
 - **THEN** Figura does not install it and retains the prior valid summary and source history
+
+#### Scenario: Diagnose an invalid generated summary without storing its contents
+- **WHEN** a generated summary is rejected by response or JSON contract validation
+- **THEN** the compaction operation records a safe reason category and does not store the rejected response body
 
 #### Scenario: Preserve existing preparation failure behavior
 - **WHEN** compaction fails and the uncompressed request violates an existing payload guard or selected Provider protocol requirement
@@ -271,3 +275,55 @@ The summary response SHALL use a machine-readable v2 structure with separate fie
 #### Scenario: Preserve a valid summary above or below its approximate target
 - **WHEN** a structurally valid, source-linked summary differs in length from its approximate target
 - **THEN** Figura preserves it and measures the rebuilt ordinary request using the local estimator
+
+### Requirement: Summary generation uses the canonical streaming Provider path
+Figura SHALL dispatch every compaction summary through the same streaming transport, timeout observation, cancellation, retry coordinator, and Provider attempt ledger used by ordinary Agent requests. The summary consumer SHALL assemble the complete stream privately, validate its response contract and source references, and install a checkpoint only after terminal completion. Partial summary text SHALL NOT be exposed as an assistant answer or replace any existing checkpoint.
+
+#### Scenario: Receive a complete summary stream
+- **WHEN** a summary request emits a valid terminal stream and the summary passes validation
+- **THEN** Figura installs the summary using the operation's frozen coverage and checkpoint revision
+
+#### Scenario: Interrupt summary generation
+- **WHEN** a summary stream fails or is cancelled before a valid terminal event
+- **THEN** Figura leaves the prior checkpoint unchanged and applies the shared Provider retry or safe fallback behavior
+
+### Requirement: DeepSeek compaction requests use isolated medium reasoning
+When Figura creates a context-compaction summary request for DeepSeek, it SHALL explicitly enable thinking and set `reasoning_effort` to `medium`. These options SHALL be part of the frozen Provider request descriptor so retries and recovery reuse the same request identity. This override SHALL apply only to compaction requests; ordinary Agent requests SHALL retain their configured reasoning options. Summary requests for other Providers SHALL retain their existing option-resolution behavior.
+
+#### Scenario: Bind medium reasoning for a new DeepSeek summary request
+- **WHEN** Figura creates a new compaction summary request for DeepSeek
+- **THEN** the prepared request enables thinking, uses medium reasoning effort, and freezes both values in its request descriptor
+
+#### Scenario: Leave ordinary DeepSeek requests unchanged
+- **WHEN** Figura prepares an ordinary Agent request for DeepSeek
+- **THEN** it uses the configured ordinary-request reasoning options rather than the compaction override
+
+#### Scenario: Preserve other Provider summary settings
+- **WHEN** Figura creates a compaction summary request for a Provider other than DeepSeek
+- **THEN** it uses that Provider's existing option-resolution behavior without applying DeepSeek's medium-reasoning override
+
+#### Scenario: Retry with the bound reasoning options
+- **WHEN** a DeepSeek summary request is retried or resumed after its request descriptor has been frozen
+- **THEN** Figura reuses the frozen medium-reasoning options and does not derive new options from a changed Provider profile
+
+### Requirement: DeepSeek summary validation uses final assistant content
+Figura SHALL allow a DeepSeek summary response to contain a provider-private reasoning continuation when the response otherwise satisfies the summary response envelope. It SHALL parse and validate only the final assistant content against the existing JSON, field, and authorized-source-reference contract. The continuation SHALL NOT be copied into the installed summary checkpoint or ordinary Agent history. Providers other than DeepSeek SHALL retain the existing summary response contract.
+
+#### Scenario: Accept a valid DeepSeek summary with a reasoning continuation
+- **WHEN** DeepSeek returns a stopped text response with valid summary JSON and a reasoning continuation
+- **THEN** Figura validates the final assistant content and may install the source-validated summary without including the continuation
+
+#### Scenario: Reject invalid final content despite a continuation
+- **WHEN** a DeepSeek response contains a reasoning continuation but its final assistant content is missing or violates the summary JSON or source-reference contract
+- **THEN** Figura rejects the summary, preserves the prior checkpoint, and follows the existing safe fallback behavior
+
+#### Scenario: Keep the non-DeepSeek response contract
+- **WHEN** another Provider returns a summary response containing a continuation
+- **THEN** Figura applies the existing response validation behavior for that Provider
+
+### Requirement: Existing frozen summary requests are not silently rebound
+When recovery finds an unfinished compaction operation whose frozen DeepSeek summary options do not satisfy the current medium-reasoning policy, Figura SHALL NOT rewrite the descriptor or dispatch a request with changed options under the same operation identity. It SHALL resolve the operation through the existing safe fallback behavior while preserving any prior valid checkpoint.
+
+#### Scenario: Fall back from an unfinished operation with old reasoning options
+- **WHEN** recovery encounters an unfinished DeepSeek compaction operation bound to reasoning options other than enabled thinking with medium effort
+- **THEN** Figura does not mutate or dispatch that operation and continues through the existing safe fallback path with the prior checkpoint unchanged
