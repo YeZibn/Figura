@@ -1,6 +1,7 @@
 """Versioned codecs for persisted tool calls, attempts, and results."""
 
 from __future__ import annotations
+from figura.shared.media import ToolImageAttachment, attachment_from_dict, attachment_to_dict
 
 import re
 from typing import Any
@@ -51,7 +52,7 @@ def decode_tool_fact(kind: ToolFactKind, schema_version: int, raw: str) -> objec
         raise RunError(RunErrorCode.INTEGRITY_ERROR)
     if value.get("schema_version") != schema_version:
         raise RunError(RunErrorCode.INTEGRITY_ERROR)
-    if schema_version not in {1, 2}:
+    if schema_version not in {1, 2, 3}:
         raise RunError(RunErrorCode.UNSUPPORTED_VERSION)
     if schema_version == 1:
         utf8_size(raw, MAX_TOOL_FACT_JSON_BYTES)
@@ -93,9 +94,11 @@ def decode_tool_fact(kind: ToolFactKind, schema_version: int, raw: str) -> objec
         )
 
     if kind is ToolFactKind.TOOL_RESULT:
+        if schema_version != 3:
+            raise RunError(RunErrorCode.UNSUPPORTED_VERSION)
         _require_keys(
             value,
-            {"schema_version", "fact_kind", "tool_call_sequence", "attempt_id", "call_id", "tool_name", "outcome", "result", "error"},
+            {"schema_version", "fact_kind", "tool_call_sequence", "attempt_id", "call_id", "tool_name", "outcome", "result", "error", "attachments"},
         )
         try:
             outcome = ToolOutcome(value["outcome"])
@@ -114,6 +117,14 @@ def decode_tool_fact(kind: ToolFactKind, schema_version: int, raw: str) -> objec
                 raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
             _require_keys(error_raw, {"code", "message", "retryable", "field_path"})
             error = _tool_error_from_dict(error_raw)
+        try:
+            if not isinstance(value["attachments"], list):
+                raise ValueError("attachments must be an array")
+            attachments = tuple(attachment_from_dict(a) for a in value["attachments"])
+            if outcome is ToolOutcome.FAILED and attachments:
+                raise ValueError("failure cannot have media")
+        except (ValueError, TypeError):
+            raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD) from None
         return ToolResultFact(
             tool_call_sequence=_positive_int(value["tool_call_sequence"]),
             attempt_id=_nonempty_string(value["attempt_id"], 128),
@@ -121,6 +132,7 @@ def decode_tool_fact(kind: ToolFactKind, schema_version: int, raw: str) -> objec
             tool_name=_tool_name(value["tool_name"]),
             outcome=outcome,
             result=freeze_json_value(result) if result is not None else None,
+            attachments=attachments,
             error=error,
             schema_version=schema_version,
         )
@@ -174,7 +186,7 @@ def _tool_fact_to_dict(kind: ToolFactKind, payload: object) -> dict[str, Any]:
             "registry_version": _nonempty_string(payload.registry_version, 128),
         }
     if kind is ToolFactKind.TOOL_RESULT and isinstance(payload, ToolResultFact):
-        if payload.schema_version not in {1, 2}:
+        if payload.schema_version != 3:
             raise RunError(RunErrorCode.UNSUPPORTED_VERSION)
         try:
             outcome = ToolOutcome(payload.outcome)
@@ -187,7 +199,7 @@ def _tool_fact_to_dict(kind: ToolFactKind, payload: object) -> dict[str, Any]:
                 raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
             result = _bounded_result(payload.result, legacy=payload.schema_version == 1)
         else:
-            if payload.result is not None or not isinstance(payload.error, ToolExecutionError):
+            if payload.result is not None or not isinstance(payload.error, ToolExecutionError) or payload.attachments:
                 raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
             error = _tool_error_to_dict(payload.error)
         return {
@@ -200,6 +212,7 @@ def _tool_fact_to_dict(kind: ToolFactKind, payload: object) -> dict[str, Any]:
             "outcome": outcome.value,
             "result": result,
             "error": error,
+            "attachments": _attachments_to_list(payload.attachments),
         }
     raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
 
@@ -285,3 +298,15 @@ def _position(value: object, *, legacy: bool = False) -> int:
         raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
     return value
 
+
+
+def _attachments_to_list(attachments) -> list[dict[str, object]]:
+    try:
+        if not isinstance(attachments, tuple) or any(not isinstance(a, ToolImageAttachment) for a in attachments):
+            raise ValueError("invalid attachments")
+        values = [attachment_to_dict(a) for a in attachments]
+        for value in values:
+            attachment_from_dict(value)
+        return values
+    except (TypeError, ValueError):
+        raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD) from None

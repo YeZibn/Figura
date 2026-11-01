@@ -66,7 +66,9 @@ Figura SHALL remove every Panel record and private Panel PNG owned by a permanen
 - **THEN** Figura restores the staged Panel files and retains their metadata and readable content
 
 ### Requirement: Image bytes enter model requests only through explicit observation calls
-Figura SHALL register `load_image` with authorized `source_kind` and opaque `source_id`. It SHALL verify Session ownership and return only the source kind, ID, display name, and dimensions; original bytes SHALL remain outside durable tool results. A Provider request SHALL include original image bytes only for successful `load_image` calls in the immediately preceding fully committed tool batch, in tool-call order, with duplicate source IDs included once. A fully committed batch containing successful `measure_chart` calls SHALL additionally include one deterministic annotated image per successful measurement call, reconstructed from its authorized selected source and complete result. Successful `extract_text` calls SHALL likewise include one matching transient OCR annotation. Image bytes and annotations SHALL NOT be persisted in resource catalogs or tool-result JSON. The initial request and requests after other tool batches SHALL contain no image bytes.
+Figura SHALL register load_image with authorized source_kind and opaque source_id, preserve Session ownership checks and existing business fields source kind, ID, display name and dimensions, and return one original image attachment through the unified tool-result contract. The first ordinary request SHALL contain source identities and names but no image bytes. The next ordinary request following a complete visual batch SHALL include each successful call's ordered saved attachments in that call's own native tool-result content. Different calls naming the same source SHALL each retain their logical image occurrence; storage deduplication SHALL NOT alter call association.
+
+Successful extract_text and measure_chart calls SHALL provide saved OCR/measurement annotation attachments rather than request-time transient overlays. Successful rendering and explicit historical image reads SHALL use the same attachment-driven projection. Image bytes SHALL remain outside durable JSON, resource catalogs and public events. Requests after nonvisual batches SHALL NOT automatically resend images from earlier batches or Runs. No normal user message SHALL be fabricated solely to carry tool image feedback.
 
 #### Scenario: Start a Run with multiple images
 - **WHEN** a Run references multiple images and the checkpoint points to its initial model action
@@ -74,7 +76,7 @@ Figura SHALL register `load_image` with authorized `source_kind` and opaque `sou
 
 #### Scenario: Load multiple images in one tool batch
 - **WHEN** successful `load_image` calls reference multiple authorized images in one fully committed batch
-- **THEN** the next Provider request contains each original image once in call order with its ID and name in user-role text
+- **THEN** the next Provider request contains each call's original attachment and identity inside that call's tool result in call order, including separate occurrences when calls share a source
 
 #### Scenario: Load an image from an earlier Run
 - **WHEN** `load_image` names an authorized image resource from an earlier terminal Run in the same Session
@@ -86,10 +88,10 @@ Figura SHALL register `load_image` with authorized `source_kind` and opaque `sou
 
 #### Scenario: Return OCR annotations after an OCR batch
 - **WHEN** the immediately preceding fully committed batch contains successful `extract_text` calls
-- **THEN** the next Provider request contains the matching OCR observations and one transient annotated image per call
+- **THEN** the next Provider request contains the matching OCR observations and one saved annotated image inside each call's tool result
 
 #### Scenario: Do not repeat old overlays
-- **WHEN** the immediately preceding batch contains no successful OCR or `measure_chart` call
+- **WHEN** the immediately preceding batch contains no annotation attachment, including through an explicit historical image read
 - **THEN** no annotation from an earlier batch or Run is attached
 
 #### Scenario: Reject an image outside the resource catalog
@@ -97,7 +99,7 @@ Figura SHALL register `load_image` with authorized `source_kind` and opaque `sou
 - **THEN** Figura returns a bounded failure and provides no image bytes
 
 #### Scenario: Fail before Provider dispatch if an observation image is unavailable
-- **WHEN** a successful OCR or measurement result requires annotation but its authorized source cannot be resolved
+- **WHEN** a committed successful OCR or measurement result has a saved annotation that cannot be resolved or does not match its descriptor
 - **THEN** request preparation fails before claiming a Provider attempt and sends no request
 
 #### Scenario: Enforce Provider image bounds
@@ -107,3 +109,7 @@ Figura SHALL register `load_image` with authorized `source_kind` and opaque `sou
 #### Scenario: Read an image after its source file disappears
 - **WHEN** a `load_image` result committed but its source bytes cannot be resolved for the next request
 - **THEN** request preparation fails and sends no image
+
+#### Scenario: Keep duplicate source reads tied to separate calls
+- **WHEN** two successful load_image calls in the same batch name the same Attachment
+- **THEN** both results carry their original attachment with matching call IDs, while the underlying resource and file are reused

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from figura.tools.contracts import ToolOutput, ToolImageOutput
+from figura.shared.media import ResourceImage
+
 from collections.abc import Callable, Mapping
 from typing import Any
 
@@ -14,7 +17,8 @@ from figura.charts.chartfigure import (
     validate_chart_figure,
 )
 from figura.charts.chartspec import ChartType
-from figura.agent.execution_resources import MeasurementContent, RunExecutionState, ToolResourceRef
+from figura.shared.resource_refs import ToolResourceRef
+from figura.agent.execution_resources import (MeasurementContent, RunExecutionState)
 from figura.runtime.errors import RunError
 from figura.tools.contracts import (
     ReplayEffect,
@@ -65,7 +69,7 @@ _MEASUREMENT_TOOLS = frozenset({"measure_chart"})
 def assemble_chart_figure_definition(
     execution_state_for_run: Callable[[str, str], RunExecutionState],
 ) -> ToolDefinition:
-    def assemble(context: ToolContext, arguments: Mapping[str, Any]) -> dict[str, object]:
+    def assemble(context: ToolContext, arguments: Mapping[str, Any]) -> ToolOutput:
         try:
             figure = parse_chart_figure(arguments)
         except ChartFigureParseError as error:
@@ -123,7 +127,7 @@ def assemble_chart_figure_definition(
                         field_path=field_path,
                     )
 
-        return {
+        return ToolOutput({
             "figure_ref": {"run_id": context.run_id, "call_id": context.call_id},
             "figure_digest": chart_figure_digest(figure),
             "title": figure.title,
@@ -135,7 +139,7 @@ def assemble_chart_figure_definition(
                 }
                 for chart in figure.charts
             ],
-        }
+        })
 
     return ToolDefinition(
         name="assemble_chart_figure",

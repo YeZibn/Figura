@@ -1,6 +1,9 @@
 from __future__ import annotations
+from figura.tools import ToolOutput
+from tests.figura_sources_support import make_durable_tool_executor
 
 from io import BytesIO
+from types import SimpleNamespace
 
 import pytest
 from PIL import Image
@@ -11,20 +14,13 @@ from tests.figura_sources_support import (
     make_panel_service,
 )
 
-from figura.agent.execution_resources import (
-    AttachmentContent,
-    ChartRenderContent,
-    ExecutionResource,
-    ImageResourceRef,
-    MeasurementContent,
-    OcrContent,
-    PanelContent,
-    RunExecutionState,
-    ToolResourceRef,
-)
+from figura.shared.resource_refs import ImageResourceRef, ToolResourceRef
+from figura.agent.execution_resources import (AttachmentContent, ChartRenderContent, ExecutionResource, MeasurementContent, OcrContent, PanelContent, RunExecutionState)
 from figura.agent.execution_state import RunExecutionStateService
 from figura.agent.request import AgentRequestBuilder
-from figura.agent.prompting.observations import build_observation_messages
+from figura.agent.prompting.observations import pending_visual_results, tool_message_content
+from figura.memory import ToolMessage
+from figura.memory.projector import project_run_messages
 from figura.memory.retrieval import SessionHistorySearch, resource_ref_to_dict
 from figura.providers import ImageBlock
 from figura.tools.implementations.history import (
@@ -227,7 +223,7 @@ def test_history_tools_use_the_durable_current_run_audit_path(tmp_path):
         ),
         registry_version=registry.version,
     )
-    state = DurableToolExecutor(store, registry).execute_pending(
+    state = make_durable_tool_executor(store, registry).execute_pending(
         session.session_id, target.run_id
     )
     result_facts = [
@@ -250,7 +246,7 @@ def test_search_reads_committed_tool_result_without_reexecution(tmp_path):
     session = coordinator.create_session()
 
     def inspect(_context: ToolContext, _arguments):
-        return {"value": 42, "note": "已提交观察"}
+        return ToolOutput({"value": 42, "note": "已提交观察"})
 
     registry = ToolRegistry(
         "history-tools-v1",
@@ -287,7 +283,7 @@ def test_search_reads_committed_tool_result_without_reexecution(tmp_path):
         ),
         registry_version=registry.version,
     )
-    DurableToolExecutor(store, registry).execute_pending(session.session_id, run.run_id)
+    make_durable_tool_executor(store, registry).execute_pending(session.session_id, run.run_id)
     after_tool = store.read_run_state(session.session_id, run.run_id)
     _commit_response(
         coordinator,
@@ -418,13 +414,16 @@ def test_historical_image_tool_attaches_verified_image_on_next_request(tmp_path)
         ),
         registry_version=registry.version,
     )
-    state = DurableToolExecutor(store, registry).execute_pending(
+    state = make_durable_tool_executor(store, registry).execute_pending(
         session.session_id, target.run_id
     )
     execution = execution_state_service.build(
         state, coordinator.read_prior_run_states(session.session_id, target.run_id)
     )
-    messages = build_observation_messages(state, execution, image_reader)
+    messages = [SimpleNamespace(content=tool_message_content(message, tool_name="read_resource_image",
+        selected=pending_visual_results(state), session_id=session.session_id,
+        state=execution, image_reader=image_reader)) for message in project_run_messages(state)
+        if isinstance(message, ToolMessage)]
     image_blocks = [
         block for message in messages
         for block in message.content
@@ -526,15 +525,23 @@ def test_historical_image_tool_supports_panel_annotations_and_chart_render():
         def image_resource(self, _session_id, _run_id, raw_reference):
             return execution, by_reference[reference_key(raw_reference)]
 
+    from figura.shared.media import ResourceImage, ToolImageAttachment
+    buffer = BytesIO()
+    Image.new('RGB', (16, 9), 'purple').save(buffer, format='PNG')
+    image = ResourceImage.from_bytes(buffer.getvalue())
     class ImageReader:
+        def descriptor(self, _session_id, _execution, ref):
+            kind = {'attachment': 'original', 'panel': 'original', 'ocr': 'ocr_annotation',
+                    'measurement': 'measurement_annotation', 'chart_render': 'rendered'}[ref.kind]
+            return ToolImageAttachment.describe(ref, kind, image)
         def read(self, _session_id, _execution, _reference):
-            return b"verified-image", 16, 9
+            return image.image_bytes, 16, 9
 
     definition = historical_image_tool_definition(History(), ImageReader())
     context = ToolContext("current-run", "session-1", "history-image-call")
     from figura.tools import ToolInvocation, ToolRuntime
     import json
-    runtime = ToolRuntime(ToolRegistry("image-ref-tests", (definition,)))
+    runtime = ToolRuntime(ToolRegistry("image-ref-tests", (definition,)), media_committer=lambda _c, out: tuple(i.descriptor() for i in out.images))
     for ref, _content, expected_name, expected_media_type in refs_and_contents:
         invocation = ToolInvocation(context.call_id, definition.name, json.dumps({"resource_ref": resource_ref_to_dict(ref)}))
         execution_result = runtime.invoke(invocation, context)
@@ -587,7 +594,7 @@ def test_complete_v7_figure_remains_readable_and_projectable_with_v8_registry(tm
         ProviderId.QWEN, MODEL_IDS[ProviderId.QWEN], "制作图表。",
         (ProviderToolCall("figure-call", definition.name, json.dumps(figure)),), FinishReason.TOOL_CALLS,
     ), registry_version=old_registry.version)
-    DurableToolExecutor(store, old_registry).execute_pending(session.session_id, source.run_id)
+    make_durable_tool_executor(store, old_registry).execute_pending(session.session_id, source.run_id)
     completed = _complete_text(coordinator, session.session_id, source.run_id)
     target = _create_run(coordinator, session.session_id, "figure-target", "修改历史图")
     ref = {"kind": "chart_figure", "run_id": source.run_id, "call_id": "figure-call"}

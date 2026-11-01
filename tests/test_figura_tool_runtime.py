@@ -1,4 +1,5 @@
 from __future__ import annotations
+from figura.tools import ToolOutput
 
 import math
 from collections.abc import Mapping
@@ -62,7 +63,7 @@ def _context(call_id: str, *, cancelled: bool = False) -> ToolContext:
 
 def _echo_handler(context: ToolContext, arguments: Mapping[str, Any]) -> dict[str, Any]:
     assert context.run_id == "run-1"
-    return {"value": arguments["value"]}
+    return ToolOutput({"value": arguments["value"]})
 
 
 def test_valid_invocation_calls_handler_once_with_validated_arguments_and_context() -> None:
@@ -70,7 +71,7 @@ def test_valid_invocation_calls_handler_once_with_validated_arguments_and_contex
 
     def handler(context: ToolContext, arguments: Mapping[str, Any]) -> dict[str, Any]:
         calls.append((context.call_id, arguments))
-        return {"value": arguments["value"]}
+        return ToolOutput({"value": arguments["value"]})
 
     invocation = ToolInvocation("call-17", "echo_value", '{"value":7}')
     result = _runtime(handler).invoke(invocation, _context("call-17"))
@@ -92,7 +93,7 @@ def test_idempotent_local_write_requires_context_key_before_dispatch() -> None:
 
     def handler(context: ToolContext, arguments: Mapping[str, Any]) -> dict[str, Any]:
         calls.append(context.idempotency_key)
-        return {"value": arguments["value"]}
+        return ToolOutput({"value": arguments["value"]})
 
     runtime = _runtime(handler, replay_effect=ReplayEffect.IDEMPOTENT_LOCAL_WRITE)
     invocation = ToolInvocation("call-idempotent", "echo_value", '{"value":7}')
@@ -131,7 +132,7 @@ def test_invalid_arguments_and_unknown_tools_never_invoke_handler(
 
     def handler(_context: ToolContext, arguments: Mapping[str, Any]) -> dict[str, Any]:
         calls.append(1)
-        return {"value": arguments["value"]}
+        return ToolOutput({"value": arguments["value"]})
 
     call_id = "call-invalid"
     result = _runtime(handler).invoke(
@@ -152,7 +153,7 @@ def test_argument_byte_limit_and_context_identity_are_checked_before_execution()
 
     def handler(_context: ToolContext, arguments: Mapping[str, Any]) -> dict[str, Any]:
         calls.append(1)
-        return {"value": arguments["value"]}
+        return ToolOutput({"value": arguments["value"]})
 
     runtime = _runtime(handler)
     too_large = '{"value":7}' + " " * MAX_ARGUMENT_BYTES
@@ -172,7 +173,7 @@ def test_cooperative_preinvoke_cancellation_returns_once_without_calling_handler
 
     def handler(_context: ToolContext, arguments: Mapping[str, Any]) -> dict[str, Any]:
         calls.append(1)
-        return {"value": arguments["value"]}
+        return ToolOutput({"value": arguments["value"]})
 
     result = _runtime(handler).invoke(
         ToolInvocation("call-cancelled", "echo_value", '{"value":7}'),
@@ -237,7 +238,7 @@ def test_invalid_or_oversized_handler_outputs_become_bounded_failed_results(
 
     def handler(_context: ToolContext, _arguments: Mapping[str, Any]) -> object:
         calls.append(1)
-        return output
+        return (ToolOutput(output) if isinstance(output, dict) else output)
 
     result = _runtime(handler).invoke(
         ToolInvocation("call-output", "echo_value", '{"value":7}'),
@@ -255,3 +256,11 @@ def test_runtime_does_not_mutate_its_registry_reference() -> None:
     runtime = _runtime(_echo_handler)
     with pytest.raises(AttributeError):
         runtime._registry = ToolRegistry("empty-v1", ())  # type: ignore[misc]
+
+
+def test_dictionary_handler_is_rejected_without_online_output_adapter():
+    result = _runtime(lambda *_: {'value': 7}).invoke(
+        ToolInvocation('bare-dictionary', 'echo_value', '{"value":7}'), _context('bare-dictionary'))
+    assert result.outcome is ToolOutcome.FAILED
+    assert result.error.code == 'invalid_result'
+    assert result.attachments == ()

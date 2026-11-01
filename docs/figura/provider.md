@@ -1,6 +1,6 @@
 # Provider：模型请求与响应边界
 
-> 更新日期：2026-10-19。[返回总览](../figura-implementation-overview.md)。本篇拥有模型服务的调用期合同、配置、适配与规范化失败；持久化的 `ProviderRequestRecord`、`ProviderAttempt` 和 `ProviderContinuationFact` 由[Run Runtime](runtime.md#4-完整模型字段)定义。
+> 更新日期：2026-10-22。[返回总览](../figura-implementation-overview.md)。本篇拥有模型服务的调用期合同、配置、适配与规范化失败；持久化的 `ProviderRequestRecord`、`ProviderAttempt` 和 `ProviderContinuationFact` 由[Run Runtime](runtime.md#4-完整模型字段)定义。
 
 ## 1. 职责与边界
 
@@ -79,8 +79,8 @@ ProviderCapabilities 按固定 Provider/model profile 声明 `streaming`、`usag
 
 | 完整字段路径 | 类型 | 构造默认 | 含义与约束 | 写入 → 权威 → 读取/公开 |
 |---|---|---|---|---|
-| ImageBlock.media_type | str | 必传 | 由图片内容验证得到的媒体类型 | FiguraAttachmentService / AgentRequestBuilder → 调用期内存 → Provider adapter；字节不入 Run 事实或普通日志 |
-| ImageBlock.image_bytes | bytes | 必传 | 已验证图像字节，仅调用期内存 | FiguraAttachmentService / AgentRequestBuilder → 调用期内存 → Provider adapter；字节不入 Run 事实或普通日志 |
+| ImageBlock.media_type | str | 必传 | 由图片内容验证得到的媒体类型 | AgentRequestBuilder 水合中立媒体 → 调用期内存 → Provider adapter；字节不入 Run 事实或普通日志 |
+| ImageBlock.image_bytes | bytes | 必传 | 已验证图像字节，仅调用期内存 | AgentRequestBuilder 水合中立媒体 → 调用期内存 → Provider adapter；字节不入 Run 事实或普通日志 |
 | ImageBlock.source_ref | Mapping[str, str] 或 None | None；repr=False | Agent 图片的完整 typed ref；直接 Provider 调用可无；不进入 wire | Agent image feedback → 调用期内存 → prepare 私有 manifest，字段见 [Runtime](runtime.md#providerrequestbinding) |
 | ImageBlock.observation_kind | str | original | original/annotated/rendered 回看类别；不进入 wire | Agent image feedback → 调用期内存 → prepare manifest |
 
@@ -299,3 +299,15 @@ SDK `max_retries=0`、HTTP transport `retries=0`；请求只走流式 transport�
 - `ProviderFailureCode`：`configuration_missing`、`invalid_configuration`、`unsupported_provider`、`unsupported_model`、`invalid_request`、`unsupported_capability`、`provider_rejected`、`provider_unavailable`、`timeout`、`connection_error`、`incomplete_stream`、`invalid_provider_response`、`transport_error`。
 - `ContentBlock = TextBlock | ImageBlock`，`MessageContent = str | tuple[ContentBlock, ...]`。Exception 类携带的错误状态由 `ProviderFailure` 或安全错误码表达，不作为另一个持久事实。
 - 代码：[模型](../../src/figura/providers/models.py)、[配置](../../src/figura/providers/config.py)、[Client/Factory](../../src/figura/providers/client.py)、[适配器](../../src/figura/providers/adapters/base.py)、[错误](../../src/figura/providers/errors.py)；主规格：[model-provider](../../openspec/figura/openspec/specs/model-provider/spec.md)、[continuation 持久化](../../openspec/figura/openspec/specs/provider-continuation-persistence/spec.md)。
+
+## 原生工具结果图片能力
+
+当前工作树的 ProviderPolicy 显式声明 `supports_tool_result_images`，默认 False。DeepSeek/deepseek-flash 使用 Chat Completions 的原生 TOOL 文本/图片数组；Qwen/qwen3.8-flash 的[当前官方 Chat Completions 合同](https://www.alibabacloud.com/help/en/model-studio/qwen-api-via-openai-chat-completions)要求 tool.content 是字符串，不满足本次图片数组合同；MiMo/mimo-v2.6-flash 的精确 TOOL 图片合同及识别仍未确认，两者保持 False。该能力与“凭据配置有效”的 availability 不同：配置可用并不代表可忠实表达图像工具结果。
+
+AgentRequestBuilder 在调用期 asset_contract 声明 requires_tool_result_images；它由 Registry 中 `ToolDefinition.produces_images` 派生。Provider 在首次普通请求 prepare 时就拒绝不支持该能力的工具目录，实际 TOOL ImageBlock 同样校验，不 claim attempt 或 dispatch。这个临时准入标志不扩充持久 manifest 字段，不会改写历史请求审计。各定义的图片声明纳入 Registry 摘要。
+
+通用校验保留完整工具批次和精确 tool_call_id 关联，不再禁止 TOOL 图片。同一批内 call ID 必须唯一；闭合后的后续批次可再次使用相同 opaque ID，资源身份仍由完整 Run/call 引用区分。原生序列化保留角色、调用及内容块顺序，将图旁 TextBlock 与 image_url 放在同一 TOOL content 中。不追加普通 user、不丢图、不换模型/端点或协议。
+
+图片、hint、角色、call ID 和顺序全部进入原 wire request_fingerprint；资产 manifest 仍使用原 source_ref、observation_kind、media_type、byte_count、sha256。具体 image_kind 仅在业务附件及身份文本中表达，manifest 的 observation_kind 按 original/annotated/rendered 粗分类投影。相同逻辑请求重试不改变 body 或媒体；图像变化沿原绑定不匹配规则失败，continuation、流式请求和重试额度保持原合同。
+
+2026-10-21 最小两图识别：DeepSeek 对两条工具结果分别识别红色圆形、蓝色方形且 call ID 正确，实际 usage 输入 717、输出 35、总计 752。Qwen 请求返回 403，不能据此声称支持或不支持；MiMo 未配置有效凭据，未发送。线上支持范围只包括已通过的 DeepSeek；离线测试同时覆盖其余模型的本地能力拒绝。该测试不衡量图表抽取质量或长任务成功率。

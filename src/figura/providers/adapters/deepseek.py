@@ -24,6 +24,7 @@ _DEEPSEEK_EFFORTS = {
 
 class DeepSeekPolicy(ProviderPolicy):
     provider_id = ProviderId.DEEPSEEK
+    supports_tool_result_images = True
 
     def validate_configuration(self) -> ProviderFailureCode | None:
         base_error = super().validate_configuration()

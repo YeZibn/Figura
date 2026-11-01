@@ -131,7 +131,8 @@ class ProviderClient:
             "registry_version": "provider-direct-v1",
             "registry_digest": hashlib.sha256(encode_json(projection["tools"]).encode()).hexdigest(),
         }
-        manifest = {**contract, "adapter_contract_version": 1, "images": images}
+        manifest = {**{key: item for key, item in contract.items() if key != "requires_tool_result_images"},
+                    "adapter_contract_version": 1, "images": images}
         descriptor = {"provider_id": self.provider_id.value, "model_id": self.model_id,
             "endpoint_identity": endpoint_binding,
             "request_fingerprint": digest.hexdigest(),

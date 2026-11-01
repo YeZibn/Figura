@@ -1,6 +1,8 @@
 """Read-only, source-addressable Session history search and retrieval."""
 
 from __future__ import annotations
+from figura.tools.observation import observation_json
+from figura.shared.media import attachment_to_dict
 
 import base64
 import hashlib
@@ -9,18 +11,8 @@ import re
 from collections.abc import Mapping
 from dataclasses import replace
 
-from figura.agent.execution_resources import (
-    AttachmentContent,
-    ChartFigureContent,
-    ChartRenderContent,
-    ImageResourceRef,
-    MeasurementContent,
-    OcrContent,
-    PanelContent,
-    ResourceRef,
-    RunExecutionState,
-    ToolResourceRef,
-)
+from figura.shared.resource_refs import ImageResourceRef, ResourceRef, ToolResourceRef
+from figura.agent.execution_resources import (AttachmentContent, ChartFigureContent, ChartRenderContent, MeasurementContent, OcrContent, PanelContent, RunExecutionState)
 from figura.agent.execution_state import RunExecutionStateService
 from figura.runtime.coordinator import RunCoordinator
 from figura.runtime.errors import RunError, RunErrorCode
@@ -226,6 +218,7 @@ class SessionHistorySearch:
                     "source_kind": "tool_result",
                     "tool_name": result.tool_name,
                     "outcome": result.outcome.value,
+                    "attachments": [attachment_to_dict(a) for a in result.attachments],
                     "label": result.tool_name,
                     "excerpt": _excerpt(text),
                 }
@@ -349,6 +342,7 @@ class SessionHistorySearch:
                     "tool_name": result.tool_name,
                     "call_id": result.call_id,
                     "outcome": result.outcome.value,
+                    "attachments": [attachment_to_dict(a) for a in result.attachments],
                 }
                 if result.outcome is ToolOutcome.SUCCEEDED:
                     content["result"] = _json_value(result.result)
@@ -433,6 +427,8 @@ class SessionHistorySearch:
             }
         else:
             raise RunError(RunErrorCode.INTEGRITY_ERROR)
+        if hasattr(content, "attachments"):
+            value["attachments"] = [attachment_to_dict(a) for a in content.attachments]
         if run_id is not None and (
             run_id not in states or states[run_id].run.ordinal > target_ordinal
         ):
@@ -529,7 +525,7 @@ def _message_search_text(message: MemoryMessage) -> tuple[str, str, str]:
             for call in message.tool_calls
         )
         return "assistant", message.content, detail
-    return "tool", message.content, message.tool_call_id
+    return "tool", observation_json(message), message.tool_call_id
 
 
 def _source_matches(kind: str, requested: str | None) -> bool:

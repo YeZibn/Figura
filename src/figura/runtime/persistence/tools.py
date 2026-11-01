@@ -359,6 +359,7 @@ class ToolRepository:
                 outcome=result.outcome,
                 result=result.result,
                 error=result.error,
+                attachments=result.attachments,
             )
             tool_sequence = checkpoint.last_committed_tool_sequence + 1
             fact = _insert_tool_fact(

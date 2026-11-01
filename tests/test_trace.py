@@ -113,14 +113,14 @@ def test_trace_redacts_local_paths_inside_measurement_arguments():
         payload={
             "arguments": {
                 "measurement_target": {
-                    "reason": "复查 /Users/yezibin/Project/Figura/photo/chart.png",
+                    "reason": "复查 /Users/example/Project/Figura/photo/chart.png",
                 }
             }
         },
     )
 
     encoded = event.to_json()
-    assert "/Users/yezibin/Project/Figura" not in encoded
+    assert "/Users/example/Project/Figura" not in encoded
     assert "[PATH_OMITTED]" in encoded
 
 

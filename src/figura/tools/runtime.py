@@ -6,6 +6,8 @@ import inspect
 from collections.abc import Mapping
 from typing import Any
 
+from figura.shared.media import attachment_to_dict
+from figura.shared.image_limits import MAX_TOTAL_IMAGE_BYTES
 from figura.shared.json_schema import JsonValueError, canonical_json_dumps, normalize_json_value, validate_instance
 from figura.shared.payloads import PayloadError, PayloadTooLarge, decode_json, encode_json, payload_scope
 from .contracts import (
@@ -19,6 +21,7 @@ from .contracts import (
     ToolInvocationError,
     ToolOutcome,
     ToolOutcomeUnknown,
+    ToolOutput,
     freeze_json_value,
 )
 from .limits import MAX_ERROR_POINTER_BYTES
@@ -37,12 +40,13 @@ _ARGUMENT_MESSAGES = {
 class ToolRuntime:
     """Validate and invoke exactly one registered handler per call."""
 
-    __slots__ = ("_registry",)
+    __slots__ = ("_registry", "_media_committer")
 
-    def __init__(self, registry: ToolRegistry) -> None:
+    def __init__(self, registry: ToolRegistry, *, media_committer=None) -> None:
         if not isinstance(registry, ToolRegistry):
             raise TypeError("registry must be a ToolRegistry")
         object.__setattr__(self, "_registry", registry)
+        object.__setattr__(self, "_media_committer", media_committer)
 
     def __setattr__(self, name: str, value: object) -> None:
         raise AttributeError("ToolRuntime is immutable")
@@ -151,7 +155,7 @@ class ToolRuntime:
                 raise ToolOutcomeUnknown() from None
             return _handler_failed(invocation)
 
-        result = _success_or_failure(invocation, definition, output)
+        result = _success_or_failure(invocation, definition, output, context, self._media_committer)
         if durable and result.outcome is ToolOutcome.FAILED and definition.replay_effect is not ReplayEffect.REPLAY_SAFE:
             raise ToolOutcomeUnknown()
         return result
@@ -170,8 +174,10 @@ def _success_or_failure(
     invocation: ToolInvocation,
     definition: ToolDefinition,
     output: object,
+    context: ToolContext,
+    media_committer,
 ) -> ToolExecutionResult:
-    if not isinstance(output, Mapping):
+    if not isinstance(output, ToolOutput):
         return _failed(
             invocation.call_id,
             invocation.name,
@@ -180,9 +186,14 @@ def _success_or_failure(
             retryable=False,
         )
     try:
+        if sum(len(item.image.image_bytes) for item in output.images) > MAX_TOTAL_IMAGE_BYTES:
+            raise ValueError("tool media exceeds image byte guard")
+        if definition.produces_images and not output.images:
+            raise ValueError("visual result requires media")
         encode_json({"call_id": invocation.call_id, "tool_name": invocation.name,
-            "outcome": "succeeded", "result": output, "error": None})
-        normalized = normalize_json_value(output)
+            "outcome": "succeeded", "result": output.result, "error": None,
+            "attachments": [attachment_to_dict(item.descriptor()) for item in output.images]})
+        normalized = normalize_json_value(output.result)
         if not isinstance(normalized, dict):
             raise JsonValueError("result is not an object")
         encode_json(normalized)
@@ -206,12 +217,20 @@ def _success_or_failure(
             retryable=False,
             field_path=issue.pointer or None,
         )
-    return ToolExecutionResult(
-        call_id=invocation.call_id,
-        tool_name=invocation.name,
-        outcome=ToolOutcome.SUCCEEDED,
-        result=normalized,
-    )
+    try:
+        if output.images and media_committer is None:
+            raise ValueError("media committer required")
+        attachments = media_committer(context, output) if output.images else ()
+        return ToolExecutionResult(
+            call_id=invocation.call_id,
+            tool_name=invocation.name,
+            outcome=ToolOutcome.SUCCEEDED,
+            result=normalized,
+            attachments=attachments,
+        )
+    except Exception:
+        return _failed(invocation.call_id, invocation.name, "image_feedback_unavailable",
+                       "工具图像当前无法准备。", retryable=True)
 
 
 def _failed(

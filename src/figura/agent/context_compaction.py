@@ -1,6 +1,8 @@
 """Pure selection and response validation for Session context compaction."""
 
 from __future__ import annotations
+from figura.tools.observation import observation_json
+from .prompting.observations import pending_visual_results
 
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
@@ -195,7 +197,10 @@ def select_compaction_coverage(
             suffix_start = index
             continue
         # Keep the newest complete interaction even when it alone exceeds the target.
-        if suffix_start == len(candidate_units) and protected_tokens == 0:
+        if suffix_start == len(candidate_units) and (protected_tokens == 0 or (
+            active_run_state is not None and unit.state.run.run_id == active_run_state.run.run_id
+            and pending_visual_results(active_run_state)
+        )):
             suffix_start = index
             suffix_tokens += unit_tokens
         break
@@ -265,6 +270,12 @@ def selection_for_coverage(
     if cutoff_index is None:
         return None
     covered_prefix = candidate_units[:cutoff_index + 1]
+    if active_run_state is not None and pending_visual_results(active_run_state):
+        pending = pending_visual_results(active_run_state)
+        if any(unit.state.run.run_id == active_run_state.run.run_id
+               and any(sequence <= unit.tool_sequence for run_id, sequence in pending)
+               for unit in covered_prefix):
+            return None
     return CompactionSelection(
         selected_run_states=_unique_states(covered_prefix),
         covered_run_id=operation.covered_run_id,
@@ -523,7 +534,7 @@ def _message_projection(message: MemoryMessage) -> dict[str, object]:
             "reference": {"kind": "tool_result", "run_id": message.run_id,
                           "call_id": message.tool_call_id},
             "role": "tool", "tool_call_id": message.tool_call_id,
-            "content": message.content,
+            "content": observation_json(message),
         }
     raise ValueError("unsupported projected history message")
 

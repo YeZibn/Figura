@@ -1,4 +1,7 @@
 from __future__ import annotations
+from tests.figura_sources_support import open_legacy_schema_for_test
+from tests.figura_sources_support import make_durable_tool_executor
+from figura.tools import ToolOutput
 
 import sqlite3
 from figura.shared.payloads import ExecutionPayloadLimits, use_payload_limits
@@ -381,7 +384,7 @@ def _snapshot_run_rows(connection: sqlite3.Connection, *, session_id: str, run_i
     }
 
 
-def test_fresh_store_creates_schema_v13_context_provider_and_execution_tables(tmp_path) -> None:
+def test_fresh_store_creates_schema_v14_context_provider_and_execution_tables(tmp_path) -> None:
     store = FiguraRunStore(tmp_path)
 
     with sqlite3.connect(store.database_path) as connection:
@@ -408,7 +411,7 @@ def test_fresh_store_creates_schema_v13_context_provider_and_execution_tables(tm
             for row in connection.execute("PRAGMA table_info(attachments)")
         }
 
-    assert version == 13
+    assert version == 14
     assert quick_check == "ok"
     assert "run_provider_continuations" in tables
     assert "run_provider_attempts" in tables
@@ -446,7 +449,7 @@ def test_v6_migration_preserves_events_and_accepts_run_progress(tmp_path) -> Non
     before = coordinator.read_run_state(session.session_id, run.run_id)
     _downgrade_run_event_table_to_v6(store)
 
-    upgraded_store = FiguraRunStore(tmp_path)
+    upgraded_store = open_legacy_schema_for_test(tmp_path)
     migrated = upgraded_store.read_run_state(session.session_id, run.run_id)
     with sqlite3.connect(store.database_path) as connection:
         version = connection.execute("PRAGMA user_version").fetchone()[0]
@@ -475,6 +478,7 @@ def test_v6_migration_preserves_events_and_accepts_run_progress(tmp_path) -> Non
         EventKind.RUN_CREATED,
         EventKind.RUN_PROGRESS,
     ]
+
 
 
 def test_tool_call_fact_codec_preserves_bounded_provider_arguments() -> None:
@@ -812,7 +816,7 @@ def test_attempt_and_result_transitions_reject_stale_or_mismatched_inputs(tmp_pa
 def test_attempt_and_failure_facts_round_trip(kind, fact) -> None:
     raw = encode_tool_fact(kind, fact)
 
-    assert decode_tool_fact(kind, 2, raw) == fact
+    assert decode_tool_fact(kind, fact.schema_version, raw) == fact
 
 
 def test_success_result_is_canonical_and_round_trips_as_an_object() -> None:
@@ -826,7 +830,7 @@ def test_success_result_is_canonical_and_round_trips_as_an_object() -> None:
     )
 
     raw = encode_tool_fact(ToolFactKind.TOOL_RESULT, fact)
-    decoded = decode_tool_fact(ToolFactKind.TOOL_RESULT, 2, raw)
+    decoded = decode_tool_fact(ToolFactKind.TOOL_RESULT, 3, raw)
 
     assert dict(decoded.result) == {"label": "趋势", "value": 3}
     assert '"fact_kind":"tool_result"' in raw
@@ -892,7 +896,7 @@ def test_result_codec_uses_configured_guard_and_rejects_unknown_versions() -> No
 def test_v1_migration_preserves_run_records_checkpoint_events_and_idempotency(tmp_path) -> None:
     _create_v1_database(tmp_path)
 
-    store = FiguraRunStore(tmp_path)
+    store = open_legacy_schema_for_test(tmp_path)
     state = store.read_run_state("legacy-session", "legacy-run")
     with sqlite3.connect(store.database_path) as connection:
         version = connection.execute("PRAGMA user_version").fetchone()[0]
@@ -941,6 +945,7 @@ def test_v1_migration_preserves_run_records_checkpoint_events_and_idempotency(tm
     assert state.provider_continuations == ()
 
 
+
 def test_v2_migration_preserves_existing_run_facts_checkpoint_events_and_idempotency(tmp_path) -> None:
     database_path, session, run = _create_v2_database(tmp_path)
     with sqlite3.connect(database_path) as connection:
@@ -951,7 +956,7 @@ def test_v2_migration_preserves_existing_run_facts_checkpoint_events_and_idempot
         )
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
 
-    store = FiguraRunStore(tmp_path)
+    store = open_legacy_schema_for_test(tmp_path)
 
     with sqlite3.connect(database_path) as connection:
         after = _snapshot_run_rows(
@@ -978,6 +983,7 @@ def test_v2_migration_preserves_existing_run_facts_checkpoint_events_and_idempot
     assert state.provider_continuations == ()
 
 
+
 def test_v2_migration_failure_rolls_back_new_schema_and_can_retry(tmp_path) -> None:
     database_path, session, run = _create_v2_database(tmp_path)
     with sqlite3.connect(database_path) as connection:
@@ -990,7 +996,7 @@ def test_v2_migration_failure_rolls_back_new_schema_and_can_retry(tmp_path) -> N
         connection.commit()
 
     with pytest.raises(RunError):
-        FiguraRunStore(tmp_path)
+        open_legacy_schema_for_test(tmp_path)
 
     with sqlite3.connect(database_path) as connection:
         version = connection.execute("PRAGMA user_version").fetchone()[0]
@@ -1019,17 +1025,18 @@ def test_v2_migration_failure_rolls_back_new_schema_and_can_retry(tmp_path) -> N
     with sqlite3.connect(database_path) as connection:
         connection.execute("DROP TABLE run_provider_continuations")
         connection.commit()
-    store = FiguraRunStore(tmp_path)
+    store = open_legacy_schema_for_test(tmp_path)
     assert store.read_run_state(session.session_id, run.run_id).run.run_id == run.run_id
     with sqlite3.connect(database_path) as connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 13
+
 
 
 def test_v1_migration_rolls_back_schema_version_and_added_column_on_failure(tmp_path) -> None:
     database_path = _create_v1_database(tmp_path, conflicting_tool_table=True)
 
     with pytest.raises(RunError):
-        FiguraRunStore(tmp_path)
+        open_legacy_schema_for_test(tmp_path)
 
     with sqlite3.connect(database_path) as connection:
         version = connection.execute("PRAGMA user_version").fetchone()[0]
@@ -1042,15 +1049,16 @@ def test_v1_migration_rolls_back_schema_version_and_added_column_on_failure(tmp_
     assert version == 1
     assert "last_committed_tool_sequence" not in checkpoint_columns
 
-    store = FiguraRunStore(tmp_path)
+    store = open_legacy_schema_for_test(tmp_path)
     assert store.read_run_state("legacy-session", "legacy-run").checkpoint.last_committed_tool_sequence == 0
+
 
 
 def test_v1_migration_rejects_foreign_key_violation_and_can_retry_after_repair(tmp_path) -> None:
     database_path = _create_v1_database(tmp_path, invalid_foreign_key=True)
 
     with pytest.raises(RunError):
-        FiguraRunStore(tmp_path)
+        open_legacy_schema_for_test(tmp_path)
 
     with sqlite3.connect(database_path) as connection:
         version = connection.execute("PRAGMA user_version").fetchone()[0]
@@ -1062,8 +1070,9 @@ def test_v1_migration_rejects_foreign_key_violation_and_can_retry_after_repair(t
 
     assert version == 1
     assert "last_committed_tool_sequence" not in checkpoint_columns
-    store = FiguraRunStore(tmp_path)
+    store = open_legacy_schema_for_test(tmp_path)
     assert store.read_run_state("legacy-session", "legacy-run").run.run_id == "legacy-run"
+
 
 
 def test_model_response_and_tool_intents_roll_back_together_when_tool_insert_fails(tmp_path) -> None:
@@ -1474,9 +1483,9 @@ def test_durable_executor_dispatches_calls_serially_after_attempt_start(tmp_path
         assert current.checkpoint.next_action.action_kind is ActionKind.TOOL_ATTEMPT
         assert current.tool_facts[-1].fact_kind is ToolFactKind.TOOL_ATTEMPT_STARTED
         observed.append(arguments["value"])
-        return {"value": arguments["value"]}
+        return ToolOutput({"value": arguments["value"]})
 
-    executor = DurableToolExecutor(store, _registry(handler))
+    executor = make_durable_tool_executor(store, _registry(handler))
     state = executor.execute_pending(session.session_id, run.run_id)
 
     assert observed == [1, 2]
@@ -1513,10 +1522,10 @@ def test_durable_executor_persists_known_handler_failure_then_advances(tmp_path,
         invoked.append(arguments["value"])
         if arguments["value"] == 1:
             raise RuntimeError("private handler detail")
-        return {"value": arguments["value"]}
+        return ToolOutput({"value": arguments["value"]})
 
     with caplog.at_level(logging.DEBUG):
-        state = DurableToolExecutor(store, _registry(handler)).execute_pending(
+        state = make_durable_tool_executor(store, _registry(handler)).execute_pending(
             session.session_id,
             run.run_id,
         )
@@ -1548,9 +1557,9 @@ def test_run_lock_contention_fails_closed_without_starting_a_tool(tmp_path) -> N
 
     def handler(_context: ToolContext, arguments: Mapping[str, Any]) -> dict[str, int]:
         invoked.append(arguments["value"])
-        return {"value": arguments["value"]}
+        return ToolOutput({"value": arguments["value"]})
 
-    executor = DurableToolExecutor(store, _registry(handler))
+    executor = make_durable_tool_executor(store, _registry(handler))
     lock = PerRunExecutionLock(tmp_path)
     with lock.acquire(run.run_id):
         with pytest.raises(RunError):
@@ -1587,9 +1596,9 @@ def test_different_run_can_execute_while_another_run_lock_is_held(tmp_path) -> N
 
     def handler(context: ToolContext, arguments: Mapping[str, Any]) -> dict[str, int]:
         invoked.append(context.run_id)
-        return {"value": arguments["value"]}
+        return ToolOutput({"value": arguments["value"]})
 
-    executor = DurableToolExecutor(store, _registry(handler))
+    executor = make_durable_tool_executor(store, _registry(handler))
     with PerRunExecutionLock(tmp_path).acquire(first_run.run_id):
         second_state = executor.execute_pending(other_session.session_id, second_run.run_id)
 
@@ -1614,12 +1623,12 @@ def test_run_state_reads_and_public_logs_hide_tool_payloads(tmp_path, caplog) ->
     def handler(context: ToolContext, arguments: Mapping[str, Any]) -> dict[str, int]:
         invoked.append(arguments["value"])
         keys.append(context.idempotency_key)
-        return {"value": arguments["value"]}
+        return ToolOutput({"value": arguments["value"]})
 
     state = coordinator.read_run_state(session.session_id, run.run_id)
     assert invoked == []
     with caplog.at_level(logging.DEBUG):
-        state = DurableToolExecutor(
+        state = make_durable_tool_executor(
             store,
             _registry(handler, replay_effect=ReplayEffect.IDEMPOTENT_LOCAL_WRITE),
         ).execute_pending(session.session_id, run.run_id)
@@ -1762,9 +1771,9 @@ def test_recovery_replays_replay_safe_attempt_after_acquiring_run_lock(tmp_path)
 
     def handler(_context: ToolContext, arguments: Mapping[str, Any]) -> dict[str, int]:
         invoked.append(arguments["value"])
-        return {"value": arguments["value"]}
+        return ToolOutput({"value": arguments["value"]})
 
-    executor = DurableToolExecutor(store, _registry(handler))
+    executor = make_durable_tool_executor(store, _registry(handler))
     state = executor.recover_unknown_attempt(session.session_id, run.run_id)
     starts = [fact.payload for fact in state.tool_facts if isinstance(fact.payload, ToolAttemptStartedFact)]
 
@@ -1804,7 +1813,7 @@ def test_idempotent_local_write_replay_reuses_stable_key_and_original_result(tmp
         assert context.idempotency_key is not None
         if context.idempotency_key not in applied_operations:
             applied_operations[context.idempotency_key] = {"value": arguments["value"] + 10}
-        return applied_operations[context.idempotency_key]
+        return ToolOutput(applied_operations[context.idempotency_key])
 
     registry = _registry(handler, replay_effect=ReplayEffect.IDEMPOTENT_LOCAL_WRITE)
     # Simulate a process dying after its write succeeded but before the result fact was committed.
@@ -1817,11 +1826,11 @@ def test_idempotent_local_write_replay_reuses_stable_key_and_original_result(tmp
         ),
         {"value": 1},
     )
-    state = DurableToolExecutor(store, registry).recover_unknown_attempt(session.session_id, run.run_id)
+    state = make_durable_tool_executor(store, registry).recover_unknown_attempt(session.session_id, run.run_id)
     result = next(fact.payload for fact in state.tool_facts if isinstance(fact.payload, ToolResultFact))
 
     assert observed_keys == [expected_key, expected_key]
-    assert result.result == original_result == {"value": 11}
+    assert result.result == original_result.result == {"value": 11}
     assert len(applied_operations) == 1
     assert state.checkpoint.next_action == NextAction(ActionKind.MODEL)
 
@@ -1848,9 +1857,9 @@ def test_reconcile_required_recovery_waits_without_dispatch_then_commits_trusted
 
     def handler(_context: ToolContext, arguments: Mapping[str, Any]) -> dict[str, int]:
         invoked.append(arguments["value"])
-        return {"value": arguments["value"]}
+        return ToolOutput({"value": arguments["value"]})
 
-    executor = DurableToolExecutor(
+    executor = make_durable_tool_executor(
         store,
         _registry(handler, replay_effect=ReplayEffect.RECONCILE_REQUIRED),
     )
@@ -1903,11 +1912,11 @@ def test_recovery_registry_mismatch_fails_closed_without_new_attempt(tmp_path) -
 
     def handler(_context: ToolContext, arguments: Mapping[str, Any]) -> dict[str, int]:
         invoked.append(arguments["value"])
-        return {"value": arguments["value"]}
+        return ToolOutput({"value": arguments["value"]})
 
     old_registry = _registry(handler)
     changed_registry = ToolRegistry("registry-v2", old_registry.definitions)
-    executor = DurableToolExecutor(store, changed_registry)
+    executor = make_durable_tool_executor(store, changed_registry)
     with pytest.raises(RunError):
         executor.recover_unknown_attempt(session.session_id, run.run_id)
 
@@ -1940,9 +1949,9 @@ def test_recovery_lock_contention_leaves_unknown_attempt_unchanged(tmp_path) -> 
 
     def handler(_context: ToolContext, arguments: Mapping[str, Any]) -> dict[str, int]:
         invoked.append(arguments["value"])
-        return {"value": arguments["value"]}
+        return ToolOutput({"value": arguments["value"]})
 
-    executor = DurableToolExecutor(store, _registry(handler))
+    executor = make_durable_tool_executor(store, _registry(handler))
     with PerRunExecutionLock(tmp_path).acquire(run.run_id):
         with pytest.raises(RunError):
             executor.recover_unknown_attempt(session.session_id, run.run_id)
@@ -1988,9 +1997,9 @@ def test_known_failed_tool_result_is_not_replayed_during_recovery(tmp_path) -> N
 
     def handler(_context: ToolContext, arguments: Mapping[str, Any]) -> dict[str, int]:
         invoked.append(arguments["value"])
-        return {"value": arguments["value"]}
+        return ToolOutput({"value": arguments["value"]})
 
-    state = DurableToolExecutor(store, _registry(handler)).recover_unknown_attempt(
+    state = make_durable_tool_executor(store, _registry(handler)).recover_unknown_attempt(
         session.session_id,
         run.run_id,
     )

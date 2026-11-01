@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Literal, TypeAlias
+from typing import TypeAlias
 
+from figura.shared.resource_refs import ImageResourceRef, ToolResourceRef, ResourceRef, ResourceKind
+from figura.shared.media import ToolImageAttachment
 from figura.charts.chartfigure import ChartFigure, chart_figure_digest
 from figura.runtime.errors import RunError, RunErrorCode
 from figura.sources.models import PanelPoint
@@ -14,38 +16,7 @@ from figura.tools.contracts import ToolExecutionError, freeze_json_value
 from figura.tools.measurements.contracts import validate_measurement_result
 
 
-ImageResourceKind: TypeAlias = Literal["attachment", "panel"]
-ToolResourceKind: TypeAlias = Literal["ocr", "measurement", "chart_figure", "chart_render"]
-ResourceKind: TypeAlias = ImageResourceKind | ToolResourceKind
 _MEASUREMENT_TOOL_NAMES = frozenset({"measure_chart"})
-
-
-@dataclass(frozen=True)
-class ImageResourceRef:
-    kind: ImageResourceKind
-    id: str
-
-    def __post_init__(self) -> None:
-        if self.kind not in {"attachment", "panel"} or not _nonempty(self.id):
-            raise ValueError("invalid image resource reference")
-
-
-@dataclass(frozen=True)
-class ToolResourceRef:
-    kind: ToolResourceKind
-    run_id: str
-    call_id: str
-
-    def __post_init__(self) -> None:
-        if (
-            self.kind not in {"ocr", "measurement", "chart_figure", "chart_render"}
-            or not _nonempty(self.run_id)
-            or not _nonempty(self.call_id)
-        ):
-            raise ValueError("invalid tool resource reference")
-
-
-ResourceRef: TypeAlias = ImageResourceRef | ToolResourceRef
 
 
 @dataclass(frozen=True)
@@ -98,6 +69,7 @@ class OcrContent:
     outcome: ToolOutcome
     result: Mapping[str, object] | None = field(default=None, repr=False)
     error: ToolExecutionError | None = None
+    attachments: tuple[ToolImageAttachment, ...] = ()
 
     def __post_init__(self) -> None:
         _validate_observation(self.attempt_id, self.source_ref, self.outcome, self.result, self.error)
@@ -117,6 +89,7 @@ class MeasurementContent:
     outcome: ToolOutcome
     result: Mapping[str, object] | None = field(default=None, repr=False)
     error: ToolExecutionError | None = None
+    attachments: tuple[ToolImageAttachment, ...] = ()
 
     def __post_init__(self) -> None:
         _validate_observation(self.attempt_id, self.source_ref, self.outcome, self.result, self.error)
@@ -173,6 +146,7 @@ class ChartRenderContent:
     outcome: ToolOutcome
     result: Mapping[str, object] | None = field(default=None, repr=False)
     error: ToolExecutionError | None = None
+    attachments: tuple[ToolImageAttachment, ...] = ()
 
     def __post_init__(self) -> None:
         _validate_observation(self.attempt_id, None, self.outcome, self.result, self.error)
@@ -200,6 +174,11 @@ class ExecutionResource:
     content: ResourceContent
 
     def __post_init__(self) -> None:
+        attachments = getattr(self.content, "attachments", ())
+        if (not isinstance(attachments, tuple) or len(attachments) > 1
+                or any(not isinstance(a, ToolImageAttachment) or a.resource_ref != self.ref for a in attachments)
+                or (attachments and getattr(self.content, "outcome", None) is not ToolOutcome.SUCCEEDED)):
+            raise ValueError("resource attachment identity mismatch")
         if not _content_matches_ref(self.ref, self.content):
             raise ValueError("resource reference and content kinds do not match")
 

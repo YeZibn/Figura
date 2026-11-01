@@ -7,7 +7,8 @@ from dataclasses import dataclass
 from typing import Literal
 
 from figura.agent.execution_images import RunExecutionImageReader
-from figura.agent.execution_resources import AttachmentContent, ImageResourceRef, PanelContent, RunExecutionState
+from figura.shared.resource_refs import ImageResourceRef
+from figura.agent.execution_resources import (AttachmentContent, PanelContent, RunExecutionState)
 from figura.runtime.errors import RunError
 
 from figura.tools.contracts import ToolFailure

@@ -77,6 +77,7 @@ def resolve_options(
 
 class ProviderPolicy:
     provider_id: ProviderId
+    supports_tool_result_images = False
 
     def __init__(self, profile: ProviderProfile) -> None:
         self.profile = profile
@@ -246,6 +247,12 @@ class ProviderPolicy:
         provider_id: ProviderId,
     ) -> dict[str, Any]:
         validate_request(request, provider_id)
+        requires_images = bool((request.asset_contract or {}).get("requires_tool_result_images", False))
+        has_tool_images = any(message.role is MessageRole.TOOL and not isinstance(message.content, str)
+                              and any(isinstance(part, ImageBlock) for part in message.content)
+                              for message in request.messages)
+        if (requires_images or has_tool_images) and not self.supports_tool_result_images:
+            raise fail(ProviderFailureCode.UNSUPPORTED_CAPABILITY, "当前模型尚未启用原生工具图片结果能力。")
         validate_tools_for_endpoint(request.tools, provider_id, self.profile.base_url or "")
         self._validate_thinking_options(request)
         messages = [

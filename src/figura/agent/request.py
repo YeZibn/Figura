@@ -1,6 +1,8 @@
 """Projection from durable Figura conversation facts to a bounded Provider request."""
 
 from __future__ import annotations
+from figura.tools.observation import observation_json
+from figura.agent.prompting.loader import load_image_feedback
 
 from collections.abc import Mapping
 import hashlib
@@ -12,16 +14,12 @@ from figura.shared.payloads import encode_json
 from figura.agent.context_compaction import CompactionSelection
 from figura.agent.execution_images import RunExecutionImageReader
 from figura.agent.execution_state import RunExecutionStateService
-from figura.agent.execution_resources import (
-    ImageResourceRef,
-    PanelContent,
-    RunExecutionState,
-    ToolResourceRef,
-)
+from figura.shared.resource_refs import ImageResourceRef, ToolResourceRef
+from figura.agent.execution_resources import (PanelContent, RunExecutionState)
 from figura.agent.prompting.execution import build_context_summary_instruction, build_execution_instruction
 from figura.agent.prompting.loader import PromptAssetError, build_compaction_instruction
 from figura.agent.prompting.loader import build_static_instruction
-from figura.agent.prompting.observations import build_observation_messages
+from figura.agent.prompting.observations import pending_visual_results, tool_message_content
 from figura.agent.prompting.tools import build_tool_instruction
 from figura.memory import (
     AssistantMessage,
@@ -134,16 +132,15 @@ class AgentRequestBuilder:
             continuations=_continuations_by_response((*prior_run_states, state)),
             registry=registry,
             historical_inputs=historical_inputs,
+            selected_images=pending_visual_results(state),
+            session_id=state.run.session_id,
+            full_execution_state=full_execution_state,
         )
         if historical_inputs:
             messages = (
                 _historical_user_inputs_message(historical_inputs),
                 *messages,
             )
-        messages = (
-            *messages,
-            *build_observation_messages(state, execution_state, self._execution_images),
-        )
         try:
             tools = project_provider_tools(registry)
         except (TypeError, ValueError):
@@ -164,10 +161,11 @@ class AgentRequestBuilder:
         )
         registry_projection = [{"name": d.name, "description": d.description,
             "parameters": d.parameters_schema, "result": d.result_schema,
-            "replay_effect": d.replay_effect.value} for d in registry]
+            "replay_effect": d.replay_effect.value, "produces_images": d.produces_images} for d in registry]
         asset_contract = MappingProxyType({
+            "requires_tool_result_images": any(d.produces_images for d in registry),
             "prompt_digest": hashlib.sha256(encode_json([
-                {"role": i.role.value, "content": i.content} for i in instructions]).encode()).hexdigest(),
+                {"role": i.role.value, "content": i.content} for i in instructions] + [load_image_feedback()[1]]).encode()).hexdigest(),
             "registry_version": registry.version,
             "registry_digest": hashlib.sha256(encode_json(registry_projection).encode()).hexdigest(),
         })
@@ -295,7 +293,7 @@ class AgentRequestBuilder:
                         "reference": ref.to_dict(),
                         "role": "tool",
                         "tool_call_id": message.tool_call_id,
-                        "content": message.content,
+                        "content": observation_json(message),
                     })
                 else:
                     raise RunError(RunErrorCode.INTEGRITY_ERROR)
@@ -371,13 +369,18 @@ class AgentRequestBuilder:
         continuations: dict[tuple[str, str], ProviderContinuation],
         registry: ToolRegistry,
         historical_inputs: dict[str, dict[str, object]],
+        selected_images=frozenset(),
+        session_id=None,
+        full_execution_state=None,
     ) -> tuple[ProviderMessage, ...]:
         projected: list[ProviderMessage] = []
         resolved_calls_by_response: dict[tuple[str, str], set[str]] = {}
+        call_names = {}
         for index, message in enumerate(messages):
             if not isinstance(message, AssistantMessage):
                 continue
             key = (message.run_id, message.source_record_id)
+            call_names.update({(message.run_id, call.call_id): call.tool_name for call in message.tool_calls})
             paired = set()
             for following in messages[index + 1 :]:
                 if not isinstance(following, ToolMessage):
@@ -436,7 +439,9 @@ class AgentRequestBuilder:
                 projected.append(
                     ProviderMessage(
                         role=MessageRole.TOOL,
-                        content=message.content,
+                        content=tool_message_content(message, tool_name=call_names[(message.run_id, message.tool_call_id)],
+                            selected=selected_images, session_id=session_id,
+                            state=full_execution_state, image_reader=self._execution_images),
                         tool_call_id=message.tool_call_id,
                     )
                 )

@@ -1,4 +1,7 @@
 from __future__ import annotations
+from tests.figura_sources_support import open_legacy_schema_for_test
+from tests.figura_sources_support import make_durable_tool_executor
+from figura.tools import ToolOutput
 
 from dataclasses import replace
 import json
@@ -30,7 +33,7 @@ def test_partial_terminal_batch_retains_observations_and_continues(tmp_path, val
         content="原始意图：读取后分析", reason=FinishReason.TOOL_CALLS,
         calls=tuple(ProviderToolCall(f"call-{i}", "inspect", json.dumps({"value": value})) for i in range(3)),
     ))
-    state = DurableToolExecutor(store, registry).execute_pending(session.session_id, run.run_id, max_calls=1)
+    state = make_durable_tool_executor(store, registry).execute_pending(session.session_id, run.run_id, max_calls=1)
     store.begin_tool_attempt(session_id=session.session_id, run_id=run.run_id,
         expected_revision=state.checkpoint.revision, tool_call_sequence=2,
         registry_version=registry.version, replay_effect=ReplayEffect.REPLAY_SAFE)
@@ -263,7 +266,7 @@ def test_ocr_success_measurement_unknown_render_unstarted_continues_with_authori
     from figura.tools.implementations.measure_chart import measure_chart_definition
     from figura.tools.measurements.family_adapters import current_chart_family_adapters
     from figura.tools.implementations.render_chart_figure import render_chart_figure_definition
-    from figura.agent.execution_resources import ToolResourceRef
+    from figura.shared.resource_refs import ToolResourceRef
     from figura.providers import ImageBlock
     import figura.tools.measurements.ocr as ocr_module
     store, co, session, run, attachments, panels, execution_state, _, _, attachment = _setup(tmp_path)
@@ -285,7 +288,7 @@ def test_ocr_success_measurement_unknown_render_unstarted_continues_with_authori
         calls=(ProviderToolCall('ocr', 'extract_text', source),
                ProviderToolCall('measurement', 'measure_chart', measurement_source),
                ProviderToolCall('render', 'render_chart_figure', '{"figure_ref":{"run_id":"missing","call_id":"missing"}}'))))
-    state = DurableToolExecutor(store, registry).execute_pending(session.session_id, run.run_id, max_calls=1)
+    state = make_durable_tool_executor(store, registry).execute_pending(session.session_id, run.run_id, max_calls=1)
     store.begin_tool_attempt(session_id=session.session_id, run_id=run.run_id,
         expected_revision=state.checkpoint.revision, tool_call_sequence=2,
         registry_version=registry.version, replay_effect=ReplayEffect.REPLAY_SAFE)
@@ -354,12 +357,13 @@ def test_v9_migration_preserves_facts_and_adds_empty_stop_controls(tmp_path):
         connection.execute('DROP TRIGGER immutable_run_stop_request_delete')
         connection.execute('DROP TABLE run_stop_requests')
         connection.execute('PRAGMA user_version = 9')
-    reopened = FiguraRunStore(tmp_path)
+    reopened = open_legacy_schema_for_test(tmp_path)
     assert reopened.read_run_state(session.session_id, run.run_id) == before
     with reopened.database.read() as connection:
         assert connection.execute('PRAGMA user_version').fetchone()[0] == 13
         assert not connection.execute('SELECT * FROM run_stop_requests').fetchall()
         assert not connection.execute('PRAGMA foreign_key_check').fetchall()
+
 
 
 def test_abnormal_outcome_limit_is_not_silently_trimmed(tmp_path, monkeypatch):
@@ -465,7 +469,7 @@ def test_stop_from_started_tool_preserves_real_result_and_blocks_next_call(tmp_p
         co.request_stop(session.session_id, run.run_id)
         if failed:
             raise ToolFailure('inspection_failed', '无法检查该值。', retryable=True)
-        return {'value': 1}
+        return ToolOutput({'value': 1})
     base = _registry()
     registry = ToolRegistry(base.version, (replace(base.definitions[0], handler=handler),))
     _commit_tool_response(co, session.session_id, run.run_id, registry, _response(

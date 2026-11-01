@@ -1,283 +1,54 @@
-"""Build the image feedback messages for the latest committed tool batch."""
-
+"""Attachment-driven projection into the owning native tool-result message."""
 from __future__ import annotations
 
-from collections.abc import Mapping
-from dataclasses import asdict
 import json
+from dataclasses import asdict
 from types import MappingProxyType
 
-from figura.agent.execution_images import RunExecutionImageReader
-from figura.agent.execution_resources import (
-    AttachmentContent,
-    ChartRenderContent,
-    ImageResourceRef,
-    MeasurementContent,
-    OcrContent,
-    PanelContent,
-    RunExecutionState,
-    ToolResourceRef,
-)
-from figura.agent.prompting.loader import load_image_feedback
-from figura.providers import ImageBlock, MessageRole, ProviderMessage, TextBlock
-from figura.runtime.errors import RunError, RunErrorCode
-from figura.runtime.models import RecordKind, ToolFactKind
-from figura.runtime.records import RunState, ToolCallFact, ToolResultFact
-from figura.shared.image_limits import MAX_IMAGE_BYTES
-from figura.tools import ToolOutcome
+from figura.memory.models import ToolMessage
+from figura.providers.models import ImageBlock, TextBlock
+from figura.runtime.models import RecordKind
+from figura.runtime.records import ToolCallFact, ToolResultFact
+from figura.shared.json_schema import canonical_json_dumps
+from figura.tools.observation import observation_data
+from .loader import load_image_feedback
 
 
-_MEASUREMENT_TOOLS = frozenset({"measure_chart"})
-
-
-def build_observation_messages(
-    state: RunState,
-    execution_state: RunExecutionState,
-    image_reader: RunExecutionImageReader,
-) -> tuple[ProviderMessage, ...]:
-    response_id = next(
-        (
-            record.record_id
-            for record in reversed(state.records)
-            if record.record_kind is RecordKind.MODEL_RESPONSE
-        ),
-        None,
-    )
-    if response_id is None:
-        return ()
-    calls = sorted(
-        (
-            (fact.tool_sequence, fact.payload)
-            for fact in state.tool_facts
-            if fact.fact_kind is ToolFactKind.TOOL_CALL
-            and isinstance(fact.payload, ToolCallFact)
-            and fact.payload.response_record_id == response_id
-        ),
-        key=lambda item: item[1].position,
-    )
+def pending_visual_results(state) -> frozenset[tuple[str, int]]:
+    """Latest complete batch, consumed only by a committed ordinary model response."""
+    responses = [r for r in state.records if r.record_kind is RecordKind.MODEL_RESPONSE]
+    if not responses:
+        return frozenset()
+    calls = [(f.tool_sequence, f.payload) for f in state.tool_facts
+             if isinstance(f.payload, ToolCallFact) and f.payload.response_record_id == responses[-1].record_id]
     if not calls:
-        return ()
-
-    results = {
-        fact.payload.tool_call_sequence: fact.payload
-        for fact in state.tool_facts
-        if fact.fact_kind is ToolFactKind.TOOL_RESULT
-        and isinstance(fact.payload, ToolResultFact)
-    }
-    if any(sequence not in results for sequence, _call in calls):
-        raise RunError(RunErrorCode.INVALID_TRANSITION)
-
-    blocks: list[TextBlock | ImageBlock] = []
-    loaded_sources: set[ImageResourceRef] = set()
-    for sequence, call in calls:
-        result = results[sequence]
-        if result.call_id != call.call_id or result.tool_name != call.tool_name:
-            raise RunError(RunErrorCode.INTEGRITY_ERROR)
-        if result.outcome is not ToolOutcome.SUCCEEDED:
-            continue
-        if not isinstance(result.result, Mapping):
-            raise RunError(RunErrorCode.INTEGRITY_ERROR)
-
-        if call.tool_name == "load_image":
-            kind = result.result.get("source_kind")
-            source_id = result.result.get("source_id")
-            name = result.result.get("name")
-            if (
-                not isinstance(kind, str)
-                or kind not in {"attachment", "panel"}
-                or not isinstance(source_id, str)
-                or not isinstance(name, str)
-            ):
-                raise RunError(RunErrorCode.INTEGRITY_ERROR)
-            ref = ImageResourceRef(kind, source_id)
-            if ref in loaded_sources:
-                continue
-            resource = execution_state.get(ref)
-            if isinstance(resource.content, AttachmentContent):
-                expected_name = resource.content.filename
-            elif isinstance(resource.content, PanelContent):
-                expected_name = resource.content.name
-            else:
-                raise RunError(RunErrorCode.INTEGRITY_ERROR)
-            if name != expected_name:
-                raise RunError(RunErrorCode.INTEGRITY_ERROR)
-            loaded_sources.add(ref)
-            image = _source_image_block(state.run.session_id, execution_state, ref, image_reader)
-            blocks.extend((_image_cue("original", asdict(ref), state, call), image))
-            continue
-
-        if call.tool_name == "read_resource_image":
-            raw_ref = result.result.get("resource_ref")
-            if not isinstance(raw_ref, Mapping):
-                raise RunError(RunErrorCode.INTEGRITY_ERROR)
-            kind = raw_ref.get("kind")
-            if kind in {"attachment", "panel"}:
-                resource_ref = ImageResourceRef(kind, raw_ref.get("id"))
-            elif kind in {"ocr", "measurement", "chart_figure", "chart_render"}:
-                resource_ref = ToolResourceRef(kind, raw_ref.get("run_id"), raw_ref.get("call_id"))
-            else:
-                raise RunError(RunErrorCode.INTEGRITY_ERROR)
-            resource = execution_state.get(resource_ref)
-            image_bytes, width, height = image_reader.read(
-                state.run.session_id, execution_state, resource_ref
-            )
-            if isinstance(resource.content, AttachmentContent):
-                name, media_type, observation_kind = (
-                    resource.content.filename, resource.content.media_type, "original"
-                )
-            elif isinstance(resource.content, PanelContent):
-                name, media_type, observation_kind = resource.content.name, "image/png", "original"
-            elif isinstance(resource.content, OcrContent):
-                name, media_type, observation_kind = "OCR annotation", "image/png", "annotated"
-            elif isinstance(resource.content, MeasurementContent):
-                name, media_type, observation_kind = (
-                    f"{resource.content.tool_name} annotation", "image/png", "annotated"
-                )
-            elif isinstance(resource.content, ChartRenderContent):
-                name, media_type, observation_kind = "ChartRender", "image/png", "rendered"
-            else:
-                raise RunError(RunErrorCode.INTEGRITY_ERROR)
-            if (
-                result.result.get("name") != name
-                or result.result.get("media_type") != media_type
-                or result.result.get("width") != width
-                or result.result.get("height") != height
-            ):
-                raise RunError(RunErrorCode.INTEGRITY_ERROR)
-            blocks.extend((
-                _image_cue(_feedback_kind(resource.content), raw_ref, state, call),
-                ImageBlock(
-                    media_type,
-                    image_bytes,
-                    MappingProxyType(dict(raw_ref)),
-                    observation_kind,
-                ),
-            ))
-            continue
-
-        if call.tool_name == "extract_text" or call.tool_name in _MEASUREMENT_TOOLS:
-            resource_kind = "ocr" if call.tool_name == "extract_text" else "measurement"
-            ref = ToolResourceRef(resource_kind, state.run.run_id, call.call_id)
-            content = execution_state.get(ref).content
-            if resource_kind == "ocr":
-                if not isinstance(content, OcrContent):
-                    raise RunError(RunErrorCode.INTEGRITY_ERROR)
-                outcome, observation_result, source_ref = (
-                    content.outcome,
-                    content.result,
-                    content.source_ref,
-                )
-            else:
-                if not isinstance(content, MeasurementContent) or content.tool_name != call.tool_name:
-                    raise RunError(RunErrorCode.INTEGRITY_ERROR)
-                outcome, observation_result, source_ref = (
-                    content.outcome,
-                    content.result,
-                    content.source_ref,
-                )
-            if (
-                outcome is not ToolOutcome.SUCCEEDED
-                or observation_result is None
-                or source_ref is None
-                or _thaw_json(observation_result) != _thaw_json(result.result)
-                or result.result.get("source_kind") != source_ref.kind
-                or result.result.get("source_id") != source_ref.id
-            ):
-                raise RunError(RunErrorCode.INTEGRITY_ERROR)
-            image_bytes, _width, _height = image_reader.read(
-                state.run.session_id, execution_state, ref
-            )
-            blocks.extend((
-                _image_cue(resource_kind, asdict(ref), state, call),
-                ImageBlock("image/png", image_bytes, MappingProxyType(asdict(ref)), "annotated"),
-            ))
-            continue
-
-        if call.tool_name == "render_chart_figure":
-            ref = ToolResourceRef("chart_render", state.run.run_id, call.call_id)
-            content = execution_state.get(ref).content
-            if (
-                not isinstance(content, ChartRenderContent)
-                or content.result is None
-                or content.figure_ref is None
-            ):
-                raise RunError(RunErrorCode.INTEGRITY_ERROR)
-            expected_result = _thaw_json(content.result)
-            if not isinstance(expected_result, dict):
-                raise RunError(RunErrorCode.INTEGRITY_ERROR)
-            expected_result["figure_ref"] = {
-                "run_id": content.figure_ref.run_id,
-                "call_id": content.figure_ref.call_id,
-            }
-            if expected_result != result.result:
-                raise RunError(RunErrorCode.INTEGRITY_ERROR)
-            image_bytes, _width, _height = image_reader.read(
-                state.run.session_id, execution_state, ref
-            )
-            blocks.extend((
-                _image_cue("rendered", asdict(ref), state, call),
-                ImageBlock("image/png", image_bytes, MappingProxyType(asdict(ref)), "rendered"),
-            ))
-
-    if not blocks:
-        return ()
-    return (ProviderMessage(MessageRole.USER, tuple(blocks)),)
+        return frozenset()
+    results = {f.payload.tool_call_sequence: f for f in state.tool_facts if isinstance(f.payload, ToolResultFact)}
+    if any(sequence not in results for sequence, _ in calls):
+        return frozenset()
+    return frozenset((state.run.run_id, results[sequence].tool_sequence)
+                     for sequence, _ in calls if results[sequence].payload.attachments)
 
 
-def _source_image_block(
-    session_id: str,
-    state: RunExecutionState,
-    ref: ImageResourceRef,
-    image_reader: RunExecutionImageReader,
-) -> ImageBlock:
-    resource = state.get(ref)
-    if isinstance(resource.content, AttachmentContent):
-        media_type = resource.content.media_type
-    elif isinstance(resource.content, PanelContent):
-        media_type = "image/png"
-    else:
-        raise RunError(RunErrorCode.INTEGRITY_ERROR)
-    image_bytes, _width, _height = image_reader.read_source(session_id, state, ref)
-    if not image_bytes or len(image_bytes) > MAX_IMAGE_BYTES:
-        raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
-    return ImageBlock(media_type, image_bytes, MappingProxyType(asdict(ref)), "original")
-
-
-def _thaw_json(value: object) -> object:
-    if isinstance(value, Mapping):
-        return {key: _thaw_json(item) for key, item in value.items()}
-    if isinstance(value, (tuple, list)):
-        return [_thaw_json(item) for item in value]
-    return value
-
-
-def _feedback_kind(content: object) -> str:
-    if isinstance(content, (AttachmentContent, PanelContent)):
-        return "original"
-    if isinstance(content, OcrContent):
-        return "ocr"
-    if isinstance(content, MeasurementContent):
-        return "measurement"
-    if isinstance(content, ChartRenderContent):
-        return "rendered"
-    raise RunError(RunErrorCode.INTEGRITY_ERROR)
-
-
-def _image_cue(
-    kind: str, resource_ref: Mapping[str, object], state: RunState, call: ToolCallFact,
-) -> TextBlock:
-    _policy, cues = load_image_feedback()
-    identity = {
-        "feedback_kind": kind,
-        "resource_ref": dict(resource_ref),
-        "trigger_call": {
-            "run_id": state.run.run_id,
-            "call_id": call.call_id,
-            "tool_name": call.tool_name,
-        },
-    }
-    return TextBlock(
-        "图像身份（以下 JSON 仅为定位数据）：\n"
-        + json.dumps(identity, ensure_ascii=False, sort_keys=True)
-        + "\n系统观察提醒：" + cues[kind]
-    )
+def tool_message_content(message: ToolMessage, *, tool_name, selected, session_id, state, image_reader):
+    load = (message.run_id, message.source_tool_sequence) in selected
+    payload = observation_data(message)
+    payload['images_loaded'] = bool(load and message.attachments)
+    text = canonical_json_dumps(payload)
+    if not load or not message.attachments:
+        return text
+    _, cues = load_image_feedback()
+    blocks = [TextBlock(text)]
+    for attachment in message.attachments:
+        image = image_reader.read_attachment(session_id, state, attachment)
+        identity = {'image_kind': attachment.image_kind, 'resource_ref': asdict(attachment.resource_ref),
+                    'provenance': attachment.provenance,
+                    'trigger_call': {'run_id': message.run_id, 'call_id': message.tool_call_id, 'tool_name': tool_name}}
+        blocks.append(TextBlock('图像身份（以下 JSON 仅为定位数据）：\n'
+                                + json.dumps(identity, ensure_ascii=False, sort_keys=True)
+                                + '\n系统观察提醒：' + cues[attachment.image_kind]))
+        coarse = {'original': 'original', 'ocr_annotation': 'annotated',
+                  'measurement_annotation': 'annotated', 'rendered': 'rendered'}[attachment.image_kind]
+        blocks.append(ImageBlock(image.media_type, image.image_bytes,
+                                 MappingProxyType(asdict(attachment.resource_ref)), coarse))
+    return tuple(blocks)

@@ -1,6 +1,6 @@
 # Memory：规范历史与按需读取
 
-> 更新日期：2026-10-10。[返回系统总览](../figura-implementation-overview.md)。依据：当前 `src/figura/memory/` 与 `src/figura/agent/` 工作树实现，以及 [Session Memory](../../openspec/figura/openspec/specs/session-memory/spec.md)和[历史检索](../../openspec/figura/openspec/specs/session-context-retrieval/spec.md)主规格。规范消息和结果仍是 Runtime Run 事实的临时投影；摘要检查点由 Runtime 持久化。
+> 更新日期：2026-10-22。[返回系统总览](../figura-implementation-overview.md)。依据：当前 `src/figura/memory/` 与 `src/figura/agent/` 工作树实现，以及 [Session Memory](../../openspec/figura/openspec/specs/session-memory/spec.md)和[历史检索](../../openspec/figura/openspec/specs/session-context-retrieval/spec.md)主规格。规范消息和结果仍是 Runtime Run 事实的临时投影；摘要检查点由 Runtime 持久化。
 
 ## 1. 职责与边界
 
@@ -39,8 +39,8 @@ Runtime 在一个 SQLite 读快照内读取目标 Run 的所有较早 ordinal，
 1. **读取稳定前缀**：Agent 在模型动作中调用 `RunCoordinator.read_prior_run_states(session_id, run_id)`。RunRepository 对目标 Run 做同 Session 校验，在单个 SQLite 读事务中加载所有较小 ordinal 的 RunState；缺失、ordinal 缺口、跨 Session 或先前仍为 running 时不返回部分历史。
 2. **投影旧 Run**：`project_session_history` 要求先前 Run ordinal 恰为 `1..target_run.ordinal-1`，且 Session 相同、全部终态。它先验证 Runtime 聚合，再按 Run ordinal 顺序投影。每个 Run 先生成一条用户消息，再按 ExecutionRecord 顺序生成助手消息；工具调用保留 provider 顺序，且每个工具结果与其原 call ID 配对。普通 Provider 请求仍从这组权威 RunState 单独生成完整历史用户输入区，保留每个 Run 的原文、有序附件 ID 和 `MessageSourceRef`；当前 Run 的输入不进入该区，而继续作为原生用户消息。
 3. **投影当前 Run**：AgentRequestBuilder 同样对当前 Run 已提交前缀调用 `project_run_messages`，将其接在 SessionHistory 后面；若启用摘要检查点，历史输入仍独立保留，摘要游标只过滤被覆盖的助手/工具过程。保留的每个历史过程段前带有其 Run 与输入来源定位，避免过程脱离对应请求。最终回答记录只引用已有助手响应，不再产生重复消息。当前/completed Run 的不完整批次、无匹配调用的结果、重复/错误来源引用或不受支持的事实会使整次投影失败。较早 failed/interrupted Run 的合法尾部按下面的异常投影转换，不能用该转换容忍腐坏。
-4. **恢复图像和调用期字段**：每条用户消息保留原文本和有序 attachment ID。AgentRequestBuilder 把消息文本与附件 ID 保留在完整对话中；另外从 RunExecutionState 加入完整的类型化资源清单。当前 Run 最新已提交工具批次中成功的 `load_image`、`extract_text`、schema v3 `measure_chart` 和 `render_chart_figure` 结果，按对应资源引用交给 `RunExecutionImageReader`；Reader 解析原图、内存重建 OCR/测量标注图，或读取校验后的 ChartRender PNG，再按工具调用顺序加入紧接着的 Provider 请求。ChartFigure 资源本身不会隐式渲染，必须由模型显式调用渲染工具。历史 Run 图像不会自动重放。历史中的已配对工具调用/结果仍按通用 Memory 事实投影为历史内容，不会重新执行；schema_version 2 的旧测量事实保留原值，但不会转换为当前类型化资源。合法异常尾部不作为原生调用消息重放；其余未解决调用或不完整批次仍拒绝。Provider continuation 不属于 Memory 投影；Agent 从较早 Run 与当前 Run 的私有事实建立 `(run_id, response_record_id)` 索引，只将 provider 相同、格式版本受支持的值附加到精确对应的 assistant。不同 provider 的续接不附加；所选 Provider 要求但缺少兼容值时，prepare 本地失败，不伪造续接或删掉历史。
-5. **按需检索而非回灌全部内容**：历史工具调用 `SessionHistorySearch`，依当前 `ToolContext.session_id/run_id` 读取目标与之前 Run 的一致快照。它不接受模型选定 Session，也不访问目标 Run 之后的事实；当前 Run 的未闭合 model/tool 批次会从搜索前缀排除。查询只返回短摘录、身份和稳定引用，后续 `read_history` 可按引用返回原始消息、工具结果或资源元数据；`read_resource_image` 将授权图像附加到下一次请求。旧工具不会被重新执行，检索内容总标记为 `untrusted_history`。工具 schema/错误对外合同由[Tools](tools.md#9-session-历史读取工具)负责。
+4. **恢复图像和调用期字段**：每条用户消息保留原文本和有序 attachment ID。AgentRequestBuilder 把消息文本与附件 ID 保留在完整对话中；另外从 RunExecutionState 加入完整的类型化资源清单。当前 Run 最新已提交工具批次中成功的 `load_image`、`extract_text`、schema v3 `measure_chart` 和 `render_chart_figure` 结果，按对应资源引用交给 `RunExecutionImageReader`；Reader 解析原图、读取已提交描述对应的保存标注图，或读取校验后的 ChartRender PNG。Agent 将图片、对应工具 JSON 与 hint 放在同一条 native TOOL 消息中，维持原调用关联。ChartFigure 资源本身不会隐式渲染，必须由模型显式调用渲染工具。历史 Run 图像不会自动重放。历史中的已配对工具调用/结果仍按通用 Memory 事实投影为历史内容，不会重新执行；schema_version 2 的旧测量事实保留原值，但不会转换为当前类型化资源。合法异常尾部不作为原生调用消息重放；其余未解决调用或不完整批次仍拒绝。Provider continuation 不属于 Memory 投影；Agent 从较早 Run 与当前 Run 的私有事实建立 `(run_id, response_record_id)` 索引，只将 provider 相同、格式版本受支持的值附加到精确对应的 assistant。不同 provider 的续接不附加；所选 Provider 要求但缺少兼容值时，prepare 本地失败，不伪造续接或删掉历史。
+5. **按需检索而非回灌全部内容**：历史工具调用 `SessionHistorySearch`，依当前 `ToolContext.session_id/run_id` 读取目标与之前 Run 的一致快照。它不接受模型选定 Session，也不访问目标 Run 之后的事实；当前 Run 的未闭合 model/tool 批次会从搜索前缀排除。查询只返回短摘录、身份和稳定引用，后续 `read_history` 可按引用返回原始消息、工具结果或资源元数据；`read_resource_image` 将授权图像与 JSON 放入同一条 native TOOL 消息。旧工具不会被重新执行，检索内容总标记为 `untrusted_history`。工具 schema/错误对外合同由[Tools](tools.md#9-session-历史读取工具)负责。
 6. **先准备再领取 attempt**：AgentRequestBuilder 组装实际 ProviderRequest；Provider 对其估算并附可选容量。只有容量和估算均可用且比例达到约 80% 时，Agent 才考虑额外摘要模型调用。普通请求 prepare 检查消息、指令、工具、图片及文本/Schema 字节限制，并完成 Provider 专属 payload 准备。通过后才在锁内复查 checkpoint、claim attempt 并 dispatch 已准备请求。Memory 不删除旧 Run 或消息；历史检索也不改变源事实。完整历史/资源构建失败时不 dispatch；prepare 失败不 claim attempt，按既有 Run 终态保留安全说明。详见[Provider 流转](provider.md#2-内部流转)和[Agent 压缩流程](agent.md#上下文压缩与请求投影)。
 
 旧 Run 的执行事实不因后续 Run 重写。新消息只有在所属 Run 中提交后，才会被之后的投影、检索或摘要读取；Memory 消息仍按源事实重建，不拥有独立更新或恢复流程。
@@ -51,7 +51,7 @@ Runtime 在一个 SQLite 读快照内读取目标 Run 的所有较早 ordinal，
 
 来源引用有 message、tool result 和资源三组。Message source ref 以 `(run_id, record_id)` 精确定位输入/助手响应；tool result ref 以 `(run_id, call_id)` 定位已提交成功/失败结果，也可定位合法异常尾部中的 `not_started`/`outcome_unknown` 未决调用。resource ref 使用 Agent 定义的 `(kind,id)` 或 `(kind,run_id,call_id)` 类型化引用。省略 selector 时完整读取原消息、工具结果/错误或结构化资源内容；ChartFigure 的 `content.figure` 是完整值，修改前可直接按已有引用读取，不必先搜索或重放旧工具。`selector.field_path` 从返回 `content` 根开始按 JSON Pointer 选字段（例如 `/figure`、`/result` 或消息的 `/content`）；随后可对字符串/数组使用 0-based `start/end` 切片，起点包含、终点排除，省略分别为开始和末尾；对象切片失败。缺失结果绝不补造观察；不在范围或不合法的引用返回有界失败。
 
-历史图片独立走 `read_resource_image`。可读取 Attachment、Panel、成功 OCR/测量标注和成功 ChartRender；沿既有 Sources/Agent integrity 与 session 权限检查加载，附在下一次 Provider 请求中。图像工具使用专用引用 Schema，消息、tool_result 和 ChartFigure 在 handler 前即被拒绝；search/read 仍接受通用来源引用。ChartFigure 不隐式绘图，失败/未决资源不产生图片。图片字节不进入搜索结果或检索 JSON，不因摘要引用或 resource locator 自动发送。工具自身的 `ToolDefinition` 与 JSON Schema 字段见[Tools](tools.md#9-session-历史读取工具)，六类资源内容字段见[Agent](agent.md#4-runexecutionstate-资源合同与完整字段)。
+历史图片独立走 `read_resource_image`。可读取 Attachment、Panel、成功 OCR/测量标注和成功 ChartRender；沿既有 Sources/Agent integrity 与 Session 权限检查加载，再与本次工具 JSON 一起放进所属 native TOOL 消息。图像工具使用专用引用 Schema，消息、tool_result 和 ChartFigure 在 handler 前即被拒绝；search/read 仍接受通用来源引用。ChartFigure 不隐式绘图，失败/未决资源不产生图片。图片字节不进入搜索结果、检索 JSON 或持久 Runtime 事实，也不会因摘要引用或 resource locator 自动发送。工具自身的 `ToolDefinition` 与 JSON Schema 字段见[Tools](tools.md#9-session-历史读取工具)，六类资源内容字段见[Agent](agent.md#4-runexecutionstate-资源合同与完整字段)。
 
 ## 4. 完整模型字段
 
@@ -117,7 +117,7 @@ Runtime 在一个 SQLite 读快照内读取目标 Run 的所有较早 ordinal，
 
 ### ToolMessage
 
-一个已提交工具结果的模型可读观察。`content` 是从结果事实生成的有界规范 JSON，不包含 handler 异常堆栈或本机执行细节。
+一个已提交工具结果的模型可读观察。消息保留结构化业务观察与附件描述，不维护第二份权威 content 字符串；统一 observation_json 序列化时才生成 JSON，不读图片或生成 hint。
 
 | 完整字段路径 | 类型 | 必填/默认 | 含义与约束 | 写入者 → 权威位置 | 读取者 → 公开/修订规则 |
 |---|---|---|---|---|---|
@@ -125,7 +125,10 @@ Runtime 在一个 SQLite 读快照内读取目标 Run 的所有较早 ordinal，
 | `ToolMessage.run_ordinal` | `int` | 必填 | Run 在 Session 内从 1 开始的顺序 | `project_run_messages` → `Run.ordinal` | `project_session_history` / AgentRequestBuilder → 历史顺序；不独立公开或修订 |
 | `ToolMessage.source_tool_sequence` | `int` | 必填 | 来源结果在 Run 工具事实流中的序号 | `project_run_messages` → `ToolExecutionFact.tool_sequence`（kind 为 tool_result） | AgentRequestBuilder → 内部事实来源；不独立公开或修订 |
 | `ToolMessage.tool_call_id` | `str` | 必填 | 对应助手工具调用的 opaque call ID | `project_run_messages` → 匹配的 `ToolCallFact.call_id` | AgentRequestBuilder → Provider tool 消息关联键；不独立公开或修订 |
-| `ToolMessage.content` | `str` | 必填；`repr=False` | 通过 `tool_observation` 编码的成功结果或安全失败对象 | `project_run_messages` → 匹配的 `ToolResultFact` | AgentRequestBuilder → Provider tool 观察；不出现在 repr/API，不独立修订 |
+| `ToolMessage.outcome` | `ToolOutcome` | 必填 | 成功或失败 | projector → ToolResultFact.outcome | Agent/历史读取；不可独立修订 |
+| `ToolMessage.result` | `Mapping[str, object] \| None` | None；repr=False | 成功业务对象，失败为空 | projector → ToolResultFact.result | 统一观察序列化；不公开原始结果 |
+| `ToolMessage.error` | `ToolExecutionError \| None` | None | 失败安全错误，成功为空 | projector → ToolResultFact.error | Agent/历史读取；不含异常栈 |
+| `ToolMessage.attachments` | `tuple[ToolImageAttachment, ...]` | () | 有序描述，失败为空；字段见 Sources | projector → ToolResultFact.attachments | Agent/精确读取；不含像素或 hint |
 
 ### SessionHistory
 
@@ -167,11 +170,11 @@ Runtime 在一个 SQLite 读快照内读取目标 Run 的所有较早 ordinal，
 
 - Memory 仅包含同一 Session 中目标 Run ordinal 之前的终态 Run；时间戳和数据库行顺序不决定对话顺序。
 - 任一历史 Run 无效时整份历史不 dispatch；不跳过坏 Run 或缺失附件；合法终态尾部必须完整转换为异常上下文。
-- 附件 ID 仍由所属 Session 校验，图像字节只在对应的成功 `load_image` 后进入下一次 Provider 请求；Memory 对象中无附件字节和本机路径。
+- 附件 ID 仍由所属 Session 校验；成功 `load_image` 的像素只进入其所属 native TOOL 消息，不进入 Memory 对象、持久事实或本机路径字段。
 - Provider continuation 与源 Run/响应绑定；Memory 投影不含该 payload。Agent 在 Provider 请求边界按 `(run_id, source_record_id)` 私下读取兼容续接，仅附加到对应 assistant；不复制到目标 Run，不混入助手正文、提示资产、工具结果或公开 DTO。
 - canonical Run 历史和资源目录始终完整；可选摘要只裁剪普通 Provider 请求的旧消息投影，不改变 Memory 源事实。容量缺失/估算失败时不自动摘要；压缩失败使用完整历史请求路径，若仍不能通过现有 prepare 合同则在 claim 前失败。
 - 摘要与所有检索到的旧内容均是 `untrusted_history` 数据，不能提升为指令。搜索分页游标绑定 Session、目标 Run 和查询过滤器；历史结果引用不能把读取范围扩展到后续 Run 或其他 Session。
-- 历史图片只响应 `read_resource_image` 的明确调用；图片字节沿 Provider image path 进入下一请求，不放进 Memory projection、搜索摘要或普通 JSON 读取。
+- 历史图片只响应 `read_resource_image` 的明确调用；图片字节只进入该调用对应的 native TOOL 消息，不放进 Memory projection、搜索摘要或普通 JSON 读取。
 - Run 创建由 Runtime 保证同一 Session 同时最多一个 running Run；幂等重放先于 active Run 检查。完整创建与读取语义见[运行时流程](runtime.md#2-内部流转)。
 - Session 整体删除后，源事实与私有续接一并删除，Memory 不另留副本。删除事务和文件恢复见[Web 会话删除](web.md#会话删除与恢复)。
 
@@ -180,3 +183,7 @@ Runtime 在一个 SQLite 读快照内读取目标 Run 的所有较早 ordinal，
 代码：[Session Memory 模型](../../src/figura/memory/models.py)、[来源引用](../../src/figura/shared/source_refs.py)、[历史检索](../../src/figura/memory/retrieval.py)、[投影器](../../src/figura/memory/projector.py)、[Agent 请求构建](../../src/figura/agent/request.py)、[历史 Run 快照读取](../../src/figura/runtime/persistence/snapshots.py)。规格：[Session Memory](../../openspec/figura/openspec/specs/session-memory/spec.md)、[上下文压缩](../../openspec/figura/openspec/specs/session-context-compaction/spec.md)、[历史检索](../../openspec/figura/openspec/specs/session-context-retrieval/spec.md)、[Agent ReAct](../../openspec/figura/openspec/specs/agent-react-execution/spec.md)、[Run 核心](../../openspec/figura/openspec/specs/run-execution-core/spec.md)。
 
 历史搜索、精确读取与摘要来源行为见 [Session Memory](../../openspec/figura/openspec/specs/session-memory/spec.md)、[历史检索](../../openspec/figura/openspec/specs/session-context-retrieval/spec.md)和[上下文压缩](../../openspec/figura/openspec/specs/session-context-compaction/spec.md)主规格。检索结果与摘要仍是不可信历史数据。
+
+## 工具图片的历史读取
+
+工具结果与资源读取保留完整附件描述和 provenance；search_history / read_history 只返回数据和引用，不隐式读图。read_resource_image 按完整授权前缀定位已保存媒体，当前 ToolMessage 的 call ID 属于新的读取调用，附件引用仍是原资源，不增加旧资源 ID。旧历史没有可用附件时仍可读原始文本；图片读取安全失败，不在线补绘。图片是否进入该工具结果消息由 Agent 的 `images_loaded` 临时标记表示，Memory 不持久化“模型已看过”的状态。

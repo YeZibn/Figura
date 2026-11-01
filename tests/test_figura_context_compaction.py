@@ -1,4 +1,5 @@
 from __future__ import annotations
+from tests.figura_sources_support import make_durable_tool_executor
 
 from dataclasses import replace
 import json
@@ -295,7 +296,7 @@ def _complete_two_interaction_run(coordinator, store, session_id, *, key="two-in
             reason=FinishReason.TOOL_CALLS,
         ),
     )
-    DurableToolExecutor(store, registry).execute_pending(session_id, run.run_id)
+    make_durable_tool_executor(store, registry).execute_pending(session_id, run.run_id)
     _complete_text_run(coordinator, session_id, run.run_id, registry=registry)
     return run
 
@@ -310,7 +311,7 @@ def _active_two_interaction_run(
         run = _create_followup_run(
             coordinator, session_id, key=key, text="当前任务：完成两次有依据的观察。"
         )
-    executor = DurableToolExecutor(store, registry)
+    executor = make_durable_tool_executor(store, registry)
     for call_id, observation in (
         ("active-early-call", "活动 Run 较早交互：识别第一组数据。"),
         ("active-recent-call", "活动 Run 近期交互：核对第二组数据。"),
@@ -1135,12 +1136,8 @@ def test_selector_keeps_incomplete_abnormal_run_tail_outside_summary(tmp_path):
 
 
 def test_partial_coverage_keeps_cited_and_newer_same_run_tool_resources(tmp_path):
-    from figura.agent.execution_resources import (
-        ExecutionResource,
-        OcrContent,
-        RunExecutionState,
-        ToolResourceRef,
-    )
+    from figura.shared.resource_refs import ToolResourceRef
+    from figura.agent.execution_resources import (ExecutionResource, OcrContent, RunExecutionState)
     from figura.agent.request import _prompt_resource_projection
     from figura.runtime.tool_execution import DurableToolExecutor
     from figura.tools import ToolOutcome
@@ -1167,7 +1164,7 @@ def test_partial_coverage_keeps_cited_and_newer_same_run_tool_resources(tmp_path
                 reason=FinishReason.TOOL_CALLS,
             ),
         )
-        DurableToolExecutor(store, registry).execute_pending(session.session_id, run.run_id)
+        make_durable_tool_executor(store, registry).execute_pending(session.session_id, run.run_id)
     _complete_text_run(coordinator, session.session_id, run.run_id, registry=registry)
     target = _create_followup_run(
         coordinator, session.session_id, key="resource-slice-target", text="继续整理。"
@@ -1978,3 +1975,32 @@ def test_prompt_resource_directory_is_compact_while_server_catalog_stays_complet
         for resource in prompt_catalog["resources"]
     )
     assert builder._execution_state.build(target_state, prior) == full_catalog
+
+
+def test_pending_visual_batch_is_raw_and_summary_sources_only_include_descriptors(tmp_path):
+    from tests.test_figura_agent_request import _app_with_attachments, _image_registry, _commit_tool_calls, _image_bytes, _builder
+    from figura.runtime.records import ContextCompactionOperation
+    from figura.agent.prompting.observations import pending_visual_results
+    store, coordinator, session, run, attachments = _app_with_attachments(tmp_path, (_image_bytes('red'),))
+    _panels, _service, registry = _image_registry(store, coordinator, attachments)
+    attachment = attachments.list(session.session_id)[0]
+    _commit_tool_calls(store, coordinator, session, run, registry, [ProviderToolCall('early', 'inspect', '{"value":1}')])
+    state = _commit_tool_calls(store, coordinator, session, run, registry, [ProviderToolCall('load', 'load_image', json.dumps({'source_kind':'attachment', 'source_id':attachment.attachment_id}))])
+    assert pending_visual_results(state)
+    selected = select_compaction_coverage((), None, 0, active_run_state=state, estimate_tokens=lambda _: 100)
+    assert selected.covered_tool_sequence < state.checkpoint.last_committed_tool_sequence
+    operation = ContextCompactionOperation('op', session.session_id, run.run_id,
+        state.checkpoint.last_committed_record_sequence, state.checkpoint.last_committed_tool_sequence,
+        0, run.run_id, run.ordinal, state.checkpoint.last_committed_record_sequence,
+        state.checkpoint.last_committed_tool_sequence, 'preparing')
+    assert selection_for_coverage((), None, operation, active_run_state=state) is None
+    # A later ordinary response consumes the picture. It can then be summarized by reference.
+    newer = _commit_tool_calls(store, coordinator, session, run, registry, [ProviderToolCall('later', 'inspect', '{"value":2}')])
+    assert not pending_visual_results(newer)
+    selected = select_compaction_coverage((), None, 0, active_run_state=newer, estimate_tokens=lambda _: 100)
+    request, _refs = _builder(store, coordinator, attachments).build_summary_request(newer,
+        selected.selected_run_states, None, coverage=selected, context_capacity_tokens=1000, summary_budget_tokens=100)
+    content = request.messages[0].content
+    assert 'attachments' in content and attachment.attachment_id in content
+    assert 'images_loaded' not in content and '系统观察提醒' not in content and 'base64' not in content
+    assert request.tools == ()

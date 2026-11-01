@@ -4,14 +4,8 @@ import json
 
 import pytest
 
-from figura.agent.execution_resources import (
-    ChartFigureContent,
-    ExecutionResource,
-    ImageResourceRef,
-    MeasurementContent,
-    RunExecutionState,
-    ToolResourceRef,
-)
+from figura.shared.resource_refs import ImageResourceRef, ToolResourceRef
+from figura.agent.execution_resources import (ChartFigureContent, ExecutionResource, MeasurementContent, RunExecutionState)
 from figura.charts.chartfigure import chart_figure_digest, parse_chart_figure
 from figura.shared.json_schema import normalize_json_value
 from figura.tools import (

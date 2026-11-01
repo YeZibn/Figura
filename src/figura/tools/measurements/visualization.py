@@ -1,4 +1,4 @@
-"""Deterministic, transient image annotations for committed observations."""
+"""Deterministic annotation pixels for tool execution and explicit maintenance."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ def render_measurement_overlay(
     result: Mapping[str, object],
     tool_name: str,
 ) -> bytes:
-    """Draw committed geometry and status labels without changing the source."""
+    """Draw candidate geometry and status labels without changing the source."""
     try:
         with Image.open(BytesIO(image_bytes)) as source:
             source.load()

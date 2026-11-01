@@ -4,12 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from figura.agent.execution_resources import (
-    ChartFigureContent,
-    ChartRenderContent,
-    RunExecutionState,
-    ToolResourceRef,
-)
+from figura.shared.resource_refs import ToolResourceRef
+from figura.agent.execution_resources import (ChartFigureContent, ChartRenderContent, RunExecutionState)
 from figura.runtime.models import EventKind, RecordKind, Run, Session
 from figura.runtime.records import (
     FinalAnswerFact,

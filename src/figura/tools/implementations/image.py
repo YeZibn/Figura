@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+from figura.tools.contracts import ToolOutput, ToolImageOutput
+from figura.shared.media import ResourceImage
+
 from collections.abc import Callable, Mapping
 from typing import Any
 
 from figura.agent.execution_images import RunExecutionImageReader
-from figura.agent.execution_resources import AttachmentContent, ImageResourceRef, PanelContent, RunExecutionState
+from figura.shared.resource_refs import ImageResourceRef
+from figura.agent.execution_resources import (AttachmentContent, PanelContent, RunExecutionState)
 from figura.runtime.errors import RunError, RunErrorCode
 from figura.sources.models import PanelPoint
 from figura.sources.panels import FiguraPanelService
@@ -92,7 +96,7 @@ def image_tool_definitions(
     image_reader: RunExecutionImageReader,
     panels: FiguraPanelService,
 ) -> tuple[ToolDefinition, ToolDefinition]:
-    def load_image(context: ToolContext, arguments: Mapping[str, Any]) -> dict[str, object]:
+    def load_image(context: ToolContext, arguments: Mapping[str, Any]) -> ToolOutput:
         state = image_inventory(context.session_id, context.run_id)
         kind, source_id = arguments["source_kind"], arguments["source_id"]
         ref = ImageResourceRef(kind, source_id)
@@ -110,15 +114,15 @@ def image_tool_definitions(
             _image_bytes, width, height = image_reader.read_source(context.session_id, state, ref)
         except RunError:
             raise ToolFailure("image_unavailable", "图像文件当前无法读取。", retryable=True) from None
-        return {
+        return ToolOutput({
             "source_kind": kind,
             "source_id": source_id,
             "name": name,
             "width": width,
             "height": height,
-        }
+        }, (ToolImageOutput(ref, "original", ResourceImage.from_bytes(_image_bytes)),))
 
-    def decompose_chart_image(context: ToolContext, arguments: Mapping[str, Any]) -> dict[str, object]:
+    def decompose_chart_image(context: ToolContext, arguments: Mapping[str, Any]) -> ToolOutput:
         state = image_inventory(context.session_id, context.run_id)
         attachment_id = arguments["attachment_id"]
         try:
@@ -143,7 +147,7 @@ def image_tool_definitions(
             if error.code in {RunErrorCode.INVALID_REQUEST, RunErrorCode.UNSUPPORTED_PAYLOAD}:
                 raise ToolFailure("invalid_region", "Panel 区域结构或资源范围不符合要求。") from None
             raise ToolOutcomeUnknown() from None
-        return {
+        return ToolOutput({
             "panels": [
                 {
                     "panel_id": record.panel_id,
@@ -152,16 +156,17 @@ def image_tool_definitions(
                 }
                 for record in records
             ]
-        }
+        })
 
     return (
         ToolDefinition(
             name="load_image",
-            description="读取当前 Session 已授权的 Attachment 或 Panel 原图，用于观察布局、颜色或视觉内容。结果返回来源、名称和尺寸，图像附加到下一次模型请求；需要其他历史图像资源时用 read_resource_image。",
+            description="读取当前 Session 已授权的 Attachment 或 Panel 原图，用于观察布局、颜色或视觉内容。结果返回来源、名称和尺寸，图片作为当前工具结果的附件进入下一次模型请求；需要其他历史图像资源时用 read_resource_image。",
             parameters_schema=_LOAD_IMAGE_PARAMETERS,
             result_schema=_LOAD_IMAGE_RESULT,
             replay_effect=ReplayEffect.REPLAY_SAFE,
             handler=load_image,
+            produces_images=True,
         ),
         ToolDefinition(
             name="decompose_chart_image",

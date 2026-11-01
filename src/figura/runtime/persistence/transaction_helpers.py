@@ -22,14 +22,14 @@ def _insert_tool_fact(
     raw_payload = encode_tool_fact(kind, payload)
     connection.execute(
         "INSERT INTO run_tool_execution_facts(run_id, tool_sequence, fact_kind, schema_version, payload_json, created_at) "
-        "VALUES (?, ?, ?, 2, ?, ?)",
-        (run_id, tool_sequence, kind.value, raw_payload, created_at),
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (run_id, tool_sequence, kind.value, payload.schema_version, raw_payload, created_at),
     )
     return ToolExecutionFact(
         run_id=run_id,
         tool_sequence=tool_sequence,
         fact_kind=kind,
-        schema_version=2,
+        schema_version=payload.schema_version,
         payload=payload,
         created_at=created_at,
     )

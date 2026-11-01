@@ -47,7 +47,7 @@ def _leave_older_registry_run(tmp_path, *, registry_version: str, terminal: bool
 
 
 @pytest.mark.parametrize("old_version", ["figura-web-v8", "figura-web-v9"])
-def test_registry_v10_startup_blocks_active_older_registry_runs(tmp_path, old_version) -> None:
+def test_registry_v11_startup_blocks_active_older_registry_runs(tmp_path, old_version) -> None:
     _leave_older_registry_run(tmp_path, registry_version=old_version, terminal=False)
 
     with pytest.raises(RuntimeError, match="older bound Run is still active"):
@@ -55,17 +55,17 @@ def test_registry_v10_startup_blocks_active_older_registry_runs(tmp_path, old_ve
 
 
 @pytest.mark.parametrize("old_version", ["figura-web-v8", "figura-web-v9"])
-def test_registry_v10_startup_allows_terminal_older_registry_history(tmp_path, old_version) -> None:
+def test_registry_v11_startup_allows_terminal_older_registry_history(tmp_path, old_version) -> None:
     _leave_older_registry_run(tmp_path, registry_version=old_version, terminal=True)
 
     application = create_application(tmp_path)
     try:
-        assert application.dispatcher._executor._tools.registry.version == "figura-web-v10"
+        assert application.dispatcher._executor._tools.registry.version == "figura-web-v11"
     finally:
         application.close()
 
 
-def test_registry_v10_startup_ignores_context_compaction_contract_for_active_run() -> None:
+def test_registry_v11_startup_ignores_context_compaction_contract_for_active_run() -> None:
     active_run = SimpleNamespace(session_id="session", run_id="run")
     state = SimpleNamespace(
         run=SimpleNamespace(status=RunStatus.RUNNING),
@@ -73,7 +73,7 @@ def test_registry_v10_startup_ignores_context_compaction_contract_for_active_run
         provider_requests=(
             SimpleNamespace(
                 purpose="agent_turn",
-                asset_manifest={"registry_version": "figura-web-v10"},
+                asset_manifest={"registry_version": "figura-web-v11"},
             ),
             SimpleNamespace(
                 purpose="context_compaction",
@@ -90,4 +90,4 @@ def test_registry_v10_startup_ignores_context_compaction_contract_for_active_run
             assert (session_id, run_id) == ("session", "run")
             return state
 
-    _ensure_registry_cutover_ready(Coordinator(), "figura-web-v10")
+    _ensure_registry_cutover_ready(Coordinator(), "figura-web-v11")

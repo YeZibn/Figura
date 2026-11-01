@@ -12,6 +12,7 @@ from figura.runtime.store import FiguraRunStore
 from figura.sources.attachments import FiguraAttachmentService
 from figura.sources.chart_renders import FiguraChartRenderService
 from figura.sources.panels import FiguraPanelService
+from figura.sources.tool_media import FiguraToolMediaService
 from figura.sources.repository import SourcesRepository
 from figura.sources.storage import ensure_private_directory
 
@@ -26,12 +27,14 @@ class FiguraSessionDeletion:
         attachments: FiguraAttachmentService,
         panels: FiguraPanelService,
         chart_renders: FiguraChartRenderService,
+        media: FiguraToolMediaService | None = None,
     ) -> None:
         self._store = store
         self._sources = sources
         self._attachments = attachments
         self._panels = panels
         self._chart_renders = chart_renders
+        self._media = media or FiguraToolMediaService(store.data_root)
         self._trash_root = store.data_root / "session-trash"
         try:
             ensure_private_directory(self._trash_root, "Session deletion staging")
@@ -75,6 +78,7 @@ class FiguraSessionDeletion:
                 self._attachments.stage_session_deletion(session_trash, attachment_ids)
                 self._panels.stage_session_deletion(session_trash, panel_ids)
                 self._chart_renders.stage_session_deletion(session_trash, render_calls)
+                self._media.stage_session_deletion(session_trash, session_id)
                 self._store.begin_session_deletion(connection, session_id)
                 self._store.delete_session_run_facts(connection, session_id)
                 self._sources.delete_session_rows(connection, session_id)
@@ -112,6 +116,7 @@ class FiguraSessionDeletion:
         self._attachments.restore_session_deletion(session_trash)
         self._panels.restore_session_deletion(session_trash)
         self._chart_renders.restore_session_deletion(session_trash)
+        self._media.restore_session_deletion(session_trash)
         session_trash.rmdir()
 
     def _discard(self, session_trash: Path) -> None:
@@ -122,6 +127,7 @@ class FiguraSessionDeletion:
         self._attachments.discard_session_deletion(session_trash)
         self._panels.discard_session_deletion(session_trash)
         self._chart_renders.discard_session_deletion(session_trash)
+        self._media.discard_session_deletion(session_trash)
         shutil.rmtree(session_trash)
 
 

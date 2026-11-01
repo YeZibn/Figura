@@ -1,4 +1,6 @@
 from __future__ import annotations
+from tests.figura_sources_support import make_durable_tool_executor
+from figura.tools import ToolOutput
 
 from tests.figura_sources_support import make_attachment_service, make_panel_service, make_execution_image_reader
 
@@ -43,7 +45,7 @@ def _registry(*, version: str = "registry-v1") -> ToolRegistry:
     def handler(_context, arguments):
         if arguments["value"] == 2:
             raise ToolFailure("inspection_failed", "无法读取该值。", retryable=True)
-        return {"value": arguments["value"]}
+        return ToolOutput({"value": arguments["value"]})
 
     return ToolRegistry(
         version,
@@ -191,7 +193,7 @@ def _commit_tool_round(
         provider_attempt_id=attempt.attempt_id,
         registry_version=registry.version,
     )
-    executor = DurableToolExecutor(store, registry)
+    executor = make_durable_tool_executor(store, registry)
     return executor.execute_pending(session.session_id, run.run_id)
 
 
@@ -244,7 +246,7 @@ def _commit_tool_calls(store, coordinator, session, run, registry, calls):
         provider_attempt_id=attempt.attempt_id,
         registry_version=registry.version,
     )
-    return DurableToolExecutor(store, registry).execute_pending(session.session_id, run.run_id)
+    return make_durable_tool_executor(store, registry).execute_pending(session.session_id, run.run_id)
 
 
 def _request_text_bytes(request) -> int:
@@ -360,15 +362,14 @@ def test_latest_load_batch_attaches_multiple_images_once_in_tool_order(tmp_path)
     state = _commit_tool_calls(store, coordinator, session, run, registry, loads)
 
     request = _builder(store, coordinator, attachments).build(state, registry)
-    image_message = request.messages[-1]
-    assert image_message.role is MessageRole.USER
-    assert isinstance(image_message.content, tuple)
-    image_blocks = [block for block in image_message.content if isinstance(block, ImageBlock)]
-    assert image_blocks == [ImageBlock("image/png", second_image), ImageBlock("image/png", first_image)]
-    cues = [json.loads(block.text.split("\n")[1]) for block in image_message.content if isinstance(block, TextBlock)]
-    assert len(cues) == 2
-    assert [cue["feedback_kind"] for cue in cues] == ["original", "original"]
-    assert [cue["trigger_call"]["call_id"] for cue in cues] == ["load-0", "load-1"]
+    image_messages = [message for message in request.messages if message.role is MessageRole.TOOL]
+    assert len(image_messages) == 3
+    image_blocks = [block for message in image_messages for block in message.content if isinstance(block, ImageBlock)]
+    assert image_blocks == [ImageBlock("image/png", second_image), ImageBlock("image/png", first_image), ImageBlock("image/png", second_image)]
+    cues = [json.loads(message.content[1].text.split("\n")[1]) for message in image_messages]
+    assert [cue["image_kind"] for cue in cues] == ["original"] * 3
+    assert [cue["trigger_call"]["call_id"] for cue in cues] == ["load-0", "load-1", "load-2"]
+    assert [message.tool_call_id for message in image_messages] == ["load-0", "load-1", "load-2"]
     for index, image in enumerate(image_blocks):
         assert cues[index]["resource_ref"] == dict(image.source_ref)
     assert request == _builder(store, coordinator, attachments).build(state, registry)
@@ -435,7 +436,7 @@ def test_request_rebuilds_tool_round_in_order_and_attaches_continuation(tmp_path
         provider_attempt_id=started.attempt_id,
         registry_version=registry.version,
     )
-    state = DurableToolExecutor(store, registry).execute_pending(session.session_id, run.run_id)
+    state = make_durable_tool_executor(store, registry).execute_pending(session.session_id, run.run_id)
 
     request = _builder(store, coordinator).build(state, registry)
 
@@ -456,10 +457,9 @@ def test_request_rebuilds_tool_round_in_order_and_attaches_continuation(tmp_path
         "call-first",
         "call-second",
     ]
-    assert request.messages[4].content == '{"outcome":"succeeded","result":{"value":1}}'
+    assert request.messages[4].content == '{"attachments":[],"images_loaded":false,"outcome":"succeeded","result":{"value":1}}'
     assert request.messages[5].content == (
-        '{"error":{"code":"inspection_failed","message":"无法读取该值。",'
-        '"retryable":true},"outcome":"failed"}'
+        '{"attachments":[],"error":{"code":"inspection_failed","message":"无法读取该值。","retryable":true},"images_loaded":false,"outcome":"failed"}'
     )
 
 

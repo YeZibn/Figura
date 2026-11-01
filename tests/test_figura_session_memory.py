@@ -1,4 +1,7 @@
 from __future__ import annotations
+from figura.tools.observation import observation_json
+from tests.figura_sources_support import make_durable_tool_executor
+from figura.tools import ToolOutput
 
 from tests.figura_sources_support import make_attachment_service
 
@@ -96,7 +99,7 @@ def _registry() -> ToolRegistry:
     def inspect(_context, arguments):
         if arguments["value"] == 2:
             raise ToolFailure("inspection_failed", "无法读取该值。", retryable=True)
-        return {"value": arguments["value"]}
+        return ToolOutput({"value": arguments["value"]})
 
     return ToolRegistry(
         "registry-v1",
@@ -184,7 +187,7 @@ def test_project_run_messages_maps_tool_calls_results_and_final_answer_once(tmp_
         ),
         registry_version=registry.version,
     )
-    state = DurableToolExecutor(store, registry).execute_pending(session.session_id, run.run_id)
+    state = make_durable_tool_executor(store, registry).execute_pending(session.session_id, run.run_id)
     final_state = _commit_response(
         coordinator,
         session.session_id,
@@ -220,10 +223,9 @@ def test_project_run_messages_maps_tool_calls_results_and_final_answer_once(tmp_
         "call-ok",
         "call-failed",
     ]
-    assert messages[2].content == '{"outcome":"succeeded","result":{"value":1}}'
-    assert messages[3].content == (
-        '{"error":{"code":"inspection_failed","message":"无法读取该值。",'
-        '"retryable":true},"outcome":"failed"}'
+    assert observation_json(messages[2]) == '{"attachments":[],"outcome":"succeeded","result":{"value":1}}'
+    assert observation_json(messages[3]) == (
+        '{"attachments":[],"error":{"code":"inspection_failed","message":"无法读取该值。","retryable":true},"outcome":"failed"}'
     )
     assert messages[-1].content == "两个值均已检查。"
     assert len([message for message in messages if isinstance(message, AssistantMessage)]) == 2

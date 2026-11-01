@@ -1,6 +1,10 @@
 """Authorized source adapter for bounded OCR observations."""
 
 from __future__ import annotations
+from .media_outputs import annotation_output
+
+from figura.tools.contracts import ToolOutput, ToolImageOutput
+from figura.shared.media import ResourceImage
 
 from collections.abc import Callable, Mapping
 from typing import Any
@@ -70,7 +74,7 @@ def extract_text_definition(
     image_inventory: Callable[[str, str], RunExecutionState],
     image_reader: RunExecutionImageReader,
 ) -> ToolDefinition:
-    def extract(context: ToolContext, arguments: Mapping[str, Any]) -> dict[str, object]:
+    def extract(context: ToolContext, arguments: Mapping[str, Any]) -> ToolOutput:
         kind, source_id = arguments["source_kind"], arguments["source_id"]
         source = resolve_measurement_source(
             context.session_id,
@@ -92,7 +96,7 @@ def extract_text_definition(
 
         observation = recognize_text(rgb, mask) if mask is not None else recognize_text(rgb)
         height, width = rgb.shape[:2]
-        return {
+        return annotation_output(context, {
             "source_kind": kind,
             "source_id": source_id,
             "image_size": {"width": width, "height": height},
@@ -108,16 +112,17 @@ def extract_text_definition(
                 }
                 for snippet in observation.snippets
             ],
-        }
+        }, source.image_bytes, "ocr_annotation")
 
     return ToolDefinition(
         name="extract_text",
         description=(
             "从授权 Attachment 或 Panel 提取候选 OCR 文本、原来源像素框 [x,y,width,height] 与置信度。"
-            "available 表示 OCR 是否可用，空 snippets 不证明无文字，truncated 表示可能不完整。可选 observation_scope；整框跨出有效范围的候选会被丢弃，成功批次提供标注图回看。"
+            "available 表示 OCR 是否可用，空 snippets 不证明无文字，truncated 表示可能不完整。可选 observation_scope；整框跨出有效范围的候选会被丢弃，结果包含已保存标注图附件，供自主复核或补测。"
         ),
         parameters_schema=SOURCE_PARAMETERS,
         result_schema=EXTRACT_TEXT_RESULT_SCHEMA,
         replay_effect=ReplayEffect.REPLAY_SAFE,
         handler=extract,
+            produces_images=True,
     )

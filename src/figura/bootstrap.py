@@ -10,6 +10,7 @@ from figura.agent import AgentExecutor, AgentRequestBuilder
 from figura.sources.attachments import FiguraAttachmentService
 from figura.sources.chart_renders import FiguraChartRenderService
 from figura.sources.panels import FiguraPanelService
+from figura.sources.tool_media import FiguraToolMediaService
 from figura.sources.repository import SourcesRepository
 from figura.gateway.application import FiguraGatewayApplication
 from figura.gateway.dispatcher import RunDispatcher
@@ -57,18 +58,21 @@ def create_application(
     coordinator = RunCoordinator(store, factory)
     panel_service = FiguraPanelService(sources, store.data_root, attachment_service)
     chart_renders = FiguraChartRenderService(store.data_root)
+    media = FiguraToolMediaService(store.data_root)
+    media.reconcile_idle(store.database)
     session_deletion = FiguraSessionDeletion(
         store,
         sources,
         attachment_service,
         panel_service,
         chart_renders,
+        media,
     )
     execution_state = RunExecutionStateService(coordinator, panel_service)
-    execution_images = RunExecutionImageReader(attachment_service, panel_service, chart_renders)
+    execution_images = RunExecutionImageReader(attachment_service, panel_service, chart_renders, media)
     history = SessionHistorySearch(coordinator, execution_state)
     registry = ToolRegistry(
-        "figura-web-v10",
+        "figura-web-v11",
         (
             *image_tool_definitions(execution_state.for_run, execution_images, panel_service),
             *history_tool_definitions(history),
@@ -85,7 +89,7 @@ def create_application(
         payload_limits=limits,
     )
     _ensure_registry_cutover_ready(coordinator, registry.version)
-    runtime = ToolRuntime(registry)
+    runtime = ToolRuntime(registry, media_committer=execution_images.media_committer(execution_state.for_run))
     lock = PerRunExecutionLock(store.data_root)
     tools = DurableToolExecutor(store, registry, runtime, execution_lock=lock)
     transient_events = TransientRunEventHub()
@@ -119,7 +123,7 @@ def recover_running_runs(application: FiguraGatewayApplication) -> int:
 
 def _ensure_registry_cutover_ready(coordinator: RunCoordinator, registry_version: str) -> None:
     """Do not activate new contracts while an older bound Run could still resume."""
-    if registry_version != "figura-web-v10":
+    if registry_version != "figura-web-v11":
         return
     for run in coordinator.list_running_runs():
         state = coordinator.read_run_state(run.session_id, run.run_id)
@@ -137,6 +141,6 @@ def _ensure_registry_cutover_ready(coordinator: RunCoordinator, registry_version
         )
         if state.run.status is RunStatus.RUNNING and any(version != registry_version for version in bound_versions):
             raise RuntimeError(
-                "Cannot activate Figura Registry v10 while an older bound Run is still active; "
+                "Cannot activate Figura Registry v11 while an older bound Run is still active; "
                 "finish or interrupt older Runs, then restart Figura."
             )

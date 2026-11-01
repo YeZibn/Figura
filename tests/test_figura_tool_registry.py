@@ -1,4 +1,5 @@
 from __future__ import annotations
+from figura.tools import ToolOutput
 
 from typing import Any
 
@@ -23,7 +24,7 @@ from figura.tools import (
 
 
 def _handler(_context: ToolContext, arguments: Any) -> dict[str, Any]:
-    return {"accepted": bool(arguments.get("value"))}
+    return ToolOutput({"accepted": bool(arguments.get("value"))})
 
 
 def _definition(

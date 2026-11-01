@@ -1,6 +1,7 @@
 """Persisted execution facts and Runtime snapshots."""
 
 from __future__ import annotations
+from figura.shared.media import ToolImageAttachment
 
 from dataclasses import dataclass, field
 from types import MappingProxyType
@@ -209,7 +210,8 @@ class ToolResultFact:
     outcome: ToolOutcome
     result: Mapping[str, object] | None = field(default=None, repr=False)
     error: ToolExecutionError | None = None
-    schema_version: int = 2
+    schema_version: int = 3
+    attachments: tuple[ToolImageAttachment, ...] = ()
 
 
 ToolFactPayload: TypeAlias = ToolCallFact | ToolAttemptStartedFact | ToolResultFact

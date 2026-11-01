@@ -1,6 +1,10 @@
 """Unified family-explicit chart measurement tool and adapter router."""
 
 from __future__ import annotations
+from .media_outputs import annotation_output
+
+from figura.tools.contracts import ToolOutput, ToolImageOutput
+from figura.shared.media import ResourceImage
 
 from collections.abc import Callable, Mapping
 from typing import Any
@@ -78,7 +82,7 @@ def measure_chart_definition(
     if missing:
         raise ValueError("measure_chart requires a sensor for every advertised family")
 
-    def measure(context: ToolContext, arguments: Mapping[str, Any]) -> dict[str, object]:
+    def measure(context: ToolContext, arguments: Mapping[str, Any]) -> ToolOutput:
         source_kind = arguments["source_kind"]
         source_id = arguments["source_id"]
         chart_type = ChartType(arguments["chart_type"])
@@ -127,13 +131,14 @@ def measure_chart_definition(
                 "图表观察结果未通过统一合同校验。",
                 field_path=issue.field_path or None,
             )
-        return supported_result
+        return annotation_output(context, supported_result, source.image_bytes, "measurement_annotation")
 
     return ToolDefinition(
         name="measure_chart",
         description=(
             "对已授权的 Attachment 或 Panel 执行一次明确家族的图表视觉观察。必须提供 chart_type：bar、line、scatter、pie、area、"
             "histogram、box_plot、radar、heatmap 或 treemap；气泡图归入 scatter，甜甜圈图归入 pie。"
+            "结果含已保存测量标注图附件，供自主复核或补测。"
             "家族由 Agent 根据用户描述、当前视觉上下文或 load_image 后观察结果选择；本工具不调用模型、不分类、不改选家族，也不自动重试。"
             "结果是保留原图像素坐标与不确定性的候选证据，不会自动成为 ChartSpec。非空数值带 value_provenance，coverage 描述实际范围，issues 保留缺口与冲突；未校准的数值保持 null；partial、unsupported、警告和截断情况由 Agent 决定后续动作。"
             "可选 observation_scope 使用来源内 0–1000 归一化多边形，include 取并集、exclude 优先扣除；无效或无可观察像素时失败，不会扩大到全图。"
@@ -143,6 +148,7 @@ def measure_chart_definition(
         result_schema=MEASUREMENT_RESULT_SCHEMA,
         replay_effect=ReplayEffect.REPLAY_SAFE,
         handler=measure,
+            produces_images=True,
     )
 
 

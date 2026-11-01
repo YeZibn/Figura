@@ -45,10 +45,12 @@ def load_image_feedback() -> tuple[str, dict[str, str]]:
     if tuple(parts[1::2]) != expected:
         raise PromptAssetError("image_feedback.md requires ordered, unique feedback sections")
     cues: dict[str, str] = {}
+    rules = []
     for heading, body in zip(parts[1::2], parts[2::2]):
         if heading == "Common":
             if not body.strip() or re.search(r"^### ", body, re.MULTILINE):
                 raise PromptAssetError("image_feedback.md requires nonempty Common rules")
+            rules.append(body.strip())
             continue
         segments = re.split(r"^### (.+)$", body, flags=re.MULTILINE)
         if (
@@ -57,8 +59,10 @@ def load_image_feedback() -> tuple[str, dict[str, str]]:
             or any(not value.strip() for value in segments[2::2])
         ):
             raise PromptAssetError("image_feedback.md requires nonempty Rules and Cue")
-        cues[heading.lower()] = segments[4].strip()
-    return content, cues
+        key = {"Original": "original", "OCR": "ocr_annotation", "Measurement": "measurement_annotation", "Rendered": "rendered"}[heading]
+        cues[key] = segments[4].strip()
+        rules.append(segments[2].strip())
+    return "\n\n".join(rules), cues
 
 
 def build_compaction_instruction(

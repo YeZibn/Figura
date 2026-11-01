@@ -30,7 +30,9 @@ Figura SHALL register an `extract_text` tool accepting exactly `source_kind` (`a
 - **THEN** Figura returns a bounded structured tool failure and reads no image bytes
 
 ### Requirement: Bound OCR output and preserve source coordinates
-Figura SHALL assign snippet IDs that are unique within one result, retain recognized text only up to the declared per-snippet limit, and set `truncated` to true when OCR output is cut off by the snippet-count or text-length bound. Every returned bounding box SHALL use integer pixels relative to the complete selected source, regardless of whether an observation scope was applied. The tool result SHALL contain no image bytes, overlay, local filesystem path, or unbounded OCR payload.
+Figura SHALL assign snippet IDs unique within a result, retain recognized text up to the declared per-snippet bound and set truncated when snippet count or text length is cut off. All boxes SHALL remain integer pixels in the complete selected source frame, regardless of observation scope.
+
+The business result SHALL contain only the existing OCR observation fields, without image bytes, overlay pixels, local paths or unbounded OCR data. Each new successful OCR call SHALL additionally provide one validated saved ocr_annotation attachment in its outer tool-result envelope, pointing to that OCR call's resource. Empty or unavailable OCR observations SHALL retain their existing available/snippets semantics and SHALL NOT imply successful recognition merely because an annotation image exists. Image preparation failures SHALL follow the unified tool-error contract before success publication.
 
 #### Scenario: Truncate excessive OCR output
 - **WHEN** OCR produces more than 512 snippets or a text snippet longer than 128 characters
@@ -42,8 +44,11 @@ Figura SHALL assign snippet IDs that are unique within one result, retain recogn
 
 #### Scenario: Keep image payloads outside the OCR result
 - **WHEN** the OCR tool returns a result
-- **THEN** the durable JSON result contains snippet observations only and no image bytes, overlay, or local filesystem path
+- **THEN** the durable business result contains the existing snippet observation fields, the outer envelope contains only the annotation descriptor, and neither contains image bytes, overlay pixels or local paths
 
+#### Scenario: Deliver a saved annotation without changing OCR business fields
+- **WHEN** an OCR call completes and its annotation is saved and validated
+- **THEN** the business result preserves its existing schema and the outer tool result supplies the annotation descriptor for multimodal delivery
 ### Requirement: Apply a validated observation scope to OCR
 `extract_text` SHALL accept an optional `observation_scope` object with no fields other than optional `include` and `exclude` arrays of polygons. Each supplied array SHALL contain 1 through 4 polygons; each polygon SHALL contain 3 through 32 points; each point SHALL be an integer `[x, y]` pair with both coordinates in the inclusive range `0..1000`, normalized to the selected source's width and height. When `include` is absent, the full source is included; when present, the included area is the union of its polygons. The union of `exclude` polygons SHALL be removed from the included area, and exclusions SHALL take precedence over inclusions. A supplied scope SHALL contain at least one `include` or `exclude` array. Figura SHALL run OCR using only pixels in the resulting effective area and return boxes in the original source coordinate system. An omitted `observation_scope` SHALL mean the complete source. A scope that produces no observable source pixels SHALL return a bounded structured tool failure. Invalid scope input SHALL return a bounded structured tool failure and SHALL NOT fall back to unscoped OCR.
 

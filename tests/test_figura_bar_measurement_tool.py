@@ -1,4 +1,7 @@
 from __future__ import annotations
+from tests.figura_sources_support import make_tool_runtime
+from tests.figura_sources_support import make_durable_tool_executor
+from figura.tools import ToolOutput
 
 import json
 from io import BytesIO
@@ -90,7 +93,7 @@ def _setup(tmp_path, image_bytes: bytes | None = None):
         current_chart_family_adapters(),
     )
     registry = ToolRegistry("figura-web-v9", (definition,))
-    return store, coordinator, session, run, attachments, panels, execution_state, registry, ToolRuntime(registry), attachment
+    return store, coordinator, session, run, attachments, panels, execution_state, registry, make_tool_runtime(registry, store=store), attachment
 
 
 def _request_builder(store, attachments, panels, execution_state) -> AgentRequestBuilder:
@@ -116,7 +119,7 @@ def _commit_measurements(store, coordinator, session_id, run_id, registry, calls
         provider_attempt_id=attempt.attempt_id,
         registry_version=registry.version,
     )
-    DurableToolExecutor(
+    make_durable_tool_executor(
         store,
         registry,
         execution_lock=PerRunExecutionLock(store.data_root),
@@ -239,7 +242,7 @@ def test_legacy_measurement_facts_remain_raw_and_are_not_projected(tmp_path) -> 
         parameters_schema={"type": "object", "properties": {}, "additionalProperties": False},
         result_schema={"type": "object", "properties": {}, "additionalProperties": False},
         replay_effect=ReplayEffect.REPLAY_SAFE,
-        handler=lambda _context, _arguments: {"bars": []},
+        handler=lambda _context, _arguments: ToolOutput({"bars": []}),
     )
     old_registry = ToolRegistry("figura-web-v8", (legacy,))
     call = ProviderToolCall("legacy-call", "measure_bars", "{}")

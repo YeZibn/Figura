@@ -1,6 +1,6 @@
 # Validation：共享 JSON Schema 合同
 
-> 核对日期：2026-10-03。[返回总览](../figura-implementation-overview.md)。`figura.shared.json_schema` 与 `figura.shared.image_limits` 是多个能力复用的基础合同；它们不属于 Agent、Provider 或 Tool 的业务事实。
+> 核对日期：2026-10-21。[返回总览](../figura-implementation-overview.md)。`figura.shared.json_schema` 与 `figura.shared.image_limits` 是多个能力复用的基础合同；它们不属于 Agent、Provider 或 Tool 的业务事实。
 
 ## 1. 职责与边界
 
@@ -43,3 +43,9 @@ JSON Schema 验证的无 payload 问题。 **写入者：**`figura.shared.json_s
 ## 4. 依据
 
 代码：[共享 JSON Schema](../../src/figura/shared/json_schema.py)、[图像限制](../../src/figura/shared/image_limits.py)。`JsonValueError` 和 `SchemaDefinitionError` 是异常机制；后者携带 code/pointer，但不是持久领域模型。
+
+## 多模态工具结果校验
+
+当前工作树复用完整 execution-payload guard、既有图片字节/解码保护，不增加通用消息、工具或图片数量上限。ToolOutput 的业务 JSON 按原工具 result_schema 校验；完整观察包含有序附件描述，失败附件必须为空。中立图片的媒体类型与尺寸必须符合实际解码，附件种类与资源种类一致，保存字节数与 SHA-256 必须一致；完整字段由 [Sources](sources.md#中立媒体值与附件描述)拥有。
+
+描述与图片分开保护：大图片不能作为 JSON bytes、Base64 或路径写入事实。Provider 对实际图片 occurrence 继续每次估算 1024 tokens，图旁 hint 按文本计数；未加载引用只计其文本，URL/Base64 不分词。旧观测 JSON 无附件时不在线推断媒体。数据库 schema 14 还要求新结果使用外层 schema 3 和附件数组，严格 codec 验证所有字段；迁移校验与新写入使用相同规范，历史读上限沿既有已接受载荷读合同保留。

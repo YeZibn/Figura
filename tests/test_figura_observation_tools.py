@@ -1,4 +1,6 @@
 from __future__ import annotations
+from tests.figura_sources_support import make_tool_runtime
+from tests.figura_sources_support import make_durable_tool_executor
 
 import json
 from io import BytesIO
@@ -80,7 +82,7 @@ def test_extract_text_reports_available_empty_and_unavailable_observations(tmp_p
     (_store, _coordinator, session, run, attachments, panels, state, reader, attachment) = _setup(
         tmp_path, _image_bytes(Image.new("RGB", (80, 60), "white"))
     )
-    runtime = ToolRuntime(ToolRegistry("ocr-tests", (extract_text_definition(state.for_run, reader),)))
+    runtime = make_tool_runtime(ToolRegistry("ocr-tests", (extract_text_definition(state.for_run, reader),)), reader=reader, inventory=state.for_run)
 
     monkeypatch.setattr(ocr_module, "_engine", lambda _image: SimpleNamespace(boxes=[], txts=[], scores=[]))
     empty = _invoke(runtime, "extract_text", {
@@ -118,7 +120,7 @@ def test_extract_text_authorizes_source_and_keeps_scoped_boxes_in_source_coordin
         return original_resolve(service, session_id, attachment_id)
 
     monkeypatch.setattr(type(attachments), "resolve", track_resolve)
-    runtime = ToolRuntime(ToolRegistry("ocr-source-tests", (extract_text_definition(state.for_run, reader),)))
+    runtime = make_tool_runtime(ToolRegistry("ocr-source-tests", (extract_text_definition(state.for_run, reader),)), reader=reader, inventory=state.for_run)
     rejected = _invoke(runtime, "extract_text", {
         "source_kind": "attachment", "source_id": foreign.attachment_id,
     }, run.run_id, session.session_id)
@@ -150,7 +152,7 @@ def test_extract_text_enforces_text_and_candidate_truncation_limits(tmp_path, mo
     (_store, _coordinator, session, run, _attachments, _panels, state, reader, attachment) = _setup(
         tmp_path, _image_bytes(Image.new("RGB", (100, 80), "white"))
     )
-    runtime = ToolRuntime(ToolRegistry("ocr-bounds", (extract_text_definition(state.for_run, reader),)))
+    runtime = make_tool_runtime(ToolRegistry("ocr-bounds", (extract_text_definition(state.for_run, reader),)), reader=reader, inventory=state.for_run)
     monkeypatch.setattr(ocr_module, "_engine", lambda _image: SimpleNamespace(
         boxes=[[(2, 2), (8, 2), (8, 8), (2, 8)]], txts=["t" * 140], scores=[0.8],
     ))
@@ -190,7 +192,7 @@ def test_measure_chart_authorizes_attachment_and_requires_a_valid_scope(tmp_path
     monkeypatch.setattr(type(attachments), "resolve", track_resolve)
     monkeypatch.setattr(pie_module, "recognize_text", lambda *_args: OCRObservation((), True))
     definition = measure_chart_definition(state.for_run, reader, current_chart_family_adapters())
-    runtime = ToolRuntime(ToolRegistry("figura-web-v9", (definition,)))
+    runtime = make_tool_runtime(ToolRegistry("figura-web-v9", (definition,)), reader=reader, inventory=state.for_run)
     rejected = _invoke(runtime, "measure_chart", {
         "source_kind": "attachment", "source_id": foreign.attachment_id, "chart_type": "pie",
     }, run.run_id, session.session_id)
@@ -215,7 +217,7 @@ def test_measure_chart_authorizes_attachment_and_requires_a_valid_scope(tmp_path
     assert valid.result["coordinate_system"] == "attachment_px"
     assert valid.result["observations"]["sectors"]
     assert "image_bytes" not in valid.result
-    assert reads == [attachment.attachment_id, attachment.attachment_id]
+    assert reads and set(reads) == {attachment.attachment_id}
 
 
 def test_measurement_registry_has_no_family_specific_legacy_aliases(tmp_path) -> None:
@@ -261,7 +263,7 @@ def test_panel_crop_hidden_pixels_are_removed_before_measurement(tmp_path, monke
         ProviderResponse(ProviderId.QWEN, MODEL_IDS[ProviderId.QWEN], "拆分图表。", (call,), FinishReason.TOOL_CALLS),
         provider_attempt_id=attempt.attempt_id, registry_version=registry.version,
     )
-    DurableToolExecutor(
+    make_durable_tool_executor(
         store, registry, execution_lock=PerRunExecutionLock(store.data_root),
     ).execute_pending(session.session_id, run.run_id)
     panel_id = state.for_run(session.session_id, run.run_id).list("panel")[0].ref.id
@@ -274,7 +276,7 @@ def test_panel_crop_hidden_pixels_are_removed_before_measurement(tmp_path, monke
 
     monkeypatch.setattr(ocr_module, "_engine", detect)
     definition = measure_chart_definition(state.for_run, reader, current_chart_family_adapters())
-    result = _invoke(ToolRuntime(ToolRegistry("panel-measure", (definition,))), "measure_chart", {
+    result = _invoke(make_tool_runtime(ToolRegistry("panel-measure", (definition,)), reader=reader, inventory=state.for_run), "measure_chart", {
         "source_kind": "panel", "source_id": panel_id, "chart_type": "bar",
     }, run.run_id, session.session_id)
 
@@ -297,7 +299,7 @@ def test_transparent_chart_is_rejected_before_measurement_sensor_runs(tmp_path, 
     monkeypatch.setattr(bars_module, "recognize_text", detect)
     monkeypatch.setattr(ocr_module, "_engine", detect)
     definition = measure_chart_definition(state.for_run, reader, current_chart_family_adapters())
-    runtime = ToolRuntime(ToolRegistry("transparent-measure", (definition,)))
+    runtime = make_tool_runtime(ToolRegistry("transparent-measure", (definition,)), reader=reader, inventory=state.for_run)
     result = _invoke(runtime, "measure_chart", {
         "source_kind": "attachment", "source_id": attachment.attachment_id, "chart_type": "bar",
     }, run.run_id, session.session_id)

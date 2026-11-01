@@ -2,19 +2,15 @@
 
 from __future__ import annotations
 
+from figura.tools.contracts import ToolOutput, ToolImageOutput
+from figura.shared.media import ResourceImage
+
 from collections.abc import Mapping
 from typing import Any
 
 from figura.agent.execution_images import RunExecutionImageReader
-from figura.agent.execution_resources import (
-    AttachmentContent,
-    ChartRenderContent,
-    ImageResourceRef,
-    MeasurementContent,
-    OcrContent,
-    PanelContent,
-    ToolResourceRef,
-)
+from figura.shared.resource_refs import ImageResourceRef, ToolResourceRef
+from figura.agent.execution_resources import (AttachmentContent, ChartRenderContent, MeasurementContent, OcrContent, PanelContent)
 from figura.memory.retrieval import SessionHistorySearch, resource_ref_to_dict
 from figura.runtime.errors import RunError, RunErrorCode
 from figura.tools.contracts import ReplayEffect, ToolContext, ToolDefinition, ToolFailure
@@ -193,9 +189,9 @@ _IMAGE_RESULT = {
 def history_tool_definitions(
     history: SessionHistorySearch,
 ) -> tuple[ToolDefinition, ToolDefinition]:
-    def search_history(context: ToolContext, arguments: Mapping[str, Any]) -> dict[str, object]:
+    def search_history(context: ToolContext, arguments: Mapping[str, Any]) -> ToolOutput:
         try:
-            return history.search(
+            return ToolOutput(history.search(
                 context.session_id,
                 context.run_id,
                 arguments["query"],
@@ -203,18 +199,18 @@ def history_tool_definitions(
                 cursor=arguments.get("cursor"),
                 run_id=arguments.get("run_id"),
                 source_kind=arguments.get("source_kind"),
-            )
+            ))
         except RunError as error:
             raise _history_failure(error) from None
 
-    def read_history(context: ToolContext, arguments: Mapping[str, Any]) -> dict[str, object]:
+    def read_history(context: ToolContext, arguments: Mapping[str, Any]) -> ToolOutput:
         try:
-            return history.read(
+            return ToolOutput(history.read(
                 context.session_id,
                 context.run_id,
                 arguments["reference"],
                 selector=arguments.get("selector"),
-            )
+            ))
         except RunError as error:
             raise _history_failure(error) from None
 
@@ -248,12 +244,13 @@ def historical_image_tool_definition(
     history: SessionHistorySearch,
     image_reader: RunExecutionImageReader,
 ) -> ToolDefinition:
-    def read_resource_image(context: ToolContext, arguments: Mapping[str, Any]) -> dict[str, object]:
+    def read_resource_image(context: ToolContext, arguments: Mapping[str, Any]) -> ToolOutput:
         try:
             execution, reference = history.image_resource(
                 context.session_id, context.run_id, arguments["resource_ref"]
             )
             resource = execution.get(reference)
+            descriptor = image_reader.descriptor(context.session_id, execution, reference)
             image_bytes, width, height = image_reader.read(
                 context.session_id, execution, reference
             )
@@ -274,19 +271,19 @@ def historical_image_tool_definition(
             raise ToolFailure("image_not_available", "该资源没有可读取的图像。")
         if not image_bytes:
             raise ToolFailure("image_unavailable", "图像文件当前无法读取。", retryable=True)
-        return {
+        return ToolOutput({
             "trust": "untrusted_history",
             "resource_ref": resource_ref_to_dict(reference),
             "name": name,
             "media_type": media_type,
             "width": width,
             "height": height,
-        }
+        }, (ToolImageOutput(reference, descriptor.image_kind, ResourceImage.from_bytes(image_bytes), descriptor.provenance),))
 
     return ToolDefinition(
         name="read_resource_image",
         description=(
-            "按授权资源引用读取 Attachment、Panel、成功 OCR／测量标注图或 ChartRender，图像附加到下一次模型请求。"
+            "按授权资源引用读取 Attachment、Panel、成功 OCR／测量标注图或 ChartRender，图片作为当前工具结果的附件进入下一次模型请求。"
             "只读取已提交内容，不重跑历史工具。message／tool_result 用 read_history；ChartFigure 先显式渲染，或找到其已有 ChartRender 引用。"
         ),
         parameters_schema={
@@ -298,6 +295,7 @@ def historical_image_tool_definition(
         result_schema=_IMAGE_RESULT,
         replay_effect=ReplayEffect.REPLAY_SAFE,
         handler=read_resource_image,
+            produces_images=True,
     )
 
 

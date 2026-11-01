@@ -1,4 +1,5 @@
 from __future__ import annotations
+from tests.figura_sources_support import open_legacy_schema_for_test
 
 import sqlite3
 from datetime import datetime, timezone
@@ -189,7 +190,7 @@ def test_schema_v11_migrates_additive_context_checkpoint_table(tmp_path):
         connection.execute("DROP TABLE session_context_checkpoints")
         connection.execute("PRAGMA user_version = 11")
 
-    upgraded = FiguraRunStore(tmp_path)
+    upgraded = open_legacy_schema_for_test(tmp_path)
     with sqlite3.connect(upgraded.database_path) as connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 13
         assert connection.execute(
@@ -197,6 +198,7 @@ def test_schema_v11_migrates_additive_context_checkpoint_table(tmp_path):
             "AND name = 'session_context_checkpoints'"
         ).fetchone() == ("session_context_checkpoints",)
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+
 
 
 def test_compaction_request_and_attempt_survive_restart(tmp_path):

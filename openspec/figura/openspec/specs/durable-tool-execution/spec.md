@@ -33,7 +33,9 @@ Figura SHALL append a durable attempt-start fact and advance the checkpoint befo
 - **THEN** Figura rejects the transition without invoking a handler or advancing the checkpoint
 
 ### Requirement: Tool outcomes and checkpoint progress commit atomically
-Figura SHALL persist each returned success or failure as a bounded tool-execution fact associated with the exact call and attempt. A successful result SHALL contain a JSON object, and its complete observation and encoded fact SHALL satisfy the shared execution-payload contract without independent 256/512 KiB ceilings. A failed result SHALL contain only a bounded structured error. Committing an outcome and advancing the tool-fact sequence and checkpoint to the next tool call or model action SHALL be atomic. A previously committed result SHALL be returned from durable state and SHALL NOT invoke the handler again.
+Figura SHALL persist every known success or failure as one bounded tool-execution fact associated with the exact call and attempt. Successful facts SHALL contain the business JSON object and ordered validated attachment descriptions; failed facts SHALL contain the safe error, null result, and an empty attachment array. The complete observation and encoded fact SHALL satisfy the shared execution-payload contract without independent 256/512 KiB ceilings.
+
+Required media SHALL be installed and validated before publishing the result. Appending the result with all its attachment descriptions, advancing the tool-fact sequence and checkpoint, and issuing existing safe progress notification SHALL be one database transaction. Files without a committed result SHALL NOT become visible resources. A file/database failure SHALL NOT publish partial attachment metadata or advance the checkpoint. Previously committed results and descriptors SHALL be returned from durable state without invoking the handler or reconstructing images again. Unknown business effects SHALL retain the existing declared-effect recovery behavior.
 
 #### Scenario: Commit a successful tool result
 - **WHEN** the current attempt returns a successful bounded object result and the expected revision is current
@@ -47,6 +49,13 @@ Figura SHALL persist each returned success or failure as a bounded tool-executio
 - **WHEN** a caller tries to commit another result for an attempt that already has a committed result
 - **THEN** Figura rejects the duplicate transition and retains the original result and checkpoint
 
+#### Scenario: Stop after image installation before result commit
+- **WHEN** a process stops after installing a candidate image but before its result transaction commits
+- **THEN** no public or Agent resource is published, the existing checkpoint still identifies unresolved work, and eligible recovery cannot mix a recomputed business result with an older uncommitted image
+
+#### Scenario: Recover a committed multimodal result
+- **WHEN** a committed result and its matching image files already exist when execution resumes
+- **THEN** the existing result and attachment descriptors are reused without duplicate handler execution or new result facts
 ### Requirement: Unknown tool outcomes follow the declared replay effect
 After recovery finds an attempt-start fact with no corresponding result, Figura SHALL treat the outcome as unknown and SHALL NOT assume the handler did not run. Recovery SHALL begin only after the prior execution owner is confirmed inactive and the committed registry version remains available. For replay_safe calls, Figura SHALL create a new attempt for the same logical call ID when recovery is requested. For idempotent_local_write calls, Figura SHALL create a new attempt only with the same stable idempotency key derived from canonical JSON `[run_id, call_id]`, and the handler contract SHALL return the prior operation result when that key was already applied. Figura SHALL expose this key only as `ToolContext.idempotency_key`; ToolRuntime SHALL refuse to invoke an idempotent local-write handler when the key is absent. For reconcile_required calls, Figura SHALL NOT invoke the handler again; only a trusted reconciliation outcome can resolve that attempt. Missing/unknown classifications and registry mismatches SHALL not be dispatched; the unresolved effect remains factual while automatic lifecycle coordination terminates safely once prior-owner exit is confirmed. A known failed result SHALL not be retried by this capability based solely on its retryable field.
 

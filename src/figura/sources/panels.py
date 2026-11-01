@@ -9,7 +9,7 @@ import tempfile
 from collections.abc import Sequence
 from pathlib import Path
 
-from figura.providers.models import ImageBlock
+from figura.shared.media import ResourceImage
 from figura.shared.image_limits import MAX_IMAGE_BYTES, MAX_TOTAL_IMAGE_BYTES
 from figura.runtime.errors import RunError, RunErrorCode
 
@@ -124,10 +124,10 @@ class FiguraPanelService:
         except (OSError, ValueError):
             raise RunError(RunErrorCode.STORAGE_ERROR) from None
 
-    def resolve(self, session_id: str, panel_id: str) -> tuple[PanelRecord, ImageBlock, int, int]:
+    def resolve(self, session_id: str, panel_id: str) -> tuple[PanelRecord, ResourceImage, int, int]:
         record = self._repository.get_panel(session_id, panel_id)
         content, width, height = self._read_file(panel_id)
-        return record, ImageBlock("image/png", content), width, height
+        return record, ResourceImage.from_bytes(content), width, height
 
     def get(self, session_id: str, panel_id: str) -> PanelRecord:
         return self._repository.get_panel(session_id, panel_id)

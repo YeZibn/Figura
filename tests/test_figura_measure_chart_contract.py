@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+from io import BytesIO
+from PIL import Image
 
 import numpy as np
 import pytest
@@ -20,6 +22,12 @@ from figura.tools.measurements.contracts import (
     validate_measurement_result,
 )
 from figura.shared.json_schema import validate_instance, validate_schema_definition
+
+
+def _source_png():
+    out = BytesIO()
+    Image.new('RGB', (20, 12), 'white').save(out, format='PNG')
+    return out.getvalue()
 
 
 def _axis() -> dict[str, object]:
@@ -139,13 +147,13 @@ def test_measurement_result_checks_source_coordinate_frame_and_pixel_bounds() ->
 
 def test_measure_chart_routes_family_and_applies_shared_scope_and_source_context(monkeypatch) -> None:
     source = MeasurementSource(
-        "attachment", "att-1", "chart.png", "attachment_px", b"png", 20, 12
+        "attachment", "att-1", "chart.png", "attachment_px", _source_png(), 20, 12
     )
     monkeypatch.setattr(measure_chart_module, "resolve_measurement_source", lambda *_args: source)
     passed_scopes: list[object] = []
 
     def decode(image_bytes: bytes, scope: object):
-        assert image_bytes == b"png"
+        assert image_bytes == _source_png()
         passed_scopes.append(scope)
         return np.zeros((12, 20, 3), dtype=np.uint8), np.ones((12, 20), dtype=bool)
 
@@ -156,7 +164,7 @@ def test_measure_chart_routes_family_and_applies_shared_scope_and_source_context
         for chart_type in ChartType
     }
     definition = measure_chart_definition(lambda *_args: None, object(), adapters)  # type: ignore[arg-type]
-    runtime = ToolRuntime(ToolRegistry("measure-chart-tests", (definition,)))
+    runtime = ToolRuntime(ToolRegistry("measure-chart-tests", (definition,)), media_committer=lambda _c, out: tuple(i.descriptor() for i in out.images))
     scope = {"include": [[[0, 0], [1000, 0], [1000, 1000], [0, 1000]]]}
     arguments = {"source_kind": "attachment", "source_id": "att-1", "chart_type": "heatmap", "observation_scope": scope}
     call_id = "measure-chart-call"
@@ -174,7 +182,7 @@ def test_measure_chart_routes_family_and_applies_shared_scope_and_source_context
 
 
 def test_measure_chart_commits_partial_sensor_once_without_automatic_retry(monkeypatch) -> None:
-    source = MeasurementSource("attachment", "att-1", "chart.png", "attachment_px", b"png", 20, 12)
+    source = MeasurementSource("attachment", "att-1", "chart.png", "attachment_px", _source_png(), 20, 12)
     monkeypatch.setattr(measure_chart_module, "resolve_measurement_source", lambda *_args: source)
     monkeypatch.setattr(
         measure_chart_module,
@@ -195,7 +203,7 @@ def test_measure_chart_commits_partial_sensor_once_without_automatic_retry(monke
 
     adapters[ChartType.HEATMAP] = partial_sensor
     definition = measure_chart_definition(lambda *_args: None, object(), adapters)  # type: ignore[arg-type]
-    runtime = ToolRuntime(ToolRegistry("measure-chart-no-retry", (definition,)))
+    runtime = ToolRuntime(ToolRegistry("measure-chart-no-retry", (definition,)), media_committer=lambda _c, out: tuple(i.descriptor() for i in out.images))
     call_id = "partial-measurement-call"
     outcome = runtime.invoke(
         ToolInvocation(call_id, "measure_chart", json.dumps({"source_kind": "attachment", "source_id": "att-1", "chart_type": "heatmap"})),

@@ -30,19 +30,8 @@ from figura.tools.implementations.image import DECOMPOSE_RESULT_SCHEMA
 from figura.tools.implementations.measurement_schema import OBSERVATION_SCOPE
 from figura.tools.measurements.contracts import MEASUREMENT_RESULT_SCHEMA, validate_measurement_result
 
-from .execution_resources import (
-    AttachmentContent,
-    ChartFigureContent,
-    ChartFigureResult,
-    ChartRenderContent,
-    ExecutionResource,
-    ImageResourceRef,
-    MeasurementContent,
-    OcrContent,
-    PanelContent,
-    RunExecutionState,
-    ToolResourceRef,
-)
+from figura.shared.resource_refs import ImageResourceRef, ToolResourceRef
+from .execution_resources import (AttachmentContent, ChartFigureContent, ChartFigureResult, ChartRenderContent, ExecutionResource, MeasurementContent, OcrContent, PanelContent, RunExecutionState)
 
 
 # Frozen read-only schema for already committed facts. It is never registered as
@@ -388,6 +377,7 @@ def _observation_content(
             result_fact.outcome,
             result=result_fact.result,
             error=result_fact.error,
+            attachments=result_fact.attachments,
         )
     return MeasurementContent(
         result_fact.attempt_id,
@@ -397,6 +387,7 @@ def _observation_content(
         result_fact.outcome,
         result=result_fact.result,
         error=result_fact.error,
+        attachments=result_fact.attachments,
     )
 
 
@@ -474,6 +465,7 @@ def _chart_render_content(
             figure_ref,
             result_fact.outcome,
             error=result_fact.error,
+            attachments=result_fact.attachments,
         )
     if result_fact.error is not None or not isinstance(result_fact.result, Mapping) or figure_ref is None:
         raise RunError(RunErrorCode.INTEGRITY_ERROR)
@@ -499,7 +491,7 @@ def _chart_render_content(
     ):
         raise RunError(RunErrorCode.INTEGRITY_ERROR)
     metadata = {key: value for key, value in result.items() if key != "figure_ref"}
-    return ChartRenderContent(result_fact.attempt_id, figure_ref, result_fact.outcome, result=metadata)
+    return ChartRenderContent(result_fact.attempt_id, figure_ref, result_fact.outcome, result=metadata, attachments=result_fact.attachments)
 
 
 def _tool_facts(

@@ -1,4 +1,5 @@
 from __future__ import annotations
+from tests.figura_sources_support import open_legacy_schema_for_test
 
 import sqlite3
 
@@ -222,7 +223,7 @@ def test_v3_migration_preserves_committed_responses_without_synthetic_attempts(t
     database.commit()
     database.close()
 
-    migrated = FiguraRunStore(tmp_path).read_run_state(session.session_id, run.run_id)
+    migrated = open_legacy_schema_for_test(tmp_path).read_run_state(session.session_id, run.run_id)
 
     assert migrated.run == before_migration.run
     assert migrated.records == before_migration.records

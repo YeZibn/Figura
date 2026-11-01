@@ -1,4 +1,5 @@
 from __future__ import annotations
+from tests.figura_sources_support import open_legacy_schema_for_test
 
 from tests.figura_sources_support import make_attachment_service
 
@@ -224,7 +225,7 @@ def test_v4_migration_adds_attachment_table_without_changing_run_state(tmp_path)
         connection.execute("DROP TABLE attachments")
         connection.execute("PRAGMA user_version = 4")
 
-    migrated_store = FiguraRunStore(tmp_path)
+    migrated_store = open_legacy_schema_for_test(tmp_path)
     after = migrated_store.read_run_state(session.session_id, run.run_id)
 
     with sqlite3.connect(store.database_path) as connection:
@@ -238,6 +239,7 @@ def test_v4_migration_adds_attachment_table_without_changing_run_state(tmp_path)
         ).fetchone() == ("panels",)
 
     assert after == before
+
 
 
 def test_v5_migration_preserves_attachments_and_adds_panels(tmp_path) -> None:
@@ -259,7 +261,7 @@ def test_v5_migration_preserves_attachments_and_adds_panels(tmp_path) -> None:
         connection.execute("DROP TABLE panels")
         connection.execute("PRAGMA user_version = 5")
 
-    migrated_store = FiguraRunStore(tmp_path)
+    migrated_store = open_legacy_schema_for_test(tmp_path)
     after = migrated_store.read_run_state(session.session_id, run.run_id)
 
     with sqlite3.connect(store.database_path) as connection:
@@ -274,6 +276,7 @@ def test_v5_migration_preserves_attachments_and_adds_panels(tmp_path) -> None:
         ).fetchone() == ("panels",)
 
     assert after == before
+
 
 
 def test_v7_migration_adds_scoped_deletion_without_changing_run_facts(tmp_path) -> None:
@@ -298,7 +301,7 @@ def test_v7_migration_adds_scoped_deletion_without_changing_run_facts(tmp_path) 
         connection.execute("DROP TABLE session_deletion_scopes")
         connection.execute("PRAGMA user_version = 7")
 
-    migrated_store = FiguraRunStore(tmp_path)
+    migrated_store = open_legacy_schema_for_test(tmp_path)
     after = migrated_store.read_run_state(session.session_id, run.run_id)
 
     with sqlite3.connect(store.database_path) as connection:
@@ -318,6 +321,7 @@ def test_v7_migration_adds_scoped_deletion_without_changing_run_facts(tmp_path) 
             )
 
     assert after == before
+
 
 
 def test_create_run_persists_authorized_attachment_ids_and_includes_them_in_idempotency(
@@ -1184,14 +1188,14 @@ def test_schema9_preserves_explicit_deepseek_values_and_schema8_history(tmp_path
     coordinator.complete_run(session.session_id, run.run_id, state.checkpoint.revision)
     before = coordinator.read_run_state(session.session_id, run.run_id)
     _make_schema8(store)
-    store = FiguraRunStore(tmp_path)
+    store = open_legacy_schema_for_test(tmp_path)
     coordinator = RunCoordinator(store, _factory())
     assert coordinator.read_run_state(session.session_id, run.run_id) == before
     next_run = coordinator.create_run(replace(_request(session.session_id, key='next'),
         provider_id='deepseek', model_id=MODEL_IDS[ProviderId.DEEPSEEK]))
     _commit_response(coordinator, session.session_id, next_run.run_id, 1,
         replace(response, continuation=ProviderContinuation(ProviderId.DEEPSEEK, 1, reasoning)))
-    restarted = FiguraRunStore(tmp_path)
+    restarted = open_legacy_schema_for_test(tmp_path)
     new_state = restarted.read_run_state(session.session_id, next_run.run_id)
     assert new_state.provider_continuations[0].reasoning_content == reasoning
     assert 'private text' not in repr(new_state)
@@ -1213,6 +1217,7 @@ def test_schema9_preserves_explicit_deepseek_values_and_schema8_history(tmp_path
     assert not restarted.session_exists(session.session_id)
 
 
+
 def test_schema9_migration_failure_rolls_back_table_and_version(tmp_path, monkeypatch):
     import figura.storage.schema as schema
     store, coordinator = _app(tmp_path)
@@ -1224,9 +1229,9 @@ def test_schema9_migration_failure_rolls_back_table_and_version(tmp_path, monkey
         raise RunError(RunErrorCode.INTEGRITY_ERROR)
     monkeypatch.setattr(schema, '_validate_migration', fail)
     with pytest.raises(RunError):
-        FiguraRunStore(tmp_path)
+        open_legacy_schema_for_test(tmp_path)
     with sqlite3.connect(store.database_path) as connection:
         assert connection.execute('PRAGMA user_version').fetchone()[0] == 8
         assert 'NOT NULL' in connection.execute("SELECT sql FROM sqlite_master WHERE name='run_provider_continuations'").fetchone()[0]
     monkeypatch.undo()
-    assert FiguraRunStore(tmp_path).read_run_state(session.session_id, run.run_id) == before
+    assert open_legacy_schema_for_test(tmp_path).read_run_state(session.session_id, run.run_id) == before

@@ -1,6 +1,6 @@
 # Evaluation：图表测量离线回归
 
-> 更新日期：2026-10-10。[返回系统总览](../figura-implementation-overview.md)。本篇说明当前可运行的测量回归脚本及其报告；它不是在线评测服务，也不拥有 Run 事实。
+> 更新日期：2026-10-22。[返回系统总览](../figura-implementation-overview.md)。本篇说明当前可运行的测量回归脚本及其报告；它不是在线评测服务，也不拥有 Run 事实。
 
 ## 1. 职责与边界
 
@@ -10,7 +10,7 @@
 
 该实验后续增加了摘要 Token 软目标复测：加入约 4,000 tokens 目标后，摘要均值变长、请求 Token 降幅低于无目标基线；样本量较小且 Provider 输出无固定随机种子，结论仅作方向性参考。
 
-另有上下文容量预算实验，对固定合成历史在 100,000 和 200,000 容量下比较动态 10%/10% 历史预算，记录首请求本地估算、摘要输出长度、Provider 累计用量和源事实恢复。试验结论只适用于其固定样例；数值提示小样本未显示收益，因此生产摘要提示不包含预算数字。
+另有上下文容量预算实验，对固定合成历史在 100,000 和 200,000 容量下比较动态 10%/10% 历史预算，记录首请求本地估算、摘要输出长度、Provider 累计用量和源事实恢复。试验结论只适用于其固定样例；数值提示小样本未显示收益，该早期实验结论不代表当前提示；当前生产摘要提示由 env 容量实时计算并写入动态 10% 软目标。
 
 这是一套可重复的合成样例回归，不是开放域图表基准、Provider 模型评测或 Agent 端到端完成率。它不会发起 Provider 网络请求；脚本用合成响应记录工具意图，仅为让 `DurableToolExecutor` 经正常 Run/Tool 路径执行工具。Gateway 与 Web 不提供评测工作区或评测 API。
 
@@ -97,3 +97,9 @@ conda run -n agent python scripts/evaluate_figura_measurements.py
 - 回归合同：[chart-measurement-regression](../../openspec/figura/openspec/specs/chart-measurement-regression/spec.md)
 - 测量结果合同：[chart-family-measurement](../../openspec/figura/openspec/specs/chart-family-measurement/spec.md)
 - 授权工具执行：[Tools](tools.md#6-图像与测量工具合同)
+
+## 工具媒体改造的验证范围
+
+当前工作树的离线测量入口显式注入与生产相同的媒体提交器，测量标注随工具结果保存。成功业务 JSON 的 family observations 和原比较口径不变，不将原生工具图片识别误计为测量准确率。
+
+本次最小 Provider 识别只验证 TOOL 图片可见性与调用归属：DeepSeek 两图全部识别正确，usage 总计 752 tokens；Qwen 返回 403、MiMo 无有效配置，未启用。该结果与离线工具/持久化/压缩回归是不同证据，不构成三家模型通用能力、图表成功率或上下文消耗改善结论。原始实验脚本和产物位于 Git 忽略的 evaluation；本次实现验证摘要见[归档 validation.md](../../openspec/figura/openspec/changes/archive/2026-10-22-unify-figura-multimodal-tool-results/validation.md)，不写入凭据、原始请求或本机 Session 数据。

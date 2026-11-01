@@ -1,12 +1,12 @@
 # Agent：Run 决策与编排
 
-> 更新日期：2026-10-19。[返回总览](../figura-implementation-overview.md)。本篇说明 Agent 编排及其调用期派生运行态；Provider 与 Tool 的完整字段分别见[Provider](provider.md)和[Tool](tools.md)，附件和 Panel 持久模型见[Sources](sources.md)，Run 执行事实与摘要检查点见[Run Runtime](runtime.md)，规范历史和来源检索见[Session Memory](memory.md)，网页调用和公开投影见[Web 边界](web.md)。
+> 更新日期：2026-10-22。[返回总览](../figura-implementation-overview.md)。本篇说明 Agent 编排及其调用期派生运行态；Provider 与 Tool 的完整字段分别见[Provider](provider.md)和[Tool](tools.md)，附件和 Panel 持久模型见[Sources](sources.md)，Run 执行事实与摘要检查点见[Run Runtime](runtime.md)，规范历史和来源检索见[Session Memory](memory.md)，网页调用和公开投影见[Web 边界](web.md)。
 
 ## 1. 职责与边界
 
 `AgentExecutor` 按当前 `RunState.checkpoint.next_action` 推进模型、工具和终结动作。`AgentRequestBuilder` 从 Run 事实重建规范 Session 历史、当前 Run 已提交前缀和 Agent 的完整 `RunExecutionState` 资源目录。每个普通 Provider 请求都先构造独立历史用户输入区，按 Run ordinal 保留每个此前 Run 的完整文本、有序附件 ID 和输入来源引用；当前 Run 输入仍以原生用户消息出现。若 Runtime 有 `SessionContextCheckpoint`，实际 Provider 请求会以摘要替代覆盖范围内的旧 Assistant/工具过程，同时保留覆盖游标之后的原文、历史输入区和当前输入。摘要覆盖可以进入最近一个已完成 Run，也可以进入当前 Run 已提交的完整交互前缀；后者只允许到压缩操作冻结的记录与工具序号，并在同一 Run 的后续请求中继续应用。摘要只替代过程，不移除用户输入；未提交记录、未完成工具批次和未解决动作留在原始上下文。完整目录仍保留授权前缀内的附件、Panel、OCR、测量、ChartFigure 与 ChartRender 六类资源，prompt 只投影相关定位信息，完整资源仍可由类型化引用按需读取。容量已配置且实际请求估算达到约 80% 阈值时，Agent 才尝试压缩。运行事实、图像资源与工具过程分别经历史或图片读取工具显式取回，不会重新执行历史工具。Runtime 持有摘要检查点与压缩操作状态，`RunExecutionState` 不保存摘要或删减完整资源目录。
 
-Agent 每次组装三层或四层有序 SYSTEM 指令：稳定规则、当前工具目录、可选的来源关联摘要、最终的资源/执行状态索引。图片读取由 `RunExecutionImageReader` 统一执行：核对目标 Session 和资源引用，再由 Sources 解析授权附件、Panel 或已存 PNG；OCR/测量标注图在内存重建，ChartFigure 本身要求显式调用渲染工具。当前 Run 最新已提交工具批次中的成功 `load_image` 原图、OCR/测量标注图和 `render_chart_figure` PNG，会在紧接着的 Provider 请求中按调用顺序加入；历史图像只有显式调用读取工具才会附加到下一次请求。兼容 Provider continuation 由请求边界按源响应重放，不属于 Memory 消息或 SYSTEM 正文。Agent 以流式 Provider 事件驱动同步 ReAct：普通回答文本增量作为临时 `assistant_delta` 发给 Gateway，推理和工具参数片段不公开；Provider 返回完整且通过校验的终止响应后才提交模型事实，压缩摘要的增量不发给网页。Web Gateway 通过有界 `RunDispatcher` 异步调用 `execute_slice(session_id, run_id)`，HTTP handler 不直接请求模型。Agent 没有独立的持久模型。
+Agent 每次组装三层或四层有序 SYSTEM 指令：稳定规则、当前工具目录、可选的来源关联摘要、最终的资源/执行状态索引。图片读取由 `RunExecutionImageReader` 统一执行：核对目标 Session 和资源引用，再由 Sources 解析授权附件、Panel 或已存 PNG；OCR/测量标注图由工具执行阶段保存，读取时不重绘，ChartFigure 本身要求显式调用渲染工具。当前 Run 最新已提交工具批次中的成功 `load_image` 原图、OCR/测量标注图和 `render_chart_figure` PNG，分别与其 JSON 结果及 hint 一起放入对应的 native TOOL 消息；历史图像也只有显式调用读取工具后，才会作为该读取调用的 TOOL 消息媒体返回。图片不通过普通 user 消息另行附加。Provider continuation 由请求边界按源响应重放，不属于 Memory 消息或 SYSTEM 正文。Agent 以流式 Provider 事件驱动同步 ReAct：普通回答文本增量作为临时 `assistant_delta` 发给 Gateway，推理和工具参数片段不公开；Provider 返回完整且通过校验的终止响应后才提交模型事实，压缩摘要的增量不发给网页。Web Gateway 通过有界 `RunDispatcher` 异步调用 `execute_slice(session_id, run_id)`，HTTP handler 不直接请求模型。Agent 没有独立的持久模型。
 
 ```mermaid
 flowchart LR
@@ -74,7 +74,7 @@ flowchart LR
 
 摘要成功后，请求投影只移除覆盖游标之前、已由摘要表示的交互；若覆盖截止点位于某 Run 中间，同一 Run 截止点之后的交互仍作为原文保留，再接续更新的历史与当前 Run。摘要失败、输出无效、引用未授权或四次物理 attempt 耗尽时，当前请求按完整规范历史重建；已有 checkpoint 不被覆盖。Provider retry 会复用绑定中的 `full`、`checkpoint` 或 `fallback` 投影及对应 checkpoint revision，不在重试中另做决定。`RunExecutionState` 始终包含完整授权资源目录，它不是压缩存储；prompt 的资源索引只列出近期、摘要引用或当前上下文相关的定位信息。摘要本身及工具取回的历史内容均是不可信数据。
 
-历史按需读取由[Session Memory](memory.md#搜索读取与历史图像边界)定义来源引用、授权前缀和检索边界，由[Tools](tools.md#9-session-历史读取工具)定义模型可调用的参数与结果。模型可先用 `search_history` 获取短摘录和引用，再用 `read_history` 读取原始消息、工具结果或资源元数据；`read_resource_image` 仅将获准图像附加到下一次 Provider 请求。图片读取不会因摘要/资源索引出现就自动发生。
+历史按需读取由[Session Memory](memory.md#搜索读取与历史图像边界)定义来源引用、授权前缀和检索边界，由[Tools](tools.md#9-session-历史读取工具)定义模型可调用的参数与结果。模型可先用 `search_history` 获取短摘录和引用，再用 `read_history` 读取原始消息、工具结果或资源元数据；`read_resource_image` 将获准图片附在该次读取调用对应的 native TOOL 消息中。图片读取不会因摘要/资源索引出现就自动发生。
 
 ### 提示分层与代码职责
 
@@ -85,9 +85,22 @@ flowchart LR
 | 1. 稳定规则 | 四份基础资产 `agent.md`、`evidence.md`、`workflow.md`、`response.md`，随后加入 `image_feedback.md`，由 `loader.py` 固定载入 | 职责、证据、工作流、回答规则与四类图像观察政策；不包含本次用户输入、工具状态或资源值 |
 | 2. 当前工具目录 | 本次请求的 `ToolRegistry`，由 `tools.py` 投影 | 按注册顺序列工具名称和描述；参数以同请求 `ProviderRequest.tools` Schema 为准 |
 | 3. 可选摘要索引 | Runtime 的 `SessionContextCheckpoint`，由 `execution.py` 投影 | 自动摘要、覆盖边界、revision 和来源引用；全体内容作为不可信历史数据，必要时通过历史工具核对原始事实 |
-| 最后一层：资源/执行状态索引 | `RunExecutionState` 与 Memory 的异常 outcome，由 `execution.py` 投影 | 只列请求相关资源引用、精简状态和合法异常状态；不替代完整服务端资源目录或闭合 ToolMessage |
+| 最后一层：资源/执行状态索引 | `RunExecutionState` 与 Memory 的异常 outcome，由 `execution.py` 投影 | 只列请求相关资源引用、OCR/测量概要和合法异常状态；不替代完整服务端资源目录或闭合 ToolMessage |
 
 目录中的文件名、标题、OCR 片段、摘要、检索结果和工具观察均为数据而非指令。工具目录说明不能扩展或覆盖原生工具 Schema。指令块每次按权威运行态重建，不写入 Run facts；Provider 的 `InstructionBlock` 字段合同由[Provider 专题](provider.md#4-完整模型字段)拥有。
+
+#### Prompt 资源目录中的 OCR 与测量概要
+
+Prompt 资源目录是从完整 `RunExecutionState.resources` 派生的请求期投影。完整资源仍留在当前 Run 的服务端调用期目录中；完整工具输入与结果分别由 Runtime 的 `ToolCallFact` 和 `ToolResultFact` 持久化。概要不新增持久字段或独立存储。概要中的 `ref` 与完整资源使用相同的类型化身份，可交给现有 `read_history` 读取完整结果或字段/范围。该读取只返回已提交内容，不重跑观察工具；需要像素时仍走显式图像读取工具。
+
+每个目录条目还带 `image_available`；存在图像附件时附带 `image_kind`，表示可以沿授权图像读取路径加载像素，不代表图片字节已嵌入 Prompt JSON。
+
+| 条目 | Prompt 概要字段 | 未放进概要的内容与精确读取方式 |
+|---|---|---|
+| OCR | `ref`、`source_ref`、`scope_kind`、`outcome`；成功结果另含 `available`、源结果 `truncated`、`snippet_count`、`snippet_preview`、`summary_truncated`。预览最多 3 条，每条仅有 `snippet_id` 与最多 80 字符的 `text`。 | 不含完整 snippets、坐标和置信度。用 `ref` 调 `read_history` 读取完整 OCR 结果或所需字段/范围。 |
+| 测量 | `ref`、`tool_name`、`source_ref`、`scope_kind`、`outcome`；成功结果另含 `chart_type`、`status`、源结果 `truncated`、`structure_status`、原样复制的 `detected_counts`、四项 `confidence`、`calibration_count`、`supported_calibration_count`、`issue_count`、最多 8 个去重 `issue_codes`、`warning_count`、最多 3 条且每条最多 160 字符的 `warnings_preview`、`summary_truncated`。 | 不含 family observations、完整 issues/warnings、几何/数值证据、校准参数和 value provenance。用 `ref` 调 `read_history` 读取完整测量结果或所需字段/范围。 |
+
+`scope_kind` 仅表示 `full_source`（无范围）或 `scoped`（指定范围），不把多边形坐标放进摘要。`truncated` 保留来源结果本身的标记；`summary_truncated` 单独表示 Prompt 预览因条数或文本长度而省略内容。测量 `detected_counts` 直接取已提交 `coverage`，不从观察值重算；置信度和校准统计也只从提交结果投影。失败条目保留 `ref`、来源、范围类型、`outcome` 与安全结构化 `error`，不会补上成功字段。以上 JSON 位于资源目录的条目内，不更改 `RunExecutionState` 的完整资源合同，也不改变历史工具的返回合同。
 
 四份基础规则分别由 `agent.md` 管目标与职责，`evidence.md` 管来源、候选观察、缺失值和坐标，`workflow.md` 管按需读取、完整新 Figure 与结束路径，`response.md` 管实际交付及完成阶段；`image_feedback.md` 集中定义原图、OCR 标注图、测量标注图和生成图的观察规则与邻近 Cue。工具的详细字段解释留在原生参数 Schema，SYSTEM 工具目录只列名称与说明。描述性新标题/轴名可依数据拟定，不得伪称原图标签或补造单位。
 
@@ -95,30 +108,31 @@ flowchart LR
 
 ### 图像回传观察引导
 
-当前工作树新增 [image_feedback.md](../../src/figura/agent/prompting/assets/image_feedback.md)，其完整内容加入第一 SYSTEM 层，参与既有 prompt_digest。原有四份规则相对顺序保持不变，摘要请求只加载 compaction.md。资产使用固定的 Common、Original、OCR、Measurement、Rendered 章节，后四类各包含非空 Rules/Cue；缺失、重复或空章节抛出 PromptAssetError。
+当前工作树新增 [image_feedback.md](../../src/figura/agent/prompting/assets/image_feedback.md)，其中 Common/Rules 加入第一 SYSTEM 层；Cue 只在图片旁生成，模板参与既有 prompt_digest。原有四份规则相对顺序保持不变，摘要请求只加载 compaction.md。资产使用固定的 Common、Original、OCR、Measurement、Rendered 章节，后四类各包含非空 Rules/Cue；缺失、重复或空章节抛出 PromptAssetError。
 
 完整工具批次提交后，图像通过原有授权和结果一致性校验，再在每个实际 ImageBlock 前加入一个 TextBlock：JSON 身份数据及一至两句系统观察提醒。提醒是调用期投影，不写入 Run facts，不产生检查状态或额外 Provider 请求。没有实际图片的 JSON 工具结果不产生局部提醒。
 
 | 类型 | 关注内容 |
 |---|---|
 | original | 原图/Panel 的任务相关结构、轴、标签和图例 |
-| ocr | 文字覆盖、框位置、识别内容和关联；标注不保证识别正确 |
-| measurement | 遗漏、重复、图例误检、类别/系列对应与校准依据；几何不是业务数值 |
+| ocr_annotation | 文字覆盖、框位置、识别内容和关联；标注不保证识别正确 |
+| measurement_annotation | 遗漏、重复、图例误检、类别/系列对应与校准依据；几何不是业务数值 |
 | rendered | 目标和数据对应、图例、文字遮挡、裁切和布局；绘制成功不是审核通过 |
 
 邻近身份对象的完整字段由 Agent 构造并序列化为 JSON，Provider 只按 TextBlock 文本消费：
 
 | 字段 | 类型/约束 | 来源与生命周期 |
 |---|---|---|
-| feedback_kind | original/ocr/measurement/rendered，必填 | 已授权资源的 content 类型；仅 prompting 内部分类，不改 ImageBlock.observation_kind |
+| image_kind | original/ocr_annotation/measurement_annotation/rendered，必填 | 已提交附件的 image_kind；不按工具名称推断，不改 Provider 私有 observation_kind |
 | resource_ref | ImageResourceRef 或 ToolResourceRef 的完整 JSON，必填 | 与相邻 ImageBlock.source_ref 一致；历史图片保留原始 run_id/call_id |
+| provenance | recorded / migration_reconstructed，必填 | 来自已提交附件，历史重载保持原值；迁移重建不等同当时图片 |
 | trigger_call.run_id | 非空字符串，必填 | 本次工具调用所属 Run |
 | trigger_call.call_id | 非空字符串，必填 | 产生或加载本图片的本次工具调用 |
 | trigger_call.tool_name | 非空字符串，必填 | 本次工具名称；历史重载为 read_resource_image |
 
-图片中的文字与标记、资源名称都作为不可信数据。read_resource_image 按被读取资源类型复用规则，不按读取工具名统一分类；历史完整 JSON 或源图缺失时按需取回，不因提示自动加载。source 原图去重、图片数量与调用顺序沿原有实现。模型自行选择补证据、修正、继续或交付，无强制审核报告。相同前缀与资产确定性重建；资产变化仍遵循严格请求绑定校验，不静默更换已绑定请求。
+图片中的文字与标记、资源名称都作为不可信数据。read_resource_image 按被读取资源类型复用规则，不按读取工具名统一分类；历史完整 JSON 或源图缺失时按需取回，不因提示自动加载。不同调用即使读取相同资源也分别保留图片，调用顺序和每调用内部附件顺序保持；仅存储内容去重。模型自行选择补证据、修正、继续或交付，无强制审核报告。相同前缀与资产确定性重建；资产变化仍遵循严格请求绑定校验，不静默更换已绑定请求。
 
-本功能见已归档 change [add-figura-image-feedback-guidance](../../openspec/figura/openspec/changes/archive/2026-10-08-add-figura-image-feedback-guidance/proposal.md)，主规格已同步。离线请求验证证明提醒送达与身份关联，不代表真实模型发现问题的准确率；真实 Provider 行为尚无有效探测结果，因此不据此推断模型效果。
+本功能见已归档 change [add-figura-image-feedback-guidance](../../openspec/figura/openspec/changes/archive/2026-10-08-add-figura-image-feedback-guidance/proposal.md)，主规格已同步。离线请求验证证明提醒送达与身份关联，不代表真实模型发现问题的准确率；DeepSeek 的最小两图识别已验证原生工具图片可见与调用归属；这不代表图表质量评测。Qwen 403、MiMo 无有效配置，均保持未启用原生工具图片。
 
 `observations.py` 负责与 SYSTEM 指令分开的图像观察选择和 Provider 图像消息构造。`AgentRequestBuilder` 组合规范历史/请求投影、资源索引、指令、观察图像、Provider tools/options，不负责最终 Provider 校验；`AgentExecutor` 在 attempt claim 前调用 `ProviderClient.prepare`。
 
@@ -145,7 +159,7 @@ flowchart LR
 | `ProviderRequest`、`ProviderResponse` | [Provider](provider.md#4-完整模型字段) | 组装请求、消费规范化结果；字段合同由 Provider 边界定义 |
 | `ToolDefinition`、`ToolInvocation`、`ToolExecutionResult` | [Tool](tools.md#4-完整模型字段) | 投影可用工具、提交调用、消费结果 |
 
-资源目录与内容均为 Agent 派生状态 dataclass，只在调用期重建，不是独立持久事实。Runtime 仍拥有 Run 生命周期、完整工具调用/尝试/结果事实；Sources 拥有附件/Panel 元数据和图像文件。网页创建 Run 后由 Gateway Dispatcher 调度。当前工作树 Gateway Registry 为 `figura-web-v10`，按序注册九个图像、历史、OCR、测量和画布工具；图表测量只有 `measure_chart` 一个入口，成功结果使用 schema v3，并由顶层 `chart_type` 选择十类观察结构。启动时仍绑定 v9 的活动 Run 会阻止 v10 激活；schema_version 2 的历史测量事实保留在 Runtime，但不转换为当前类型化资源。资源模型详见本篇第 4 节与[RunExecutionResources 主规格](../../openspec/figura/openspec/specs/run-execution-resources/spec.md)。画布、渲染及历史读取工具的完整输入/输出分别见[画布组装](tools.md#7-图表画布组装工具)、[图表渲染](tools.md#8-图表渲染工具)和[Session 历史读取](tools.md#9-session-历史读取工具)。
+资源目录与内容均为 Agent 派生状态 dataclass，只在调用期重建，不是独立持久事实。Runtime 仍拥有 Run 生命周期、完整工具调用/尝试/结果事实；Sources 拥有附件/Panel 元数据和图像文件。网页创建 Run 后由 Gateway Dispatcher 调度。当前工作树 Gateway Registry 为 `figura-web-v11`，按序注册九个图像、历史、OCR、测量和画布工具；图表测量只有 `measure_chart` 一个入口，成功结果使用 schema v3，并由顶层 `chart_type` 选择十类观察结构。启动时只允许仍绑定当前 Registry 的活动 Run；绑定其他版本的活动 Run 会阻止 v11 激活。schema_version 2 的历史测量事实保留在 Runtime，但不转换为当前类型化资源。资源模型详见本篇第 4 节与[RunExecutionResources 主规格](../../openspec/figura/openspec/specs/run-execution-resources/spec.md)。画布、渲染及历史读取工具的完整输入/输出分别见[画布组装](tools.md#7-图表画布组装工具)、[图表渲染](tools.md#8-图表渲染工具)和[Session 历史读取](tools.md#9-session-历史读取工具)。
 
 ## 4. RunExecutionState 资源合同与完整字段
 
@@ -202,7 +216,7 @@ Sources 附件元数据在 Run 资源目录中的只读引用；图片字节仍�
 
 ### `OcrContent`
 
-单次已提交 OCR 调用的完整只读资源。**字段流转：**`RunExecutionStateService` 从 ToolCallFact、ToolAttemptStartedFact 和 ToolResultFact 重建；调用/尝试/结果事实是权威；Agent 请求索引与 `RunExecutionImageReader` 读取；完整结果另经 Memory ToolMessage 进入 Provider 上下文，不向 Web 公开原始 OCR 结果。Web 只可按需取得受授权的临时观察图。结果 schema 的全部嵌套字段由[Tools：extract_text 结果合同](tools.md#6-图像与测量工具合同)拥有；安全错误由[ToolExecutionError](tools.md#4-完整模型字段)拥有。
+单次已提交 OCR 调用的完整只读资源。**字段流转：**`RunExecutionStateService` 从 ToolCallFact、ToolAttemptStartedFact 和 ToolResultFact 重建；调用/尝试/结果事实是权威；Agent 请求索引与 `RunExecutionImageReader` 读取；完整结果另经 Memory ToolMessage 进入 Provider 上下文，不向 Web 公开原始 OCR 结果。Web 只可按需取得受授权的已保存观察图。结果 schema 的全部嵌套字段由[Tools：extract_text 结果合同](tools.md#6-图像与测量工具合同)拥有；安全错误由[ToolExecutionError](tools.md#4-完整模型字段)拥有。
 
 | 完整字段路径 | 类型 | 构造默认 | 含义、约束与流转 |
 |---|---|---|---|
@@ -212,6 +226,7 @@ Sources 附件元数据在 Run 资源目录中的只读引用；图片字节仍�
 | `OcrContent.outcome` | `ToolOutcome` | 必传 | 仅 `succeeded` 或 `failed`；决定 result/error 互斥形状 |
 | `OcrContent.result` | `Mapping[str, object] \| None` | `None` | 成功时为完整有界 OCR JSON，失败时为空；字段合同归 Tools，不在此复制或重算 |
 | `OcrContent.error` | `ToolExecutionError \| None` | `None` | 失败时的安全结构化错误，成功时为空；字段合同归 Tools |
+| `OcrContent.attachments` | `tuple[ToolImageAttachment, ...]` | `()` | 完整保留结果事实的有序媒体描述；失败为空，缺失历史媒体不补绘；字段见 Sources；Runtime ToolResultFact → 目录派生 → 图片读取/Prompt 可用性；不单独持久化 |
 
 ### `MeasurementContent`
 
@@ -226,6 +241,7 @@ Sources 附件元数据在 Run 资源目录中的只读引用；图片字节仍�
 | `MeasurementContent.outcome` | `ToolOutcome` | 必传 | 仅 `succeeded` 或 `failed`；决定 result/error 互斥形状 |
 | `MeasurementContent.result` | `Mapping[str, object] \| None` | `None` | 成功时保留对应工具的全部有界 JSON 结果，失败时为空；完整字段见[Tools](tools.md#6-图像与测量工具合同) |
 | `MeasurementContent.error` | `ToolExecutionError \| None` | `None` | 失败时的安全结构化错误，成功时为空；完整字段见[Tools](tools.md#4-完整模型字段) |
+| `MeasurementContent.attachments` | `tuple[ToolImageAttachment, ...]` | `()` | 完整保留结果事实的有序媒体描述；失败为空，缺失历史媒体不补绘；字段见 Sources；Runtime ToolResultFact → 目录派生 → 图片读取/Prompt 可用性；不单独持久化 |
 
 ### `ChartFigureResult`
 
@@ -258,6 +274,7 @@ Sources 附件元数据在 Run 资源目录中的只读引用；图片字节仍�
 | `ChartRenderContent.outcome` | `ToolOutcome` | 必传 | 仅 `succeeded` 或 `failed`；结果与错误互斥 |
 | `ChartRenderContent.result` | `Mapping[str, object] \| None` | `None` | 成功时恰含完整已提交渲染 metadata；失败时为空；字段归 Tools |
 | `ChartRenderContent.error` | `ToolExecutionError \| None` | `None` | 失败时的安全结构化错误，成功时为空 |
+| `ChartRenderContent.attachments` | `tuple[ToolImageAttachment, ...]` | `()` | 完整保留结果事实的有序媒体描述；失败为空，缺失历史媒体不补绘；字段见 Sources；Runtime ToolResultFact → 目录派生 → 图片读取/Prompt 可用性；不单独持久化 |
 
 ### `ExecutionResource`
 
@@ -279,7 +296,7 @@ Sources 附件元数据在 Run 资源目录中的只读引用；图片字节仍�
 
 ### `RunExecutionImageReader`
 
-此 Agent 图像服务接受目标 Session、RunExecutionState 与完整类型化资源引用。Attachment/Panel 由 Sources owner 验证并读取；OCR/测量标注在内存重建；ChartRender PNG 按 ToolResultFact 的摘要校验；ChartFigure 返回显式 render-required，不隐式触发写入工具。Agent 在 Provider attempt claim 前读取并检查所需图像；Gateway 仅从 Session-scoped 只读路由请求成功 OCR/测量的观察图，并且不保存重建图像。
+此 Agent 图像服务接受目标 Session、RunExecutionState 与完整类型化资源引用。Attachment/Panel 由 Sources owner 验证并读取；OCR/测量标注读取已保存媒体并验证描述；ChartRender PNG 按 ToolResultFact 的摘要校验；ChartFigure 返回显式 render-required，不隐式触发写入工具。Agent 在 Provider attempt claim 前读取并检查所需图像；Gateway 仅从 Session-scoped 只读路由请求成功 OCR/测量的观察图，并且不重绘或修复历史图像。
 
 ### 异常 Run 推进与后续请求
 
@@ -297,7 +314,7 @@ Sources 附件元数据在 Run 资源目录中的只读引用；图片字节仍�
 
 ## 5. 不变量、状态与依据
 
-资源目录是调用期派生视图，不扩展 Runtime RunState，也没有独立持久化。规范历史仍来自同 Session 已提交 Run 事实；普通请求可用摘要替代已覆盖消息，提示索引只列出与当前投影相关的类型化资源引用和精简状态，不复制完整 OCR、测量、Figure 或 render JSON。原图仅在最新已提交工具批次成功 `load_image` 后回看；OCR/`measure_chart` 标注根据已提交结果临时重建；ChartRender PNG 在 Sources 读取并校验。OCR 与十类 `measure_chart` family 共用 Tools 所有的可见像素解码；范围只影响本次观察输入，不改写 Sources 原图或源坐标系。跨 Session、目标 Run 前缀外、失败观察或缺失/损坏文件不能授予图像访问；Gateway 时间线仅允许读取同 Session 下成功且来源可解析的 OCR/测量观察图，且不保存重建图像。历史 schema_version 2 测量事实保留在原始 Run 历史，但不转成当前 schema v3 `MeasurementContent`。所有 Agent 请求所需图像与 Provider 限制在 attempt claim 前校验。代码：[AgentExecutor](../../src/figura/agent/executor.py)、[AgentRequestBuilder](../../src/figura/agent/request.py)、[资源合同](../../src/figura/agent/execution_resources.py)、[资源重建](../../src/figura/agent/execution_state.py)、[统一图片读取](../../src/figura/agent/execution_images.py)、[Run Dispatcher](../../src/figura/gateway/dispatcher.py)；统一测量与资源合同见[图表家族测量主规格](../../openspec/figura/openspec/specs/chart-family-measurement/spec.md)和[Run 资源主规格](../../openspec/figura/openspec/specs/run-execution-resources/spec.md)。
+资源目录是调用期派生视图，不扩展 Runtime RunState，也没有独立持久化。规范历史仍来自同 Session 已提交 Run 事实；普通请求可用摘要替代已覆盖消息。Prompt 索引只投影与当前请求相关的资源；OCR 与测量概要及其精确读取规则见[Prompt 资源概要合同](#prompt-资源目录中的-ocr-与测量概要)。完整 snippets、observations、证据、坐标与校准参数不复制进 Prompt 资源目录，通过类型化引用调用 `read_history` 读取；图片字节仍经授权图像读取路径获取。完整资源由 RunExecutionState 从 Runtime 事实与 Sources 元数据重建，权威事实仍分别由 Runtime 与 Sources 持有。原图仅在最新已提交工具批次成功 `load_image` 后回看；OCR/`measure_chart` 标注按已提交附件读取已保存 PNG；ChartRender PNG 在 Sources 读取并校验。OCR 与十类 `measure_chart` family 共用 Tools 所有的可见像素解码；范围只影响本次观察输入，不改写 Sources 原图或源坐标系。跨 Session、目标 Run 前缀外、失败观察或缺失/损坏文件不能授予图像访问；Gateway 时间线仅允许读取同 Session 下成功且来源可解析的 OCR/测量观察图，且不重绘或修复历史图像。历史 schema_version 2 测量事实保留在原始 Run 历史，但不转成当前 schema v3 `MeasurementContent`。所有 Agent 请求所需图像与 Provider 限制在 attempt claim 前校验。代码：[AgentExecutor](../../src/figura/agent/executor.py)、[AgentRequestBuilder](../../src/figura/agent/request.py)、[资源内容合同](../../src/figura/agent/execution_resources.py)与[公共引用值](../../src/figura/shared/resource_refs.py)、[资源重建](../../src/figura/agent/execution_state.py)、[统一图片读取](../../src/figura/agent/execution_images.py)、[Run Dispatcher](../../src/figura/gateway/dispatcher.py)；统一测量与资源合同见[图表家族测量主规格](../../openspec/figura/openspec/specs/chart-family-measurement/spec.md)和[Run 资源主规格](../../openspec/figura/openspec/specs/run-execution-resources/spec.md)。
 
 四份稳定提示资产已补充六类任务目标、按需证据选择、OCR/测量不确定性、十类图表的数据表达、Figure 装配与校正、渲染回看及面向用户的限制说明；模型/工具职责和 RunExecutionState 的权威字段归属未变。[agent-react-execution 主规格](../../openspec/figura/openspec/specs/agent-react-execution/spec.md)规定稳定规则、工具目录与执行/资源索引三类基础 SYSTEM 层；启用摘要时，来源关联摘要位于资源/执行索引之前。`improve-figura-prompt-assets` 与执行策略 change 均已归档。归档记录需求演进，不代表代码已发布。
 
@@ -306,3 +323,13 @@ Sources 附件元数据在 Run 资源目录中的只读引用；图片字节仍�
 协作停止、工具恢复策略和终态字段由 [Runtime](runtime.md#4-完整模型字段) 拥有；异常意图/观察字段由 [Memory](memory.md#合法异常尾部投影) 拥有。最终 SYSTEM 指令中的 `prior_run_outcomes`、摘要以及检索结果都是不可信数据，不能覆盖系统规则、证明未知调用成功或要求自动重试。当前请求按 prepare 与 Provider 实际能力校验，容量估算只触发可选摘要；摘要不修改 Run 事实，失败时回退完整历史。unexpected 退出按最新 checkpoint 处理；完整性/存储错误仍拒绝执行。停止不会强杀尚未返回的同步 handler。
 
 提示、检索、压缩、图像观察及类型化资源合同见 [Agent ReAct](../../openspec/figura/openspec/specs/agent-react-execution/spec.md)、[上下文压缩](../../openspec/figura/openspec/specs/session-context-compaction/spec.md)、[历史检索](../../openspec/figura/openspec/specs/session-context-retrieval/spec.md)、[工具运行时](../../openspec/figura/openspec/specs/tool-runtime/spec.md)、[图像观察解码](../../openspec/figura/openspec/specs/image-observation-decoding/spec.md)和[RunExecutionResources](../../openspec/figura/openspec/specs/run-execution-resources/spec.md)主规格。结构与回归测试不证明真实模型遵循效果。
+
+## 工具结果中的媒体投影
+
+当前工作树在同一调用的一条 native TOOL 消息内依次放置：统一观察 JSON（业务结果/安全错误、attachments、images_loaded）、每图身份和短 hint、紧邻 ImageBlock。没有普通 user 附图消息，也没有按工具名补图的中央分支。JSON 的附件描述字段由 Sources 拥有；images_loaded 仅是请求期布尔值，不写回 Memory 或 Runtime。
+
+`pending_visual_results` 以最后已提交普通模型响应及其完整工具批次确定待观察图片；摘要响应不会消费图片。下一次普通请求与替代 attempts 使用相同媒体和 hint，直到普通响应提交。更早结果仅保留引用及 images_loaded=false；历史像素由新的显式读取调用返回。未观察带图批次连同 assistant 调用及全部结果保持 raw，即使其他保护历史耗尽约 10% 预算也不拆分或压入摘要。摘要只消费规范业务数据、附件引用与 provenance，不消费像素、hint 或 images_loaded。
+
+媒体水合使用完整授权 RunExecutionState，不能以筛选后的 Prompt 资源索引替代授权目录。资源索引仅加 image_available 与可用附件的 image_kind，不复制完整描述和像素；资源引用不会因重载产生新 ID。公共引用的实现位置已移到 shared/resource_refs，目录顶层仍只有 run_id/resources。
+
+多模态工具结果合同已同步至[工具结果媒体主规格](../../openspec/figura/openspec/specs/tool-result-media/spec.md)，对应 change [unify-figura-multimodal-tool-results](../../openspec/figura/openspec/changes/archive/2026-10-22-unify-figura-multimodal-tool-results/proposal.md) 已归档。当前实现把成功工具的 JSON、附件描述、图像 hint 与图片块放入同一条 native TOOL 消息；像素不写入 JSON 或 Runtime 持久事实。

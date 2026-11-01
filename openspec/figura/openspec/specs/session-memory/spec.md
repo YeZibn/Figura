@@ -30,7 +30,9 @@ For a target Run, Figura SHALL derive Session history only from durable facts be
 - **THEN** Figura does not produce a dispatchable Session history from a changing prefix and fails closed before a Provider attempt is claimed
 
 ### Requirement: Projected messages preserve the complete committed conversation
-Figura SHALL reconstruct complete canonical history from durable Run facts, including each earlier Run input, committed assistant response, committed tool result, and validated abnormal-tail outcome context in deterministic order. Request assembly MAY replace eligible older closed interactions with a source-linked summary and retain a recent raw-history tail; it SHALL preserve the current Run input, required current Run prefix, complete tool-call/result batches, and provider continuation compatibility. A summary SHALL reference canonical source facts and SHALL NOT alter, delete, or stand in for them. Full canonical history SHALL remain available to authorized retrieval. A final-answer fact that references an existing response SHALL NOT create a duplicate message. The neutral Session history SHALL NOT contain provider-private continuation payloads. Provider request assembly MAY resolve a continuation from its exact source Run and response, but SHALL associate it only with that assistant response and SHALL preserve the continuation unchanged when the selected Provider and format are compatible.
+Figura SHALL reconstruct complete canonical history from durable Run facts, including each earlier Run input, committed assistant response, committed structured tool result and ordered attachment descriptions, and validated abnormal-tail context in deterministic order. Each tool message SHALL preserve its Run, tool sequence, exact tool_call_id, outcome and mutually exclusive business result/error; it SHALL NOT hold a second authoritative serialized observation or image bytes. Plain user messages SHALL remain user inputs rather than synthetic tool-image observations.
+
+Request assembly may replace eligible older closed interactions with source-linked summaries and retain a recent raw tail, but SHALL preserve the current input, required current prefix, complete tool-call/result batches, unconsumed visual batches, and continuation compatibility. A summary SHALL NOT alter, delete or replace canonical facts; full history and attachment references SHALL remain available to authorized retrieval. Final-answer references SHALL NOT duplicate messages. Neutral history SHALL contain neither Provider-private continuation nor image bytes. Compatible continuation may be resolved only from its exact originating Run and response and SHALL be replayed unchanged.
 
 #### Scenario: Preserve user text and attachment order
 - **WHEN** an earlier Run input contains text and multiple attachment IDs
@@ -64,6 +66,13 @@ Figura SHALL reconstruct complete canonical history from durable Run facts, incl
 - **WHEN** a completed Run has a missing result or any prior Run contains duplicate results, invalid ownership, broken ordering, or mismatched identities
 - **THEN** Figura fails closed instead of treating corruption as a recoverable incomplete tail
 
+#### Scenario: Read a structured tool observation with image references
+- **WHEN** a committed tool result contains ordered image attachment descriptions
+- **THEN** canonical history retains that data and order without opening files, generating hint text, or duplicating the business JSON as authoritative text
+
+#### Scenario: Separate omitted image bytes from missing resources
+- **WHEN** a later request omits pixels from an earlier visual result
+- **THEN** the canonical tool observation and attachment references remain unchanged and the request projection explicitly marks images as not loaded
 ### Requirement: Session history remains complete and private to its owning Session
 Figura SHALL retain complete canonical history and source-linked outcome facts for their owning Session without a Memory retention or cumulative token budget. When a valid selected Provider/model context capacity and a request estimate are available, request assembly MAY create and persist a derived source-linked compaction summary at the agreed occupancy threshold; this summary SHALL NOT become a second authoritative message history. When capacity or estimate is unknown, Figura SHALL NOT automatically summarize or prune history. Existing execution-payload protections and genuine selected-Provider protocol restrictions remain in force. Every Run, message, tool result, attachment, and summary source reference SHALL remain scoped to its owning Session. The public projection SHALL expose no provider-private continuation payload or local attachment path.
 

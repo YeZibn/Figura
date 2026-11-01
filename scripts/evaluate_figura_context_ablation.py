@@ -40,7 +40,7 @@ from figura.runtime.records import SessionContextCheckpoint
 from figura.runtime.tool_execution import DurableToolExecutor
 from figura.shared.source_refs import MessageSourceRef, ToolResultSourceRef
 from figura.shared.json_schema import canonical_json_dumps
-from figura.tools import ReplayEffect, ToolDefinition, ToolInvocation, ToolRegistry, ToolRuntime
+from figura.tools import ToolOutput, ReplayEffect, ToolDefinition, ToolInvocation, ToolRegistry, ToolRuntime
 from figura.tools.contracts import ToolContext
 
 
@@ -200,7 +200,7 @@ def seed(application, case: str, provider: ProviderId):
             {"type": "object", "properties": {}, "additionalProperties": False},
             {"type": "object", "properties": {"rows": {"type": "array", "items": {"type": "object"}}},
              "required": ["rows"], "additionalProperties": False},
-            ReplayEffect.REPLAY_SAFE, lambda _c, _a, rows=item["rows"]: {"rows": rows})
+            ReplayEffect.REPLAY_SAFE, lambda _c, _a, rows=item["rows"]: ToolOutput({"rows": rows}))
         fixture_registry = ToolRegistry("context-ablation-fixtures-v1", (definition,))
         call_id = f"fixture-table-{index}"
         commit(coordinator, session.session_id, run.run_id,

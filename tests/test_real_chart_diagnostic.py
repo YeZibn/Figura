@@ -361,8 +361,8 @@ def test_report_is_bounded_and_does_not_reemit_raw_event_secrets_or_paths():
     manifest = load_manifest(MANIFEST, asset_root=ROOT)
     history = _history(
         [
-            _event(1, "run_started", {"api_key": "secret-value", "path": "/Users/yezibin/private/chart.png"}),
-            _event(2, "run_failed", {"error": "failed at /Users/yezibin/private/chart.png"}),
+            _event(1, "run_started", {"api_key": "secret-value", "path": "/Users/example/private/chart.png"}),
+            _event(2, "run_failed", {"error": "failed at /Users/example/private/chart.png"}),
         ],
         status="failed",
     )
@@ -371,8 +371,8 @@ def test_report_is_bounded_and_does_not_reemit_raw_event_secrets_or_paths():
     markdown = report.to_markdown()
 
     assert "secret-value" not in encoded
-    assert "/Users/yezibin" not in encoded
-    assert "/Users/yezibin" not in markdown
+    assert "/Users/example" not in encoded
+    assert "/Users/example" not in markdown
     assert "shareholders_and_adjusted_price" in encoded
     assert "第一个可确认失败" in markdown
 

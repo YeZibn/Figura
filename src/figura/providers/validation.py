@@ -85,10 +85,11 @@ def _validate_request(request: ProviderRequest, expected_provider: ProviderId) -
         utf8_size(instruction.content)
 
     pending_tool_calls: set[str] = set()
-    seen_tool_call_ids: set[str] = set()
     for message in request.messages:
         if not isinstance(message, ProviderMessage) or not isinstance(message.role, MessageRole):
             raise fail(ProviderFailureCode.INVALID_REQUEST, "对话消息角色或结构无效。")
+        if pending_tool_calls and message.role is not MessageRole.TOOL:
+            raise fail(ProviderFailureCode.INVALID_REQUEST, "工具调用批次尚未完整闭合。")
         blocks = _content_blocks(message.content)
         for block in blocks:
             if isinstance(block, TextBlock):
@@ -96,8 +97,6 @@ def _validate_request(request: ProviderRequest, expected_provider: ProviderId) -
                     raise fail(ProviderFailureCode.INVALID_REQUEST, "文本内容必须是字符串。")
                 utf8_size(block.text)
             elif isinstance(block, ImageBlock):
-                if message.role is not MessageRole.USER:
-                    raise fail(ProviderFailureCode.UNSUPPORTED_CAPABILITY, "图片仅支持出现在 user 消息中。")
                 if not isinstance(block.media_type, str) or block.media_type not in SUPPORTED_MEDIA_TYPES:
                     raise fail(ProviderFailureCode.UNSUPPORTED_CAPABILITY, "不支持此图片格式。")
                 if not isinstance(block.image_bytes, bytes) or not block.image_bytes:
@@ -120,18 +119,19 @@ def _validate_request(request: ProviderRequest, expected_provider: ProviderId) -
             if message.role is MessageRole.USER and (message.tool_calls or message.continuation is not None):
                 raise fail(ProviderFailureCode.INVALID_REQUEST, "user 消息不能包含工具调用或续接数据。")
             if message.role is MessageRole.ASSISTANT:
+                batch_call_ids: set[str] = set()
                 for call in message.tool_calls:
                     _validate_tool_call(call)
                     utf8_size(call.arguments)
-                    if call.call_id in seen_tool_call_ids:
+                    if call.call_id in batch_call_ids:
                         raise fail(ProviderFailureCode.INVALID_REQUEST, "工具调用 ID 重复。")
-                    seen_tool_call_ids.add(call.call_id)
+                    batch_call_ids.add(call.call_id)
                     pending_tool_calls.add(call.call_id)
                 if message.continuation is not None:
                     _validate_continuation(message.continuation, provider_id)
                     utf8_size(message.continuation.reasoning_content or "")
-        if message.role is not MessageRole.USER and any(isinstance(block, ImageBlock) for block in blocks):
-            raise fail(ProviderFailureCode.UNSUPPORTED_CAPABILITY, "图片仅支持出现在 user 消息中。")
+        if message.role is MessageRole.ASSISTANT and any(isinstance(block, ImageBlock) for block in blocks):
+            raise fail(ProviderFailureCode.UNSUPPORTED_CAPABILITY, "不支持 assistant 图片内容。")
 
     if pending_tool_calls:
         raise fail(ProviderFailureCode.INVALID_REQUEST, "历史工具调用缺少对应的工具结果。")

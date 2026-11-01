@@ -5,18 +5,8 @@ from dataclasses import fields
 import pytest
 
 from figura.agent.execution_images import RunExecutionImageReader
-from figura.agent.execution_resources import (
-    AttachmentContent,
-    ChartFigureContent,
-    ChartFigureResult,
-    ChartRenderContent,
-    ExecutionResource,
-    ImageResourceRef,
-    MeasurementContent,
-    OcrContent,
-    RunExecutionState,
-    ToolResourceRef,
-)
+from figura.shared.resource_refs import ImageResourceRef, ToolResourceRef
+from figura.agent.execution_resources import (AttachmentContent, ChartFigureContent, ChartFigureResult, ChartRenderContent, ExecutionResource, MeasurementContent, OcrContent, RunExecutionState)
 from figura.charts.chartfigure import chart_figure_digest, parse_chart_figure
 from figura.runtime.errors import RunError, RunErrorCode
 from figura.sources.attachments import FiguraAttachmentService

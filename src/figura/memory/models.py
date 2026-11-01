@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import TypeAlias
+from collections.abc import Mapping
+from figura.tools.contracts import ToolOutcome, ToolExecutionError
+from figura.shared.media import ToolImageAttachment
 
 
 @dataclass(frozen=True)
@@ -39,7 +42,10 @@ class ToolMessage:
     run_ordinal: int
     source_tool_sequence: int
     tool_call_id: str
-    content: str = field(repr=False)
+    outcome: ToolOutcome
+    result: Mapping[str, object] | None = field(default=None, repr=False)
+    error: ToolExecutionError | None = None
+    attachments: tuple[ToolImageAttachment, ...] = ()
 
 
 @dataclass(frozen=True)

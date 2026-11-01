@@ -1,4 +1,6 @@
 from __future__ import annotations
+from tests.figura_sources_support import make_tool_runtime
+from tests.figura_sources_support import make_durable_tool_executor
 
 from tests.figura_sources_support import (
     make_attachment_service,
@@ -11,13 +13,8 @@ import hashlib
 
 import pytest
 
-from figura.agent.execution_resources import (
-    ChartFigureContent,
-    ChartFigureResult,
-    ChartRenderContent,
-    RunExecutionState,
-    ToolResourceRef,
-)
+from figura.shared.resource_refs import ToolResourceRef
+from figura.agent.execution_resources import (ChartFigureContent, ChartFigureResult, ChartRenderContent, RunExecutionState)
 from figura.agent.execution_state import RunExecutionStateService
 from figura.agent.request import AgentRequestBuilder
 from figura.charts.chartfigure.rendering import render_chart_figure_image
@@ -289,7 +286,7 @@ def test_successful_figure_is_retained_in_existing_tool_call_and_result_facts(tm
         [("figure-call", figure)],
     )
 
-    state = DurableToolExecutor(store, registry).execute_pending(session.session_id, run.run_id)
+    state = make_durable_tool_executor(store, registry).execute_pending(session.session_id, run.run_id)
     calls = _facts(state, ToolFactKind.TOOL_CALL, ToolCallFact)
     results = _facts(state, ToolFactKind.TOOL_RESULT, ToolResultFact)
 
@@ -320,7 +317,7 @@ def test_state_projection_orders_prior_and_current_figures_and_omits_failed_or_p
         registry,
         [("prior-figure", _figure("Prior figure"))],
     )
-    DurableToolExecutor(store, registry).execute_pending(session.session_id, prior_run.run_id)
+    make_durable_tool_executor(store, registry).execute_pending(session.session_id, prior_run.run_id)
     _complete_run(coordinator, session.session_id, prior_run.run_id, registry)
 
     foreign_session = coordinator.create_session()
@@ -332,7 +329,7 @@ def test_state_projection_orders_prior_and_current_figures_and_omits_failed_or_p
         registry,
         [("foreign-figure", _figure("Foreign figure"))],
     )
-    DurableToolExecutor(store, registry).execute_pending(foreign_session.session_id, foreign_run.run_id)
+    make_durable_tool_executor(store, registry).execute_pending(foreign_session.session_id, foreign_run.run_id)
 
     current_run = _create_run(coordinator, session.session_id, "current-figure-run")
     failed_figure = _figure("Failed figure")
@@ -350,7 +347,7 @@ def test_state_projection_orders_prior_and_current_figures_and_omits_failed_or_p
         ],
     )
 
-    partially_executed = DurableToolExecutor(store, registry).execute_pending(
+    partially_executed = make_durable_tool_executor(store, registry).execute_pending(
         session.session_id, current_run.run_id, max_calls=2
     )
     partial_projection = execution_state.for_run(session.session_id, current_run.run_id)
@@ -363,7 +360,7 @@ def test_state_projection_orders_prior_and_current_figures_and_omits_failed_or_p
     assert all(item.ref.run_id != foreign_run.run_id for item in partial_figures)
     assert partially_executed.checkpoint.next_action is not None
 
-    completed_tools = DurableToolExecutor(store, registry).execute_pending(
+    completed_tools = make_durable_tool_executor(store, registry).execute_pending(
         session.session_id, current_run.run_id
     )
     projection = execution_state.for_run(session.session_id, current_run.run_id)
@@ -417,14 +414,14 @@ def test_render_observations_include_prior_and_current_runs_and_structured_failu
     session = coordinator.create_session()
     prior_run = _create_run(coordinator, session.session_id, "prior-render-run")
     _commit_mixed_calls(coordinator, session.session_id, prior_run.run_id, registry, _figure("Prior"))
-    DurableToolExecutor(store, registry).execute_pending(session.session_id, prior_run.run_id)
+    make_durable_tool_executor(store, registry).execute_pending(session.session_id, prior_run.run_id)
     _complete_run(coordinator, session.session_id, prior_run.run_id, registry)
 
     current_run = _create_run(coordinator, session.session_id, "current-render-run")
     _commit_mixed_calls(
         coordinator, session.session_id, current_run.run_id, registry, _figure("Current")
     )
-    DurableToolExecutor(store, registry).execute_pending(session.session_id, current_run.run_id)
+    make_durable_tool_executor(store, registry).execute_pending(session.session_id, current_run.run_id)
     _complete_run(coordinator, session.session_id, current_run.run_id, registry)
 
     original_renderer = render_chart_figure_image
@@ -459,7 +456,7 @@ def test_render_observations_include_prior_and_current_runs_and_structured_failu
             ("unknown-render", {"run_id": "unknown-run", "call_id": "unknown-call"}),
         ],
     )
-    executor = DurableToolExecutor(store, registry)
+    executor = make_durable_tool_executor(store, registry)
     partial = executor.execute_pending(session.session_id, later_run.run_id, max_calls=3)
     observations = _render_entries(execution_state.for_run(session.session_id, later_run.run_id))
 
@@ -520,10 +517,10 @@ def test_render_tool_returns_bounded_metadata_and_replays_the_same_artifact(tmp_
     session = coordinator.create_session()
     run = _create_run(coordinator, session.session_id, "render-tool-run")
     _commit_calls(coordinator, session.session_id, run.run_id, registry, [("figure-call", _figure("Sales"))])
-    DurableToolExecutor(store, registry).execute_pending(session.session_id, run.run_id)
+    make_durable_tool_executor(store, registry).execute_pending(session.session_id, run.run_id)
 
     definition = registry["render_chart_figure"]
-    runtime = ToolRuntime(ToolRegistry(registry.version, (definition,)))
+    runtime = make_tool_runtime(ToolRegistry(registry.version, (definition,)), store=store)
     context = ToolContext(
         run_id=run.run_id,
         session_id=session.session_id,
@@ -565,7 +562,7 @@ def test_render_tool_rejects_foreign_figure_and_typed_resource_rejects_digest_mi
     session = coordinator.create_session()
     run = _create_run(coordinator, session.session_id, "target-render-run")
     _commit_calls(coordinator, session.session_id, run.run_id, registry, [("figure-call", _figure("Local"))])
-    DurableToolExecutor(store, registry).execute_pending(session.session_id, run.run_id)
+    make_durable_tool_executor(store, registry).execute_pending(session.session_id, run.run_id)
 
     foreign_session = coordinator.create_session()
     foreign_run = _create_run(coordinator, foreign_session.session_id, "foreign-render-run")
@@ -576,10 +573,10 @@ def test_render_tool_rejects_foreign_figure_and_typed_resource_rejects_digest_mi
         registry,
         [("foreign-figure", _figure("Foreign"))],
     )
-    DurableToolExecutor(store, registry).execute_pending(foreign_session.session_id, foreign_run.run_id)
+    make_durable_tool_executor(store, registry).execute_pending(foreign_session.session_id, foreign_run.run_id)
 
     definition = registry["render_chart_figure"]
-    runtime = ToolRuntime(ToolRegistry(registry.version, (definition,)))
+    runtime = make_tool_runtime(ToolRegistry(registry.version, (definition,)), store=store)
     foreign_invocation = ToolInvocation(
         "foreign-render",
         "render_chart_figure",
@@ -616,11 +613,11 @@ def test_completed_v8_tool_call_stays_inert_under_v9_registry(tmp_path) -> None:
         prior_registry,
         [("old-figure", _figure("Earlier registry"))],
     )
-    completed = DurableToolExecutor(store, prior_registry).execute_pending(
+    completed = make_durable_tool_executor(store, prior_registry).execute_pending(
         session.session_id, run.run_id
     )
 
-    replayed = DurableToolExecutor(store, current_registry).execute_pending(
+    replayed = make_durable_tool_executor(store, current_registry).execute_pending(
         session.session_id, run.run_id
     )
 
@@ -634,7 +631,7 @@ def test_render_feedback_fails_on_corrupt_png_before_provider_attempt(tmp_path) 
     session = coordinator.create_session()
     run = _create_run(coordinator, session.session_id, "corrupt-render-run")
     _commit_mixed_calls(coordinator, session.session_id, run.run_id, registry, _figure("Broken"))
-    state = DurableToolExecutor(store, registry).execute_pending(session.session_id, run.run_id)
+    state = make_durable_tool_executor(store, registry).execute_pending(session.session_id, run.run_id)
     path = next((store.data_root / "chart-renders").glob("*.png"))
     path.write_bytes(b"corrupted png")
     prior_attempts = coordinator.read_run_state(session.session_id, run.run_id).provider_attempts
@@ -660,7 +657,7 @@ def test_render_feedback_provider_image_limit_fails_before_provider_attempt(
     session = coordinator.create_session()
     run = _create_run(coordinator, session.session_id, "render-limit-run")
     _commit_mixed_calls(coordinator, session.session_id, run.run_id, registry, _figure("Limit"))
-    state = DurableToolExecutor(store, registry).execute_pending(session.session_id, run.run_id)
+    state = make_durable_tool_executor(store, registry).execute_pending(session.session_id, run.run_id)
     prior_attempts = coordinator.read_run_state(session.session_id, run.run_id).provider_attempts
     monkeypatch.setattr(provider_validation, limit_name, limit_value)
 

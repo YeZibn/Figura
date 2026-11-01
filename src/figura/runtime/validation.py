@@ -124,7 +124,7 @@ def _validate_state(state: RunState) -> None:
     results_by_attempt: dict[str, tuple[ToolExecutionFact, ToolResultFact]] = {}
 
     for fact in tool_facts:
-        if fact.run_id != run.run_id or fact.schema_version not in {1, 2}:
+        if fact.run_id != run.run_id or fact.schema_version not in {1, 2, 3}:
             raise RunError(RunErrorCode.INTEGRITY_ERROR)
         if fact.fact_kind is ToolFactKind.TOOL_CALL and isinstance(fact.payload, ToolCallFact):
             call = fact.payload

@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 
 from figura.runtime.errors import RunError, RunErrorCode
 
-_SCHEMA_VERSION = 13
+_SCHEMA_VERSION = 14
 
 
 def _run_stream_events_table(table_name: str) -> str:
@@ -886,101 +886,122 @@ def _migrate_dynamic_payload_bounds(connection: sqlite3.Connection) -> None:
 
 
 def initialize_schema(connection: sqlite3.Connection) -> None:
-    """Initialize or migrate the database while holding its writer lock."""
+    """Create a fresh canonical database; existing formats require maintenance."""
     connection.execute("PRAGMA journal_mode = WAL")
     connection.execute("PRAGMA foreign_keys = OFF")
     connection.execute("BEGIN IMMEDIATE")
     try:
-        # Read the migration version after acquiring the writer lock so concurrent
-        # first opens cannot race migrations.
         version = connection.execute("PRAGMA user_version").fetchone()[0]
-        if version > _SCHEMA_VERSION:
-            raise RunError(RunErrorCode.UNSUPPORTED_VERSION)
         if version == _SCHEMA_VERSION:
             connection.commit()
             return
-        if version == 0:
-            for statement in _SCHEMA:
-                connection.execute(statement)
-        elif version == 1:
-            connection.execute(
-                "ALTER TABLE run_execution_checkpoints ADD COLUMN "
-                "last_committed_tool_sequence INTEGER NOT NULL DEFAULT 0 "
-                "CHECK (last_committed_tool_sequence >= 0)"
-            )
-            for statement in _TOOL_SCHEMA:
-                connection.execute(statement)
-            for statement in _CONTINUATION_SCHEMA:
-                connection.execute(statement)
-            connection.execute(_LEGACY_PROVIDER_ATTEMPT_CREATE)
-        elif version == 2:
-            for statement in _CONTINUATION_SCHEMA:
-                connection.execute(statement)
-            connection.execute(_LEGACY_PROVIDER_ATTEMPT_CREATE)
-        elif version == 3:
-            connection.execute(_LEGACY_PROVIDER_ATTEMPT_CREATE)
-        elif version in {4, 5, 6, 7, 8, 9, 10, 11, 12}:
-            pass
-        else:
+        if version != 0:
             raise RunError(RunErrorCode.UNSUPPORTED_VERSION)
-        if 0 < version < 5:
-            for statement in _ATTACHMENT_SCHEMA:
-                connection.execute(statement)
-            for statement in _PANEL_SCHEMA:
-                connection.execute(statement)
-        elif version == 5:
-            for statement in _PANEL_SCHEMA:
-                connection.execute(statement)
-        if 0 < version < 8:
-            # Older fixtures/deployments have no deletion scope yet; make all
-            # existing scoped triggers valid before SQLite rewrites table names.
-            connection.execute("CREATE TABLE IF NOT EXISTS session_deletion_scopes (session_id TEXT PRIMARY KEY REFERENCES sessions(session_id) ON DELETE RESTRICT, created_at TEXT NOT NULL)")
-            _migrate_run_stream_events(connection)
-        if 3 <= version < 9:
-            _migrate_continuations(connection)
-        _migrate_session_deletion(connection)
-        connection.execute("""CREATE TABLE IF NOT EXISTS run_stop_requests (
-            run_id TEXT PRIMARY KEY REFERENCES runs(run_id) ON DELETE CASCADE,
-            request_id TEXT NOT NULL UNIQUE,
-            requested_at TEXT NOT NULL,
-            reason TEXT NOT NULL CHECK (reason = 'user_requested')
-        )""")
-        connection.execute("""CREATE TRIGGER IF NOT EXISTS immutable_run_stop_request_update
-            BEFORE UPDATE ON run_stop_requests
-            BEGIN SELECT RAISE(ABORT, 'immutable stop request'); END""")
-        connection.execute("""CREATE TRIGGER IF NOT EXISTS immutable_run_stop_request_delete
-            BEFORE DELETE ON run_stop_requests
-            WHEN NOT EXISTS (SELECT 1 FROM session_deletion_scopes g JOIN runs r
-                ON r.session_id = g.session_id WHERE r.run_id = OLD.run_id)
-            BEGIN SELECT RAISE(ABORT, 'immutable stop request'); END""")
-        has_stream_provider_requests = connection.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='run_provider_requests'"
-        ).fetchone() is not None
-        if 0 < version < 11 and not has_stream_provider_requests:
-            _migrate_execution_policy(connection)
-        connection.execute(
-            "CREATE TABLE IF NOT EXISTS execution_payload_metadata "
-            "(singleton INTEGER PRIMARY KEY CHECK(singleton = 1), "
-            "read_ceiling INTEGER NOT NULL CHECK(read_ceiling > 0))"
-        )
-        connection.execute(
-            "INSERT OR IGNORE INTO execution_payload_metadata VALUES (1, 33554432)"
-        )
-        for statement in _SESSION_CONTEXT_SCHEMA:
-            connection.execute(statement)
-        if 0 < version < _SCHEMA_VERSION:
-            _migrate_provider_stream_contract(connection)
-            _migrate_dynamic_payload_bounds(connection)
-        connection.execute("DROP TRIGGER IF EXISTS immutable_provider_request_update")
-        connection.execute("DROP TRIGGER IF EXISTS immutable_provider_request_delete")
-        connection.execute("CREATE TRIGGER immutable_provider_request_update BEFORE UPDATE ON run_provider_requests BEGIN SELECT RAISE(ABORT, 'immutable provider request'); END")
-        connection.execute("CREATE TRIGGER immutable_provider_request_delete BEFORE DELETE ON run_provider_requests WHEN NOT EXISTS (SELECT 1 FROM runs JOIN session_deletion_scopes USING(session_id) WHERE runs.run_id=OLD.run_id) BEGIN SELECT RAISE(ABORT, 'immutable provider request'); END")
+        upgrade_pre_media_schema(connection, 0, validate=False)
+        install_tool_media_constraint(connection)
         _validate_migration(connection)
         connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
         connection.commit()
     except Exception:
         connection.rollback()
         raise
-
     finally:
         connection.execute("PRAGMA foreign_keys = ON")
+
+
+def install_tool_media_constraint(connection: sqlite3.Connection) -> None:
+    """Reject noncanonical new result facts without rewriting immutable history."""
+    connection.execute("""CREATE TRIGGER IF NOT EXISTS canonical_tool_result_insert
+        BEFORE INSERT ON run_tool_execution_facts
+        WHEN NEW.fact_kind = 'tool_result' AND (
+            NEW.schema_version != 3 OR
+            COALESCE(json_extract(NEW.payload_json, '$.schema_version'), 0) != 3 OR
+            COALESCE(json_type(NEW.payload_json, '$.attachments'), '') != 'array' OR
+            (json_extract(NEW.payload_json, '$.outcome') = 'failed'
+             AND json_array_length(NEW.payload_json, '$.attachments') != 0))
+        BEGIN SELECT RAISE(ABORT, 'noncanonical tool result'); END""")
+
+
+def upgrade_pre_media_schema(connection: sqlite3.Connection, version: int, *, validate: bool = True) -> None:
+    """Maintenance-only legacy DDL within the caller's exclusive transaction."""
+    if not 0 <= version < 13:
+        raise RunError(RunErrorCode.UNSUPPORTED_VERSION)
+    if version == 0:
+        for statement in _SCHEMA:
+            connection.execute(statement)
+    elif version == 1:
+        connection.execute(
+            "ALTER TABLE run_execution_checkpoints ADD COLUMN "
+            "last_committed_tool_sequence INTEGER NOT NULL DEFAULT 0 "
+            "CHECK (last_committed_tool_sequence >= 0)"
+        )
+        for statement in _TOOL_SCHEMA:
+            connection.execute(statement)
+        for statement in _CONTINUATION_SCHEMA:
+            connection.execute(statement)
+        connection.execute(_LEGACY_PROVIDER_ATTEMPT_CREATE)
+    elif version == 2:
+        for statement in _CONTINUATION_SCHEMA:
+            connection.execute(statement)
+        connection.execute(_LEGACY_PROVIDER_ATTEMPT_CREATE)
+    elif version == 3:
+        connection.execute(_LEGACY_PROVIDER_ATTEMPT_CREATE)
+    elif version in {4, 5, 6, 7, 8, 9, 10, 11, 12}:
+        pass
+    else:
+        raise RunError(RunErrorCode.UNSUPPORTED_VERSION)
+    if 0 < version < 5:
+        for statement in _ATTACHMENT_SCHEMA:
+            connection.execute(statement)
+        for statement in _PANEL_SCHEMA:
+            connection.execute(statement)
+    elif version == 5:
+        for statement in _PANEL_SCHEMA:
+            connection.execute(statement)
+    if 0 < version < 8:
+        # Older fixtures/deployments have no deletion scope yet; make all
+        # existing scoped triggers valid before SQLite rewrites table names.
+        connection.execute("CREATE TABLE IF NOT EXISTS session_deletion_scopes (session_id TEXT PRIMARY KEY REFERENCES sessions(session_id) ON DELETE RESTRICT, created_at TEXT NOT NULL)")
+        _migrate_run_stream_events(connection)
+    if 3 <= version < 9:
+        _migrate_continuations(connection)
+    _migrate_session_deletion(connection)
+    connection.execute("""CREATE TABLE IF NOT EXISTS run_stop_requests (
+        run_id TEXT PRIMARY KEY REFERENCES runs(run_id) ON DELETE CASCADE,
+        request_id TEXT NOT NULL UNIQUE,
+        requested_at TEXT NOT NULL,
+        reason TEXT NOT NULL CHECK (reason = 'user_requested')
+    )""")
+    connection.execute("""CREATE TRIGGER IF NOT EXISTS immutable_run_stop_request_update
+        BEFORE UPDATE ON run_stop_requests
+        BEGIN SELECT RAISE(ABORT, 'immutable stop request'); END""")
+    connection.execute("""CREATE TRIGGER IF NOT EXISTS immutable_run_stop_request_delete
+        BEFORE DELETE ON run_stop_requests
+        WHEN NOT EXISTS (SELECT 1 FROM session_deletion_scopes g JOIN runs r
+            ON r.session_id = g.session_id WHERE r.run_id = OLD.run_id)
+        BEGIN SELECT RAISE(ABORT, 'immutable stop request'); END""")
+    has_stream_provider_requests = connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='run_provider_requests'"
+    ).fetchone() is not None
+    if 0 < version < 11 and not has_stream_provider_requests:
+        _migrate_execution_policy(connection)
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS execution_payload_metadata "
+        "(singleton INTEGER PRIMARY KEY CHECK(singleton = 1), "
+        "read_ceiling INTEGER NOT NULL CHECK(read_ceiling > 0))"
+    )
+    connection.execute(
+        "INSERT OR IGNORE INTO execution_payload_metadata VALUES (1, 33554432)"
+    )
+    for statement in _SESSION_CONTEXT_SCHEMA:
+        connection.execute(statement)
+    if 0 < version < 13:
+        _migrate_provider_stream_contract(connection)
+        _migrate_dynamic_payload_bounds(connection)
+    connection.execute("DROP TRIGGER IF EXISTS immutable_provider_request_update")
+    connection.execute("DROP TRIGGER IF EXISTS immutable_provider_request_delete")
+    connection.execute("CREATE TRIGGER immutable_provider_request_update BEFORE UPDATE ON run_provider_requests BEGIN SELECT RAISE(ABORT, 'immutable provider request'); END")
+    connection.execute("CREATE TRIGGER immutable_provider_request_delete BEFORE DELETE ON run_provider_requests WHEN NOT EXISTS (SELECT 1 FROM runs JOIN session_deletion_scopes USING(session_id) WHERE runs.run_id=OLD.run_id) BEGIN SELECT RAISE(ABORT, 'immutable provider request'); END")
+    if validate:
+        _validate_migration(connection)
+    connection.execute("PRAGMA user_version = 13")

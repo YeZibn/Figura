@@ -396,7 +396,7 @@ def test_reader_projects_current_bar_line_dashboard_bundle_when_present():
     assert isinstance(line_data.get("series"), list)
     assert isinstance(line_data.get("axes"), dict)
     encoded = json.dumps(history_details, ensure_ascii=False)
-    assert "/Users/yezibin" not in encoded
+    assert "/Users/example" not in encoded
     with pytest.raises(Exception) as error:
         reader.get_history_details(evaluation_root.name, "unknown_case")
     assert getattr(error.value, "code", None) == "evaluation_case_not_found"

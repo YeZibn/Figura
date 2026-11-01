@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+from figura.tools.contracts import ToolOutput, ToolImageOutput
+from figura.shared.media import ResourceImage
+
 import hashlib
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from figura.agent.execution_resources import ChartFigureContent, RunExecutionState, ToolResourceRef
+from figura.shared.resource_refs import ToolResourceRef
+from figura.agent.execution_resources import (ChartFigureContent, RunExecutionState)
 from figura.charts.chartfigure.rendering import render_chart_figure_image
 from figura.runtime.errors import RunError, RunErrorCode
 from figura.shared.image_limits import MAX_IMAGE_BYTES
@@ -67,7 +71,7 @@ def render_chart_figure_definition(
     execution_state_for_run: Callable[[str, str], RunExecutionState],
     renders: FiguraChartRenderService,
 ) -> ToolDefinition:
-    def render(context: ToolContext, arguments: Mapping[str, Any]) -> dict[str, object]:
+    def render(context: ToolContext, arguments: Mapping[str, Any]) -> ToolOutput:
         raw_reference = arguments["figure_ref"]
         reference_run_id = raw_reference["run_id"]
         reference_call_id = raw_reference["call_id"]
@@ -117,7 +121,7 @@ def render_chart_figure_definition(
         except RunError:
             raise ToolOutcomeUnknown() from None
 
-        return {
+        return ToolOutput({
             "figure_ref": {"run_id": reference_run_id, "call_id": reference_call_id},
             "figure_digest": content.result.figure_digest,
             "image_sha256": hashlib.sha256(png).hexdigest(),
@@ -125,16 +129,17 @@ def render_chart_figure_definition(
             "byte_count": len(png),
             "width": width,
             "height": height,
-        }
+        }, (ToolImageOutput(ToolResourceRef("chart_render", context.run_id, context.call_id), "rendered", ResourceImage.from_bytes(png)),))
 
     return ToolDefinition(
         name="render_chart_figure",
         description=(
             "将同 Session 已接受的 Figure 绘制为 PNG；传入装配结果的嵌套 figure_ref（含 run_id、call_id）。"
-            "返回图像摘要，PNG 附加到下一次模型请求供你观察。修改内容需先装配新 Figure；渲染成功表示图像生成，不表示数据正确或已审核。"
+            "返回图像摘要，PNG 随当前工具结果供你观察。修改内容需先装配新 Figure；渲染成功表示图像生成，不表示数据正确或已审核。"
         ),
         parameters_schema=_PARAMETERS_SCHEMA,
         result_schema=_RESULT_SCHEMA,
         replay_effect=ReplayEffect.IDEMPOTENT_LOCAL_WRITE,
         handler=render,
+            produces_images=True,
     )

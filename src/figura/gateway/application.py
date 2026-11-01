@@ -11,7 +11,8 @@ from urllib.parse import parse_qs, urlsplit
 from figura.sources.attachments import FiguraAttachmentService
 from figura.sources.panels import FiguraPanelService
 from figura.agent.execution_images import RunExecutionImageReader
-from figura.agent.execution_resources import ChartRenderContent, ToolResourceRef
+from figura.shared.resource_refs import ToolResourceRef
+from figura.agent.execution_resources import (ChartRenderContent)
 from figura.agent.execution_state import RunExecutionStateService
 from figura.providers import MODEL_IDS, ProviderFactory, ProviderId
 from figura.runtime.coordinator import RunCoordinator

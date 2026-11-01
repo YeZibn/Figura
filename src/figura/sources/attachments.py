@@ -11,7 +11,7 @@ import uuid
 from pathlib import Path
 from typing import BinaryIO
 
-from figura.providers.models import ImageBlock
+from figura.shared.media import ResourceImage
 from figura.shared.image_limits import MAX_IMAGE_BYTES
 from figura.runtime.errors import RunError, RunErrorCode
 from figura.sources.imaging import verify_attachment_image
@@ -43,6 +43,10 @@ class FiguraAttachmentService:
             raise
         except OSError:
             raise RunError(RunErrorCode.STORAGE_ERROR) from None
+
+    @property
+    def data_root(self) -> Path:
+        return self._root.parent
 
     def upload(
         self,
@@ -98,7 +102,7 @@ class FiguraAttachmentService:
     def list(self, session_id: str) -> tuple[AttachmentMetadata, ...]:
         return self._repository.list_attachments(session_id)
 
-    def resolve(self, session_id: str, attachment_id: str) -> ImageBlock:
+    def resolve(self, session_id: str, attachment_id: str) -> ResourceImage:
         metadata = self._repository.get_attachment_metadata(session_id, attachment_id)
         path = self._final_path(metadata.attachment_id)
         try:
@@ -117,7 +121,7 @@ class FiguraAttachmentService:
             raise RunError(RunErrorCode.STORAGE_ERROR)
         if verify_attachment_image(io.BytesIO(content)) != metadata.media_type:
             raise RunError(RunErrorCode.INTEGRITY_ERROR)
-        return ImageBlock(metadata.media_type, content)
+        return ResourceImage.from_bytes(content)
 
     def delete(self, session_id: str, attachment_id: str) -> None:
         self._repository.get_attachment_metadata(session_id, attachment_id)

@@ -1,23 +1,38 @@
 # Tool：能力定义与调用边界
 
-> 更新日期：2026-10-06。[返回总览](../figura-implementation-overview.md)。本篇拥有工具定义、注册、调用及结果合同；`ToolCallFact`、`ToolAttemptStartedFact`、`ToolResultFact` 是[Run Runtime](runtime.md#4-完整模型字段)所拥有的持久事实。
+> 更新日期：2026-10-22。[返回总览](../figura-implementation-overview.md)。本篇拥有工具定义、注册、调用及结果合同；`ToolCallFact`、`ToolAttemptStartedFact`、`ToolResultFact` 是[Run Runtime](runtime.md#4-完整模型字段)所拥有的持久事实。
 
 ## 1. 职责与边界
 
-`ToolRegistry` 保存有序、版本化的 `ToolDefinition`；`ToolRuntime` 校验参数、运行同步 handler，并验证成功结果或返回安全错误。`DurableToolExecutor` 属于 Run 执行边界，负责在调用前后提交事实。当前工作树 Gateway Registry 为 `figura-web-v10`，按序注册九个工具：`load_image`、`decompose_chart_image`、`search_history`、`read_history`、`read_resource_image`、`extract_text`、`measure_chart`、`assemble_chart_figure` 和 `render_chart_figure`。历史工具只读当前 Session 的授权前缀；历史图片只有显式请求才附加到下一模型请求。图像、OCR 与测量工具处理已授权 Attachment/Panel；画布组装工具接收 Charts 域的完整 ChartFigure v2 并核对测量引用；渲染工具只接收已接受 Figure 的 `(run_id, call_id)`。当前 Registry 不注册旧测量工具、结果适配器或旧版 ChartSpec/Figure 转换器。启动时若仍有任何绑定较旧 Registry 的活动 Run，Gateway 会拒绝激活 v10；旧事实留在 Runtime 历史中，但不投影成 v2 图表资源。
+`ToolRegistry` 保存有序、版本化的 `ToolDefinition`；`ToolRuntime` 校验参数、运行同步 handler，并验证成功结果或返回安全错误。`DurableToolExecutor` 属于 Run 执行边界，负责在调用前后提交事实。当前工作树 Gateway Registry 为 `figura-web-v11`，按序注册九个工具：`load_image`、`decompose_chart_image`、`search_history`、`read_history`、`read_resource_image`、`extract_text`、`measure_chart`、`assemble_chart_figure` 和 `render_chart_figure`。历史工具只读当前 Session 的授权前缀；历史图片只有显式请求才会出现在该读取调用的 native TOOL 消息中。图像、OCR 与测量工具处理已授权 Attachment/Panel；画布组装工具接收 Charts 域的完整 ChartFigure v2 并核对测量引用；渲染工具只接收已接受 Figure 的 `(run_id, call_id)`。当前 Registry 不注册旧测量工具、结果适配器或旧版 ChartSpec/Figure 转换器。启动时若仍有任何绑定较旧 Registry 的活动 Run，Gateway 会拒绝激活 v11；旧事实留在 Runtime 历史中，但不投影成 v2 图表资源。
 
 ## 2. 内部流转
 
-1. **注册**：Gateway 组装有序 `ToolDefinition`，检查名称唯一、参数与结果 JSON Schema、描述及总大小。当前 v10 工具顺序为 `load_image`、`decompose_chart_image`、`search_history`、`read_history`、`read_resource_image`、`extract_text`、`measure_chart`、`assemble_chart_figure`、`render_chart_figure`；Registry 对外提供只读版本、定义顺序和按名查找。
+1. **注册**：Gateway 组装有序 `ToolDefinition`，检查名称唯一、参数与结果 JSON Schema、描述及总大小。当前 v11 工具顺序为 `load_image`、`decompose_chart_image`、`search_history`、`read_history`、`read_resource_image`、`extract_text`、`measure_chart`、`assemble_chart_figure`、`render_chart_figure`；Registry 对外提供只读版本、定义顺序和按名查找。
 2. **模型投影**：Agent 把允许的工具定义映射为 Provider 的 `FunctionTool`；模型只见名称、说明与参数 Schema，不见 handler、结果 Schema 或本地上下文。九个定义均有工具级 description；原生参数的 description 说明来源引用、坐标点形状、历史局部读取和图表数据语义，并在 Provider 投影中保留。SYSTEM 目录与同一 Registry 同序，但不重复整份 Schema。
 3. **调用**：`ToolInvocation` 的 call ID、名称和 JSON 参数进入 `ToolRuntime`；解析拒绝重复键、无效数值与不符合 Schema 的内容。handler 只收到已验证参数及 `ToolContext`。
-4. **结果与恢复**：成功时结果必须是有界 JSON 对象；失败时返回 `ToolExecutionError`。图像读取、OCR、测量与 `assemble_chart_figure` 为 `replay_safe`；Panel 分割和 `render_chart_figure` 为 `idempotent_local_write`。组装工具不新建外部资源，只验证、摘要并通过既有 Runtime 工具事实保留 Figure；渲染工具把 PNG 安装到 Sources 私有文件区，ToolResultFact 只保存有界摘要。结果超出既有大小上限时整体拒绝，不静默截断或删减观测。`replay_effect` 决定不确定结果能否安全重放或必须显式协调；ToolRuntime 自身不拥有 Run checkpoint。
+4. **结果与恢复**：成功 handler 必须返回唯一 `ToolOutput` 合同；裸字典拒绝。其 `result` 继续按原业务 Schema 验证，`images` 经通用媒体提交器验证并安装；失败时返回 `ToolExecutionError`，附件为空。图像读取、OCR、测量与 `assemble_chart_figure` 为 `replay_safe`；Panel 分割和 `render_chart_figure` 为 `idempotent_local_write`。组装工具不新建外部资源，只验证、摘要并通过既有 Runtime 工具事实保留 Figure；渲染工具把 PNG 安装到 Sources 私有文件区，ToolResultFact 保存业务数据及有序附件描述，文件先安装、事实与 checkpoint 随后事务提交。结果超出既有大小上限时整体拒绝，不静默截断或删减观测。`replay_effect` 决定不确定结果能否安全重放或必须显式协调；ToolRuntime 自身不拥有 Run checkpoint。
 
 ## 3. 模型关系与共同规则
 
-`ToolExecutionResult` 根据 `outcome` 在 `result` 与 `error` 之间二选一。`ToolDefinition.parameters_schema` 是模型输入合同，`result_schema` 是内部结果合同。`ToolContext.idempotency_key` 只给需要本地幂等写的 handler 使用。以下逐模型列出全部声明字段。
+`ToolExecutionResult` 根据 `outcome` 在 `result` 与 `error` 之间二选一，始终包含有序 `attachments`。图片字节只在 handler 输出和 Sources 中存在；描述完整字段由 [Sources](sources.md#中立媒体值与附件描述)集中定义。`ToolDefinition.parameters_schema` 是模型输入合同，`result_schema` 是内部结果合同。`ToolContext.idempotency_key` 只给需要本地幂等写的 handler 使用。以下逐模型列出全部声明字段。
 
 ## 4. 完整模型字段
+
+### ToolOutput 与 ToolImageOutput
+
+这两个模型是调用期唯一成功合同，定义在 `tools/contracts.py`。Runtime 先校验业务及完整描述，再安装媒体。图片准备失败返回安全 `image_feedback_unavailable`；写效果未知仍走原 unknown-effect 恢复，不自动重试。
+
+| 完整字段路径 | 类型 | 默认 | 含义与完整流转 |
+|---|---|---|---|
+| ToolOutput.result | Mapping[str, JSONValue] | 必传；repr=False | handler 写入，Runtime 按原 result_schema 校验，随后写入规范结果；不公开原始 JSON |
+| ToolOutput.images | tuple[ToolImageOutput, ...] | ()；repr=False | handler 的有序候选媒体，规范化后只留下附件描述；不持久化 |
+| ToolImageOutput.resource_ref | ResourceRef | 必传 | 复用原资源完整身份；新生产资源引用当前 Run/call，历史读取保留原身份；由授权解析器验证 |
+| ToolImageOutput.image_kind | ImageKind | 必传 | original / ocr_annotation / measurement_annotation / rendered；必须匹配资源 kind；驱动 hint |
+| ToolImageOutput.image | ResourceImage | 必传；repr=False | 私有调用期像素及真实媒体元数据，详见 Sources；不得进入结果事实或 SSE |
+| ToolImageOutput.provenance | MediaProvenance | recorded | 新生产只用 recorded；读取时沿用已提交来源；迁移可用 migration_reconstructed |
+
+九个工具统一使用该合同。load_image、extract_text、measure_chart、render_chart_figure、read_resource_image 成功时必须有图片；另外四个工具 images=()。非视觉结果不会隐式读取 Panel、渲染 Figure 或加载历史像素。
 
 ### ToolContext
 
@@ -63,6 +78,7 @@
 | ToolExecutionResult.outcome | ToolOutcome | 必传 | 工具结果的成功或失败状态 | ToolRuntime → 调用期；随后转 ToolResultFact → DurableToolExecutor / Agent |
 | ToolExecutionResult.result | Mapping[str, Any] \| None | None | 成功时的有界 JSON 对象；失败时为空 | ToolRuntime → 调用期；随后转 ToolResultFact → DurableToolExecutor / Agent |
 | ToolExecutionResult.error | ToolExecutionError \| None | None | 失败时的安全错误；成功时为空 | ToolRuntime → 调用期；随后转 ToolResultFact → DurableToolExecutor / Agent |
+| ToolExecutionResult.attachments | tuple[ToolImageAttachment, ...] | () | 有序已验证描述；失败必须为空 | 通用媒体提交器 → 规范结果 → Runtime / Memory；不含图片字节，字段见 Sources |
 
 ### ToolDefinition
 
@@ -76,6 +92,7 @@
 | ToolDefinition.result_schema | Mapping[str, Any] | 必传 | 工具成功结果的有界对象 Schema | 进程启动时组装 ToolRegistry → 进程内 Registry → Agent 工具投影与 ToolRuntime；handler 不进模型 |
 | ToolDefinition.replay_effect | ReplayEffect \| str | 必传 | 未知效果恢复策略 | 进程启动时组装 ToolRegistry → 进程内 Registry → Agent 工具投影与 ToolRuntime；handler 不进模型 |
 | ToolDefinition.handler | ToolHandler | 必传 | 同步处理函数；不进入模型投影 | 进程启动时组装 ToolRegistry → 进程内 Registry → Agent 工具投影与 ToolRuntime；handler 不进模型 |
+| ToolDefinition.produces_images | bool | False | 声明此定义成功时必须带图 | 工具定义 → Registry → 首次请求能力准入；不进入原生参数 Schema |
 
 ## 5. 枚举、非 dataclass 合同与依据
 
@@ -86,9 +103,9 @@
 
 ## 6. 图像与测量工具合同
 
-图像工具只接受目标 Run `RunExecutionState` 中的 Attachment/Panel 类型化引用，再经 Sources 核对 Session 所有权后读取图像。模型不能提交本机路径、URL 或图片字节。图像字节与标注 PNG 不进入工具结果、Runtime 事实或资源目录。
+图像工具只接受目标 Run `RunExecutionState` 中的 Attachment/Panel 类型化引用，再经 Sources 核对 Session 所有权后读取图像。模型不能提交本机路径、URL 或图片字节。图像 handler 的 `ToolOutput` 可在调用期携带图片；媒体提交器校验并保存文件，把附件描述写入持久 `ToolResultFact`。像素不进入工具 JSON、Runtime 事实或资源目录。Agent 在所属 native TOOL 消息中并列投影工具 JSON、每图 hint 与 ImageBlock，因此图片仍与产生它的工具调用及 call ID 绑定。
 
-当前公开观察工具为 `load_image`、`extract_text` 和 `measure_chart`。统一测量实现位于 [`measure_chart.py`](../../src/figura/tools/implementations/measure_chart.py)；来源解析位于 [`measurement_source.py`](../../src/figura/tools/implementations/measurement_source.py)；范围和共享结果合同位于 [`measurements/observation_scope.py`](../../src/figura/tools/measurements/observation_scope.py) 与 [`measurements/contracts.py`](../../src/figura/tools/measurements/contracts.py)；十个 family adapter 由 [`family_adapters.py`](../../src/figura/tools/measurements/family_adapters.py) 路由到 `tools/measurements/` 中各自的视觉算法。旧的四个公开测量定义和 v1 结果兼容执行器不在 v10 Registry 中。
+当前公开观察工具为 `load_image`、`extract_text` 和 `measure_chart`。统一测量实现位于 [`measure_chart.py`](../../src/figura/tools/implementations/measure_chart.py)；来源解析位于 [`measurement_source.py`](../../src/figura/tools/implementations/measurement_source.py)；范围和共享结果合同位于 [`measurements/observation_scope.py`](../../src/figura/tools/measurements/observation_scope.py) 与 [`measurements/contracts.py`](../../src/figura/tools/measurements/contracts.py)；十个 family adapter 由 [`family_adapters.py`](../../src/figura/tools/measurements/family_adapters.py) 路由到 `tools/measurements/` 中各自的视觉算法。旧的四个公开测量定义和 v1 结果兼容执行器不在 v11 Registry 中。
 
 ### 6.1 `measure_chart` 输入与决策边界
 
@@ -233,7 +250,7 @@ family sensor 在公共 router 补充来源身份前返回 `MeasurementSensorRes
 
 handler 先从当前目标 Run 的授权资源目录解析精确来源，再通过 Sources 服务验证 Session/Panel 记录并读图。工具成功或失败都作为普通 ToolResultFact 持久化；当前 schema_version 3 的 `measure_chart` 调用由 Agent 重建为一个独立 `MeasurementContent`，保留 attempt ID、tool name、来源引用、原始 scope、outcome 和完整结果。资源投影不会重算、规范化或修复提交结果。冻结 schema_version 2 的结果只按原样保留在历史 ToolResultFact 中，不投影为当前 MeasurementContent；可通过历史读取工具查看原始结果，不会因此获得新调用或组装权限。旧 `measure_bars`、`measure_lines`、`measure_scatter`、`measure_pie` 事实同样留在原始 Run 历史中。
 
-成功 OCR 与 `measure_chart` 结果在下一次 Provider 请求中按当前已提交批次与调用顺序生成临时标注图；它们不成为独立事实。历史读取和工具结果可以提供文字证据，但只有成功 `load_image` 或当前批次观察才按对应规则附图。图片无法重建、来源不再可读或请求图片越过 Provider 边界时，在 Provider attempt claim 前失败。
+成功 OCR 与 `measure_chart` 在 handler 阶段准备标注，通用媒体提交器安装 PNG，再把描述与业务结果一起提交。下一次普通请求按完整已提交批次的附件顺序，把保存像素放入各自对应的 native TOOL 消息，与该工具 JSON 和 hint 一起发送；历史重载使用相同描述和文件。图片丢失、损坏或超出 Provider 边界时，在 attempt claim 前失败，不在线重绘。
 
 `extract_text` 仍是独立 OCR 工具，使用相同的来源授权、可见像素解码与 observation scope；它返回文字片段、位置和置信度，不替代 family sensor。OCR 候选的详细合同与错误由 [`extract_text.py`](../../src/figura/tools/implementations/extract_text.py) 及 OCR 主规格负责。
 
@@ -244,9 +261,10 @@ flowchart LR
     Decode --> Router[显式 family router]
     Router --> Sensors[十种内部 sensors]
     Sensors --> Contract[MeasurementResult 校验]
-    Contract --> Fact[ToolResultFact 提交]
+    Contract --> Overlay[工具执行阶段绘制并保存标注]
+    Overlay --> Fact[ToolResultFact 数据与附件描述提交]
     Fact --> Projection[MeasurementContent 类型化资源]
-    Fact --> Overlay[下一请求临时观察标注图]
+    Fact --> Observe[下一请求的同调用 TOOL JSON / hint / 已保存图像]
 ```
 
 测量与资源合同见[统一测量主规格](../../openspec/figura/openspec/specs/chart-family-measurement/spec.md)和[RunExecutionResources 主规格](../../openspec/figura/openspec/specs/run-execution-resources/spec.md)；实现见[`measure_chart.py`](../../src/figura/tools/implementations/measure_chart.py)、[`family_adapters.py`](../../src/figura/tools/measurements/family_adapters.py)和[观察图绘制](../../src/figura/tools/measurements/visualization.py)。
@@ -281,7 +299,7 @@ flowchart LR
 
 ## 8. 图表渲染工具
 
-`render_chart_figure` 将同一 Session 已成功组装的 ChartFigure 绘制为一张 PNG。模型输入只包含引用，不传图表数据、尺寸、主题或颜色；工具结果只有有限摘要，没有图像字节、路径或新的 Figure/render ID。处理由 Tool handler 协调：[Charts](charts.md#5-确定性-png-renderer)负责纯绘制，[Sources](sources.md#4-存储失败与访问边界)负责私有文件存取，Runtime 仍持久化通用工具事实，Agent 重建运行态，Web 负责预览路由。
+`render_chart_figure` 将同一 Session 已成功组装的 ChartFigure 绘制为一张 PNG。模型输入只包含引用，不传图表数据、尺寸、主题或颜色；工具 JSON 结果只有有限摘要，没有图像字节、路径或新的 Figure/render ID。处理由 Tool handler 协调：[Charts](charts.md#5-确定性-png-renderer)负责纯绘制，[Sources](sources.md#4-存储失败与访问边界)负责私有文件存取，Runtime 持久化通用工具事实和附件描述；下一次模型交互中的该工具 native TOOL 消息同时携带有限 JSON 摘要、hint 和 PNG。Agent 重建运行态，Web 负责预览路由。
 
 实现见[render handler](../../src/figura/tools/implementations/render_chart_figure.py)、[Charts renderer](../../src/figura/charts/chartfigure/rendering.py)、[Sources 存储服务](../../src/figura/sources/chart_renders.py)、[Registry 装配](../../src/figura/bootstrap.py)和[Agent 请求组装](../../src/figura/agent/request.py)。十类 ChartSpec v2 的绘制合同见[Chart rendering 主规格](../../openspec/figura/openspec/specs/chart-rendering/spec.md)。
 
@@ -329,11 +347,11 @@ flowchart LR
 | `chart_render_storage_failed` | Sources 无法写入或校验 PNG | 有界存储失败；仅 `STORAGE_ERROR` 标记可重试 |
 
 `render_chart_figure` 的 `replay_effect` 是 `idempotent_local_write`。文件可以先于 ToolResultFact 安装；在结果未成功提交时它仍是不可从 Agent/Web 读取的孤儿，重放同一调用会验证并复用原文件。工具不会用新内容覆盖损坏或冲突的既有文件。
-当前 Registry 是 `figura-web-v10`。Bootstrap 在启动时检查仍在运行的 Run：只要其已提交工具事实或 Provider binding 仍绑定较旧 Registry，就拒绝启动并要求先完成或中断该 Run。当前 Registry 不注册旧测量工具、结果 adapter、ChartSpec/Figure 转换器或 unresolved-call executor；已存旧事实原样保留，不创建新类型化图表资源。渲染的文字布局与百分比规则见[Charts 确定性 PNG renderer](charts.md#5-确定性-png-renderer)；会话删除会清除其私有 Panel/render 文件，详见[Sources](sources.md#2-内部流转与不变量)。
+当前 Registry 是 `figura-web-v11`。Bootstrap 在启动时检查仍在运行的 Run：只要其已提交工具事实或 Provider binding 仍绑定较旧 Registry，就拒绝启动并要求先完成或中断该 Run。当前 Registry 不注册旧测量工具、结果 adapter、ChartSpec/Figure 转换器或 unresolved-call executor；已存旧事实原样保留，不创建新类型化图表资源。渲染的文字布局与百分比规则见[Charts 确定性 PNG renderer](charts.md#5-确定性-png-renderer)；会话删除会清除其私有 Panel/render 文件，详见[Sources](sources.md#2-内部流转与不变量)。
 
 ## 9. Session 历史读取工具
 
-当前 v10 Registry 提供三个只读历史工具，可搜索当前 Run 的已闭合前缀与较早历史，再按需取得原始内容或图像；当前未闭合的调用批次不会进入搜索结果。它们的 `ToolContext.session_id` 与 `run_id` 由 DurableToolExecutor 注入，模型不能指定 Session，也不能越过当前 Run 已授权前缀。调用自身仍作为当前 Run 的普通工具事实审计；执行没有重放旧工具的副作用。Memory 拥有来源引用格式、搜索匹配及精确读取语义，见[来源引用](memory.md#historysourceref)和[历史检索边界](memory.md#搜索读取与历史图像边界)；Agent 拥有六类资源内容字段，见[资源合同](agent.md#4-runexecutionstate-资源合同与完整字段)。
+当前 v11 Registry 提供三个只读历史工具，可搜索当前 Run 的已闭合前缀与较早历史，再按需取得原始内容或图像；当前未闭合的调用批次不会进入搜索结果。它们的 `ToolContext.session_id` 与 `run_id` 由 DurableToolExecutor 注入，模型不能指定 Session，也不能越过当前 Run 已授权前缀。调用自身仍作为当前 Run 的普通工具事实审计；执行没有重放旧工具的副作用。Memory 拥有来源引用格式、搜索匹配及精确读取语义，见[来源引用](memory.md#historysourceref)和[历史检索边界](memory.md#搜索读取与历史图像边界)；Agent 拥有六类资源内容字段，见[资源合同](agent.md#4-runexecutionstate-资源合同与完整字段)。
 
 `search_history` 的输入对象只含下表属性且拒绝额外字段。查询使用本地文本匹配与分页，不访问未来 Run；默认页大小为 10，`page_size` 可设为 1–20。
 
@@ -384,7 +402,7 @@ flowchart LR
 | `read_history.result.selected_field` | string，可选 | 实际选择的 JSON Pointer |
 | `read_history.result.content` | object、string、array 或 null | 被授权读取的原始历史内容或资源元数据；不补造缺失的结果 |
 
-`read_resource_image` 的结果 JSON 只含图像元数据；成功图像由 Agent 在该工具完成后的下一次 Provider 请求中附加，不放入工具结果或 Runtime facts。Attachment/Panel、成功 OCR/测量标注和成功 ChartRender 可读取；ChartFigure 必须先显式渲染，失败/未决资源不能产生图像。输入与结果对象均拒绝额外字段。
+`read_resource_image` 的业务 JSON 只含图像元数据；读取到的图像通过媒体输出与 JSON 一起进入这次工具调用对应的 native TOOL 消息，不放进 JSON 正文或持久 Runtime facts。Attachment/Panel、成功 OCR/测量标注和成功 ChartRender 可读取；ChartFigure 必须先显式渲染，失败/未决资源不能产生图像。输入与结果对象均拒绝额外字段。
 
 | 完整字段路径 | 类型与约束 | 含义 |
 |---|---|---|
@@ -396,7 +414,7 @@ flowchart LR
 | `read_resource_image.result.width` | integer，1–100000 | 图像宽度 |
 | `read_resource_image.result.height` | integer，1–100000 | 图像高度 |
 
-三个定义的 `replay_effect` 均为 `replay_safe`。search/read/image resource handler 返回安全历史错误；授权范围或引用不可用映射为 `history_reference_unavailable`，Schema 入参拒绝为 `invalid_arguments`，handler 内无效查询映射为 `invalid_history_request`，其他读取错误映射为可重试的 `history_unavailable`。图像字节仅作为下一 Provider 请求输入，不会进入该工具的 JSON 结果。
+三个定义的 `replay_effect` 均为 `replay_safe`。search/read/image resource handler 返回安全历史错误；授权范围或引用不可用映射为 `history_reference_unavailable`，Schema 入参拒绝为 `invalid_arguments`，handler 内无效查询映射为 `invalid_history_request`，其他读取错误映射为可重试的 `history_unavailable`。图像字节只在调用期和 Provider 的 native TOOL 消息中出现，不进入 JSON 结果或持久事实。
 
 ## 10. 执行载荷与未知效果
 
@@ -404,12 +422,12 @@ Registry 完整 metadata/parameter Schema/result Schema 投影、参数、成功
 
 已知 ToolFailure 或参数校验失败只提交一次 failed observation，`retryable=True` 由模型解读；模型的新决策使用新 call ID。未知的部分写入通过 `ToolOutcomeUnknown` 传播，不产生伪造 failed result。Panel 分割与 PNG 保存的无法确认存储异常采用这一分支；按原 replay_effect 和稳定 SHA-256 `[run_id, call_id]` 键恢复。存储 claim 入口强制每逻辑调用最多三次尝试。CancellationSignal 读取持久停止状态；读取失败传播并拒绝执行。尚在 native handler 内的动作保留 owner，真实返回后可保存结果再停止。
 
-工具执行、历史读取与图像观察边界见 [Tool Runtime](../../openspec/figura/openspec/specs/tool-runtime/spec.md)、[历史检索](../../openspec/figura/openspec/specs/session-context-retrieval/spec.md)和[图像观察解码](../../openspec/figura/openspec/specs/image-observation-decoding/spec.md)主规格。结构与回归测试不证明真实模型遵循效果。
+工具执行、历史读取、图像观察与媒体返回边界见 [Tool Runtime](../../openspec/figura/openspec/specs/tool-runtime/spec.md)、[历史检索](../../openspec/figura/openspec/specs/session-context-retrieval/spec.md)、[图像观察解码](../../openspec/figura/openspec/specs/image-observation-decoding/spec.md)和[工具结果媒体](../../openspec/figura/openspec/specs/tool-result-media/spec.md)主规格。结构与回归测试不证明真实模型遵循效果。
 
 ### 测量回归与调用期共享基础
 
 `context.py` 仅在一次已授权工具调用内复用 OCR 与局部 OCR 候选，结束即释放；`layout.py` 联合紧凑色样与排列文字判断图例，不通过 RGB 距离删除真实系列。OCR 使用 scope 后的像素，局部放大后映射回来源坐标并再次检查掩码；不会创建新的 Panel 或调用 Provider。校准失败、数字冲突和集合截断仍保留不确定性，不将测量自动提升为 ChartSpec 真值。
 
-固定模拟样例及参考答案位于 `tests/fixtures/figura_measurement/`。生成命令为 `conda run -n agent python scripts/generate_figura_measurement_fixtures.py`，评测命令为 `conda run -n agent python scripts/evaluate_figura_measurements.py`；Gallery 按固定 Panel 范围通过生产授权工具路径执行，参考答案仅用于事后比较。本 Change 的实际通过情况见其 validation.md；不能用注册了十个 family 或工具调用成功代替精度验收。
+固定模拟样例及参考答案位于 `tests/fixtures/figura_measurement/`。生成命令为 `conda run -n agent python scripts/generate_figura_measurement_fixtures.py`，评测命令为 `conda run -n agent python scripts/evaluate_figura_measurements.py`；Gallery 按固定 Panel 范围通过生产授权工具路径执行，参考答案仅用于事后比较。[测量可靠性 change 的验证记录](../../openspec/figura/openspec/changes/archive/2026-10-07-improve-figura-chart-measurement-reliability/validation.md)列出已完成的回归结果；不能用注册了十个 family 或工具调用成功代替精度验收。
 
 新 Registry 的发布前提是旧绑定 Run 已终态。历史 schema_version 2 的 measure_chart 事实只用冻结历史 Schema 校验，原 JSON 保持不变，也不会投影为当前测量资源；冻结 Schema 不注册为工具定义，也不参与新调用执行。回滚前同样须确认新绑定 Run 全部终态，禁止改写历史事实。

@@ -1,4 +1,5 @@
 from __future__ import annotations
+from tests.figura_sources_support import make_durable_tool_executor
 
 from tests.figura_sources_support import (
     make_attachment_service,
@@ -248,7 +249,7 @@ def _commit_chart_render(app, store, session_id: str, run_id: str):
         provider_attempt_id=attempt.attempt_id,
         registry_version=registry.version,
     )
-    return DurableToolExecutor(store, registry).execute_pending(session_id, run_id)
+    return make_durable_tool_executor(store, registry).execute_pending(session_id, run_id)
 
 
 def _json(response):
@@ -416,7 +417,7 @@ def test_panel_routes_expose_only_committed_session_owned_pngs(tmp_path):
             provider_attempt_id=attempt.attempt_id,
             registry_version=registry.version,
         )
-        DurableToolExecutor(store, registry).execute_pending(first.session_id, run.run_id)
+        make_durable_tool_executor(store, registry).execute_pending(first.session_id, run.run_id)
 
         listed = app.handle("GET", f"/api/v1/sessions/{first.session_id}/panels", {})
         metadata = _json(listed)["panels"]
@@ -793,6 +794,12 @@ def test_timeline_ocr_detail_and_observation_are_session_scoped(tmp_path):
                 }
             ],
         }
+        from figura.tools.implementations.media_outputs import annotation_output
+        from figura.tools import ToolContext
+        output = annotation_output(ToolContext(run.run_id, session.session_id, 'call-ocr'), result,
+            app.attachments.resolve(session.session_id, attachment.attachment_id).image_bytes, 'ocr_annotation')
+        descriptor = output.images[0].descriptor()
+        app.execution_images._media.install(session.session_id, descriptor, output.images[0].image)
         current = coordinator.read_run_state(session.session_id, run.run_id)
         store.commit_tool_result(
             session_id=session.session_id,
@@ -804,6 +811,7 @@ def test_timeline_ocr_detail_and_observation_are_session_scoped(tmp_path):
                 "extract_text",
                 ToolOutcome.SUCCEEDED,
                 result=result,
+                attachments=(descriptor,),
             ),
         )
 

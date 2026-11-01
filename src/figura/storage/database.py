@@ -39,7 +39,6 @@ class SqliteDatabase:
                 raise RunError(RunErrorCode.STORAGE_ERROR) from None
 
     def _initialize(self) -> None:
-        self._backup_before_schema_migration()
         deadline = time.monotonic() + _BUSY_TIMEOUT_MS / 1000
         while True:
             try:
@@ -56,25 +55,6 @@ class SqliteDatabase:
                 time.sleep(.025)
             except sqlite3.Error:
                 raise RunError(RunErrorCode.STORAGE_ERROR) from None
-
-    def _backup_before_schema_migration(self) -> None:
-        if not self.database_path.exists():
-            return
-        try:
-            with sqlite3.connect(self.database_path) as source:
-                version = source.execute("PRAGMA user_version").fetchone()[0]
-                if version == 0 or version >= 13:
-                    return
-                backup_path = self.data_root / f"figura.sqlite3.pre-stream-v13-{os.getpid()}.bak"
-                if backup_path.exists():
-                    return
-                with sqlite3.connect(backup_path) as backup:
-                    source.backup(backup)
-                backup_path.chmod(0o600)
-        except sqlite3.Error:
-            raise RunError(RunErrorCode.STORAGE_ERROR) from None
-        except OSError:
-            raise RunError(RunErrorCode.STORAGE_ERROR) from None
 
     @contextmanager
     def _connection(self) -> Iterator[sqlite3.Connection]:

@@ -1,147 +1,97 @@
-"""Read authorized images referenced by a Run's resource catalog."""
-
+"""Resolve authorized committed media; normal reads never draw or repair images."""
 from __future__ import annotations
 
-import hashlib
-from collections.abc import Mapping
-from io import BytesIO
-
-from PIL import Image
-
 from figura.runtime.errors import RunError, RunErrorCode
-from figura.shared.image_limits import MAX_IMAGE_BYTES
+from figura.shared.media import ResourceImage, ToolImageAttachment
+from figura.shared.resource_refs import ImageResourceRef, ResourceRef
 from figura.sources.attachments import FiguraAttachmentService
 from figura.sources.chart_renders import FiguraChartRenderService
 from figura.sources.panels import FiguraPanelService
+from figura.sources.tool_media import FiguraToolMediaService, ToolMediaCommitter
 from figura.tools import ToolOutcome
-from figura.tools.measurements.visualization import render_measurement_overlay
-
-from .execution_resources import (
-    AttachmentContent,
-    ChartRenderContent,
-    ImageResourceRef,
-    MeasurementContent,
-    OcrContent,
-    PanelContent,
-    RunExecutionState,
-    ToolResourceRef,
-)
+from .execution_resources import AttachmentContent, PanelContent, RunExecutionState
 
 
 class RunExecutionImageReader:
-    __slots__ = ("_attachments", "_panels", "_chart_renders")
+    def __init__(self, attachments: FiguraAttachmentService, panels: FiguraPanelService,
+                 chart_renders: FiguraChartRenderService | None = None,
+                 media: FiguraToolMediaService | None = None) -> None:
+        self._attachments, self._panels, self._chart_renders = attachments, panels, chart_renders
+        self._media = media or FiguraToolMediaService(attachments.data_root)
 
-    def __init__(
-        self,
-        attachments: FiguraAttachmentService,
-        panels: FiguraPanelService,
-        chart_renders: FiguraChartRenderService | None = None,
-    ) -> None:
-        if not isinstance(attachments, FiguraAttachmentService) or not isinstance(panels, FiguraPanelService):
-            raise TypeError("invalid RunExecutionImageReader sources")
-        if chart_renders is not None and not isinstance(chart_renders, FiguraChartRenderService):
-            raise TypeError("chart_renders must be a FiguraChartRenderService")
-        object.__setattr__(self, "_attachments", attachments)
-        object.__setattr__(self, "_panels", panels)
-        object.__setattr__(self, "_chart_renders", chart_renders)
+    def media_committer(self, inventory) -> ToolMediaCommitter:
+        """Compose the neutral installer with this reader's full authorization path."""
+        def resolve(context, ref):
+            state = inventory(context.session_id, context.run_id)
+            descriptor = self.descriptor(context.session_id, state, ref)
+            return self.read_attachment(context.session_id, state, descriptor), descriptor
+        return ToolMediaCommitter(self._media, resolve, renders=self._chart_renders)
 
-    def __setattr__(self, name: str, value: object) -> None:
-        raise AttributeError("RunExecutionImageReader is immutable")
-
-    def read_source(
-        self,
-        session_id: str,
-        state: RunExecutionState,
-        ref: ImageResourceRef,
-    ) -> tuple[bytes, int, int]:
+    def read_source(self, session_id: str, state: RunExecutionState,
+                    ref: ImageResourceRef) -> tuple[bytes, int, int]:
         resource = state.get(ref)
-        if ref.kind == "attachment":
-            if not isinstance(resource.content, AttachmentContent) or resource.content.session_id != session_id:
+        if ref.kind == 'attachment':
+            content = resource.content
+            if not isinstance(content, AttachmentContent) or content.session_id != session_id:
                 raise RunError(RunErrorCode.INTEGRITY_ERROR)
-            block = self._attachments.resolve(session_id, ref.id)
-            if (
-                block.media_type != resource.content.media_type
-                or len(block.image_bytes) != resource.content.byte_count
-            ):
+            image = self._attachments.resolve(session_id, ref.id)
+            if image.media_type != content.media_type or len(image.image_bytes) != content.byte_count:
                 raise RunError(RunErrorCode.INTEGRITY_ERROR)
-            width, height = _image_dimensions(block.image_bytes)
-            return block.image_bytes, width, height
+        else:
+            content = resource.content
+            if not isinstance(content, PanelContent) or content.session_id != session_id:
+                raise RunError(RunErrorCode.INTEGRITY_ERROR)
+            record, image, _, _ = self._panels.resolve(session_id, ref.id)
+            if (record.run_id != content.run_id or record.source_attachment_id != content.source_attachment_id
+                    or record.name != content.name or record.points != content.points):
+                raise RunError(RunErrorCode.INTEGRITY_ERROR)
+        return image.image_bytes, image.width, image.height
 
-        if not isinstance(resource.content, PanelContent) or resource.content.session_id != session_id:
-            raise RunError(RunErrorCode.INTEGRITY_ERROR)
-        record, block, width, height = self._panels.resolve(session_id, ref.id)
-        if (
-            record.run_id != resource.content.run_id
-            or record.source_attachment_id != resource.content.source_attachment_id
-            or record.name != resource.content.name
-            or record.points != resource.content.points
-        ):
-            raise RunError(RunErrorCode.INTEGRITY_ERROR)
-        return block.image_bytes, width, height
-
-    def read(
-        self,
-        session_id: str,
-        state: RunExecutionState,
-        ref: ImageResourceRef | ToolResourceRef,
-    ) -> tuple[bytes, int, int]:
-        resource = state.get(ref)
+    def descriptor(self, session_id: str, state: RunExecutionState, ref: ResourceRef) -> ToolImageAttachment:
+        content = state.get(ref).content
         if isinstance(ref, ImageResourceRef):
-            return self.read_source(session_id, state, ref)
+            raw, _, _ = self.read_source(session_id, state, ref)
+            return ToolImageAttachment.describe(ref, 'original', ResourceImage.from_bytes(raw))
+        if ref.kind == 'chart_figure' or getattr(content, 'outcome', None) is not ToolOutcome.SUCCEEDED:
+            raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
+        attachments = getattr(content, 'attachments', ())
+        if len(attachments) != 1 or attachments[0].resource_ref != ref:
+            raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
+        return attachments[0]
 
-        content = resource.content
-        if ref.kind in {"ocr", "measurement"}:
-            if (
-                not isinstance(content, (OcrContent, MeasurementContent))
-                or content.outcome is not ToolOutcome.SUCCEEDED
-            ):
-                raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
-            if content.result is None or content.source_ref is None:
+    def read_attachment(self, session_id: str, state: RunExecutionState,
+                        descriptor: ToolImageAttachment) -> ResourceImage:
+        ref = descriptor.resource_ref
+        expected = self.descriptor(session_id, state, ref)
+        if expected != descriptor:
+            raise RunError(RunErrorCode.INTEGRITY_ERROR)
+        if isinstance(ref, ImageResourceRef):
+            raw, _, _ = self.read_source(session_id, state, ref)
+            image = ResourceImage.from_bytes(raw)
+        elif descriptor.image_kind in {'ocr_annotation', 'measurement_annotation'}:
+            # The source must still be authorized, but reading annotations does not reread/repaint it.
+            source_ref = getattr(state.get(ref).content, 'source_ref', None)
+            if source_ref is None:
                 raise RunError(RunErrorCode.INTEGRITY_ERROR)
-            image_bytes, source_width, source_height = self.read_source(session_id, state, content.source_ref)
-            image_size = content.result.get("image_size")
-            if (
-                not isinstance(image_size, Mapping)
-                or image_size.get("width") != source_width
-                or image_size.get("height") != source_height
-            ):
+            state.get(source_ref)
+            image = self._media.read(session_id, descriptor)
+        elif descriptor.image_kind == 'rendered' and self._chart_renders is not None:
+            raw, _, _ = self._chart_renders.resolve(ref.run_id, ref.call_id)
+            image = ResourceImage.from_bytes(raw)
+            result = state.get(ref).content.result
+            if (result.get('image_sha256') != descriptor.sha256 or result.get('byte_count') != descriptor.byte_count
+                    or result.get('width') != descriptor.width or result.get('height') != descriptor.height
+                    or result.get('media_type') != descriptor.media_type):
                 raise RunError(RunErrorCode.INTEGRITY_ERROR)
-            tool_name = "extract_text" if isinstance(content, OcrContent) else content.tool_name
-            try:
-                annotated = render_measurement_overlay(image_bytes, content.result, tool_name)
-            except (TypeError, ValueError, OSError):
-                raise RunError(RunErrorCode.INTEGRITY_ERROR) from None
-            if not annotated or len(annotated) > MAX_IMAGE_BYTES:
-                raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
-            width, height = _image_dimensions(annotated)
-            if (width, height) != (source_width, source_height):
-                raise RunError(RunErrorCode.INTEGRITY_ERROR)
-            return annotated, width, height
+        else:
+            raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
+        try:
+            descriptor.verify(image)
+        except ValueError:
+            raise RunError(RunErrorCode.INTEGRITY_ERROR) from None
+        return image
 
-        if ref.kind == "chart_render":
-            if not isinstance(content, ChartRenderContent) or content.outcome is not ToolOutcome.SUCCEEDED:
-                raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
-            if content.result is None or self._chart_renders is None:
-                raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
-            image_bytes, width, height = self._chart_renders.resolve(ref.run_id, ref.call_id)
-            result = content.result
-            if (
-                hashlib.sha256(image_bytes).hexdigest() != result.get("image_sha256")
-                or len(image_bytes) != result.get("byte_count")
-                or width != result.get("width")
-                or height != result.get("height")
-                or result.get("media_type") != "image/png"
-            ):
-                raise RunError(RunErrorCode.INTEGRITY_ERROR)
-            return image_bytes, width, height
-
-        raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
-
-
-def _image_dimensions(content: bytes) -> tuple[int, int]:
-    try:
-        with Image.open(BytesIO(content)) as image:
-            image.load()
-            return image.size
-    except (OSError, ValueError, SyntaxError, Image.DecompressionBombWarning, Image.DecompressionBombError):
-        raise RunError(RunErrorCode.INTEGRITY_ERROR) from None
+    def read(self, session_id: str, state: RunExecutionState, ref: ResourceRef) -> tuple[bytes, int, int]:
+        descriptor = self.descriptor(session_id, state, ref)
+        image = self.read_attachment(session_id, state, descriptor)
+        return image.image_bytes, image.width, image.height

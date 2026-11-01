@@ -1,10 +1,10 @@
 # Web：Local Gateway 与 React Figura
 
-> 更新日期：2026-10-19。[返回系统总览](../figura-implementation-overview.md)。范围：当前 `src/figura/gateway/`、`src/figura/bootstrap.py`、`frontend/src/api/figura/` 与 `frontend/src/FiguraApp.tsx` 实现；附件和 Panel 源模型归[Sources](sources.md)，Agent 派生清单归[Agent](agent.md)，本篇拥有 Web DTO 与公开路由合同。主规格见 [Gateway](../../openspec/figura/openspec/specs/figura-web-gateway/spec.md) 和 [React Client](../../openspec/figura/openspec/specs/figura-web-client/spec.md)。`connect-figura-web-frontend`、`add-figura-panel-image-tools`、`add-figura-cartesian-chart-measurements`、`add-figura-scoped-chart-observation`、`add-figura-chart-rendering` 与模块结构调整 change 均已归档。
+> 更新日期：2026-10-22。[返回系统总览](../figura-implementation-overview.md)。范围：当前 `src/figura/gateway/`、`src/figura/bootstrap.py`、`frontend/src/api/figura/` 与 `frontend/src/FiguraApp.tsx` 实现；附件和 Panel 源模型归[Sources](sources.md)，Agent 派生清单归[Agent](agent.md)，本篇拥有 Web DTO 与公开路由合同。主规格见 [Gateway](../../openspec/figura/openspec/specs/figura-web-gateway/spec.md) 和 [React Client](../../openspec/figura/openspec/specs/figura-web-client/spec.md)。`connect-figura-web-frontend`、`add-figura-panel-image-tools`、`add-figura-cartesian-chart-measurements`、`add-figura-scoped-chart-observation`、`add-figura-chart-rendering` 与模块结构调整 change 均已归档。
 
 ## 1. 职责与边界
 
-Local Gateway 是 Python 进程内的 HTTP/SSE 边界，不是第二套 Session 或 Run 存储。`bootstrap.py` 负责组装并注入 Runtime、Sources、Agent、Provider 与 Tools；`gateway/application.py` 负责 HTTP 请求处理和安全投影。它把 JSON/图片请求交给 Runtime、Sources、Agent 图像读取器与 ProviderFactory，再把有限的 Session、Run、事件、附件、已提交 Panel、ChartFigure 渲染摘要和 Run 工具时间线 DTO 返回给浏览器。Run 创建持久化后由有界 Dispatcher 异步提交给既有 Agent；Gateway handler 不直接请求模型。当前工作树 Gateway Registry 为 `figura-web-v10`，注册统一 `measure_chart` 与其他八个图像、历史和绘图工具；启动前检查并拒绝仍绑定 v9 的活动 Run。PNG 和成功 OCR/十类测量观察图通过只读内容路由懒加载，测量与渲染仍没有独立前端操作 API。离线测量回归由仓库脚本执行，不提供 Gateway/Web 评测工作区。工具时间线是基于 Runtime 已提交 ToolCall、Attempt、Result 事实构造的只读投影，不增加持久表或执行控制入口。
+Local Gateway 是 Python 进程内的 HTTP/SSE 边界，不是第二套 Session 或 Run 存储。`bootstrap.py` 负责组装并注入 Runtime、Sources、Agent、Provider 与 Tools；`gateway/application.py` 负责 HTTP 请求处理和安全投影。它把 JSON/图片请求交给 Runtime、Sources、Agent 图像读取器与 ProviderFactory，再把有限的 Session、Run、事件、附件、已提交 Panel、ChartFigure 渲染摘要和 Run 工具时间线 DTO 返回给浏览器。Run 创建持久化后由有界 Dispatcher 异步提交给既有 Agent；Gateway handler 不直接请求模型。当前工作树 Gateway Registry 为 `figura-web-v11`，注册统一 `measure_chart` 与其他八个图像、历史和绘图工具；启动前检查并拒绝仍绑定旧 Registry 的活动 Run。PNG 和成功 OCR/十类测量观察图通过只读内容路由懒加载，测量与渲染仍没有独立前端操作 API。离线测量回归由仓库脚本执行，不提供 Gateway/Web 评测工作区。工具时间线是基于 Runtime 已提交 ToolCall、Attempt、Result 事实构造的只读投影，不增加持久表或执行控制入口。
 
 React Figura mode 通过 `FiguraClient` 负责 HTTP/SSE，再由 `FiguraWorkspaceApi` 映射到现有工作区协议和共享组件。React 组件不直接访问 Gateway；ChartAgent 与 Mock client 模式仍由其原有客户端提供。此边界目前是本地网页接入，没有 Tauri shell 接入。
 
@@ -392,3 +392,9 @@ Web Gateway 投影运行输入/最终答案、安全生命周期、已提交 Pan
 ### Gateway 请求边界
 
 Run-create 完整 JSON 使用组合根注入的 `ExecutionPayloadLimits`，HTTP Content-Length 在读取前检查，应用内调用同样严格解码。图片上传仍使用 Sources 的单图 guard。health、Session/history/timeline/detail、SSE 读取只读取事实和安全投影，不调度或执行。重试等待仍为 `running`，事件身份保持 `runId:sequence`；不增加外部 retry/resume API。
+
+## 已提交媒体的展示边界
+
+当前工作树保留原 Session/Run/call 的观察图与 ChartRender URL。观察图路由从同一授权资源目录定位 ToolResultFact 的已提交描述，读取与 Agent 相同的已保存 PNG，并验证摘要；不再现场绘制标注。响应仍是 PNG、no-store 与既有安全错误，缺失/损坏图片不补绘。
+
+工具详情的 observationAvailable 需要成功且存在附件，迁移后的无媒体结果保持文本可读，图片入口不可用。时间线、DTO 和 SSE 不直接序列化完整业务结果、attachments、hint、Prompt、路径或字节。整会话删除协调包含 tool-media 暂存、回滚恢复和启动对账；前端协议和启动器未因本次后端改动调整。

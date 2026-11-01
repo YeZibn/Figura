@@ -1,4 +1,5 @@
 from __future__ import annotations
+from tests.figura_sources_support import make_durable_tool_executor
 
 from tests.figura_sources_support import make_attachment_service, make_panel_service, make_execution_image_reader
 
@@ -11,7 +12,8 @@ import pytest
 from PIL import Image
 
 from figura.sources.models import PanelPoint
-from figura.agent.execution_resources import ImageResourceRef, PanelContent
+from figura.shared.resource_refs import ImageResourceRef
+from figura.agent.execution_resources import (PanelContent)
 from figura.agent.execution_state import RunExecutionStateService
 from figura.providers import FinishReason, MODEL_IDS, ProviderFactory, ProviderId, ProviderResponse, ProviderToolCall
 from figura.runtime.coordinator import RunCoordinator
@@ -115,7 +117,7 @@ def test_decomposition_persists_ordered_independent_polygon_pngs(tmp_path) -> No
     ]
     _commit_tool_call(coordinator, session.session_id, run.run_id, registry, _decompose_call("decompose-1", attachment_id, proposals))
 
-    state = DurableToolExecutor(store, registry).execute_pending(session.session_id, run.run_id)
+    state = make_durable_tool_executor(store, registry).execute_pending(session.session_id, run.run_id)
     records = _panels(state_service.for_run(session.session_id, run.run_id))
 
     assert [content.name for _panel_id, content in records] == ["矩形区域", "三角区域"]
@@ -263,7 +265,7 @@ def test_decomposition_replay_reuses_panel_ids_after_tool_result_commit_failure(
         "points": [{"x": 0, "y": 0}, {"x": 1000, "y": 0}, {"x": 1000, "y": 1000}, {"x": 0, "y": 1000}],
     }])
     _commit_tool_call(coordinator, session.session_id, run.run_id, registry, call)
-    executor = DurableToolExecutor(store, registry, execution_lock=PerRunExecutionLock(store.data_root))
+    executor = make_durable_tool_executor(store, registry, execution_lock=PerRunExecutionLock(store.data_root))
     original_commit = FiguraRunStore.commit_tool_result
     fail_once = True
 
@@ -300,7 +302,7 @@ def test_invalid_polygon_is_rejected_without_creating_any_panel(tmp_path) -> Non
     }])
     _commit_tool_call(coordinator, session.session_id, run.run_id, registry, call)
 
-    state = DurableToolExecutor(store, registry).execute_pending(session.session_id, run.run_id)
+    state = make_durable_tool_executor(store, registry).execute_pending(session.session_id, run.run_id)
 
     result = next(fact.payload for fact in state.tool_facts if fact.fact_kind is ToolFactKind.TOOL_RESULT)
     assert result.outcome is ToolOutcome.FAILED

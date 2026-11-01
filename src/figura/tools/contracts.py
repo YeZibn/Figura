@@ -12,6 +12,8 @@ from typing import Any, TypeAlias
 
 from figura.shared.json_schema import JsonValueError, canonical_json_dumps, normalize_json_value
 from figura.shared.payloads import PayloadError, opaque_call_id, utf8_size
+from figura.shared.media import ImageKind, MediaProvenance, ResourceImage, ToolImageAttachment, attachment_to_dict, attachment_from_dict
+from figura.shared.resource_refs import ResourceRef
 from .limits import (
     MAX_ERROR_MESSAGE_BYTES,
     MAX_ERROR_POINTER_BYTES,
@@ -20,7 +22,7 @@ from .limits import (
 
 _TOOL_NAME = re.compile(r"^[A-Za-z0-9_-]+$")
 _ERROR_CODE = re.compile(r"^[a-z][a-z0-9_.-]{0,63}$")
-ToolHandler: TypeAlias = Callable[["ToolContext", Mapping[str, Any]], object]
+ToolHandler: TypeAlias = Callable[["ToolContext", Mapping[str, Any]], "ToolOutput"]
 
 
 class ReplayEffect(str, Enum):
@@ -153,14 +155,44 @@ class ToolOutcomeUnknown(Exception):
 
 
 @dataclass(frozen=True)
+class ToolImageOutput:
+    resource_ref: ResourceRef
+    image_kind: ImageKind
+    image: ResourceImage = field(repr=False)
+    provenance: MediaProvenance = "recorded"
+
+    def descriptor(self) -> ToolImageAttachment:
+        if not isinstance(self.image, ResourceImage):
+            raise ValueError("invalid image output")
+        return ToolImageAttachment.describe(self.resource_ref, self.image_kind, self.image, self.provenance)
+
+
+@dataclass(frozen=True)
+class ToolOutput:
+    result: Mapping[str, Any] = field(repr=False)
+    images: tuple[ToolImageOutput, ...] = field(default=(), repr=False)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.result, Mapping) or not isinstance(self.images, tuple):
+            raise ValueError("invalid tool output")
+        if any(not isinstance(image, ToolImageOutput) for image in self.images):
+            raise ValueError("invalid tool media output")
+
+
+@dataclass(frozen=True)
 class ToolExecutionResult:
     call_id: str
     tool_name: str
     outcome: ToolOutcome
     result: Mapping[str, Any] | None = field(default=None, repr=False)
     error: ToolExecutionError | None = None
+    attachments: tuple[ToolImageAttachment, ...] = ()
 
     def __post_init__(self) -> None:
+        if not isinstance(self.attachments, tuple) or any(not isinstance(a, ToolImageAttachment) for a in self.attachments):
+            raise ValueError("invalid tool attachments")
+        for attachment in self.attachments:
+            attachment_from_dict(attachment_to_dict(attachment))
         _validate_call_id(self.call_id)
         if not isinstance(self.tool_name, str) or not _TOOL_NAME.fullmatch(self.tool_name):
             raise ValueError("tool execution result name is invalid")
@@ -180,12 +212,13 @@ class ToolExecutionResult:
             except (JsonValueError, UnicodeEncodeError):
                 raise ValueError("successful result must contain bounded JSON data") from None
             object.__setattr__(self, "result", freeze_json_value(normalized))
-        elif self.result is not None or not isinstance(self.error, ToolExecutionError):
+        elif self.result is not None or not isinstance(self.error, ToolExecutionError) or self.attachments:
             raise ValueError("failed result must contain only an error")
         try:
             canonical_json_dumps({"call_id": self.call_id, "tool_name": self.tool_name,
                                   "outcome": self.outcome.value, "result": self.result,
-                                  "error": vars(self.error) if self.error else None})
+                                  "error": vars(self.error) if self.error else None,
+                                  "attachments": [attachment_to_dict(a) for a in self.attachments]})
         except JsonValueError:
             raise ValueError("complete tool observation exceeds its payload guard") from None
 
@@ -205,6 +238,7 @@ class ToolDefinition:
     result_schema: Mapping[str, Any]
     replay_effect: ReplayEffect | str
     handler: ToolHandler = field(repr=False, compare=False)
+    produces_images: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not _TOOL_NAME.fullmatch(self.name):
@@ -220,6 +254,8 @@ class ToolDefinition:
         except (TypeError, ValueError):
             raise ToolDefinitionError("tool replay_effect is unsupported") from None
         object.__setattr__(self, "replay_effect", replay_effect)
+        if type(self.produces_images) is not bool:
+            raise ToolDefinitionError("produces_images must be a boolean")
         if not _is_sync_handler(self.handler):
             raise ToolDefinitionError("tool handler must be a synchronous callable accepting context and arguments")
         object.__setattr__(self, "parameters_schema", _freeze_schema(self.parameters_schema))

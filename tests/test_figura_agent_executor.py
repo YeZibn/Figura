@@ -1,4 +1,6 @@
 from __future__ import annotations
+from tests.figura_sources_support import make_durable_tool_executor
+from figura.tools import ToolOutput
 
 from tests.figura_sources_support import make_attachment_service, make_panel_service, make_execution_image_reader
 
@@ -50,7 +52,7 @@ def _registry(
             calls.append(context.call_id)
         if arguments["value"] in fail_values:
             raise ToolFailure("inspection_failed", "无法检查该值。", retryable=True)
-        return {"value": arguments["value"]}
+        return ToolOutput({"value": arguments["value"]})
 
     return ToolRegistry(
         "registry-v1",
@@ -193,7 +195,13 @@ class _FakeClient:
             f"FIGURA_{self.provider_id.value.upper()}_BASE_URL": "https://provider.example.test/v1",
         }, transport_factory=lambda _profile: None)
         factory.payload_limits = self.payload_limits
-        prepared = factory.create(self.provider_id, self.model_id).prepare(request, frozen_options=frozen_options, frozen_timeout_policy=frozen_timeout_policy, estimate_context=estimate_context)
+        client = factory.create(self.provider_id, self.model_id)
+        # A test protocol peer supports native tool images. This does not enable
+        # the production Qwen/MiMo policies, whose capability refusals have separate tests.
+        class NativeTestPolicy(type(client._policy)):
+            supports_tool_result_images = True
+        client._policy = NativeTestPolicy(client._profile)
+        prepared = client.prepare(request, frozen_options=frozen_options, frozen_timeout_policy=frozen_timeout_policy, estimate_context=estimate_context)
         return prepared
 
     def dispatch(self, prepared, *, on_stream_event=None):
@@ -248,7 +256,7 @@ def _agent(store, coordinator, registry, provider_factory, request_builder=None)
         request_builder = AgentRequestBuilder(
             execution_state, image_reader
         )
-    tool_executor = DurableToolExecutor(store, registry)
+    tool_executor = make_durable_tool_executor(store, registry)
     return AgentExecutor(
         coordinator,
         provider_factory,
@@ -486,23 +494,20 @@ def test_loaded_image_failure_stops_before_following_provider_attempt(
         ),
         _response(content="完成。"),
     ])
-    if failure == "over-limit":
-        monkeypatch.setattr(observation_module, "MAX_IMAGE_BYTES", 1)
-    else:
-        original_resolve = FiguraAttachmentService.resolve
-
-        def resolve_then_damage(service, session_id, source_id):
-            image = original_resolve(service, session_id, source_id)
-            if failure == "missing":
-                image_path.unlink()
-            elif failure == "unreadable":
-                image_path.unlink()
-                image_path.symlink_to(tmp_path / "outside.bin")
-            else:
-                image_path.write_bytes(b"x" * len(image_bytes))
-            return image
-
-        monkeypatch.setattr(FiguraAttachmentService, "resolve", resolve_then_damage)
+    original_commit = store.commit_tool_result
+    def commit_then_damage(**kwargs):
+        result = original_commit(**kwargs)
+        if failure == "over-limit":
+            monkeypatch.setattr(provider_validation, "MAX_IMAGE_BYTES", 1)
+        elif failure == "missing":
+            image_path.unlink()
+        elif failure == "unreadable":
+            image_path.unlink()
+            image_path.symlink_to(tmp_path / "outside.bin")
+        else:
+            image_path.write_bytes(b"x" * len(image_bytes))
+        return result
+    monkeypatch.setattr(store, "commit_tool_result", commit_then_damage)
     agent = _agent(store, coordinator, registry, factory, builder)
 
     state = agent.execute(session.session_id, run.run_id)
@@ -546,8 +551,8 @@ def test_agent_runs_ordered_tool_round_then_uses_committed_observation(tmp_path)
         "call-2",
     ]
     assert [message.content for message in tool_messages] == [
-        '{"outcome":"succeeded","result":{"value":1}}',
-        '{"outcome":"succeeded","result":{"value":2}}',
+        '{"attachments":[],"images_loaded":false,"outcome":"succeeded","result":{"value":1}}',
+        '{"attachments":[],"images_loaded":false,"outcome":"succeeded","result":{"value":2}}',
     ]
     assert len(state.provider_attempts) == 2
 
@@ -586,7 +591,7 @@ def test_agent_resumes_after_response_or_completed_tool_batch(
     if complete_tool_batch_before_agent:
         # Model a separate process finishing the durable tool batch before the Agent
         # owner is restarted at the next MODEL checkpoint.
-        tool_state = DurableToolExecutor(reopened_store, registry).execute_pending(
+        tool_state = make_durable_tool_executor(reopened_store, registry).execute_pending(
             session.session_id, run.run_id, max_calls=1
         )
         assert tool_state.checkpoint.next_action.action_kind is ActionKind.MODEL
@@ -635,8 +640,7 @@ def test_agent_passes_known_tool_failure_as_observation_without_repeating_call(t
     )
     assert observation.tool_call_id == "call-failed"
     assert observation.content == (
-        '{"error":{"code":"inspection_failed","message":"无法检查该值。",'
-        '"retryable":true},"outcome":"failed"}'
+        '{"attachments":[],"error":{"code":"inspection_failed","message":"无法检查该值。","retryable":true},"images_loaded":false,"outcome":"failed"}'
     )
 
 
@@ -1110,7 +1114,7 @@ def test_historical_resolved_tool_registry_mismatch_is_kept_as_inert_history(tmp
     _commit_tool_response(
         coordinator, session.session_id, prior.run_id, historical_registry, call_response
     )
-    DurableToolExecutor(store, historical_registry).execute_pending(
+    make_durable_tool_executor(store, historical_registry).execute_pending(
         session.session_id, prior.run_id
     )
     _commit_tool_response(

@@ -1,5 +1,7 @@
 """Durable policy integration; all external calls use deterministic transports."""
 from __future__ import annotations
+from tests.figura_sources_support import open_legacy_schema_for_test
+from tests.figura_sources_support import make_durable_tool_executor
 
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
@@ -345,15 +347,16 @@ def test_schema12_stream_migration_is_atomic_and_preserves_legacy_rows(tmp_path,
         raise RuntimeError("injected migration failure")
     monkeypatch.setattr(schema, "_validate_migration", fail)
     with pytest.raises(RuntimeError):
-        FiguraRunStore(tmp_path)
+        open_legacy_schema_for_test(tmp_path)
     with sqlite3.connect(store.database_path) as connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 12
         assert connection.execute("SELECT 1 FROM sqlite_master WHERE name = 'execution_payload_metadata'").fetchone() is None
     monkeypatch.setattr(schema, "_validate_migration", validate)
-    upgraded = FiguraRunStore(tmp_path)
+    upgraded = open_legacy_schema_for_test(tmp_path)
     assert upgraded.read_run_state(session.session_id, run.run_id) == before
     with sqlite3.connect(store.database_path) as connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 13
+
 
 
 def test_schema12_migration_keeps_run_active_after_resolved_retry(tmp_path):
@@ -428,7 +431,7 @@ def test_schema12_migration_keeps_run_active_after_resolved_retry(tmp_path):
         connection.execute("PRAGMA user_version = 12")
         connection.commit()
 
-    migrated = FiguraRunStore(tmp_path).read_run_state(session.session_id, run.run_id)
+    migrated = open_legacy_schema_for_test(tmp_path).read_run_state(session.session_id, run.run_id)
     assert migrated.run.status is RunStatus.RUNNING
     assert migrated.checkpoint.next_action.action_kind is ActionKind.MODEL
     assert [item.status.value for item in migrated.provider_attempts] == [
@@ -439,12 +442,13 @@ def test_schema12_migration_keeps_run_active_after_resolved_retry(tmp_path):
     assert all(item.purpose == "historical_import" for item in migrated.provider_requests)
 
 
+
 def test_concurrent_first_open_and_migration_has_consistent_schema(tmp_path):
     with ThreadPoolExecutor(4) as pool:
         stores = list(pool.map(lambda _: FiguraRunStore(tmp_path), range(4)))
     for store in stores:
         with store.database.read() as connection:
-            assert connection.execute("PRAGMA user_version").fetchone()[0] == 13
+            assert connection.execute("PRAGMA user_version").fetchone()[0] == 14
             assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
 
 
@@ -577,7 +581,7 @@ def test_multiple_processes_first_open_share_one_atomic_migration(tmp_path):
     from concurrent.futures import ProcessPoolExecutor
     with ProcessPoolExecutor(3, mp_context=multiprocessing.get_context("spawn")) as pool:
         results = list(pool.map(_open_store_process, [str(tmp_path)] * 3))
-    assert results == [(13, [])] * 3
+    assert results == [(14, [])] * 3
 
 
 def test_multiple_retry_waiters_use_no_queue_capacity_and_ready_run_completes(tmp_path):
@@ -655,7 +659,7 @@ def test_native_tool_stop_keeps_owner_and_rejects_takeover_until_result(tmp_path
         assert entered.wait(5)
         co.request_stop(session.session_id, run.run_id)
         with pytest.raises(RunError):
-            DurableToolExecutor(store, registry).recover_unknown_attempt(session.session_id, run.run_id)
+            make_durable_tool_executor(store, registry).recover_unknown_attempt(session.session_id, run.run_id)
         with pytest.raises(RunError):
             with store.database.write() as connection:
                 store.begin_session_deletion(connection, session.session_id)

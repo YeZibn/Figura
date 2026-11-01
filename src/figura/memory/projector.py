@@ -225,7 +225,10 @@ def _project_run_messages(
                     run_ordinal=run.ordinal,
                     source_tool_sequence=result_sequence,
                     tool_call_id=call.call_id,
-                    content=tool_observation(result),
+                    outcome=result.outcome,
+                    result=result.result,
+                    error=result.error,
+                    attachments=result.attachments,
                 )
             )
 
@@ -242,29 +245,7 @@ def _project_run_messages(
     return tuple(messages)
 
 
-def tool_observation(result: ToolResultFact) -> str:
-    """Encode a committed tool result with the Agent's bounded observation shape."""
-    if not isinstance(result, ToolResultFact):
-        raise RunError(RunErrorCode.INTEGRITY_ERROR)
-    if result.outcome.value == "succeeded":
-        if result.error is not None or result.result is None:
-            raise RunError(RunErrorCode.INTEGRITY_ERROR)
-        payload: dict[str, object] = {
-            "outcome": result.outcome.value,
-            "result": result.result,
-        }
-    else:
-        if result.error is None or result.result is not None:
-            raise RunError(RunErrorCode.INTEGRITY_ERROR)
-        error: dict[str, object] = {
-            "code": result.error.code,
-            "message": result.error.message,
-            "retryable": result.error.retryable,
-        }
-        if result.error.field_path is not None:
-            error["field_path"] = result.error.field_path
-        payload = {"outcome": result.outcome.value, "error": error}
-    try:
-        return canonical_json_dumps(payload)
-    except (JsonValueError, TypeError, ValueError):
-        raise RunError(RunErrorCode.INTEGRITY_ERROR) from None
+def tool_observation(result) -> str:
+    """Serialize canonical business observations and descriptors, never pixels or hints."""
+    from figura.tools.observation import observation_json
+    return observation_json(result)

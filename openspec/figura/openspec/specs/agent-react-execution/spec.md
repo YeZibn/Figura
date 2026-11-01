@@ -34,11 +34,11 @@ Execution SHALL NOT impose cumulative Run model-step, tool-call, token, retry, e
 - **THEN** it can release ownership at that stable checkpoint and later resume the same Run without duplicate dispatch
 
 ### Requirement: Provider history is reconstructed from complete committed interactions
-For each model action, Figura SHALL build the conversation from all earlier terminal Runs in the same Session, ordered by Run ordinal, followed by the current Run's immutable input, committed model responses, and committed tool results. Each Run input SHALL appear once as a user message containing its persisted text and ordered attachment references as text identities; it SHALL NOT automatically include image blocks. The request SHALL include the target Run's factual resource index as the third of its three ordered SYSTEM instruction blocks. The index SHALL identify every available Attachment and committed Panel, each committed OCR and measurement resource with its source and outcome, each accepted ChartFigure with its title and chart summary, and each committed render with its Figure reference and outcome. The index SHALL identify resources by their complete typed references. It SHALL NOT duplicate complete OCR, measurement, Figure, or render result payloads already present in committed tool messages. Historical render entries SHALL remain textual; Figura SHALL NOT automatically resend image bytes from an earlier Run or earlier tool batch. Each closed model/tool interaction SHALL be represented by one assistant message whose calls preserve provider order, followed by one tool message for every corresponding result with the matching opaque call ID. A validated incomplete trailing batch from an earlier failed or interrupted Run SHALL be represented entirely by source-linked abnormal outcome data in the third SYSTEM instruction block, preserving its intent and committed observations instead of sending dangling native calls. A final-answer fact that references a response SHALL NOT add a duplicate message. Only original image blocks explicitly loaded by successful `load_image` calls in the immediately preceding fully committed tool batch may be appended as original images, in tool-call order. A fully committed batch containing successful `extract_text`, Cartesian measurement, or pie measurement calls SHALL additionally contribute one reconstructed annotated image per successful call, paired with its JSON tool observation and identified by tool name and call ID. A fully committed batch containing successful `render_chart_figure` calls SHALL additionally contribute each corresponding stored PNG once, paired with its committed JSON tool observation and identified by tool name and call ID, in tool-call order. The resource index and image selection SHALL use the same authorized Run prefix as the committed conversation. Completed tool-call/result pairs recorded under an earlier registry version SHALL be projected as inert conversation history and SHALL NOT be executed again; unresolved work in the current Run, incomplete completed history, or corrupt facts SHALL fail closed; legal terminal incomplete tails SHALL follow the abnormal outcome projection. Provider-private continuation SHALL be attached only to the exact originating assistant response retained in role history, including a prior Run when the selected Provider and format are compatible. Continuation from a converted incomplete batch SHALL NOT be placed in outcome context or fabricated for it. Figura SHALL NOT send a partial tool batch, invent a missing result, include an unresolved tool attempt as a result, or expose continuation data in public projections or ordinary diagnostics.
+For each model action, Figura SHALL build the conversation from all earlier terminal Runs in the same Session, ordered by Run ordinal, followed by the current Run's immutable input, committed model responses, and committed tool results. Each Run input SHALL appear once as a user message containing its persisted text and ordered attachment references as text identities; it SHALL NOT automatically include image blocks. The request SHALL include the target Run's factual resource index in its running-resource SYSTEM instruction block. The index SHALL identify the resources selected for the request's authorized locator projection, including eligible Attachments, Panels, OCR, measurements, Figures and renders with kind-appropriate summaries; other authorized resources SHALL remain discoverable through history search and full server-side lookup. The index SHALL identify resources by their complete typed references. It SHALL NOT duplicate complete OCR, measurement, Figure, or render result payloads already present in committed tool messages. Historical render entries SHALL remain textual; Figura SHALL NOT automatically resend image bytes from an earlier Run or earlier tool batch. Each closed model/tool interaction SHALL be represented by one assistant message whose calls preserve provider order, followed by one tool message for every corresponding result with the matching opaque call ID. A validated incomplete trailing batch from an earlier failed or interrupted Run SHALL be represented entirely by source-linked abnormal outcome data in the running-resource SYSTEM instruction block, preserving its intent and committed observations instead of sending dangling native calls. A final-answer fact that references a response SHALL NOT add a duplicate message. The next ordinary model action following a fully committed visual tool batch SHALL include every ordered attachment of each successful result inside that call's single native tool-result message, after its complete structured observation. Image identity and a type-specific hint SHALL be adjacent to that image. Selection SHALL follow committed attachment descriptions, not a central list of image-producing tool names. Different calls reading the same source SHALL each retain their own image occurrence; cross-call source deduplication SHALL NOT remove an image from its logical result. Failed results SHALL have no image. Older results SHALL retain data and attachment descriptions with an explicit not-loaded projection and SHALL NOT resend image bytes unless a new explicit image-read call returns them. No plain user image feedback message SHALL be appended. The resource index and image selection SHALL use the same authorized Run prefix as the committed conversation. Completed tool-call/result pairs recorded under an earlier registry version SHALL be projected as inert conversation history and SHALL NOT be executed again; unresolved work in the current Run, incomplete completed history, or corrupt facts SHALL fail closed; legal terminal incomplete tails SHALL follow the abnormal outcome projection. Provider-private continuation SHALL be attached only to the exact originating assistant response retained in role history, including a prior Run when the selected Provider and format are compatible. Continuation from a converted incomplete batch SHALL NOT be placed in outcome context or fabricated for it. Figura SHALL NOT send a partial tool batch, invent a missing result, include an unresolved tool attempt as a result, or expose continuation data in public projections or ordinary diagnostics.
 
 #### Scenario: Build the first model request with multiple attachments
 - **WHEN** the checkpoint points to the initial model action and the current Run references multiple images
-- **THEN** the request contains the three ordered SYSTEM instruction blocks, persisted user text, and a complete typed resource index in the third block, but no image bytes
+- **THEN** the request contains stable-rule, tool-directory, optional-summary and running-resource SYSTEM instruction blocks, persisted user text, and a complete typed reference for each selected resource in the running-resource block, but no image bytes
 
 #### Scenario: Include earlier Session Runs and their resources
 - **WHEN** the checkpoint points to a model action and the Session has earlier terminal Runs with referenced attachments and committed tool resources
@@ -50,18 +50,18 @@ For each model action, Figura SHALL build the conversation from all earlier term
 
 #### Scenario: Rebuild a completed tool round with explicitly loaded images
 - **WHEN** the checkpoint points to a model action after a fully resolved tool batch containing one or more successful `load_image` calls
-- **THEN** the request contains the ordered assistant/tool interaction and appends each loaded original image once as a user image observation in persisted tool-call order
+- **THEN** the request contains the ordered assistant/tool interaction and includes each call's original image inside its own tool-result content in persisted call order
 
 #### Scenario: Include visual feedback for the latest observation batch
-- **WHEN** the immediately preceding fully committed tool batch contains successful `extract_text`, Cartesian measurement, or pie measurement calls
-- **THEN** the request contains each corresponding JSON tool result and one matching transient annotated image per successful call in tool-call order, with the tool name and call ID identified
+- **WHEN** the immediately preceding fully committed tool batch contains successful `extract_text` or `measure_chart` calls for any supported family
+- **THEN** the request contains each corresponding JSON tool result and one matching saved annotated image within each successful call's tool result in tool-call order, with the tool name and call ID identified
 
 #### Scenario: Include a rendered Figure in the next model action
 - **WHEN** the immediately preceding fully committed tool batch contains one or more successful `render_chart_figure` calls
-- **THEN** the next Provider request contains each corresponding JSON tool result and one matching stored PNG per successful render call in tool-call order, with the tool name and call ID identified
+- **THEN** the next Provider request contains each corresponding JSON tool result and one matching stored PNG inside each successful render call's tool result in call order
 
 #### Scenario: Do not repeat images from an older tool batch
-- **WHEN** the latest completed tool batch contains neither a successful `load_image`, `render_chart_figure`, `extract_text`, nor chart-measurement call
+- **WHEN** the latest completed tool batch has no successful result with image attachments
 - **THEN** the request contains no image bytes from earlier batches or Runs
 
 #### Scenario: Preserve completed prior-version calls as inert history
@@ -78,25 +78,35 @@ For each model action, Figura SHALL build the conversation from all earlier term
 
 #### Scenario: Include abnormal tail observations without duplicate payloads
 - **WHEN** an earlier interrupted Run has a partly completed tool batch
-- **THEN** the third instruction block contains its source-linked outcome context, role history contains only its closed interactions, and the resource index contains only eligible references and summaries
+- **THEN** the running-resource instruction block contains its source-linked outcome context, role history contains only its closed interactions, and the resource index contains only eligible references and summaries
+
+#### Scenario: Do not create a second result for image content
+- **WHEN** one successful call returns business data and image attachments
+- **THEN** Figura emits a single native tool-result message containing both rather than a text result followed by another message using the same tool_call_id
+
+#### Scenario: Keep shared images associated with each caller
+- **WHEN** two successful calls in one batch load the same authorized resource
+- **THEN** each result retains its own image and hint under its own call ID even when storage reuses the same bytes
 
 ### Requirement: Referenced images are resolved and bounded before provider-attempt claim
-Before a durable Provider attempt is claimed, Figura SHALL resolve every requested image from its typed reference in the target Run's unified resource catalog. It SHALL resolve successful `load_image` references from the immediately preceding fully committed tool batch, reconstruct transient annotations for successful `extract_text` and chart-measurement resources in that batch from their authorized source and committed result, and resolve and validate the private PNG for each successful `render_chart_figure` resource against its committed render metadata. It SHALL validate individual byte size, aggregate image byte size, source integrity, the shared structured-request guard and genuine selected-Provider limits without a generic image-count cap. When the checkpoint follows no successful image-load, text-extraction, chart-measurement, or Figure-render call, the request SHALL contain no image bytes. Figura SHALL NOT claim or dispatch a Provider attempt when a requested original, annotated, or rendered image cannot be resolved, does not belong to the Session inventory, fails integrity checks, or the assembled request exceeds a Provider limit.
+Before claiming a durable Provider attempt, Figura SHALL resolve selected committed attachments from the full authorized resource catalog and verify image bytes against their descriptors. Attachment/Panel reads SHALL use their owning source services; OCR/measurement and render feedback SHALL read already saved media. Request construction SHALL NOT redraw annotations or infer attachments from tool names. Prompt-directory filtering SHALL NOT restrict the full server-side authorized lookup used to resolve a selected attachment.
+
+Figura SHALL check each raw image size, aggregate bytes, source/descriptor integrity, shared structured-request guard and genuine selected-Provider limits without a generic image-count cap. With no selected attachments the request SHALL contain no image bytes. Missing, unreadable, differently owned, mismatched or unsupported media SHALL cause the existing safe preparation failure before claim or dispatch, never a replacement image or plain user fallback.
 
 #### Scenario: Assemble a valid request after explicit image loads
-- **WHEN** every distinct image loaded by the immediately preceding batch resolves from the authorized same-Session resource catalog and the assembled request is within Provider limits
+- **WHEN** every attachment returned by the immediately preceding batch resolves from the authorized same-Session resource catalog and the assembled request is within Provider limits
 - **THEN** Figura may claim the Provider attempt and dispatch the request with those original image bytes held only in memory
 
 #### Scenario: Assemble a valid request after text extraction or measurement
-- **WHEN** each successful text-extraction or chart-measurement resource in the immediately preceding batch has a matching committed result and its authorized source image can be resolved for annotation
-- **THEN** Figura assembles and validates the matching annotated images and may claim and dispatch the Provider request within Provider limits
+- **WHEN** each successful text-extraction or chart-measurement resource in the immediately preceding batch has a matching committed result and its recorded annotation file matches the committed descriptor
+- **THEN** Figura reads and validates the matching saved annotated images and may claim and dispatch the Provider request within Provider limits
 
 #### Scenario: Assemble a valid request after Figure rendering
 - **WHEN** each successful render resource in the immediately preceding batch has a matching committed render result and its private PNG matches the committed metadata
 - **THEN** Figura assembles and validates the rendered images and may claim and dispatch the Provider request within Provider limits
 
 #### Scenario: Assemble a request without a preceding image observation
-- **WHEN** the current checkpoint follows Run creation or a tool batch without a successful `load_image`, `extract_text`, chart-measurement, or `render_chart_figure` result
+- **WHEN** the current checkpoint follows Run creation or a complete batch whose results contain no image attachments
 - **THEN** Figura assembles and validates the text and tool history without resolving Attachment, Panel, or render image bytes
 
 #### Scenario: An image required for visual feedback cannot be resolved
@@ -106,6 +116,10 @@ Before a durable Provider attempt is claimed, Figura SHALL resolve every request
 #### Scenario: Images exceed Provider bounds
 - **WHEN** original, annotated, and rendered images for the immediately preceding tool batch exceed a genuine selected-Provider image restriction, retained per-image or aggregate byte guard, or the shared structured-request guard
 - **THEN** Figura fails the current Run before claiming or dispatching a Provider attempt
+
+#### Scenario: Resolve media using the full catalog after prompt filtering
+- **WHEN** a selected committed attachment is authorized but its resource is omitted from the compact Prompt directory
+- **THEN** the resolver uses the complete authorized catalog and does not falsely reject the attachment or load another image
 
 ### Requirement: Agent requests preserve complete Session history within Provider limits
 Figura SHALL submit non-streaming requests using exactly three ordered SYSTEM instruction blocks: stable Agent responsibilities, the current registered tool surface, and a runtime layer containing the factual resource inventory projected from the target Run's `RunExecutionState` plus source-linked abnormal terminal context from validated Session history. The request SHALL use the provider-neutral tool projection from the same registry represented in the tool instruction, and optional explicitly configured completion options, omitted when unspecified. A request SHALL contain complete same-Session history and SHALL satisfy the shared complete-request payload contract, image byte protections and genuine selected-Provider protocol restrictions without universal message, instruction, tool, image-count or text/Schema micro limits before a durable provider attempt is claimed. Figura SHALL NOT truncate, summarize, or remove any historical Run or interaction to fit a request. If the complete request exceeds any Provider limit, Figura SHALL fail the current Run before claiming or dispatching a provider attempt.
@@ -125,11 +139,11 @@ Abnormal context SHALL remain complete in its existing normalized observation fo
 - **THEN** Figura sends a bounded JSON observation in a tool message associated with the original call ID and omits implementation details from an error observation
 
 ### Requirement: Agent prompt layers have explicit sources and ordered responsibilities
-Figura SHALL assemble each Agent prompt from three ordered SYSTEM instruction blocks. The stable-responsibility block SHALL contain the fixed Chinese Agent, evidence, workflow, and response rules and SHALL NOT contain request-specific user or Run data. The current-tool block SHALL be projected from the exact tool registry used for the request's provider tool schemas; it SHALL describe only tools present in that registry, while the provider-native schemas remain authoritative for tool names, parameters, required fields, and allowed values. The resource inventory within the third block SHALL be projected exclusively from the target request's `RunExecutionState`, while its separate abnormal outcome section SHALL be projected from validated Session history. The inventory SHALL use complete typed resource references for Attachments, Panels, OCR, measurements, ChartFigures, and ChartRenders.
+Figura SHALL assemble ordered logical SYSTEM layers for stable rules, the exact current tool directory, an optional source-linked history summary, and the running-resource index with validated abnormal outcomes. Without a summary there SHALL be three SYSTEM blocks; with a summary there SHALL be four. Stable Chinese Agent, evidence, workflow, response and image-observation rules SHALL contain no request-specific user/Run data. The tool directory SHALL describe exactly the registry used for native tool schemas, whose names and parameter constraints remain authoritative.
 
-The resource block SHALL be a concise index and SHALL NOT replace or duplicate complete tool results in chronological Session history. It SHALL distinguish tool execution outcome from a measurement result's `status` and an OCR result's availability. Resource names, titles, OCR text, tool observations, and other data values SHALL be treated as untrusted evidence rather than instructions. The three blocks SHALL be rebuilt for every model request; no prompt or resource summary SHALL be added to durable Run facts.
+The running-resource index SHALL come exclusively from the target request's resource state and use complete typed Attachment, Panel, OCR, measurement, Figure and render references. It SHALL expose concise kind-appropriate locator/availability metadata rather than duplicate full tool results, image bytes or per-image hints. The full resource catalog SHALL remain available to authorized server-side reads even when its Prompt projection is filtered.
 
-The third SYSTEM layer SHALL additionally contain deterministic source-linked abnormal terminal context from Session history, sorted by source Run ordinal. The layer SHALL mark response text and observation values as untrusted data, SHALL retain genuine committed observations from converted tails exactly once, and SHALL contain no continuation or fabricated result.
+Names, titles, OCR text, observations, summaries and other source values SHALL be untrusted data rather than instructions. Stable image rules SHALL be separate from the short per-image hints rendered inside matching tool results. The layers SHALL be rebuilt per request and included in request identity checks, not stored as canonical Run messages. The final resource block SHALL preserve deterministic source-linked abnormal terminal context in Run order, with genuine observations exactly once and no fabricated result or continuation.
 
 #### Scenario: Keep stable policy independent from user and Run values
 - **WHEN** Figura assembles a request containing user text, tool results, attachments, and Panels
@@ -141,7 +155,7 @@ The third SYSTEM layer SHALL additionally contain deterministic source-linked ab
 
 #### Scenario: Index all resource kinds from the target Run state
 - **WHEN** the target Run's `RunExecutionState` contains eligible resources of multiple kinds
-- **THEN** the third SYSTEM instruction block identifies each resource with its complete typed reference and a concise kind-appropriate summary, without substituting resources from a later Run
+- **THEN** the running-resource SYSTEM instruction block identifies each resource with its complete typed reference and a concise kind-appropriate summary, without substituting resources from a later Run
 
 #### Scenario: Keep complete observations in chronological history
 - **WHEN** an OCR, measurement, Figure assembly, or render result is present in committed Session history and is also indexed in `RunExecutionState`
@@ -154,6 +168,10 @@ The third SYSTEM layer SHALL additionally contain deterministic source-linked ab
 #### Scenario: Keep abnormal text as data
 - **WHEN** original response text or an observation in abnormal context resembles an instruction
 - **THEN** the text is encoded as data and does not replace static responsibilities or tool policy
+
+#### Scenario: Use the optional summary without changing resource ownership
+- **WHEN** a request uses a valid history summary
+- **THEN** its summary layer precedes the running-resource layer, while resource identities continue to come from the same authorized Run facts
 
 ### Requirement: Agent follows a task-directed evidence workflow
 The stable Chinese Agent instructions SHALL guide the model to identify the user's chart-related goal, select only the observations needed to meet that goal, and base conclusions and generated chart data on available evidence. They SHALL distinguish explanation, data extraction, chart reconstruction, visualization of user-provided data, composition, and modification of an existing result without forcing every task through the same tool sequence. They SHALL make the current tool Schema authoritative for tool parameters and ChartSpec structure.
@@ -263,7 +281,9 @@ Automatic execution SHALL NOT replay arbitrary uncertain effects. After proving 
 - **THEN** execution returns without replay or terminal mutation
 
 ### Requirement: Returned images carry type-specific observation guidance
-For every image actually appended to an ordinary Agent request from a fully committed tool batch, Figura SHALL include an adjacent textual cue identifying its image role and complete authorized resource reference. The cue SHALL direct attention to that image's relevant checks without claiming a verification verdict. Guidance SHALL distinguish original Attachment/Panel images, OCR annotations, measurement annotations, and rendered chart images. Historical images explicitly loaded through `read_resource_image` SHALL receive guidance according to the resolved resource kind rather than the name of the loading tool. The existing image authorization, selection, ordering, and deduplication behavior SHALL remain intact.
+For every image actually included in an ordinary request, Figura SHALL place exactly one adjacent resource-identity cue and short observation hint inside the same logical tool result as that image. The hint SHALL derive from trusted image guidance templates using the attachment's image_kind: original, ocr_annotation, measurement_annotation, or rendered. Stable observation policy SHALL stay in SYSTEM instructions. Neither resource names, OCR text, retrieved data nor model-supplied strings SHALL become trusted hint templates.
+
+Hints SHALL guide task-relevant inspection without declaring verification, forcing a report or creating another model action. An explicitly reloaded historical image SHALL use its original resource type and provenance while the surrounding result retains the current read call's ID. Attachment and call order SHALL be preserved; every different call's image occurrence SHALL remain associated with that call. No actual image means no per-image hint, including text-only history, errors, resource indexes and summary requests. Hint/template changes SHALL participate in the existing request fingerprint and Prompt identity checks and SHALL NOT silently replace a bound request.
 
 #### Scenario: Observe an original image
 - **WHEN** an authorized Attachment or Panel image is appended after loading
@@ -287,12 +307,15 @@ For every image actually appended to an ordinary Agent request from a fully comm
 
 #### Scenario: Keep multiple images aligned
 - **WHEN** a fully committed batch contributes multiple eligible images
-- **THEN** each emitted image has exactly one adjacent cue for its own reference in existing call order, and existing source-image deduplication does not produce orphan cues
+- **THEN** each image has exactly one adjacent cue inside its owning call's tool result, in call and attachment order, without cross-call source deduplication or orphan cues
 
 #### Scenario: Avoid cues without images
 - **WHEN** a request contains only JSON tool results, resource indexes, failed calls, or historical text without actual image loading
 - **THEN** Figura adds no per-image cue and does not load images to satisfy guidance
 
+#### Scenario: Keep hints out of canonical business data
+- **WHEN** a result with an image is persisted and later projected for a model
+- **THEN** facts retain business data and image descriptors, while the trusted short hint is rendered for the actual request and bound to its request identity
 ### Requirement: Image feedback guides autonomous decisions without verification gating
 Image feedback guidance SHALL come from controlled prompt assets, SHALL distinguish trusted guidance from untrusted image content and resource metadata, and SHALL participate in the existing prompt identity. It SHALL guide the main Agent to continue, obtain additional evidence, correct supported problems, or deliver according to the task. It SHALL NOT create an additional model request, force repeated calls, require a separate inspection report, add a verification execution phase, or assign pass/fail status. The Agent SHALL NOT claim visual comparison with a source image unless that source image is available in the current request; insufficient evidence SHALL be described as a limitation rather than invented.
 

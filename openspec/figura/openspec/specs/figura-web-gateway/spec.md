@@ -118,7 +118,7 @@ The same SSE connection MAY deliver transient `assistant_delta` events for the a
 - **THEN** the Gateway resumes durable lifecycle replay, sends only newly available transient deltas, and leaves canonical history unchanged until the complete response commits
 
 ### Requirement: Committed tool interactions are readable as a bounded Run timeline
-The Gateway SHALL provide a Session-scoped timeline snapshot for one Run, an on-demand detail read for one tool call, and an on-demand observation-image read when a committed successful OCR or chart-measurement result has a reconstructable observation. The timeline SHALL be derived from that Run's committed `ToolCallFact`, `ToolAttemptStartedFact`, and `ToolResultFact` values; it SHALL NOT create duplicate timeline facts or include tool calls from another Run. Steps SHALL be ordered by durable tool-call sequence and grouped by call ID, with every attempt and any matching result associated with the originating call. Snapshot entries SHALL expose only bounded identity, tool name, timestamps, status, and a concise safe summary. Expanded details SHALL expose only bounded tool-specific summaries, attempt statuses and timestamps, safe error summaries, and typed source/observation references; they SHALL NOT return raw argument JSON or raw result JSON. Observation-image reads SHALL verify Session and Run ownership, require a successful supported OCR or measurement result and its authorized source, return a validated PNG with no-store headers, and SHALL NOT persist a reconstructed image. These routes SHALL NOT expose provider prompts, continuation, local paths, or image bytes in JSON.
+The Gateway SHALL provide a Session-scoped timeline snapshot for one Run, an on-demand detail read for one tool call, and an on-demand observation-image read when a committed successful OCR or chart-measurement result has an available committed annotation attachment. The timeline SHALL be derived from that Run's committed `ToolCallFact`, `ToolAttemptStartedFact`, and `ToolResultFact` values; it SHALL NOT create duplicate timeline facts or include tool calls from another Run. Steps SHALL be ordered by durable tool-call sequence and grouped by call ID, with every attempt and any matching result associated with the originating call. Snapshot entries SHALL expose only bounded identity, tool name, timestamps, status, and a concise safe summary. Expanded details SHALL expose only bounded tool-specific summaries, attempt statuses and timestamps, safe error summaries, and typed source/observation references; they SHALL NOT return raw argument JSON or raw result JSON. Observation-image reads SHALL verify Session and Run ownership, require a successful supported OCR or measurement result and its authorized source, return a validated PNG with no-store headers, and SHALL read the same saved annotation bytes as Agent image feedback without redrawing or persisting a replacement. These routes SHALL NOT expose provider prompts, continuation, local paths, or image bytes in JSON.
 
 #### Scenario: Read a Run timeline snapshot
 - **WHEN** the browser reads the timeline for a Run containing committed tool calls
@@ -140,9 +140,9 @@ The Gateway SHALL provide a Session-scoped timeline snapshot for one Run, an on-
 - **WHEN** a tool call has no committed attempt start
 - **THEN** the timeline reports it as pending while the Run is active and not started when its Run is terminal
 
-#### Scenario: Read a reconstructed observation image
+#### Scenario: Read a committed observation image
 - **WHEN** the browser requests an observation image for a successful OCR or chart-measurement call with an authorized source
-- **THEN** the Gateway reconstructs and validates the annotated PNG on demand and returns it without storing a second image artifact
+- **THEN** the Gateway reads the saved PNG selected by the committed attachment, validates identity and content fingerprint, and returns the same bytes without invoking an overlay renderer
 
 #### Scenario: Reject a call or image from another Session or Run
 - **WHEN** the browser requests timeline details or an observation image using a call ID outside the requested Session and Run
@@ -156,6 +156,9 @@ The Gateway SHALL provide a Session-scoped timeline snapshot for one Run, an on-
 - **WHEN** a browser reads the details for a known or unrecognized tool call
 - **THEN** the Gateway returns only supported, bounded display summaries and never serializes raw arguments or result payloads
 
+#### Scenario: Fail a missing saved observation without repair
+- **WHEN** a committed successful observation has no available attachment or its saved PNG is missing or corrupted
+- **THEN** the existing image route returns a bounded not-found or unreadable response and does not redraw, rerun the historical tool or leak storage details
 ### Requirement: Gateway recovery follows durable Run checkpoint safety
 The Gateway SHALL schedule normal execution, startup takeover, and bounded periodic/exit compensation through one coordinated execution boundary. Scheduling SHALL preserve Run identity, checkpoint safety, queue capacity, and cross-process ownership. Orphaned Provider attempts SHALL first be closed as unknown, then follow the guarded durable replacement contract or fail safely when replacement is unavailable. Eligible orphaned tools SHALL follow bounded declared-effect recovery; unavailable recovery SHALL terminate safely. Durable stop SHALL take precedence. A safe projection SHALL distinguish queued, executing, recovering, stopping, and terminal activity without executing work during reads. Storage or integrity failure SHALL remain fail-closed and SHALL NOT be reported as successful termination.
 

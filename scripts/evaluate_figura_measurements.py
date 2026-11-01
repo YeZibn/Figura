@@ -25,7 +25,7 @@ from figura.runtime.tool_execution import DurableToolExecutor
 from figura.sources.attachments import FiguraAttachmentService
 from figura.sources.panels import FiguraPanelService
 from figura.sources.repository import SourcesRepository
-from figura.tools import ToolRegistry
+from figura.tools import ToolRegistry, ToolRuntime
 from figura.tools.implementations.image import image_tool_definitions
 from figura.tools.implementations.measure_chart import measure_chart_definition
 from figura.tools.measurements.family_adapters import current_chart_family_adapters
@@ -210,7 +210,7 @@ def evaluate(output: Path):
         inventory = RunExecutionStateService(coordinator,panels)
         reader = RunExecutionImageReader(attachments,panels)
         registry = ToolRegistry("offline-measurement-regression",(*image_tool_definitions(inventory.for_run,reader,panels),measure_chart_definition(inventory.for_run,reader,current_chart_family_adapters())))
-        executor = DurableToolExecutor(store,registry)
+        executor = DurableToolExecutor(store, registry, ToolRuntime(registry, media_committer=reader.media_committer(inventory.for_run)))
         for case in manifest["cases"]:
             content = (FIXTURES/"images"/case["image"]).read_bytes()
             if sha256(content).hexdigest()!=case["sha256"]:

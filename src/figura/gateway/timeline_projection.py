@@ -6,16 +6,8 @@ import json
 from collections import defaultdict
 from collections.abc import Mapping
 
-from figura.agent.execution_resources import (
-    AttachmentContent,
-    ChartFigureContent,
-    ImageResourceRef,
-    MeasurementContent,
-    OcrContent,
-    PanelContent,
-    RunExecutionState,
-    ToolResourceRef,
-)
+from figura.shared.resource_refs import ImageResourceRef, ToolResourceRef
+from figura.agent.execution_resources import (AttachmentContent, ChartFigureContent, MeasurementContent, OcrContent, PanelContent, RunExecutionState)
 from figura.runtime.errors import RunError, RunErrorCode
 from figura.runtime.models import RunStatus, ToolFactKind
 from figura.runtime.records import (
@@ -161,6 +153,7 @@ def observation_ref(
         not isinstance(resource.content, (OcrContent, MeasurementContent))
         or resource.content.outcome is not ToolOutcome.SUCCEEDED
         or resource.content.source_ref is None
+        or not resource.content.attachments
     ):
         raise RunError(RunErrorCode.RUN_NOT_FOUND)
     execution.get(resource.content.source_ref)
@@ -483,6 +476,7 @@ def _observation_available(
         isinstance(content, (OcrContent, MeasurementContent))
         and content.outcome is ToolOutcome.SUCCEEDED
         and content.source_ref is not None
+        and bool(content.attachments)
     )
 
 
