@@ -102,6 +102,10 @@ Prompt 资源目录是从完整 `RunExecutionState.resources` 派生的请求期
 
 `scope_kind` 仅表示 `full_source`（无范围）或 `scoped`（指定范围），不把多边形坐标放进摘要。`truncated` 保留来源结果本身的标记；`summary_truncated` 单独表示 Prompt 预览因条数或文本长度而省略内容。测量 `detected_counts` 直接取已提交 `coverage`，不从观察值重算；置信度和校准统计也只从提交结果投影。失败条目保留 `ref`、来源、范围类型、`outcome` 与安全结构化 `error`，不会补上成功字段。以上 JSON 位于资源目录的条目内，不更改 `RunExecutionState` 的完整资源合同，也不改变历史工具的返回合同。
 
+历史引用的用途在 Prompt 中明确区分：摘要 `source_refs` 指向原始支撑消息或工具结果，资源目录条目的类型化 `ref` 则定位 OCR、测量或 ChartFigure 本身。需要已列资源的精确结构化内容时，Prompt 指示模型原样复制目录 `ref` 直接调用 `read_history`，不先搜索，也不以 `source_refs` 替代；仅在当前目录和摘要没有匹配引用时搜索，读取摘要所依据的原始记录时使用 `source_refs`。选择器只给出有把握的已知路径：OCR snippets 为 `/result/snippets`、测量 warnings 为 `/result/warnings`、ChartFigure 为 `/figure`；路径不确定时省略 selector。若使用目录引用的字段读取失败，使用同一引用且省略 selector 重试一次。引用解析、授权和选择器执行边界归 [Memory](memory.md#搜索读取与历史图像边界)；工具 Schema 见 [Tools](tools.md#9-session-历史读取工具)。
+
+**状态依据：**上述模型可见规则与 selector 示例存在于当前工作树的执行提示、`workflow.md` 和 `read_history` Schema；历史检索主规格已同步，change [strengthen-compacted-resource-retrieval-guidance](../../openspec/figura/openspec/changes/archive/2026-11-03-strengthen-compacted-resource-retrieval-guidance/proposal.md) 已归档。归档记录需求演进，不代表代码已提交或发布。
+
 四份基础规则分别由 `agent.md` 管目标与职责，`evidence.md` 管来源、候选观察、缺失值和坐标，`workflow.md` 管按需读取、完整新 Figure 与结束路径，`response.md` 管实际交付及完成阶段；`image_feedback.md` 集中定义原图、OCR 标注图、测量标注图和生成图的观察规则与邻近 Cue。工具的详细字段解释留在原生参数 Schema，SYSTEM 工具目录只列名称与说明。描述性新标题/轴名可依数据拟定，不得伪称原图标签或补造单位。
 
 摘要请求仅加载独立的 [`compaction.md`](../../src/figura/agent/prompting/assets/compaction.md)，带一个来源 JSON 文本消息，无工具、无图像；普通请求不加载其 JSON-only 输出规则。资产加载失败在摘要准备边界映射为既有 `invalid_summary_input` fallback，不 dispatch 空指令请求，也不覆盖旧检查点。摘要响应被拒绝时，Runtime 以不含正文的校验类别写入 `failure_code`，涵盖响应合同、JSON、字段/条目形状及来源引用校验。摘要实际指令和 `context-compaction-v2` registry identity 参与 `prompt_digest`；摘要 request binding 记录合同版本 2。资产或合同身份变化后，已绑定请求仍进行严格核验，不匹配则 `summary_binding_mismatch` 回退。

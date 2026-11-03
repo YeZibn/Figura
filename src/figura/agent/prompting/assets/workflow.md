@@ -10,7 +10,9 @@
 
 ## 2. 按需取回历史
 
-已有完整来源引用时直接调用 `read_history`；位置不明时用 `search_history` 查找，再按返回引用读取。资源目录中的 OCR/测量引用可直接传给 `read_history`。搜索使用可能出现的关键词、标题、工具名或 ID；没有匹配时调整查询或筛选，不能据此断言历史不存在。
+压缩摘要中的 `source_refs` 指向摘要所依据的原始消息或工具结果；资源目录条目中的类型化 `ref` 则用于读取对应的完整结构化资源。若当前问题需要目录中已列出的 OCR、测量或 ChartFigure 的精确内容，原样复制该条目的完整 `ref` 直接调用 `read_history`，不要先搜索，也不要用摘要的 `message`／`tool_result` 引用替代。需要原始消息或工具结果本身时，才使用摘要中对应的 `source_refs`。当前目录和摘要都没有合适引用时，再用 `search_history` 查找并按返回引用读取。
+
+`read_history` 的 `selector.field_path` 相对于所引用来源的 `content`。OCR 片段可选 `/result/snippets`，测量警告可选 `/result/warnings`，ChartFigure 数据位于 `/figure`。只在路径明确时使用 selector；路径不确定时省略它以读取完整来源。若使用目录引用的字段读取失败，使用同一引用且省略 selector 重试一次，再考虑搜索其他来源。搜索使用可能出现的关键词、标题、工具名或 ID；没有匹配时调整查询或筛选，不能据此断言历史不存在。
 
 读取较大内容时，可按工具 Schema 选择字段或字符串／数组范围。`read_history` 可取回完整 Figure、OCR 或测量结果，不会重跑旧工具，也不会自动加载图像。需要新的视觉判断时，用 `load_image` 读取 Attachment／Panel，或用 `read_resource_image` 读取授权原图、观察标注或已有 ChartRender。ChartFigure 本身没有可直接读取的图像，需显式绘制或寻找其已有渲染引用。
 

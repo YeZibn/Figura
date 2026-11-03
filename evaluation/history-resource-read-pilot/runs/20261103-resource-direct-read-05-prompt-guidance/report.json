@@ -1,0 +1,887 @@
+{
+  "scope": "synthetic canonical resources; real Provider compaction summary, with a controlled checkpoint that explicitly exposes resource refs and removes summary items containing target answers; model-led history tool loop uses production request builder/runtime retrieval; not image accuracy or full Gateway execution",
+  "batch_id": "20261103-resource-direct-read-05-prompt-guidance",
+  "started_at": "2026-11-03T04:13:21.249169+00:00",
+  "provider": "deepseek",
+  "model": "deepseek-flash",
+  "thinking_mode": false,
+  "context_capacity_tokens": 100000,
+  "git_revision": "a74ed3582f07c299431313aae16be5bc383758dd",
+  "python": "3.11.15",
+  "fixture_registry_version": "resource-read-pilot-fixture-v1",
+  "agent_registry_version": "figura-web-v11",
+  "fixture_ids": {
+    "session_id": "19fc88b8087843399dc3f4bee97a0bef",
+    "target_run_id": "5113d39ba03847b69378c33cbd43d4fa",
+    "source_run_id": "bc9e6bf8d27246a38808ae98c6ae383d",
+    "figure_run_id": "4f78fe5824c64702ba4414022381239a",
+    "filler_run_id": "e6ebb38dcf4947ab974fb4de734bfa5f"
+  },
+  "coverage": {
+    "covered_run_id": "4f78fe5824c64702ba4414022381239a",
+    "covered_run_ordinal": 2,
+    "covered_record_sequence": 4,
+    "covered_tool_sequence": 3,
+    "selected_run_ids": [
+      "bc9e6bf8d27246a38808ae98c6ae383d",
+      "4f78fe5824c64702ba4414022381239a"
+    ]
+  },
+  "summary": {
+    "estimated_input_tokens": 26631,
+    "usage": {
+      "prompt_tokens": 22821,
+      "completion_tokens": 9020,
+      "total_tokens": 31841
+    },
+    "model_source_refs": [
+      {
+        "kind": "message",
+        "run_id": "bc9e6bf8d27246a38808ae98c6ae383d",
+        "record_id": "99fc8277ed8044a3862b651c467db497"
+      },
+      {
+        "kind": "message",
+        "run_id": "4f78fe5824c64702ba4414022381239a",
+        "record_id": "36aa5f856fa84d279a5ac2cfba1a7356"
+      },
+      {
+        "kind": "tool_result",
+        "run_id": "bc9e6bf8d27246a38808ae98c6ae383d",
+        "call_id": "fixture-ocr-7QK491"
+      },
+      {
+        "kind": "tool_result",
+        "run_id": "bc9e6bf8d27246a38808ae98c6ae383d",
+        "call_id": "fixture-measure-3XM826"
+      },
+      {
+        "kind": "message",
+        "run_id": "4f78fe5824c64702ba4414022381239a",
+        "record_id": "af6439726b834b2b87e63321330ce36f"
+      },
+      {
+        "kind": "tool_result",
+        "run_id": "4f78fe5824c64702ba4414022381239a",
+        "call_id": "fixture-figure-9VA204"
+      }
+    ],
+    "resource_refs_visible_in_natural_projection": {
+      "ocr": true,
+      "measurement": true,
+      "chart_figure": true
+    },
+    "summary": {
+      "trust": "untrusted_history",
+      "current_goal": [],
+      "constraints": [
+        {
+          "text": "后续需要读取 OCR、测量或 Figure 的具体内容时，应按来源引用精确读取，摘要不复制逐条细节。",
+          "source_refs": [
+            {
+              "kind": "message",
+              "run_id": "bc9e6bf8d27246a38808ae98c6ae383d",
+              "record_id": "99fc8277ed8044a3862b651c467db497"
+            }
+          ]
+        },
+        {
+          "text": "装配季度营收 Figure 时，应以上一轮已记录的测量来源为依据。",
+          "source_refs": [
+            {
+              "kind": "message",
+              "run_id": "4f78fe5824c64702ba4414022381239a",
+              "record_id": "36aa5f856fa84d279a5ac2cfba1a7356"
+            }
+          ]
+        }
+      ],
+      "decisions": [],
+      "facts": [
+        {
+          "text": "输入附件 ID 为 d27385c693f745268bae06eb80080328（attachment）。",
+          "source_refs": [
+            {
+              "kind": "message",
+              "run_id": "bc9e6bf8d27246a38808ae98c6ae383d",
+              "record_id": "99fc8277ed8044a3862b651c467db497"
+            }
+          ]
+        },
+        {
+          "text": "OCR 调用 fixture-ocr-7QK491 成功：附件坐标 attachment_px，图像 500×500，返回 400 条 snippet（confidence 0.93），内容为 'Observation N: marker CODE-xxxxxx'，首条 Observation 001/CODE-007919，末条 Observation 400/CODE-167651。",
+          "source_refs": [
+            {
+              "kind": "tool_result",
+              "run_id": "bc9e6bf8d27246a38808ae98c6ae383d",
+              "call_id": "fixture-ocr-7QK491"
+            }
+          ]
+        },
+        {
+          "text": "测量调用 fixture-measure-3XM826 请求 bar 图且 outcome=succeeded，但结果 status=no_evidence：图像 20×20，检测 bars=0、series=0，association/calibration/geometry/overall confidence 均为 0，轴类型 unknown；含 5 条 warnings（含 token WARN-7QK-491、WARN-3XM-826）。",
+          "source_refs": [
+            {
+              "kind": "tool_result",
+              "run_id": "bc9e6bf8d27246a38808ae98c6ae383d",
+              "call_id": "fixture-measure-3XM826"
+            }
+          ]
+        },
+        {
+          "text": "同一附件的 OCR 报告尺寸为 500×500，而测量报告尺寸为 20×20，两者不一致；该差异原因尚未确定。",
+          "source_refs": [
+            {
+              "kind": "tool_result",
+              "run_id": "bc9e6bf8d27246a38808ae98c6ae383d",
+              "call_id": "fixture-ocr-7QK491"
+            },
+            {
+              "kind": "tool_result",
+              "run_id": "bc9e6bf8d27246a38808ae98c6ae383d",
+              "call_id": "fixture-measure-3XM826"
+            }
+          ]
+        },
+        {
+          "text": "装配调用传入 12 个类别（period-01…period-12）和 Revenue 序列 [117.3, 134.6, 151.9, 169.2, 186.5, 203.8, 221.1, 817.4, 255.7, 273.0, 290.3, 129.6]，使用分组竖向柱状图，标题 'Quarterly Revenue Detail'，图表标题 'Regional Revenue Series'，并将 measurement_ref 指向 fixture-measure-3XM826 / run bc9e6bf8d27246a38808ae98c6ae383d。",
+          "source_refs": [
+            {
+              "kind": "message",
+              "run_id": "4f78fe5824c64702ba4414022381239a",
+              "record_id": "af6439726b834b2b87e63321330ce36f"
+            }
+          ]
+        },
+        {
+          "text": "该 measurement_ref 对应的测量结果是 no_evidence；Figure 组装成功本身不能证明其营收值由有效测量得到。",
+          "source_refs": [
+            {
+              "kind": "message",
+              "run_id": "4f78fe5824c64702ba4414022381239a",
+              "record_id": "af6439726b834b2b87e63321330ce36f"
+            },
+            {
+              "kind": "tool_result",
+              "run_id": "bc9e6bf8d27246a38808ae98c6ae383d",
+              "call_id": "fixture-measure-3XM826"
+            }
+          ]
+        },
+        {
+          "text": "Figure 组装工具返回成功：chart_id=sales、chart_type=bar、title='Regional Revenue Series'；Figure 标题 'Quarterly Revenue Detail'，figure_digest=d6c16d7b86893219730a2883d466d7e361b55d38d3088284af10a7d27aabe776，figure_ref 指向 fixture-figure-9VA204 / run 4f78fe5824c64702ba4414022381239a。",
+          "source_refs": [
+            {
+              "kind": "tool_result",
+              "run_id": "4f78fe5824c64702ba4414022381239a",
+              "call_id": "fixture-figure-9VA204"
+            }
+          ]
+        }
+      ],
+      "progress": {
+        "completed": [
+          {
+            "text": "已对附件 d27385c693f745268bae06eb80080328 执行 OCR 并取得 400 条文本 snippet。",
+            "source_refs": [
+              {
+                "kind": "tool_result",
+                "run_id": "bc9e6bf8d27246a38808ae98c6ae383d",
+                "call_id": "fixture-ocr-7QK491"
+              }
+            ]
+          },
+          {
+            "text": "已对该附件执行 chart measurement；调用完成，但因结果 no_evidence，未得到可用的柱/序列测量证据。",
+            "source_refs": [
+              {
+                "kind": "tool_result",
+                "run_id": "bc9e6bf8d27246a38808ae98c6ae383d",
+                "call_id": "fixture-measure-3XM826"
+              }
+            ]
+          },
+          {
+            "text": "已完成季度营收 Figure 的组装并取得 figure_digest 与 figure_ref。",
+            "source_refs": [
+              {
+                "kind": "tool_result",
+                "run_id": "4f78fe5824c64702ba4414022381239a",
+                "call_id": "fixture-figure-9VA204"
+              }
+            ]
+          }
+        ],
+        "in_progress": [],
+        "pending": [],
+        "blocked": []
+      },
+      "open_questions": [
+        {
+          "text": "装配 Figure 的 12 个营收数值（尤其第 8 期异常高的 817.4）来源是什么，是否能由 OCR 或测量证据支持？",
+          "source_refs": [
+            {
+              "kind": "message",
+              "run_id": "4f78fe5824c64702ba4414022381239a",
+              "record_id": "af6439726b834b2b87e63321330ce36f"
+            },
+            {
+              "kind": "tool_result",
+              "run_id": "bc9e6bf8d27246a38808ae98c6ae383d",
+              "call_id": "fixture-measure-3XM826"
+            }
+          ]
+        },
+        {
+          "text": "同一附件的正确图像尺寸应为 500×500 还是 20×20，需要如何解释测量结果的 20×20 尺寸？",
+          "source_refs": [
+            {
+              "kind": "tool_result",
+              "run_id": "bc9e6bf8d27246a38808ae98c6ae383d",
+              "call_id": "fixture-ocr-7QK491"
+            },
+            {
+              "kind": "tool_result",
+              "run_id": "bc9e6bf8d27246a38808ae98c6ae383d",
+              "call_id": "fixture-measure-3XM826"
+            }
+          ]
+        },
+        {
+          "text": "是否需要重新测量，或提供其他数据来源，以校验/重建 'Quarterly Revenue Detail' Figure？",
+          "source_refs": [
+            {
+              "kind": "tool_result",
+              "run_id": "bc9e6bf8d27246a38808ae98c6ae383d",
+              "call_id": "fixture-measure-3XM826"
+            },
+            {
+              "kind": "tool_result",
+              "run_id": "4f78fe5824c64702ba4414022381239a",
+              "call_id": "fixture-figure-9VA204"
+            }
+          ]
+        }
+      ],
+      "resources": [
+        {
+          "text": "附件：d27385c693f745268bae06eb80080328（source_kind=attachment）。",
+          "source_refs": [
+            {
+              "kind": "message",
+              "run_id": "bc9e6bf8d27246a38808ae98c6ae383d",
+              "record_id": "99fc8277ed8044a3862b651c467db497"
+            }
+          ]
+        },
+        {
+          "text": "OCR 结果引用：tool_result call_id=fixture-ocr-7QK491，run_id=bc9e6bf8d27246a38808ae98c6ae383d。",
+          "source_refs": [
+            {
+              "kind": "tool_result",
+              "run_id": "bc9e6bf8d27246a38808ae98c6ae383d",
+              "call_id": "fixture-ocr-7QK491"
+            }
+          ]
+        },
+        {
+          "text": "测量结果引用：tool_result call_id=fixture-measure-3XM826，run_id=bc9e6bf8d27246a38808ae98c6ae383d。",
+          "source_refs": [
+            {
+              "kind": "tool_result",
+              "run_id": "bc9e6bf8d27246a38808ae98c6ae383d",
+              "call_id": "fixture-measure-3XM826"
+            }
+          ]
+        },
+        {
+          "text": "Figure 结果引用：tool_result call_id=fixture-figure-9VA204，run_id=4f78fe5824c64702ba4414022381239a；figure_digest=d6c16d7b86893219730a2883d466d7e361b55d38d3088284af10a7d27aabe776。",
+          "source_refs": [
+            {
+              "kind": "tool_result",
+              "run_id": "4f78fe5824c64702ba4414022381239a",
+              "call_id": "fixture-figure-9VA204"
+            }
+          ]
+        }
+      ],
+      "proposals": [],
+      "run_outcomes": [
+        {
+          "run_id": "bc9e6bf8d27246a38808ae98c6ae383d",
+          "run_ordinal": 1,
+          "status": "completed",
+          "terminal_code": null,
+          "source_refs": [
+            {
+              "kind": "message",
+              "run_id": "bc9e6bf8d27246a38808ae98c6ae383d",
+              "record_id": "99fc8277ed8044a3862b651c467db497"
+            }
+          ]
+        },
+        {
+          "run_id": "4f78fe5824c64702ba4414022381239a",
+          "run_ordinal": 2,
+          "status": "completed",
+          "terminal_code": null,
+          "source_refs": [
+            {
+              "kind": "message",
+              "run_id": "4f78fe5824c64702ba4414022381239a",
+              "record_id": "36aa5f856fa84d279a5ac2cfba1a7356"
+            }
+          ]
+        }
+      ]
+    },
+    "controlled_summary_removed_items": 3
+  },
+  "catalog_before_projection": [
+    {
+      "kind": "attachment",
+      "id": "d27385c693f745268bae06eb80080328"
+    },
+    {
+      "kind": "ocr",
+      "run_id": "bc9e6bf8d27246a38808ae98c6ae383d",
+      "call_id": "fixture-ocr-7QK491"
+    },
+    {
+      "kind": "measurement",
+      "run_id": "bc9e6bf8d27246a38808ae98c6ae383d",
+      "call_id": "fixture-measure-3XM826"
+    },
+    {
+      "kind": "chart_figure",
+      "run_id": "4f78fe5824c64702ba4414022381239a",
+      "call_id": "fixture-figure-9VA204"
+    }
+  ],
+  "direct_cases": [
+    {
+      "id": "ocr-137",
+      "query": "OCR 第137条 Observation marker code",
+      "expected": "Observation 137: marker CODE-084920",
+      "kind": "ocr",
+      "status": "run",
+      "attempt": {
+        "status": "answered",
+        "answer": "CODE-084920",
+        "correct": false,
+        "raw_answer": "{\"answer\":\"CODE-084920\"}",
+        "calls": [
+          {
+            "name": "read_history",
+            "arguments": {
+              "reference": {
+                "kind": "ocr",
+                "run_id": "bc9e6bf8d27246a38808ae98c6ae383d",
+                "call_id": "fixture-ocr-7QK491"
+              },
+              "selector": {
+                "field_path": "/result/snippets",
+                "start": 136,
+                "end": 137
+              }
+            },
+            "outcome": "succeeded",
+            "result_contains_expected": true,
+            "error": null
+          }
+        ],
+        "rounds": [
+          {
+            "estimated_input_tokens": 95382,
+            "usage": {
+              "prompt_tokens": 80903,
+              "completion_tokens": 118,
+              "total_tokens": 81021
+            },
+            "finish_reason": "tool_calls"
+          },
+          {
+            "estimated_input_tokens": 95691,
+            "usage": {
+              "prompt_tokens": 81184,
+              "completion_tokens": 8,
+              "total_tokens": 81192
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "seconds": 3.792,
+        "resource_ref_visible": true,
+        "answer_leaked_in_request": false,
+        "first_tool_is_read_history": true,
+        "first_read_ref_matches_directory": true,
+        "read_result_contains_answer": true,
+        "direct_read_pass": false
+      }
+    },
+    {
+      "id": "ocr-149",
+      "query": "OCR 第149条 Observation marker code",
+      "expected": "Observation 149: marker CODE-179948",
+      "kind": "ocr",
+      "status": "run",
+      "attempt": {
+        "status": "answered",
+        "answer": "CODE-179948",
+        "correct": false,
+        "raw_answer": "{\"answer\":\"CODE-179948\"}",
+        "calls": [
+          {
+            "name": "read_history",
+            "arguments": {
+              "reference": {
+                "kind": "ocr",
+                "run_id": "bc9e6bf8d27246a38808ae98c6ae383d",
+                "call_id": "fixture-ocr-7QK491"
+              },
+              "selector": {
+                "field_path": "/result/snippets",
+                "start": 147,
+                "end": 150
+              }
+            },
+            "outcome": "succeeded",
+            "result_contains_expected": true,
+            "error": null
+          }
+        ],
+        "rounds": [
+          {
+            "estimated_input_tokens": 95382,
+            "usage": {
+              "prompt_tokens": 80903,
+              "completion_tokens": 118,
+              "total_tokens": 81021
+            },
+            "finish_reason": "tool_calls"
+          },
+          {
+            "estimated_input_tokens": 95767,
+            "usage": {
+              "prompt_tokens": 81264,
+              "completion_tokens": 8,
+              "total_tokens": 81272
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "seconds": 2.444,
+        "resource_ref_visible": true,
+        "answer_leaked_in_request": false,
+        "first_tool_is_read_history": true,
+        "first_read_ref_matches_directory": true,
+        "read_result_contains_answer": true,
+        "direct_read_pass": false
+      }
+    },
+    {
+      "id": "measurement-warning-4",
+      "query": "measure_chart 第4条完整 warning",
+      "expected": "Detailed warning token: WARN-7QK-491.",
+      "kind": "measurement",
+      "status": "run",
+      "attempt": {
+        "status": "answered",
+        "answer": "Detailed warning token: WARN-7QK-491.",
+        "correct": true,
+        "raw_answer": "{\"answer\":\"Detailed warning token: WARN-7QK-491.\"}",
+        "calls": [
+          {
+            "name": "read_history",
+            "arguments": {
+              "reference": {
+                "kind": "measurement",
+                "run_id": "bc9e6bf8d27246a38808ae98c6ae383d",
+                "call_id": "fixture-measure-3XM826"
+              },
+              "selector": {
+                "field_path": "/result/warnings"
+              }
+            },
+            "outcome": "succeeded",
+            "result_contains_expected": true,
+            "error": null
+          }
+        ],
+        "rounds": [
+          {
+            "estimated_input_tokens": 95382,
+            "usage": {
+              "prompt_tokens": 80904,
+              "completion_tokens": 106,
+              "total_tokens": 81010
+            },
+            "finish_reason": "tool_calls"
+          },
+          {
+            "estimated_input_tokens": 95677,
+            "usage": {
+              "prompt_tokens": 81174,
+              "completion_tokens": 17,
+              "total_tokens": 81191
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "seconds": 2.869,
+        "resource_ref_visible": true,
+        "answer_leaked_in_request": false,
+        "first_tool_is_read_history": true,
+        "first_read_ref_matches_directory": true,
+        "read_result_contains_answer": true,
+        "direct_read_pass": true
+      }
+    },
+    {
+      "id": "measurement-warning-5",
+      "query": "measure_chart 第5条完整 warning",
+      "expected": "Detailed warning token: WARN-3XM-826.",
+      "kind": "measurement",
+      "status": "run",
+      "attempt": {
+        "status": "answered",
+        "answer": "Detailed warning token: WARN-3XM-826.",
+        "correct": true,
+        "raw_answer": "{\"answer\":\"Detailed warning token: WARN-3XM-826.\"}",
+        "calls": [
+          {
+            "name": "read_history",
+            "arguments": {
+              "reference": {
+                "kind": "measurement",
+                "run_id": "bc9e6bf8d27246a38808ae98c6ae383d",
+                "call_id": "fixture-measure-3XM826"
+              },
+              "selector": {
+                "field_path": "/result/warnings"
+              }
+            },
+            "outcome": "succeeded",
+            "result_contains_expected": true,
+            "error": null
+          }
+        ],
+        "rounds": [
+          {
+            "estimated_input_tokens": 95382,
+            "usage": {
+              "prompt_tokens": 80904,
+              "completion_tokens": 106,
+              "total_tokens": 81010
+            },
+            "finish_reason": "tool_calls"
+          },
+          {
+            "estimated_input_tokens": 95679,
+            "usage": {
+              "prompt_tokens": 81174,
+              "completion_tokens": 16,
+              "total_tokens": 81190
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "seconds": 3.204,
+        "resource_ref_visible": true,
+        "answer_leaked_in_request": false,
+        "first_tool_is_read_history": true,
+        "first_read_ref_matches_directory": true,
+        "read_result_contains_answer": true,
+        "direct_read_pass": true
+      }
+    },
+    {
+      "id": "figure-period-08",
+      "query": "Quarterly Revenue Detail 中 Period 08 的 Revenue 数值",
+      "expected": "817.4",
+      "kind": "chart_figure",
+      "status": "run",
+      "attempt": {
+        "status": "answered",
+        "answer": "817.4",
+        "correct": true,
+        "raw_answer": "{\"answer\":\"817.4\"}",
+        "calls": [
+          {
+            "name": "read_history",
+            "arguments": {
+              "reference": {
+                "kind": "chart_figure",
+                "run_id": "4f78fe5824c64702ba4414022381239a",
+                "call_id": "fixture-figure-9VA204"
+              }
+            },
+            "outcome": "succeeded",
+            "result_contains_expected": true,
+            "error": null
+          }
+        ],
+        "rounds": [
+          {
+            "estimated_input_tokens": 95387,
+            "usage": {
+              "prompt_tokens": 80909,
+              "completion_tokens": 87,
+              "total_tokens": 80996
+            },
+            "finish_reason": "tool_calls"
+          },
+          {
+            "estimated_input_tokens": 96055,
+            "usage": {
+              "prompt_tokens": 81528,
+              "completion_tokens": 7,
+              "total_tokens": 81535
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "seconds": 2.87,
+        "resource_ref_visible": true,
+        "answer_leaked_in_request": false,
+        "first_tool_is_read_history": true,
+        "first_read_ref_matches_directory": true,
+        "read_result_contains_answer": true,
+        "direct_read_pass": true
+      }
+    },
+    {
+      "id": "figure-period-12",
+      "query": "Quarterly Revenue Detail 中 Period 12 的 Revenue 数值",
+      "expected": "129.6",
+      "kind": "chart_figure",
+      "status": "run",
+      "attempt": {
+        "status": "answered",
+        "answer": "129.6",
+        "correct": true,
+        "raw_answer": "{\"answer\":\"129.6\"}",
+        "calls": [
+          {
+            "name": "read_history",
+            "arguments": {
+              "reference": {
+                "kind": "chart_figure",
+                "run_id": "4f78fe5824c64702ba4414022381239a",
+                "call_id": "fixture-figure-9VA204"
+              }
+            },
+            "outcome": "succeeded",
+            "result_contains_expected": true,
+            "error": null
+          }
+        ],
+        "rounds": [
+          {
+            "estimated_input_tokens": 95387,
+            "usage": {
+              "prompt_tokens": 80909,
+              "completion_tokens": 80,
+              "total_tokens": 80989
+            },
+            "finish_reason": "tool_calls"
+          },
+          {
+            "estimated_input_tokens": 96048,
+            "usage": {
+              "prompt_tokens": 81521,
+              "completion_tokens": 7,
+              "total_tokens": 81528
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "seconds": 2.875,
+        "resource_ref_visible": true,
+        "answer_leaked_in_request": false,
+        "first_tool_is_read_history": true,
+        "first_read_ref_matches_directory": true,
+        "read_result_contains_answer": true,
+        "direct_read_pass": true
+      }
+    }
+  ],
+  "omitted_reference_controls": [
+    {
+      "id": "ocr-137",
+      "query": "OCR 第137条 Observation marker code",
+      "expected": "Observation 137: marker CODE-084920",
+      "kind": "ocr",
+      "status": "run",
+      "attempt": {
+        "status": "answered",
+        "answer": "Observation 137: marker CODE-084920（OCR 候选片段 snippet-137，置信度 0.93，原图 bbox [137,469,1,1]）",
+        "correct": false,
+        "raw_answer": "{\"answer\":\"Observation 137: marker CODE-084920（OCR 候选片段 snippet-137，置信度 0.93，原图 bbox [137,469,1,1]）\"}",
+        "calls": [
+          {
+            "name": "search_history",
+            "arguments": {
+              "query": "Observation marker code",
+              "source_kind": "ocr"
+            },
+            "outcome": "succeeded",
+            "result_contains_expected": false,
+            "error": null
+          },
+          {
+            "name": "read_history",
+            "arguments": {
+              "reference": {
+                "kind": "ocr",
+                "run_id": "bc9e6bf8d27246a38808ae98c6ae383d",
+                "call_id": "fixture-ocr-7QK491"
+              },
+              "selector": {
+                "field_path": "/result/snippets",
+                "start": 130,
+                "end": 145
+              }
+            },
+            "outcome": "succeeded",
+            "result_contains_expected": true,
+            "error": null
+          }
+        ],
+        "rounds": [
+          {
+            "estimated_input_tokens": 94780,
+            "usage": {
+              "prompt_tokens": 80305,
+              "completion_tokens": 57,
+              "total_tokens": 80362
+            },
+            "finish_reason": "tool_calls"
+          },
+          {
+            "estimated_input_tokens": 95118,
+            "usage": {
+              "prompt_tokens": 80596,
+              "completion_tokens": 118,
+              "total_tokens": 80714
+            },
+            "finish_reason": "tool_calls"
+          },
+          {
+            "estimated_input_tokens": 95985,
+            "usage": {
+              "prompt_tokens": 81437,
+              "completion_tokens": 43,
+              "total_tokens": 81480
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "seconds": 5.053,
+        "resource_ref_visible": false,
+        "answer_leaked_in_request": false,
+        "search_before_read": true,
+        "read_ref_matches_resource": true
+      }
+    },
+    {
+      "id": "measurement-warning-4",
+      "query": "measure_chart 第4条完整 warning",
+      "expected": "Detailed warning token: WARN-7QK-491.",
+      "kind": "measurement",
+      "status": "run",
+      "attempt": {
+        "status": "answered",
+        "answer": "第4条 warning 是：\"Detailed warning token: WARN-7QK-491.\"（来源：measurement 调用 fixture-measure-3XM826，run bc9e6bf8d27246a38808ae98c6ae383d；warnings 数组共5条，依次为 \"Preview warning one.\"、\"Preview warning two.\"、\"Preview warning three.\"、\"Detailed warning token: WARN-7QK-491.\"、\"Detailed warning token: WARN-3XM-826.\"）",
+        "correct": false,
+        "raw_answer": "{\"answer\":\"第4条 warning 是：\\\"Detailed warning token: WARN-7QK-491.\\\"（来源：measurement 调用 fixture-measure-3XM826，run bc9e6bf8d27246a38808ae98c6ae383d；warnings 数组共5条，依次为 \\\"Preview warning one.\\\"、\\\"Preview warning two.\\\"、\\\"Preview warning three.\\\"、\\\"Detailed warning token: WARN-7QK-491.\\\"、\\\"Detailed warning token: WARN-3XM-826.\\\"）\"}",
+        "calls": [
+          {
+            "name": "search_history",
+            "arguments": {
+              "query": "measure_chart warning",
+              "source_kind": "measurement"
+            },
+            "outcome": "succeeded",
+            "result_contains_expected": false,
+            "error": null
+          },
+          {
+            "name": "read_history",
+            "arguments": {
+              "reference": {
+                "kind": "measurement",
+                "run_id": "bc9e6bf8d27246a38808ae98c6ae383d",
+                "call_id": "fixture-measure-3XM826"
+              },
+              "selector": {
+                "field_path": "/result/warnings"
+              }
+            },
+            "outcome": "succeeded",
+            "result_contains_expected": true,
+            "error": null
+          }
+        ],
+        "rounds": [
+          {
+            "estimated_input_tokens": 94800,
+            "usage": {
+              "prompt_tokens": 80333,
+              "completion_tokens": 59,
+              "total_tokens": 80392
+            },
+            "finish_reason": "tool_calls"
+          },
+          {
+            "estimated_input_tokens": 95135,
+            "usage": {
+              "prompt_tokens": 80626,
+              "completion_tokens": 106,
+              "total_tokens": 80732
+            },
+            "finish_reason": "tool_calls"
+          },
+          {
+            "estimated_input_tokens": 95430,
+            "usage": {
+              "prompt_tokens": 80896,
+              "completion_tokens": 124,
+              "total_tokens": 81020
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "seconds": 5.155,
+        "resource_ref_visible": false,
+        "answer_leaked_in_request": false,
+        "search_before_read": true,
+        "read_ref_matches_resource": true
+      }
+    },
+    {
+      "id": "figure-period-08",
+      "query": "Quarterly Revenue Detail 中 Period 08 的 Revenue 数值",
+      "expected": "817.4",
+      "kind": "chart_figure",
+      "status": "invalid_control_projection",
+      "resource_ref_visible": true,
+      "answer_leaked_in_request": false
+    }
+  ],
+  "runtime_snapshot": ".figura/evaluation/resource-read-20261103-resource-direct-read-05-prompt-guidance",
+  "aggregate": {
+    "direct_total": 6,
+    "direct_executed": 6,
+    "direct_passed": 4,
+    "direct_answers_correct": 4,
+    "direct_first_read": 6,
+    "direct_reference_match": 6,
+    "control_total": 3,
+    "control_executed": 2,
+    "control_correct": 0,
+    "control_search_then_read": 2,
+    "scope": "9 one-shot questions; descriptive pilot, not a reliability estimate"
+  },
+  "finished_at": "2026-11-03T04:13:51.601036+00:00"
+}

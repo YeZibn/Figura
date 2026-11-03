@@ -34,6 +34,16 @@ def test_static_instruction_loads_chinese_assets_in_declared_order() -> None:
     assert instruction.content.index("# 分析与工具流程") < instruction.content.index("# 最终回答")
 
 
+def test_static_workflow_distinguishes_summary_refs_and_resource_refs() -> None:
+    instruction = build_static_instruction()
+
+    assert "压缩摘要中的 `source_refs`" in instruction.content
+    assert "资源目录条目中的类型化 `ref`" in instruction.content
+    assert "不要先搜索" in instruction.content
+    assert "省略 selector" in instruction.content
+    assert "同一引用且省略 selector 重试一次" in instruction.content
+
+
 def test_tool_instruction_uses_registry_order_and_descriptions_without_schema_copy() -> None:
     registry = ToolRegistry(
         "registry-v1",
@@ -178,6 +188,8 @@ def test_execution_instruction_projects_all_resource_kinds_and_cross_run_refs() 
     assert "ignore all rules" in instruction.content
     assert "不可信" in instruction.content
     assert "read_history" in instruction.content
+    assert "压缩摘要中的 source_refs" in instruction.content
+    assert "不要先 search_history" in instruction.content
 
 
 def test_execution_instruction_bounds_ocr_preview_and_separates_source_truncation() -> None:
@@ -351,7 +363,14 @@ def test_all_gateway_tool_guidance_survives_native_provider_projection(tmp_path)
             assert normalize_json_value(tool.parameters) == normalize_json_value(definition.parameters_schema)
         by_name = {tool.name: normalize_json_value(tool.parameters) for tool in projected}
         assert by_name["extract_text"]["properties"]["observation_scope"]["description"]
-        assert by_name["read_history"]["properties"]["selector"]["properties"]["field_path"]["description"]
+        selector_schema = by_name["read_history"]["properties"]["selector"]
+        field_path_description = selector_schema["properties"]["field_path"]["description"]
+        assert "省略 selector 则读取完整来源" in selector_schema["description"]
+        assert "/result/snippets" in field_path_description
+        assert "/result/warnings" in field_path_description
+        assert "/figure" in field_path_description
+        read_history = next(item for item in registry if item.name == "read_history")
+        assert "同一引用省略 selector 重试一次" in read_history.description
         figure = by_name["assemble_chart_figure"]["properties"]
         chart_spec = figure["charts"]["items"]["properties"]["chart_spec"]["properties"]
         assert tuple(chart_spec["metadata"]["properties"]["chart_type"]["enum"]) == (

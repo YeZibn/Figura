@@ -1,0 +1,177 @@
+{
+  "scope": "Controlled model-led direct typed-resource read using a compacted request projection; source facts reused from the preceding isolated pilot; explicit tool-use instruction; not a spontaneous tool-choice estimate.",
+  "source_batch": "20261103-resource-direct-read-05-prompt-guidance",
+  "started_at": "2026-11-03T04:14:12.765796+00:00",
+  "provider": "deepseek",
+  "model": "deepseek-flash",
+  "cases": [
+    {
+      "id": "typed-ocr",
+      "query": "在 OCR 资源中查找第 137 条 Observation，提取 marker code。",
+      "expected": "CODE-084920",
+      "kind": "ocr",
+      "status": "run",
+      "attempt": {
+        "status": "answered",
+        "answer": "CODE-084920",
+        "correct": true,
+        "raw_answer": "{\"answer\":\"CODE-084920\"}",
+        "calls": [
+          {
+            "name": "read_history",
+            "arguments": {
+              "reference": {
+                "kind": "ocr",
+                "run_id": "bc9e6bf8d27246a38808ae98c6ae383d",
+                "call_id": "fixture-ocr-7QK491"
+              }
+            },
+            "outcome": "succeeded",
+            "result_contains_expected": true,
+            "error": null
+          }
+        ],
+        "rounds": [
+          {
+            "estimated_input_tokens": 93610,
+            "usage": {
+              "prompt_tokens": 79186,
+              "completion_tokens": 82,
+              "total_tokens": 79268
+            },
+            "finish_reason": "tool_calls"
+          },
+          {
+            "estimated_input_tokens": 109941,
+            "usage": {
+              "prompt_tokens": 95493,
+              "completion_tokens": 8,
+              "total_tokens": 95501
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "seconds": 4.701,
+        "typed_reference_match": true,
+        "read_result_contains_answer": true,
+        "typed_direct_pass": true,
+        "resource_ref_visible": true,
+        "answer_leaked_in_request": false
+      }
+    },
+    {
+      "id": "typed-measurement",
+      "query": "在测量资源中找到第 4 条 warning，并完整复制该 warning。",
+      "expected": "Detailed warning token: WARN-7QK-491.",
+      "kind": "measurement",
+      "status": "run",
+      "attempt": {
+        "status": "answered",
+        "answer": "Detailed warning token: WARN-7QK-491.",
+        "correct": true,
+        "raw_answer": "{\"answer\":\"Detailed warning token: WARN-7QK-491.\"}",
+        "calls": [
+          {
+            "name": "read_history",
+            "arguments": {
+              "reference": {
+                "kind": "measurement",
+                "run_id": "bc9e6bf8d27246a38808ae98c6ae383d",
+                "call_id": "fixture-measure-3XM826"
+              }
+            },
+            "outcome": "succeeded",
+            "result_contains_expected": true,
+            "error": null
+          }
+        ],
+        "rounds": [
+          {
+            "estimated_input_tokens": 93609,
+            "usage": {
+              "prompt_tokens": 79187,
+              "completion_tokens": 82,
+              "total_tokens": 79269
+            },
+            "finish_reason": "tool_calls"
+          },
+          {
+            "estimated_input_tokens": 94181,
+            "usage": {
+              "prompt_tokens": 79742,
+              "completion_tokens": 17,
+              "total_tokens": 79759
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "seconds": 2.554,
+        "typed_reference_match": true,
+        "read_result_contains_answer": true,
+        "typed_direct_pass": true,
+        "resource_ref_visible": true,
+        "answer_leaked_in_request": false
+      }
+    },
+    {
+      "id": "typed-chart_figure",
+      "query": "在 Quarterly Revenue Detail 的 Revenue 系列中，Period 08 的数值是多少？",
+      "expected": "817.4",
+      "kind": "chart_figure",
+      "status": "run",
+      "attempt": {
+        "status": "answered",
+        "answer": "817.4",
+        "correct": true,
+        "raw_answer": "{\"answer\":\"817.4\"}",
+        "calls": [
+          {
+            "name": "read_history",
+            "arguments": {
+              "reference": {
+                "kind": "chart_figure",
+                "run_id": "4f78fe5824c64702ba4414022381239a",
+                "call_id": "fixture-figure-9VA204"
+              }
+            },
+            "outcome": "succeeded",
+            "result_contains_expected": true,
+            "error": null
+          }
+        ],
+        "rounds": [
+          {
+            "estimated_input_tokens": 93612,
+            "usage": {
+              "prompt_tokens": 79190,
+              "completion_tokens": 80,
+              "total_tokens": 79270
+            },
+            "finish_reason": "tool_calls"
+          },
+          {
+            "estimated_input_tokens": 94269,
+            "usage": {
+              "prompt_tokens": 79802,
+              "completion_tokens": 7,
+              "total_tokens": 79809
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "seconds": 3.984,
+        "typed_reference_match": true,
+        "read_result_contains_answer": true,
+        "typed_direct_pass": true,
+        "resource_ref_visible": true,
+        "answer_leaked_in_request": false
+      }
+    }
+  ],
+  "aggregate": {
+    "total": 3,
+    "executed": 3,
+    "typed_direct_passed": 3
+  },
+  "finished_at": "2026-11-03T04:14:12.765843+00:00"
+}

@@ -383,7 +383,7 @@ flowchart LR
 | `search_history.result.next_cursor` | string 或 null | 后续页游标；无后续页时为 null |
 | `search_history.result.has_more` | boolean | 是否还有匹配项 |
 
-`read_history` 按历史查询、摘要或资源清单提供的引用读取已有事实，不执行旧工具。省略 selector 返回原消息、工具结果/错误或完整资源内容；`chart_figure` 的 content 含完整 Figure，可读回后装配新的完整 Figure。`selector` 可选且拒绝额外字段；field_path 从返回 `content` 根开始使用 JSON Pointer（例如 `/figure` 或 `/result`），选择后才对字符串/数组切片；对象不支持切片。
+`read_history` 按历史查询、摘要或资源清单提供的引用读取已有事实，不执行旧工具。省略 selector 返回原消息、工具结果/错误或完整资源内容；`chart_figure` 的 content 含完整 Figure，可读回后装配新的完整 Figure。`selector` 可选且拒绝额外字段；`field_path` 从返回 `content` 根开始使用 JSON Pointer。已知类型化资源路径包括 OCR snippets `/result/snippets`、measurement warnings `/result/warnings`、完整 ChartFigure `/figure`；完整 measurement 可选 `/result`，tool result 的结果为 `/result`。路径不确定时省略 selector 读取完整来源；若以当前资源目录中的引用读取指定字段失败，模型指引要求使用同一引用、去掉 selector 重试一次。选择字段后才可对字符串/数组切片；对象不支持切片。模型可见的引用优先级和 Prompt 组装见 [Agent](agent.md#prompt-资源目录中的-ocr-与测量概要)，selector 执行边界见 [Memory](memory.md#搜索读取与历史图像边界)。
 
 | 完整字段路径 | 类型与约束 | 含义 |
 |---|---|---|
