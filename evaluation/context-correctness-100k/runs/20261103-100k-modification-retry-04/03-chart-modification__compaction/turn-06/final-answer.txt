@@ -1,0 +1,13 @@
+已按要求只修改 Figure 总标题并重新绘制。
+
+**本次唯一修改**
+- Figure 标题：`Regional Operations Dashboard, 2025` → **`2025 Regional Sales and Operations (Revised)`**
+
+**保持不变**
+- 列数：2（两列）
+- 图表顺序：① Quarterly Revenue by Region（柱图）→ ② Monthly Orders (Corrected)（折线）→ ③ Monthly Conversion Rate（折线）；实际排布仍为第一行左柱图、右订单，第二行左转化率
+- 全部数据与子图设定：季度收入 34/27/22、39/32/26、43/36/31、50/41/35；订单 82、90、87、95、101、108、**109**、115、123、119、130、138；转化率 2.4–3.8；子图标题、轴标签、source 及订单面板的 note `July corrected from the source ledger.` 均未动
+
+回看生成图：新标题显示在顶部，第二行右侧留空（第三张图居左），三张子图的刻度、图例与数值点位与上一版一致；订单面板下方可见 source 与 July 更正说明两行文字，未遮挡曲线。
+
+其中 `(Revised)` 与年份前置的写法是本次按你的指定新拟的总标题，并非源图中的原文字（源图为 “Regional Sales and Operations Dashboard, 2025”）。

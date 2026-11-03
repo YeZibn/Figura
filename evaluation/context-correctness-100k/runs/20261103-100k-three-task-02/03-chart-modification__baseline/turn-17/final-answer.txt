@@ -1,0 +1,75 @@
+## 0. Figure 级
+
+- 总标题：**2025 Regional Sales and Operations (Revised)**
+- 布局：两列（`columns: 2`）
+- 顺序：① Quarterly Revenue by Region → ② Monthly Orders (Corrected) → ③ Monthly Conversion Rate
+- 版本：digest `cfe3bdd9…f476`（run `4fdea6f9…` / call `call_00_f04MzIFBXY8ETWv0pcgg6947`）
+
+## ① Quarterly Revenue by Region（分组柱状图）
+
+- 类别（4 个，顺序不变）：Q1、Q2、Q3、Q4
+- 三个系列（每系列 4 个值，按 Q1→Q4）：
+
+| 系列 | Q1 | Q2 | Q3 | Q4 |
+|---|---|---|---|---|
+| North | 34 | 39 | 43 | 50 |
+| South | 27 | 32 | 36 | 41 |
+| Central | 22 | 26 | 31 | 35 |
+
+- 标题：Quarterly Revenue by Region
+- x 轴：类别轴，**无轴标签**（源图亦无）
+- y 轴标签：Revenue (M USD)
+- source：Figura synthetic operations dataset
+- note：（空）
+- 与初始 Figure 完全一致，本轮无任何改动
+
+## ② Monthly Orders (Corrected)（折线图）
+
+- 类别（12 个，Jan→Dec 顺序不变）
+- 系列：`orders`，标签 **Orders**
+- 最终取值（含源图对照）：
+
+| 月份 | 源图读数 | 最终值 | 说明 |
+|---|---|---|---|
+| Jan | 82 | 82 | 一致 |
+| Feb | 90 | 90 | 一致 |
+| Mar | 87 | 87 | 一致 |
+| Apr | 95 | 95 | 一致 |
+| May | 101 | 101 | 一致 |
+| Jun | 108 | 108 | 一致 |
+| **Jul** | **105** | **109** | **台账更正，+4** |
+| Aug | 115 | 115 | 一致 |
+| Sep | 123 | 123 | 一致 |
+| Oct | 119 | 119 | 一致 |
+| Nov | 130 | 130 | 一致 |
+| Dec | 138 | 138 | 一致 |
+
+- 差异说明：**July=105 是源图上的标注读数**，作为历史事实保留在原图与初始 Figure（digest `1619687d…5530`）中，未被抹去；**July=109 是依据订单台账核验后的最终值**，写入了现行 Figure，并靠 note 记录来由。两者并存、口径分开，除 July 外 11 个月最终值与原图完全相同。
+- 标题：Monthly Orders (Corrected)
+- x 轴：类别轴，**无轴标签**（源图亦无，类别为 Jan–Dec）
+- y 轴标签：Orders (count)
+- source：Figura synthetic operations dataset
+- note：July corrected from the source ledger.
+
+## ③ Monthly Conversion Rate（折线图）
+
+- 类别（12 个，Jan→Dec）：Jan、Feb、Mar、Apr、May、Jun、Jul、Aug、Sep、Oct、Nov、Dec
+- 系列：`conversion`，标签 Conversion (%)
+- 取值：2.4、2.6、2.5、2.8、3.0、3.1、3.0、3.3、3.4、3.2、3.6、3.8（顺序对应）
+- 标题：Monthly Conversion Rate
+- x 轴：类别轴，**无轴标签**（源图亦无）
+- y 轴标签：Conversion (%)
+- source：Figura synthetic operations dataset
+- note：（空）
+- 与初始 Figure 逐字段一致，本轮无任何改动
+
+## 生效元数据一览
+
+| 层级 | 标题 | x 轴 | y 轴 | source | note |
+|---|---|---|---|---|---|
+| Figure | 2025 Regional Sales and Operations (Revised) | — | — | — | — |
+| ① | Quarterly Revenue by Region | 类别轴，无标签 | Revenue (M USD) | Figura synthetic operations dataset | 空 |
+| ② | Monthly Orders (Corrected) | 类别轴，无标签 | Orders (count) | Figura synthetic operations dataset | July corrected from the source ledger. |
+| ③ | Monthly Conversion Rate | 类别轴，无标签 | Conversion (%) | Figura synthetic operations dataset | 空 |
+
+补充两点便于使用：三个面板的 x 轴均无轴名，源自原图本就没有横轴标题；note 仅订单面板非空，其余两面板为空字符串而非缺失字段。以上数值均来自图上标注（July 109 另据台账），未做像素测量。

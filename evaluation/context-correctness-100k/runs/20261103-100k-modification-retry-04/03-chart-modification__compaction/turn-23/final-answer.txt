@@ -1,0 +1,41 @@
+## 一、Monthly Conversion Rate · 12 个月完整数值（单位 %）
+
+| 月份 | Jan | Feb | Mar | Apr | May | Jun | Jul | Aug | Sep | Oct | Nov | Dec |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 转化率 | 2.4 | 2.6 | 2.5 | 2.8 | 3.0 | 3.1 | 3.0 | 3.3 | 3.4 | 3.2 | 3.6 | 3.8 |
+
+序列：**2.4, 2.6, 2.5, 2.8, 3.0, 3.1, 3.0, 3.3, 3.4, 3.2, 3.6, 3.8**
+
+## 二、极值与 Jan→Dec 差
+
+| 项 | 月份 | 值 |
+|---|---|---|
+| **最小值** | Jan | **2.4%** |
+| **最大值** | Dec | **3.8%** |
+| **Jan→Dec 差** | — | **+1.4 个百分点** |
+
+- 该差值是用两个百分比直接相减得到的**百分点差**（3.8% − 2.4% = 1.4 pp），不是相对增幅。若换算成相对变化，则为 1.4 / 2.4 ≈ +58.3%，两者不可混用。
+- 极值唯一：没有其他月份达到 2.4 或 3.8；次低为 Mar 2.5，次高为 Nov 3.6。
+- 另有 3 次月度回落：Feb→Mar −0.1 pp、Jun→Jul −0.1 pp、Sep→Oct −0.2 pp；其余月份环比上升。全年均值 36.7 / 12 ≈ 3.06%。
+
+## 三、最终 Figure 中该子图核对（对比初始 Figure）
+
+分别读取了初始版（run `a04fac4…`）与当前版（run `9083994…`）中 `charts[2].chart_spec`，即 `monthly_conversion`。
+
+| 字段 | 初始 | 当前 | 是否一致 |
+|---|---|---|---|
+| `metadata.title` | Monthly Conversion Rate | 同 | ✅ |
+| `metadata.chart_type` | line | 同 | ✅ |
+| `metadata.source` | Figura synthetic operations dataset | 同 | ✅ |
+| `metadata.note` | `""` | 同（仍为空） | ✅ |
+| `y_axis.label` | Conversion (%) | 同 | ✅ |
+| `y_axis.kind` | numeric | 同 | ✅ |
+| `x_axis.kind` / 轴标题 | categorical / 无 | 同 | ✅ |
+| `coordinate_system.kind` | cartesian | 同 | ✅ |
+| `series[0].id` / `label` | conversion / Conversion Rate | 同 | ✅ |
+| 12 个点位的 x 与 y | Jan 2.4 … Dec 3.8 | 完全逐点相同 | ✅ |
+| 点位数量与顺序 | 12，Jan–Dec | 同 | ✅ |
+| `schema_version` | 2 | 同 | ✅ |
+| `measurement_refs` | `[]` | 同 | ✅ |
+
+**结论**：最终 Figure 中该子图的数据与元数据**完全未变**，逐字段一致，12 个点位既无数值改动也无顺序或标签改动；该面板也没有被加入 note，source 未改，轴标签未改。本次会话对转化率面板从未执行过任何编辑操作，模型结构也与初始版相同。

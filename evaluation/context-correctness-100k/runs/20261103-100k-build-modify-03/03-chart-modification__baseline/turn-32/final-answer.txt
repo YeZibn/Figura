@@ -1,0 +1,127 @@
+## 最终 ChartSpec 摘要草稿
+
+> 状态：草稿（尚未装配、未渲染）。内容为当前生效 Figure 的完整字段摘要，未新增任何修改。
+
+### 1. Figure 头
+
+| 字段 | 值 |
+|---|---|
+| schema_version | 2 |
+| title | 2025 Regional Sales and Operations (Revised) |
+| layout.columns | 2 |
+| charts 数量 | 3 |
+| 顺序 | 1 quarterly_revenue → 2 monthly_orders → 3 monthly_conversion |
+| 呈现位置 | 第 1 行左：收入；第 1 行右：订单；第 2 行左：转化率；第 2 行右：空余（3 图入两列） |
+
+### 2. 子图 1 — `quarterly_revenue`
+
+| 字段 | 值 |
+|---|---|
+| chart_type | bar |
+| title（面板标题） | Quarterly Revenue by Region |
+| source（来源行标签） | Figura synthetic operations dataset |
+| note（备注行标签） | 空（无内容） |
+| x 轴 | kind = categorical，label = **Quarter** |
+| y 轴 | kind = numeric，label = **Revenue (M USD)** |
+| dataset.orientation | vertical |
+| dataset.mode | grouped |
+| 类别标签 | Q1、Q2、Q3、Q4（id 分别为 q1、q2、q3、q4） |
+| 图例/系列标签 | North、South、Central（id 分别为 north、south、central） |
+| measurement_refs | [] |
+
+**全量序列（按 Q1→Q4）**
+
+| 系列（label） | Q1 | Q2 | Q3 | Q4 |
+|---|---|---|---|---|
+| North | 34 | 39 | 43 | 50 |
+| South | 27 | 32 | 36 | 41 |
+| Central | 22 | 26 | 31 | 35 |
+
+### 3. 子图 2 — `monthly_orders`
+
+| 字段 | 值 |
+|---|---|
+| chart_type | line |
+| title（面板标题） | Monthly Orders (Corrected) |
+| source（来源行标签） | Figura synthetic operations dataset |
+| note（备注行标签） | July corrected from the source ledger. |
+| x 轴 | kind = categorical，label = **Month** |
+| y 轴 | kind = numeric，label = **Orders (count)** |
+| 图例/系列标签 | Orders（id = orders，单系列） |
+| 类别标签 | Jan、Feb、Mar、Apr、May、Jun、Jul、Aug、Sep、Oct、Nov、Dec |
+| measurement_refs | [] |
+
+**全量序列（12 点，按 Jan→Dec）**
+
+| 月份 | Jan | Feb | Mar | Apr | May | Jun | Jul | Aug | Sep | Oct | Nov | Dec |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Orders | 82 | 90 | 87 | 95 | 101 | 108 | **109** | 115 | 123 | 119 | 130 | 138 |
+
+（同序列另一写法：82, 90, 87, 95, 101, 108, 109, 115, 123, 119, 130, 138）
+
+### 4. 子图 3 — `monthly_conversion`
+
+| 字段 | 值 |
+|---|---|
+| chart_type | line |
+| title（面板标题） | Monthly Conversion Rate |
+| source（来源行标签） | Figura synthetic operations dataset |
+| note（备注行标签） | 空（无内容） |
+| x 轴 | kind = categorical，label = **Month** |
+| y 轴 | kind = numeric，label = **Conversion (%)** |
+| 图例/系列标签 | Conversion rate（id = conversion_rate，单系列） |
+| 类别标签 | Jan、Feb、Mar、Apr、May、Jun、Jul、Aug、Sep、Oct、Nov、Dec |
+| measurement_refs | [] |
+
+**全量序列（12 点，按 Jan→Dec）**
+
+| 月份 | Jan | Feb | Mar | Apr | May | Jun | Jul | Aug | Sep | Oct | Nov | Dec |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Conversion (%) | 2.4 | 2.6 | 2.5 | 2.8 | 3.0 | 3.1 | 3.0 | 3.3 | 3.4 | 3.2 | 3.6 | 3.8 |
+
+（同序列另一写法：2.4, 2.6, 2.5, 2.8, 3.0, 3.1, 3.0, 3.3, 3.4, 3.2, 3.6, 3.8）
+
+### 5. 修订来源说明
+
+| 项目 | 内容 |
+|---|---|
+| 受影响子图 | 仅 `monthly_orders` |
+| 源图读数 | July = **105**（源图 Monthly Orders 面板该点数据标签；属源图口径历史事实，仍存于源图附件与早期 Figure 版本） |
+| 用户确认修订值 | July = **109**（核实订单台账后确认） |
+| 绝对/相对变化 | +4 单；4 ÷ 105 ≈ +3.81% |
+| 其他月份 | 其余 11 个月源图口径与最终口径完全相同，无调整 |
+| Figure 内的追溯方式 | 该面板 note = “July corrected from the source ledger.”；note 未写入 105→109 的数值差，105 不出现在本 Figure 数据中 |
+| 连带影响 | 全年合计 1,293 → 1,297；全年月均 107.75 → 108.08；Q3 合计 343 → 347、月均 114.33 → 115.67 |
+| 证据性质 | 109 的依据是台账确认，不是图像读数，也不是渲染或计算推出 |
+
+### 6. 非目标字段保留说明
+
+| 保留范围 | 具体内容 | 结论 |
+|---|---|---|
+| Figure 级 | layout.columns = 2、schema_version = 2、charts 数量 3、chart_id 顺序 | 与初始 Figure 一致，未变 |
+| `quarterly_revenue` 全部字段 | chart_id、chart_type、title、source、note、x/y 轴 kind 与 label、orientation、mode、类别与顺序、North/South/Central 三系列 12 个值、measurement_refs、schema_version | 与初始 Figure 逐项相同 |
+| `monthly_orders` 非目标字段 | chart_id、chart_type、source、x_axis.kind / label、y_axis.kind、coordinate_system.kind、series id 与 label、12 个月类别与顺序、Jan–Jun 与 Aug–Dec 共 11 个值、measurement_refs、schema_version | 与初始 Figure 逐项相同 |
+| `monthly_conversion` 全部字段 | chart_id、chart_type、title、source、note、x/y 轴 kind 与 label、series id 与 label、12 个值、类别与顺序、measurement_refs、schema_version | 与初始 Figure 逐项相同 |
+| source 一致性 | 三个子图 source 均为 “Figura synthetic operations dataset” | 完全一致，未改写或追加 |
+| 空 note 保持 | 子图 1、子图 3 的 note 仍为空字符串 | 未被误填 |
+| 已撤销候选 | 单列布局、转化率置首 | 均未出现在任何字段（columns=2、首位为季度收入） |
+
+### 7. 标签清单核对（确保无遗漏）
+
+| 标签类别 | 数量 | 具体内容 | 状态 |
+|---|---|---|---|
+| Figure 总标题 | 1 | 2025 Regional Sales and Operations (Revised) | ✅ 已列 |
+| 子图标题 | 3 | Quarterly Revenue by Region / Monthly Orders (Corrected) / Monthly Conversion Rate | ✅ 已列 |
+| X 轴标签 | 3 | Quarter、Month、Month | ✅ 已列 |
+| Y 轴标签 | 3 | Revenue (M USD)、Orders (count)、Conversion (%) | ✅ 已列 |
+| 图例/系列标签 | 5 | North、South、Central（收入）；Orders（订单）；Conversion rate（转化率） | ✅ 已列 |
+| 类别标签 | 4 + 12 + 12 | Q1–Q4；Jan–Dec（订单）；Jan–Dec（转化率） | ✅ 已列 |
+| source 行 | 3（同一字符串） | Figura synthetic operations dataset | ✅ 已列 |
+| note 行 | 3 | 空 / July corrected from the source ledger. / 空 | ✅ 已列 |
+| 单位 | 3 | M USD、count、% | ✅ 已列 |
+
+### 8. 草稿使用提示
+
+- 本摘要覆盖 Figure 级 4 项与三个子图各 13–15 项字段，可直接作为一次完整装配的输入依据；如需正式装配，我按此提交并使用返回的 figure_ref 渲染。
+- 日期/来源措辞、单位与“July 修正”的数值差均按已确认内容书写；若台账对 July 以外月份另有更正，第 5 节与相关合计需重算。
+- 摘要中的数值来自源图数据标签与台账确认值，未经像素测量；装配与渲染仅能证明结构与绘制成立，不构成数据正确性证明。

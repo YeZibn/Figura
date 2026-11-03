@@ -1,0 +1,22 @@
+已撤销。上一轮只是把「单列 + 转化率置首」记为候选，**从未应用到任何 Figure**，因此当前生效的 Figure 无需回滚或重建；我也核对了其已提交内容，确认与要求一致。
+
+## 当前生效状态（已核对）
+
+- Figure 引用：`cefa0e08f2fe4c0e9a1d45cec2e9834d` / `call_00_LoBXhET5wCRiSmzIvIs04288`
+- 整体标题：`Regional Operations Dashboard, 2025`
+- 布局：`columns: 2`（两列，保持）
+- 面板顺序（保持原顺序）：`quarterly_revenue` → `monthly_orders` → `monthly_conversion`
+  1. Quarterly Revenue by Region（柱状图，Y 轴 Revenue (M USD)）
+  2. Monthly Orders (Corrected)（折线，Y 轴 Orders (count)）
+  3. Monthly Conversion Rate（折线，Y 轴 Conversion (%)）
+
+即第 1 行「季度收入 | 月度订单(已更正)」，第 2 行左侧「月度转化率」，右下留白。三个面板的标题、轴名、系列与全部数值均与上一轮一致。
+
+## 候选改动状态
+
+| 候选改动 | 状态 |
+|---|---|
+| 布局改为单列（`columns: 1`） | 已撤销，不采用 |
+| 面板重排为 Monthly Conversion Rate 在首位 | 已撤销，不采用 |
+
+这两项均不应出现在最终 Figure 中；任何后续装配都会沿用两列布局与 `quarterly_revenue → monthly_orders → monthly_conversion` 的原有顺序。若需要基于当前状态做其他修改，可直接说明。

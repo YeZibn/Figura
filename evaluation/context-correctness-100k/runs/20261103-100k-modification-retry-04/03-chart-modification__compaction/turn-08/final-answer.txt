@@ -1,0 +1,17 @@
+当前已生效的 Figure 已经完全符合这一要求，我没有再做任何改动，也没有重新装配或重绘：`run 908399490058411e91a60cdf906311d8`，digest `b8194b22…0b1056`，并已对照核对过完整内容。
+
+**符合情况**
+
+| 要求项 | 当前状态 |
+|---|---|
+| Monthly Orders 的 July 值 | 109（仅此点与源图读数不同） |
+| Monthly Orders 标题 | `Monthly Orders (Corrected)` |
+| Monthly Orders 轴标签 | `Orders (count)` |
+| Monthly Orders note | `July corrected from the source ledger.` |
+| Figure 总标题 | `2025 Regional Sales and Operations (Revised)` |
+| Quarterly Revenue 面板 | 与初始 Figure 完全一致（标题、轴名、Q1–Q4 类别、North/South/Central 三系列数值、source 均未变） |
+| Monthly Conversion Rate 面板 | 与初始 Figure 完全一致（标题、轴名、12 个月数值、source 均未变） |
+| 布局 | 仍为两列；候选的单列与重排要求均未应用 |
+| 面板顺序 | Quarterly Revenue → Monthly Orders (Corrected) → Monthly Conversion Rate |
+
+除上述四项外，没有其他字段被改动；子图 source 仍为 `Figura synthetic operations dataset`。最终图像使用本次会话中该 Figure 的渲染结果（1280×1002），两列布局与面板顺序在图中可见。

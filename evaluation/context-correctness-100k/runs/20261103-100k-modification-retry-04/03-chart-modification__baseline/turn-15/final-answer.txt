@@ -1,0 +1,95 @@
+## 比对基准
+- **基准**：初始 Figure（run 1，`call_00_NesyMJNoRsFt1VyPMBEs4570`）
+- **对照**：当前 Figure（run 6，`call_00_ET_pEUj4deSRGDuNzp0DYEv5527`）
+- **范围**：三个子图的全部字段与值；下面逐项给出结果。
+
+---
+
+## 一、Monthly Orders（`monthly_orders`）——允许修改范围内
+
+| 字段 | 初始值 | 当前值 | 状态 | 判定 |
+|---|---|---|---|---|
+| metadata.title | Monthly Orders | Monthly Orders (Corrected) | 已变更 | ✅ 通过（允许项） |
+| y_axis.label | Orders | Orders (count) | 已变更 | ✅ 通过（允许项） |
+| metadata.note | 数值取自折线点标注 | July corrected from the source ledger. 其余月份数值取自折线点标注（源图 July 为 105） | 已变更 | ✅ 通过（允许项），指定英文句原样包含 |
+| dataset.points[6].y（Jul） | 105 | 109 | 已变更 | ✅ 通过（允许项，唯一数据改动） |
+
+**该面板其余字段须不变，实际核对：**
+
+| 字段 | 初始 | 当前 | 状态 |
+|---|---|---|---|
+| chart_id | monthly_orders | monthly_orders | ✅ 不变 |
+| metadata.chart_type | line | line | ✅ 不变 |
+| metadata.source | Figura synthetic operations dataset | 同左 | ✅ 不变 |
+| x_axis.kind / label | categorical / Month | categorical / Month | ✅ 不变 |
+| y_axis.kind | numeric | numeric | ✅ 不变 |
+| coordinate_system.kind | cartesian | cartesian | ✅ 不变 |
+| series.id / label | orders / Orders | orders / Orders | ✅ 不变 |
+| points x 序列 | Jan…Dec（12 项，顺序） | Jan…Dec（12 项，顺序） | ✅ 不变 |
+| 其余 11 月 y | 82 / 90 / 87 / 95 / 101 / 108 / 115 / 123 / 119 / 130 / 138 | 逐一相同 | ✅ 不变 |
+| schema_version | 2 | 2 | ✅ 不变 |
+| measurement_refs | 空 | 空 | ✅ 不变 |
+
+结论：**该面板只改动了 4 个允许项，没有允许范围之外的偏差**。需要说明的是，note 采用追加方式：新增台账修订说明与源图 105 的括注，同时原说明“数值取自折线点标注”以原样片段保留，未被替换掉。
+
+---
+
+## 二、Quarterly Revenue（`revenue_by_region`）——字段与值必须不变
+
+| 字段 | 初始 | 当前 | 状态 |
+|---|---|---|---|
+| chart_id | revenue_by_region | 同左 | ✅ 不变 |
+| metadata.title | Quarterly Revenue by Region | 同左 | ✅ 不变 |
+| metadata.chart_type | bar | bar | ✅ 不变 |
+| metadata.source | Figura synthetic operations dataset | 同左 | ✅ 不变 |
+| metadata.note | 数值取自柱顶标注 | 同左 | ✅ 不变 |
+| x_axis.kind / label | categorical / Quarter | categorical / Quarter | ✅ 不变 |
+| y_axis.kind / label | numeric / Revenue (M USD) | numeric / Revenue (M USD) | ✅ 不变 |
+| categories | q1–q4（Q1–Q4） | q1–q4（Q1–Q4） | ✅ 不变 |
+| orientation / mode | vertical / grouped | vertical / grouped | ✅ 不变 |
+| series id/顺序 | north, south, central | north, south, central | ✅ 不变 |
+| North 值 | 34, 39, 43, 50 | 34, 39, 43, 50 | ✅ 不变 |
+| South 值 | 27, 32, 36, 41 | 27, 32, 36, 41 | ✅ 不变 |
+| Central 值 | 22, 26, 31, 35 | 22, 26, 31, 35 | ✅ 不变 |
+| schema_version / measurement_refs | 2 / 空 | 2 / 空 | ✅ 不变 |
+
+结论：**12 个柱值与全部字段逐项一致，未发现偏差。**
+
+---
+
+## 三、Monthly Conversion Rate（`monthly_conversion`）——字段与值必须不变
+
+| 字段 | 初始 | 当前 | 状态 |
+|---|---|---|---|
+| chart_id | monthly_conversion | 同左 | ✅ 不变 |
+| metadata.title | Monthly Conversion Rate | 同左 | ✅ 不变 |
+| metadata.chart_type | line | line | ✅ 不变 |
+| metadata.source | Figura synthetic operations dataset | 同左 | ✅ 不变 |
+| metadata.note | 数值取自折线点标注 | 同左 | ✅ 不变 |
+| x_axis.kind / label | categorical / Month | categorical / Month | ✅ 不变 |
+| y_axis.kind / label | numeric / Conversion (%) | numeric / Conversion (%) | ✅ 不变 |
+| series.id / label | conversion / Conversion rate | conversion / Conversion rate | ✅ 不变 |
+| points x 序列 | Jan…Dec（12 项，顺序） | Jan…Dec（12 项，顺序） | ✅ 不变 |
+| 12 点值 | 2.4, 2.6, 2.5, 2.8, 3.0, 3.1, 3.0, 3.3, 3.4, 3.2, 3.6, 3.8 | 2.4, 2.6, 2.5, 2.8, **3**, 3.1, **3**, 3.3, 3.4, 3.2, 3.6, 3.8 | ✅ 数值相等 |
+| schema_version / measurement_refs | 2 / 空 | 2 / 空 | ✅ 不变 |
+
+结论：**未发现数值偏差。**唯一需要记录的差异是 May 与 Jul 的数值写法：初始 JSON 写成 `3.0`，当前写成 `3`。两者是同一个数值，绘图高度与含义完全相同，属于序列化表示差异，不是数据变更；若要求字符级完全一致，可视为“表示层差异”，但不构成数值偏差。
+
+---
+
+## 四、Figure 级字段（附带核对）
+
+| 字段 | 初始 | 当前 | 状态 |
+|---|---|---|---|
+| title | Regional Operations Dashboard, 2025 | 2025 Regional Sales and Operations (Revised) | 变更（用户先后明确要求） |
+| layout.columns | 2 | 2 | ✅ 不变（撤销候选后未改动） |
+| 子图数量与顺序 | 3：revenue → orders → conversion | 3：revenue → orders → conversion | ✅ 不变 |
+| schema_version | 2 | 2 | ✅ 不变 |
+
+---
+
+## 总体判定
+- **偏差项：0 项实质偏差。**
+- **允许改动项：4 项全部落在允许范围**（月度订单面板的标题、Y 轴标签、note，以及 July 从 105 改为 109），并且 July 是唯一变动的数据点。
+- **仅记录 1 处非实质差异**：转化率面板 May、Jul 的 `3.0` 与 `3` 写法不同，数值相等。
+- 判定依据是两版 Figure 的装配字段逐项比对，并非视觉观察；最近一次渲染只用于确认显示效果，未用于数值核对。

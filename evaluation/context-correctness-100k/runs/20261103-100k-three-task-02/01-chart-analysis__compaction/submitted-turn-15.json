@@ -1,0 +1,6 @@
+{
+  "turn": 15,
+  "text": "计算 Monthly Orders 与 Monthly Conversion Rate 12 个月序列的 Pearson 相关系数，报告精度到小数点后三位。说明相关性描述的是共同变化，不支持因果结论。",
+  "attachment_sha256": [],
+  "provider_id": "deepseek"
+}

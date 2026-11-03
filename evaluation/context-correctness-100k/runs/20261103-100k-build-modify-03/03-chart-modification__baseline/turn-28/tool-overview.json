@@ -1,0 +1,14 @@
+[
+  {
+    "call_id": "call_00_zTGKGaJWX4pA8sQR3tpE7209",
+    "tool_name": "read_history",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_01_KBvCRTXHWDcqoWuhFdVc2787",
+    "tool_name": "read_resource_image",
+    "outcome": "succeeded",
+    "error": null
+  }
+]

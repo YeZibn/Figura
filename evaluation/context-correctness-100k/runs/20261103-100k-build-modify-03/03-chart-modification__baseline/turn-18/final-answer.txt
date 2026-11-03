@@ -1,0 +1,43 @@
+## 渲染前核对结果（全部通过）
+
+核对基准：初始 Figure（run e2426d3a…，digest e1f33d48…）对比当前 Figure（run 28991ef6…，digest 0a0082bc…）。
+
+| 检查项 | 应为 | 实际 | 结果 |
+|---|---|---|---|
+| Figure 总标题 | 2025 Regional Sales and Operations (Revised) | 同左 | ✅ |
+| 列数 | 2 | layout.columns = 2 | ✅ |
+| 面板顺序 | 收入 → 订单 → 转化率 | quarterly_revenue → monthly_orders → monthly_conversion | ✅ |
+| 子图数量 | 3 | 3 | ✅ |
+
+**三个子图数据**
+
+| 子图 | 核对内容 | 结果 |
+|---|---|---|
+| Quarterly Revenue by Region | Q1–Q4；North 34/39/43/50、South 27/32/36/41、Central 22/26/31/35 | ✅ 与初始版本逐值相同 |
+| Monthly Orders (Corrected) | 82、90、87、95、101、108、**109**、115、123、119、130、138；仅 July 由 105 改为 109 | ✅ 仅目标点变化，其余 11 月相同 |
+| Monthly Conversion Rate | 2.4、2.6、2.5、2.8、3.0、3.1、3.0、3.3、3.4、3.2、3.6、3.8 | ✅ 与初始版本逐值相同 |
+
+**source / note / 修订来源**
+
+| 子图 | source | note | 结果 |
+|---|---|---|---|
+| 收入 | Figura synthetic operations dataset | 空 | ✅ 与初始一致 |
+| 订单 | Figura synthetic operations dataset | July corrected from the source ledger. | ✅ 修订来源已记录，source 未被替换 |
+| 转化率 | Figura synthetic operations dataset | 空 | ✅ 与初始一致 |
+
+修订来源核对：Figure 内可追溯的信息是 note 字段的台账说明与 July=109 这一值本身；源图原始读数 105 不在当前 Figure 中，仅存于源图附件及早期 Figure 版本（含 July=105 的版本）。这一点是既定的记录方式，非缺陷。
+
+**目标外图表是否变化：无变化。** 收入子图与转化率子图的 chart_id、图表类型、标题、source、note、轴标签、类别顺序、系列标识、全部数值、measurement_refs、schema_version 均与初始版本一致；三处 source 字符串相同。
+
+## 渲染结果
+
+PNG 已生成（1280×1002）。回看要点：
+
+- 总标题 “2025 Regional Sales and Operations (Revised)” 独占一行，未与子图标题重叠
+- 首行两张子图并列，第三张位于第二行左侧、右下留空，符合两列布局
+- 收入面板三系列分组清晰，Q1–Q4 递增，与 34…50 等数值对应一致
+- 订单面板 Jun(108) 与 Jul(109) 两点几乎等高、Jul 略高，随后 8 月升至 115；纵向范围 80–140，纵轴标题为 Orders (count)
+- 订单面板来源行下两行文字为 source 与更正 note，均可读、未被裁切
+- 转化率面板 2.4→3.8 上行，Mar/Jul/Oct 三处小回落可见，与数据一致
+
+未发现需要修正的问题；三条数据、布局与标注均与核对结果相符。

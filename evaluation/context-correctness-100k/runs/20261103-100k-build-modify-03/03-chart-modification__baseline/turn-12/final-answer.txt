@@ -1,0 +1,34 @@
+已逐字段比对初始 Figure（首轮装配版本）与当前生效 Figure（标题为 “2025 Regional Sales and Operations (Revised)” 的版本）中的 Quarterly Revenue 子图，两版**完全一致，无任何字段差异**。
+
+## 一、逐系列数值核对
+
+| 系列（id / 标签） | Q1 | Q2 | Q3 | Q4 | 两版比对 |
+|---|---|---|---|---|---|
+| north / North | 34 | 39 | 43 | 50 | 一致 |
+| south / South | 27 | 32 | 36 | 41 | 一致 |
+| central / Central | 22 | 26 | 31 | 35 | 一致 |
+
+- 类别顺序两版均为 q1/Q1、q2/Q2、q3/Q3、q4/Q4，未重排
+- 数据集结构：orientation = vertical、mode = grouped，两版相同
+- 数值个数：每系列 4 个，共 12 个值，两版逐项相同（含数值顺序对齐到同一季度）
+
+## 二、非数值字段核对
+
+| 字段 | 初始 Figure | 当前 Figure | 结论 |
+|---|---|---|---|
+| chart_id | quarterly_revenue | quarterly_revenue | 无变化 |
+| chart_type | bar | bar | 无变化 |
+| title | Quarterly Revenue by Region | Quarterly Revenue by Region | 无变化 |
+| source | Figura synthetic operations dataset | Figura synthetic operations dataset | 无变化 |
+| note | 空字符串 | 空字符串 | 无变化 |
+| X 轴 | categorical / Quarter | categorical / Quarter | 无变化 |
+| Y 轴 | numeric / Revenue (M USD) | numeric / Revenue (M USD) | 无变化 |
+| coordinate_system | cartesian | cartesian | 无变化 |
+| schema_version | 2 | 2 | 无变化 |
+| measurement_refs | 空数组 | 空数组 | 无变化 |
+
+## 三、结论
+
+本轮所有改动都限定在 Monthly Orders 子图（July 值 109、标题、Y 轴名、note）与 Figure 总标题上；Quarterly Revenue 子图的数值、标题、source、note、轴标签及其余结构均未发生变化。该子图也未出现在任何已撤销的候选方案影响范围内（候选仅涉及布局与面板顺序，且从未装配）。
+
+比对依据为两次装配的结构化内容（图内数值全部来自源图数据标签，未使用测量校正）；当前 Figure 仍是已渲染的那一版，未因本次核对而产生新的装配或渲染产物。

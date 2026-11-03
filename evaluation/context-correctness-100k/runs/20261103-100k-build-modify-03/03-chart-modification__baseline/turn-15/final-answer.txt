@@ -1,0 +1,85 @@
+## 比较基准
+
+- 初始 Figure：run e2426d3a…，标注 digest e1f33d48…，整体标题 Regional Operations Dashboard, 2025
+- 当前 Figure：run 28991ef6…，digest 0a0082bc…，整体标题 2025 Regional Sales and Operations (Revised)
+- 依据：两次装配的结构化内容逐字段比对（非像素测量）；两个子图的图内数值均源自源图数据标签
+
+## A. Figure 级
+
+| 字段 | 初始 | 当前 | 要求 | 结果 |
+|---|---|---|---|---|
+| title | Regional Operations Dashboard, 2025 | 2025 Regional Sales and Operations (Revised) | 允许修改 | ✅ 通过（按第 6 轮要求变更） |
+| layout.columns | 2 | 2 | 必须为 2 | ✅ 通过（未采用单列候选） |
+| 子图数量 | 3 | 3 | 保持 3 | ✅ 通过 |
+| 子图顺序 | revenue → orders → conversion | revenue → orders → conversion | 保持原序 | ✅ 通过（未将转化率提前） |
+| schema_version | 2 | 2 | 不变 | ✅ 通过 |
+
+## B. Monthly Orders — 允许修改的字段（逐项）
+
+| 字段 | 初始值 | 当前值 | 结果 |
+|---|---|---|---|
+| July 值（Jul.y） | 105 | 109 | ✅ 通过（唯一数值改动，+4，符合台账确认值） |
+| metadata.title | Monthly Orders | Monthly Orders (Corrected) | ✅ 通过（第 2 轮要求） |
+| y_axis.label | Orders | Orders (count) | ✅ 通过（第 2 轮要求） |
+| metadata.note | ""（空） | July corrected from the source ledger. | ✅ 通过（第 5 轮要求） |
+
+**允许清单之外的字段均未改动**：
+
+| 字段 | 值（两版一致） | 结果 |
+|---|---|---|
+| chart_id | monthly_orders | ✅ 未变 |
+| chart_type | line | ✅ 未变 |
+| metadata.source | Figura synthetic operations dataset | ✅ 未变 |
+| x_axis.kind / label | categorical / Month | ✅ 未变 |
+| coordinate_system.kind | cartesian | ✅ 未变 |
+| 月份类别与顺序 | Jan, Feb, Mar, Apr, May, Jun, Jul, Aug, Sep, Oct, Nov, Dec | ✅ 未变（无增删、无重排） |
+| series.id / label | orders / Orders | ✅ 未变 |
+| 其余 11 个月数值 | 82, 90, 87, 95, 101, 108, 115, 123, 119, 130, 138 | ✅ 未变（Jan–Jun、Aug–Dec 逐值相同） |
+| measurement_refs | [] | ✅ 未变 |
+
+## C. Quarterly Revenue by Region — 必须不变
+
+| 字段 | 初始 | 当前 | 结果 |
+|---|---|---|---|
+| chart_id | quarterly_revenue | quarterly_revenue | ✅ 通过 |
+| chart_type | bar | bar | ✅ 通过 |
+| metadata.title | Quarterly Revenue by Region | 同左 | ✅ 通过 |
+| metadata.source | Figura synthetic operations dataset | 同左 | ✅ 通过 |
+| metadata.note | 空 | 空 | ✅ 通过 |
+| x_axis.kind / label | categorical / Quarter | 同左 | ✅ 通过 |
+| y_axis.kind / label | numeric / Revenue (M USD) | 同左 | ✅ 通过 |
+| dataset.orientation | vertical | vertical | ✅ 通过 |
+| dataset.mode | grouped | grouped | ✅ 通过 |
+| 类别 | q1/Q1, q2/Q2, q3/Q3, q4/Q4 | 同左 | ✅ 通过 |
+| North | 34, 39, 43, 50 | 同左 | ✅ 通过（4 值逐项相同） |
+| South | 27, 32, 36, 41 | 同左 | ✅ 通过（4 值逐项相同） |
+| Central | 22, 26, 31, 35 | 同左 | ✅ 通过（4 值逐项相同） |
+| measurement_refs | [] | [] | ✅ 通过 |
+| schema_version | 2 | 2 | ✅ 通过 |
+
+## D. Monthly Conversion Rate — 必须不变
+
+| 字段 | 初始 | 当前 | 结果 |
+|---|---|---|---|
+| chart_id | monthly_conversion | monthly_conversion | ✅ 通过 |
+| chart_type | line | line | ✅ 通过 |
+| metadata.title | Monthly Conversion Rate | 同左 | ✅ 通过 |
+| metadata.source | Figura synthetic operations dataset | 同左 | ✅ 通过 |
+| metadata.note | 空 | 空 | ✅ 通过 |
+| x_axis.kind / label | categorical / Month | 同左 | ✅ 通过 |
+| y_axis.kind / label | numeric / Conversion (%) | 同左 | ✅ 通过 |
+| series.id / label | conversion_rate / Conversion rate | 同左 | ✅ 通过 |
+| 12 个值（Jan→Dec） | 2.4, 2.6, 2.5, 2.8, 3.0, 3.1, 3.0, 3.3, 3.4, 3.2, 3.6, 3.8 | 同左 | ✅ 通过（逐值相同） |
+| 月份类别与顺序 | Jan–Dec | 同左 | ✅ 通过 |
+| measurement_refs | [] | [] | ✅ 通过 |
+| schema_version | 2 | 2 | ✅ 通过 |
+
+## E. 偏差汇总
+
+- **发现的数据或元数据偏差：0 项**。两个“必须不变”的子图在全部所列字段上逐项一致；Monthly Orders 的改动恰好落在允许的四个字段（July 值、title、y_axis.label、note）之内，没有溢出到 chart_id、source、轴结构、类别顺序、系列标识或其余月份值。
+- 已撤销候选（单列布局、转化率置首）在 Figure 级检查中均未出现，对应“columns=2”与顺序两项通过。
+
+## F. 两点非偏差性提示
+
+1. **note 只记录定性来源**：字段内容即指定原句，未包含 “105 → 109” 的数值差；原始读数 105 只保留在早期 Figure 版本（digest e1f33d48…、64b25672…）与源图附件中，当前 Figure 内无法直接看到 105。
+2. **订单面板已与原图不一致是预期结果**：July=109 与源图标注 105 存在 +4 差异，属用户确认的修订，不视为偏差；若以源图为基准复查，此处会显示为差异。

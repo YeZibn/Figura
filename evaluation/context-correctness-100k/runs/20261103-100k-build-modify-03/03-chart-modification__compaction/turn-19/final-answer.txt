@@ -1,0 +1,65 @@
+下表直接依据当前 Figure（`call_00_kcePLceujkG1CuXKv5LD2306`，digest `715644b7…cf4970`）与初始 Figure（`call_00_f7ywZBI0cGfkh3E11xwt7757`，digest `d422b433…b7948`）的完整 ChartSpec 逐项比对。
+
+## 一、Figure 级结构
+
+| 字段 | 初始 Figure | 当前有效 Figure | 状态 |
+|---|---|---|---|
+| Figure 标题 | Regional Operations Dashboard, 2025 | 2025 Regional Sales and Operations (Revised) | **已变化** |
+| 列数（layout.columns） | 2 | 2 | 不变 |
+| schema_version | 2 | 2 | 不变 |
+| 子图数量 | 3 | 3 | 不变 |
+| 面板顺序（chart_id） | 1 revenue_by_region → 2 monthly_orders → 3 monthly_conversion_rate | 同左，完全一致 | 不变 |
+
+## 二、目标子图（monthly_orders）
+
+| 字段 | 初始 | 当前 | 状态 |
+|---|---|---|---|
+| 标题 | Monthly Orders | **Monthly Orders (Corrected)** | **已变化** |
+| y 轴标签 | Orders | **Orders (count)** | **已变化** |
+| note | 空 | **July corrected from the source ledger.** | **已变化（新增）** |
+| July 值 | 105 | **109** | **已变化（数据）** |
+
+## 三、目标子图的其余结构（应保持不变）
+
+| 字段 | 初始 | 当前 | 状态 |
+|---|---|---|---|
+| chart_type | line | line | 不变 |
+| x 轴 kind / 标签 | categorical / 无轴标签 | categorical / 无轴标签 | 不变 |
+| y 轴 kind | numeric | numeric | 不变 |
+| series 数量 / id / label | 1 / orders / Orders | 同左 | 不变 |
+| source | Figura synthetic operations dataset | 同左 | 不变 |
+| 月份类别与顺序 | Jan→Dec（12 个类别） | Jan→Dec（12 个类别） | 不变 |
+| Jan–Jun、Aug–Dec 共 11 个点 | 82、90、87、95、101、108、115、123、119、130、138 | 同左，逐位相同 | 不变 |
+| measurement_refs | 空 | 空 | 不变 |
+
+## 四、非目标子图 1：revenue_by_region（全部字段应不变）
+
+| 字段 | 初始 | 当前 | 状态 |
+|---|---|---|---|
+| 标题 | Quarterly Revenue by Region | 同 | 不变 |
+| chart_type | bar | 同 | 不变 |
+| x 轴 | categorical，无标签 | 同 | 不变 |
+| y 轴标签 | Revenue (M USD) | 同 | 不变 |
+| 方向 / 模式 | vertical / grouped | 同 | 不变 |
+| 分类 | Q1、Q2、Q3、Q4 | 同 | 不变 |
+| series 值与标识 | North 34/39/43/50、South 27/32/36/41、Central 22/26/31/35 | 同 | 不变 |
+| source / note | Figura synthetic operations dataset / 空 | 同 | 不变 |
+
+## 五、非目标子图 2：monthly_conversion_rate（全部字段应不变）
+
+| 字段 | 初始 | 当前 | 状态 |
+|---|---|---|---|
+| 标题 | Monthly Conversion Rate | 同 | 不变 |
+| chart_type | line | 同 | 不变 |
+| x 轴 | categorical，无轴标签；Jan→Dec | 同 | 不变 |
+| y 轴标签 | Conversion (%) | 同 | 不变 |
+| series 标识 | conversion / Conversion | 同 | 不变 |
+| 12 个点 | 2.4、2.6、2.5、2.8、3.0、3.1、3.0、3.3、3.4、3.2、3.6、3.8 | 逐位相同 | 不变 |
+| source / note | Figura synthetic operations dataset / 空 | 同 | 不变 |
+
+## 六、结论
+
+- **共 5 个字段发生变化**：Figure 标题、Monthly Orders 标题、其 y 轴标签、其 July 值（105→109）、其 note（新增修订说明）。
+- **其余全部字段不变**，包括两列布局、三面板顺序、Quarterly Revenue 与 Monthly Conversion Rate 的所有结构与自己数值，以及 Orders 的 source、图表类型、x 轴、series 标识和除 July 外的 11 个点。
+- 两个 digest 不同（`715644b7…cf4970` vs `d422b433…b7948`）可完全由上述 5 处变化解释，没有隐含的其他改动。
+- 已撤销的“单列 + 转换率前置”候选在两者中均未出现，当前生效结构仍是两列、原顺序。

@@ -1,0 +1,45 @@
+已使用资源目录中初始 ChartFigure 的完整类型化 ref（`kind: chart_figure`，run `a04fac4cd27048969dbe04f4a5877817`，call `call_00_996wXIiGLA8LKyMpEJUy5645`）直接读取，未做搜索、未使用摘要中的 message/tool-result 引用。
+
+## 一、版本判定：确认是修改前的初始 Figure
+
+| 判据 | 读到的内容 | 结论 |
+|---|---|---|
+| Figure 总标题 | `Regional Operations Dashboard, 2025`（旧标题，未经改名为 Revised 版） | 符合修改前状态 ✅ |
+| `monthly_orders` 的 July | **105** | 台账修订前，正是所需版本 ✅ |
+| 目录 digest | `04363382b91c484711b2ecfdd239a20f00af2367f56d8623bf7d6ba8d56bd45e` | 四版本中最早的初始版 ✅ |
+
+## 二、指定四项原始值核对
+
+| 核对项 | 位置 | 初始 Figure 原值 |
+|---|---|---|
+| **North 的 Q4 收入** | `charts[0]`（quarterly_revenue）`series[0]=north`，`values[3]`（对应 `q4`） | **50** M USD |
+| **Monthly Orders · June** | `charts[1]`（monthly_orders）`points[5]` | **108** |
+| **Monthly Orders · July** | 同系列 `points[6]` | **105**（源图原始读数） |
+| **Monthly Orders · August** | 同系列 `points[7]` | **115** |
+| **December 转化率** | `charts[2]`（monthly_conversion）`points[11]` | **3.8** % |
+
+## 三、原始序列上下文（同一次读取所得）
+
+**Quarterly Revenue（North / South / Central）**
+
+| Q1 | Q2 | Q3 | Q4 |
+|---|---|---|---|
+| 34 / 27 / 22 | 39 / 32 / 36 | 43 / 36 / 31 | **50** / 41 / 35 |
+
+- North 四季度为 34 → 39 → 43 → **50**，Q4 为 North 全年最高值，也是三地区在 Q4 的最高值。
+
+**Monthly Orders（初始版）**
+
+Jan 82、Feb 90、Mar 87、Apr 95、May 101、**Jun 108**、**Jul 105**、**Aug 115**、Sep 123、Oct 119、Nov 130、Dec 138
+
+- Jun 108 → Jul 105 为月度回落 −3；Jul 105 → Aug 115 为回升 +10。此形态即源图原貌，与后续 109 版本不同（修订后 Jun→Jul 为 +1）。
+
+**Monthly Conversion Rate（初始版）**
+
+Jan 2.4、Feb 2.6、Mar 2.5、Apr 2.8、May 3.0、Jun 3.1、Jul 3.0、Aug 3.3、Sep 3.4、Oct 3.2、Nov 3.6、**Dec 3.8**
+
+- December 为全年最高值 3.8%。
+
+## 四、说明
+
+上列数值全部来自该初始 ChartFigure 的记录内容本身，未经任何计算或推断；其中 July = 105 是该版本的有效数据，后续 109 是另一版本的修订值，两者并存且互不覆盖。本次仅执行只读读取，未装配、未渲染，任何 Figure 版本均未改动。

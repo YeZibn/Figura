@@ -1,0 +1,52 @@
+## 一、当前生效的 Figure 状态
+
+| 项目 | 当前值 |
+|---|---|
+| 整体标题 | 2025 Regional Sales and Operations (Revised) |
+| 布局 | 两列（columns = 2） |
+| 面板顺序 | Quarterly Revenue by Region → Monthly Orders (Corrected) → Monthly Conversion Rate |
+| Orders 面板 | 标题 Monthly Orders (Corrected)，Y 轴 Orders (count)，14 项数据中仅 July 被修订，note 为 “July corrected from the source ledger.” |
+
+## 二、四类信息逐项区分
+
+**1. 当前有效修改（已装配并渲染）**
+
+| 修改 | 来源轮次 | 内容 |
+|---|---|---|
+| Orders 面板标题与轴名 | 第 2 轮 | Monthly Orders → Monthly Orders (Corrected)；Y 轴 Orders → Orders (count)；另两个面板数据未动 |
+| July 数值更正 | 第 5 轮 | July 105 → 109，并在该面板 note 记录来源台账更正；其余 11 个月未动 |
+| 整体标题 | 第 6 轮 | Regional Operations Dashboard, 2025 → 2025 Regional Sales and Operations (Revised) |
+| 布局与顺序 | 第 1 轮确立、后续保持 | 两列、按原图从上到下：收入 → 订单 → 转化率 |
+
+**2. 已撤销的候选（从未应用，不在最终 Figure 中）**
+
+| 候选 | 状态 |
+|---|---|
+| 改为单列布局（columns = 1） | 第 3 轮仅记录为候选；第 4 轮明确撤销；从未装配或渲染 |
+| 将 Monthly Conversion Rate 提到第一位 | 同上，已撤销；转换率始终为第三位 |
+
+**3. 原始图像读数（源图 quarterly-regional-sales.png 上的标注）**
+
+- 订单：Jan–Dec = 82, 90, 87, 95, 101, 108, **105**, 115, 123, 119, 130, 138
+- 区域收入（Q1–Q4）：North 34/39/43/50；South 27/32/36/41；Central 22/26/31/35
+- 转化率：2.4, 2.6, 2.5, 2.8, 3.0, 3.1, 3.0, 3.3, 3.4, 3.2, 3.6, 3.8
+- 面板标题与轴名即图中原文字；源图本身没有整体图标题，“Regional Operations Dashboard, 2025” 与现在的 “2025 Regional Sales and Operations (Revised)” 都是按要求设定的 Figure 标题
+
+**4. 用户确认的修订值（非源图读数）**
+
+- 仅一项：**July Orders = 109**，依据是“核实订单台账后”的确认，不是对源图的重新测量
+- 该值只进入 Orders 面板数据与 note，未附带任何其他月份的调整，也未改变轴标签、图例或类别顺序
+
+## 三、Orders 的 June / July / August
+
+| 月份 | 源图读数 | 当前 Figure 值 | 说明 |
+|---|---|---|---|
+| June | 108 | 108 | 未修改 |
+| July | **105** | **109** | 唯一更正项 |
+| August | 115 | 115 | 未修改 |
+
+## 四、July 为何与源图不同
+
+源图在该点标注 105，而台账核实结果为 109，两者存在 4 的差异。你在第 5 轮明确指出这是数据源之间的差异，并要求以台账为准，因此 Figure 采用 109；同时要求不得抹去源图读数与历史事实，所以 105 仍完整保留在早期版本的 Figure 记录中（含 July=105 的版本），本次是在其上追加新版本而非覆盖，源图附件本身也未改动。因此 105 与 109 现在并存：前者是“图上读数”，后者是“经台账确认的修订值”，note 文字即为这一差异的标注。
+
+实际影响：6→7 月由“小幅回落（108→105）”变为“几乎持平、微升（108→109）”，7→8 月的上升幅度相应由 10 收窄为 6；其余月份的趋势判断不受影响。

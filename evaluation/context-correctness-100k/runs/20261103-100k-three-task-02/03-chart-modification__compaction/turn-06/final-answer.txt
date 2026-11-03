@@ -1,0 +1,22 @@
+Figure 标题已更新并重新装配完整 Figure（未绘制 PNG）。
+
+## 本次唯一改动
+
+- Figure 整体标题：`Regional Operations Dashboard, 2025` → **`2025 Regional Sales and Operations (Revised)`**
+
+## 明确保持不变
+
+- **列数：2**（`columns = 2`）
+- **图表顺序**：
+ 1. `revenue_by_region` — Quarterly Revenue by Region（分组柱状图，Revenue (M USD)）
+ 2. `monthly_orders` — Monthly Orders (Corrected)（折线图，Orders (count)）
+ 3. `monthly_conversion_rate` — Monthly Conversion Rate（折线图，Conversion (%)）
+- 全部数据：营收 34/39/43/50、27/32/36/41、22/26/31/35；订单 Jan–Dec = 82, 90, 87, 95, 101, 108, **109**, 115, 123, 119, 130, 138；转化率 2.4–3.8。
+- 订单面板 note 仍为 `July corrected from the source ledger.`，July 保持台账值 109（源图标注读数 105 仍保留在历史版本中）。
+- 三个子图 source 仍为 `Figura synthetic operations dataset`；此前作废的单列与重排改动未出现。
+
+## 版本信息
+
+- 新 digest：`ec2c08bbc071903d959580a75dbe5e4eb1690383b234684226215f455b673a19`
+- 引用：run `cbc19960…`，call `call_00_xoKd4j8kisXlscMVfmTl4435`
+- 状态：装配通过结构校验，尚未生成图像。若需要成品 PNG（同时可核对订单面板 note 是否在图面可见），我可以立即渲染。

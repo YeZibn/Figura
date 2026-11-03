@@ -1,0 +1,19 @@
+我按照资源目录中初始成功 ChartFigure 的完整引用（`run_id: 8c654661c0d34783931ea68a8a4dc553`、`call_id: call_00_g7fuy3wtUIU290kWmnzK4413`）直接调用了 `read_history`，并读取了完整内容；其中 `outcome: succeeded`，digest 为 `14a72796c0ec60b5aa404c433e04efa2e6666488eacff88daf0df9b20086cd56`，没有任何错误字段。
+
+**指定数值核对（初始 Figure：首轮从源图读取并装配的原始版本）**
+
+| 指定项 | 初始 Figure 中的值 |
+|---|---|
+| Quarterly Revenue — North, Q4 | **50**（North 系列四个季度依次为 34、39、43、50；单位为 M USD） |
+| Monthly Orders — June | **108** |
+| Monthly Orders — July | **105** |
+| Monthly Orders — August | **115** |
+| Monthly Conversion Rate — December | **3.8**（单位为 %） |
+
+**辅助上下文（同一初始 Figure）**
+- 结构：两列布局，三个子图顺序为 `quarterly_revenue`（柱状）、`monthly_orders`（折线）、`monthly_conversion`（折线）；图表标题为 `Regional Operations Dashboard, 2025`。
+- 三个子图的 `note` 均为空；`monthly_orders` 的标题为 `Monthly Orders`，y 轴标签为 `Orders`（尚未应用后续的 `(Corrected)` 与 `Orders (count)`）。
+- `monthly_orders` 的完整序列：82、90、87、95、101、108、**105**、115、123、119、130、138。
+- `monthly_conversion` 的完整序列：2.4、2.6、2.5、2.8、3.0、3.1、3.0、3.3、3.4、3.2、3.6、**3.8**。
+
+因此，初始版本的 July 为 105；后续的 109 是用户核对台账后确认的修订，只出现在较新的 Figure 中，初始 Figure 的 105 仍作为原始读数保留。

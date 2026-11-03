@@ -1,0 +1,26 @@
+[
+  {
+    "call_id": "call_00_0qCoH4zkJmjEeqNmBecY0513",
+    "tool_name": "read_history",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_01_hmceomQClf3bCVD6CjbY7999",
+    "tool_name": "read_history",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_02_xuWFwMb8HKo94Z8Zw0uE6608",
+    "tool_name": "read_history",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_03_YcVOhK3ruuH2EiQDfn4v5207",
+    "tool_name": "read_history",
+    "outcome": "succeeded",
+    "error": null
+  }
+]

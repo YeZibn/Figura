@@ -1,0 +1,42 @@
+[
+  {
+    "attempt_id": "cb32a29bfaac4dd7a58397a6b3bb1387",
+    "request_id": "8f29bada571447f9a74fbde59493395b",
+    "status": "response_committed",
+    "response_record_id": "460c0d41e1b34179a198b14327d06100",
+    "failure_code": null,
+    "http_status": 200,
+    "attempt_sequence": 1,
+    "purpose": "agent_turn",
+    "usage": {
+      "completion_tokens": 346,
+      "prompt_tokens": 36854,
+      "total_tokens": 37200
+    },
+    "context_estimate": {
+      "context_window_tokens": 100000000,
+      "estimator_version": "tiktoken-o200k-v1",
+      "input_tokens": 37971
+    }
+  },
+  {
+    "attempt_id": "ec26582af4ee4f5fbc64e3df566bc63d",
+    "request_id": "f503932bc84347aeb682ee07fba60d21",
+    "status": "response_committed",
+    "response_record_id": "9b9021e07b2344d7be15a67f0abb89fa",
+    "failure_code": null,
+    "http_status": 200,
+    "attempt_sequence": 1,
+    "purpose": "agent_turn",
+    "usage": {
+      "completion_tokens": 1162,
+      "prompt_tokens": 38082,
+      "total_tokens": 39244
+    },
+    "context_estimate": {
+      "context_window_tokens": 100000000,
+      "estimator_version": "tiktoken-o200k-v1",
+      "input_tokens": 39257
+    }
+  }
+]

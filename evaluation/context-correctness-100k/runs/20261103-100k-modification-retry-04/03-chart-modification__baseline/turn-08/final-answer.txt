@@ -1,0 +1,14 @@
+当前生效的 Figure 已满足这组最终要求，因此无需再修改，也无需重新装配。
+
+**本次允许的更新项（均已生效）**
+- 整体标题：2025 Regional Sales and Operations (Revised)
+- Monthly Orders 面板标题：Monthly Orders (Corrected)
+- 该面板 Y 轴标签：Orders (count)
+- 该面板 July：109（源图读数 105 保留在 note 中）
+- 该面板 note：July corrected from the source ledger. 其余月份数值取自折线点标注（源图 July 为 105）
+
+**未改动的两个面板**
+- Quarterly Revenue by Region：类别 Q1–Q4、三个系列 North/South/Central、数值 34/27/22、39/32/26、43/36/31、50/41/35、轴标签 Quarter 与 Revenue (M USD)、source 与 note，全部与初始 Figure 逐字段一致。
+- Monthly Conversion Rate：12 个点与轴标签 Month、Conversion (%)、系列标识、source 与 note 全部与初始 Figure 逐字段一致。
+
+**布局**：仍为两列，顺序为 Revenue → Orders → Conversion；单列与“Conversion 置首”两项候选均未应用。

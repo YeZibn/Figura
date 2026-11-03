@@ -1,0 +1,20 @@
+四个面板都已读取完成；它们使用同一份数据，数据来源均为 **Figura synthetic operations dataset**，dataset_id 为 `regional-operations-2025-2026-v2`。请注意，这是合成数据，并不代表真实业务观测。
+
+| # | chart_id | 类型 | 数据来源 | 类别轴、矩阵方向 | 系列 | 数据点 | 单位 |
+|---|---|---|---|---|---|---|---|
+| 1 | quarterly_revenue | 柱状图（分组、垂直） | 同上 | x 轴：类别轴，表示 Quarter，共 12 个季度（24Q1–26Q4） | North / East / West，共 3 个 | 12×3 = **36** 个值 | 百万美元（M USD），y 轴为 Revenue (M USD) |
+| 2 | monthly_orders | 折线图 | 同上 | x 轴：类别轴，表示 Month，2026 年 12 个月（Jan–Dec） | Orders，共 1 个 | **12** 个点（11 个有数值 + 1 个 null） | 订单数（count） |
+| 3 | channel_heatmap | 热力图（矩阵） | 同上 | 列：通道，Retail、Web、Partner、Direct（4 列）；行：区域，North、East、West、Central（4 行）；`values` 按 [行=区域][列=通道] 排列 | 无独立系列，4×4 单元 | **16** 个单元（15 个有数值 + 1 个 null） | 订单数（order counts） |
+| 4 | delivery_scatter | 散点图 | 同上 | x 轴：数值，Delivery time (hours) 1.1–5.7 | Delivery batches，共 1 个系列 | **24** 个点，每点代表一个配送批次 | x 为小时；y 为满意度评分（score），无单位标注 |
+
+**覆盖范围**
+- Revenue：2024Q1、2024Q2、2024Q3、2024Q4 到 2026Q1、2026Q2、2026Q3、2026Q4，连续 12 个季度，三个区域全部覆盖。
+- Orders：2026 年 1–12 月，完整 12 个月；其中 1 个点缺失。
+
+**两个 null 的含义（属于缺失观测，不是 0）**
+1. **Orders 折线的 Mar**（`{"x":"Mar","y":null}`）：3 月订单数没有观测值。它不能当作 0，也不能通过插值补成 175–184 之间的某个数；折线在该处应当断开或留空。
+2. **Heatmap 的 North（行）× Direct（列）**（`values[0][3] = null`）：该区域与通道组合的订单数没有观测值。这是 16 个单元中唯一一格空白，不能视为订单为零，因此“Direct 通道订单最少”这类结论无法从这一格推出。
+
+其余数值均完整：Revenue 36 个、Orders 11 个非空、Heatmap 15 格、散点 24 个点。
+
+如果需要把这四张图实际画出来，或者把 null 显式保留为断点或空白格，我可以直接装配并渲染成一组图。

@@ -1,0 +1,6 @@
+{
+  "turn": 10,
+  "text": "按第 6–9 轮最后确认的合同重新装配并调用 `render_chart_figure`。交付 PNG 和简明 ChartSpec 摘要，并检查四面板顺序、列数、数据完整性、null 语义、标题、来源和备注。",
+  "attachment_sha256": [],
+  "provider_id": "deepseek"
+}

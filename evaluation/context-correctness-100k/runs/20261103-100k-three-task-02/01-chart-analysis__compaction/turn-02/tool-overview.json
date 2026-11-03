@@ -1,0 +1,19 @@
+[
+  {
+    "call_id": "call_00_QW5Mum1KAkniOuDE4PUO2190",
+    "tool_name": "measure_chart",
+    "outcome": "failed",
+    "error": {
+      "code": "invalid_arguments",
+      "field_path": "/observation_scope/include/0/0/0",
+      "message": "工具参数未通过定义校验。",
+      "retryable": true
+    }
+  },
+  {
+    "call_id": "call_00_VGO60BxeNlmPpC5VnQAb0206",
+    "tool_name": "measure_chart",
+    "outcome": "succeeded",
+    "error": null
+  }
+]

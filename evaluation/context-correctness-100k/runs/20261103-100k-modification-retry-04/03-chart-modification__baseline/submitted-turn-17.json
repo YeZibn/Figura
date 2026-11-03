@@ -1,0 +1,6 @@
+{
+  "turn": 17,
+  "text": "列出最终三个子图的完整类别和序列值，区分源图 July=105 与最终 July=109；同时列出所有生效的标题、轴标签、source 和 note。",
+  "attachment_sha256": [],
+  "provider_id": "deepseek"
+}

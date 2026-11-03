@@ -1,0 +1,28 @@
+已用资源目录中当前有效 ChartFigure 的完整 ref 直接读取（`run_id` 7f0257009f6f4fd7b6f33b3498c220f2 / `call_id` call_00_KPzGK0k8HBo4p5j6qJ0R6438），读取成功。以下是 Figure 内的实际内容核对结果。
+
+## Figure 基本信息（读取所得）
+- 整体标题：Regional Operations: Revenue, Orders and Delivery
+- 布局：**1 列**
+- 子图顺序：`quarterly_revenue`（bar）→ `monthly_orders`（line）→ `channel_heatmap`（heatmap）→ `delivery_scatter`（scatter）
+- 四个子图 `source` 均为 “Figura synthetic operations dataset”；Revenue 的 note 为 “Revenue is recorded in million USD. Quarterly revenue values are unchanged.”
+
+## 三个核对点
+
+**1. North 的 2025Q4 Revenue**
+- 类别序列为 24Q1…24Q4、25Q1…25Q4、26Q1…26Q4，`25Q4` 位于第 8 位（索引 7）。
+- North 系列 `values = [41, 44, 46, 49, 52, 55, 58, 62, 65, 68, 72, 75]`，第 8 个值 = **62**（百万美元）。
+- 核对结论：**62**，为有效观测，与数据源一致；figure 中数值未被改动。
+
+**2. 2026-03 Orders**
+- `{"x": "Mar", "y": null}`，位于 12 个月位置中的第 3 个。
+- 状态：**缺失观测（null）**，不是 0，也不是插值结果；Figure 中该点保留位置但无 y 值，折线在此处断开。
+- 同一系列其余 11 个点（Jan 168、Feb 175、Apr 184、May 191、Jun 198、Jul 194、Aug 205、Sep 212、Oct 208、Nov 220、Dec 228）均为有效观测。
+- 核对结论：**保持 null，未被填零或插值**。
+
+**3. Heatmap 的 North/Direct cell**
+- 列顺序 Retail → Web → Partner → Direct；行顺序 North → East → West → Central。
+- `values[0] = [12, 16, 9, null]`，即 North 行第 4 格（North × Direct）= **null**。
+- 状态：**缺失观测**，不代表 0，也不参与该行加总；North 行仅 Retail 12、Web 16、Partner 9 三个已观测格。
+- 核对结论：**保持 null，未被填零**。
+
+三个核对点在 Figure 中均与原始数据一致，缺失值仍以 `null` 表达，未做任何零值替换或插值。

@@ -1,0 +1,13 @@
+完整 Figure 已重新装配完成（未绘制 PNG）。
+
+**本次仅两处修改**
+- 子图 `monthly_orders` 标题：Monthly Orders → **Monthly Orders (Corrected)**
+- 该子图 y 轴标签：Orders → **Orders (count)**
+
+**其余保持不变**
+- Figure 标题仍为 Regional Operations Dashboard, 2025，布局为两列，三个子图按原图从上到下顺序排列。
+- `revenue_by_region`（Quarterly Revenue by Region，分组柱状图，Revenue (M USD)，North/South/Central 四季度数值 34/39/43/50、27/32/36/41、22/26/31/35）未改动。
+- `monthly_conversion_rate`（Monthly Conversion Rate，Conversion (%)，2.4–3.8 十二个月）未改动。
+- Monthly Orders 的 12 个数据点（82, 90, 87, 95, 101, 108, 105, 115, 123, 119, 130, 138）与 x 轴 Jan–Dec 分类、系列标识均未改动。
+
+新 Figure 的 digest 为 `6476105…6325c`，与上一版不同，可作为两版区分依据；装配通过校验仅表示结构有效，数据仍沿用首轮从图上标注读取的结果，未重新测量。需要我渲染这版图像查看效果吗？

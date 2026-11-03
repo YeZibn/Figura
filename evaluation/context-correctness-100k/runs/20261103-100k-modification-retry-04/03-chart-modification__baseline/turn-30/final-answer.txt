@@ -1,0 +1,64 @@
+## 一、Quarterly Revenue by Region（`revenue_by_region`）
+
+| 字段 | 当前 Figure 值 | 初始 Figure 值 | 是否一致 |
+|---|---|---|---|
+| 标题 | Quarterly Revenue by Region | Quarterly Revenue by Region | ✅ 一致 |
+| 图表类型 | bar（分组柱状图） | bar | ✅ 一致 |
+| X 轴标签 | Quarter（categorical） | Quarter（categorical） | ✅ 一致 |
+| Y 轴标签 | Revenue (M USD)（numeric） | Revenue (M USD)（numeric） | ✅ 一致 |
+| source | Figura synthetic operations dataset | 同左 | ✅ 一致 |
+| note | 数值取自柱顶标注 | 同左 | ✅ 一致 |
+| 类别 | Q1、Q2、Q3、Q4（id q1–q4） | 同左 | ✅ 一致 |
+| 分组方式 | vertical / grouped | 同左 | ✅ 一致 |
+
+**全部值（12 个柱值）**
+
+| 系列（id） | Q1 | Q2 | Q3 | Q4 | 是否一致 |
+|---|---|---|---|---|---|
+| North（north） | 34 | 39 | 43 | 50 | ✅ |
+| South（south） | 27 | 32 | 36 | 41 | ✅ |
+| Central（central） | 22 | 26 | 31 | 35 | ✅ |
+
+**声明**：该子图自初始 Figure 建立后未被任何一次修改触及，标题、图表类型、两个轴标签、source、note、类别、系列标识与 12 个数值全部与初始版本逐字段一致；`schema_version` = 2，`measurement_refs` 为空，亦未变。
+
+---
+
+## 二、Monthly Conversion Rate（`monthly_conversion`）
+
+| 字段 | 当前 Figure 值 | 初始 Figure 值 | 是否一致 |
+|---|---|---|---|
+| 标题 | Monthly Conversion Rate | Monthly Conversion Rate | ✅ 一致 |
+| 图表类型 | line（折线图） | line | ✅ 一致 |
+| X 轴标签 | Month（categorical） | Month（categorical） | ✅ 一致 |
+| Y 轴标签 | Conversion (%)（numeric） | Conversion (%)（numeric） | ✅ 一致 |
+| source | Figura synthetic operations dataset | 同左 | ✅ 一致 |
+| note | 数值取自折线点标注 | 同左 | ✅ 一致 |
+| 类别 | Jan、Feb、Mar、Apr、May、Jun、Jul、Aug、Sep、Oct、Nov、Dec（12 项，顺序一致） | 同左 | ✅ 一致 |
+| 系列 label | Conversion rate（id conversion，单系列） | 同左 | ✅ 一致 |
+
+**全部值（12 个点值，%）**
+
+| 月份 | 当前值 | 初始值 | 是否一致 |
+|---|---|---|---|
+| Jan | 2.4 | 2.4 | ✅ |
+| Feb | 2.6 | 2.6 | ✅ |
+| Mar | 2.5 | 2.5 | ✅ |
+| Apr | 2.8 | 2.8 | ✅ |
+| May | 3 | 3.0 | ✅ 数值相等（写法差异） |
+| Jun | 3.1 | 3.1 | ✅ |
+| Jul | 3 | 3.0 | ✅ 数值相等（写法差异） |
+| Aug | 3.3 | 3.3 | ✅ |
+| Sep | 3.4 | 3.4 | ✅ |
+| Oct | 3.2 | 3.2 | ✅ |
+| Nov | 3.6 | 3.6 | ✅ |
+| Dec | 3.8 | 3.8 | ✅ |
+
+**声明**：该子图的标题、图表类型、轴标签、source、note、类别、系列标识和 12 个点值全部与初始 Figure 一致，数值上没有任何改变；唯一需记录的是 May 与 Jul 在规格中由 `3.0` 写作 `3`，两者是同一个数值，绘图与统计结果相同，属于序列化表示差异，不是数据修订。
+
+---
+
+## 三、总体声明
+
+- 两个子图**均未被本轮的修改影响**；本轮的全部改动仅存在于 Monthly Orders 面板（July 105→109、标题、Y 轴标签、note）与 Figure 总标题，以及此前撤销、未生效的布局候选。
+- 一致性的判断依据是初始 Figure（run 1）与当前 Figure（run 6）装配字段的逐项比对，而非渲染图的目视判断。
+- 当前 Figure 仍为两列布局，顺序为 Quarterly Revenue → Monthly Orders (Corrected) → Monthly Conversion Rate，与本声明中两个子图的字段无关，属 Figure 层结构，未变化。

@@ -1,0 +1,46 @@
+## 一、当前有效修改（已应用到生效中的 Figure）
+
+生效 Figure：`af8dab7ccee0451db61dbe6b56300cb2` / `call_00_i5OvHHslfuTLXsHkhI0i0984`（digest `a284457d…6600cc1`）
+
+| 修改项 | 内容 | 来源轮次 |
+|---|---|---|
+| Figure 整体标题 | `Regional Operations Dashboard, 2025` → **`2025 Regional Sales and Operations (Revised)`** | 第 6 轮 |
+| Monthly Orders 面板标题 | `Monthly Orders` → **`Monthly Orders (Corrected)`** | 第 2 轮 |
+| Monthly Orders 轴标签 | `Orders` → **`Orders (count)`** | 第 2 轮 |
+| Monthly Orders 的 July 数值 | 105 → **109** | 第 5 轮 |
+| Monthly Orders 的 note | 新增 `July corrected from the source ledger.` | 第 5 轮 |
+
+布局与顺序**不在此列**：两列、`季度收入 → 月度订单 → 月度转化率` 始终是初始装配的设定，之后未被真正改动过。
+
+## 二、已撤销候选（未应用，且不应出现在最终 Figure）
+
+| 候选改动 | 状态 |
+|---|---|
+| 改为单列布局（`columns: 1`） | 第 3 轮仅记录为候选，第 4 轮明确撤销，从未装配 |
+| 把 Monthly Conversion Rate 排在第一位 | 同上，撤销，最终顺序仍以季度收入开头 |
+
+## 三、原始图像读数（源图 `quarterly-regional-sales.png` 的标注值）
+
+- 源图整体标题：`Regional Sales and Operations Dashboard, 2025`（注意：与当前 Figure 标题不同，且与第 1 轮指定的 `Regional Operations Dashboard, 2025` 也略有差异）
+- 面板 2 原标签：标题 `Monthly Orders`、轴 `Orders`
+- 面板 2 原始读数：Jan 82、Feb 90、Mar 87、Apr 95、May 101、Jun 108、**Jul 105**、Aug 115、Sep 123、Oct 119、Nov 130、Dec 138
+- 这些原始读数在历史中完整保留（首次读取与首个 Figure `8c654661…`、第 2 轮 Figure `cefa0e08…` 均记为 105），未被覆盖或删除
+
+## 四、用户确认的修订值
+
+- 经核对订单台账，**July = 109**（用户确认，取代源图读出的 105）
+- 其余月份无用户确认的修订，仍沿用源图读数
+
+## 五、Orders 的 6–8 月数值
+
+| 月份 | 最终值（当前 Figure） | 原图读数 |
+|---|---|---|
+| June | **108** | 108（未改动） |
+| July | **109** | 105 |
+| August | **115** | 115（未改动） |
+
+## 六、July 为何与源图不同
+
+源图上 July 数据点标注为 105，我们最初照标注读取并写入 Figure；随后用户核对了底层订单台账，确认该月实际为 109，说明源图该点标签存在误差。因此按“只改这一处、其余不动”的要求，将 July 更新为 109，并在该面板 note 中留下修正说明。原读数 105 作为源图事实继续保留在历史中，可追溯差异来源，而不是被抹掉。
+
+修正带来的形态变化：原折线在 6→7 月为小幅回落（108→105），现变为基本持平并略微上升（108→109），8 月继续上行至 115，整体上升趋势更连贯。

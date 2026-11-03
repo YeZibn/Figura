@@ -1,0 +1,6 @@
+{
+  "turn": 11,
+  "text": "计算 Jan–Jun 与 Jul–Dec 的订单总量和月均值，并再次列出四个季度的月均订单。缺少数据时不能补值。",
+  "attachment_sha256": [],
+  "provider_id": "deepseek"
+}

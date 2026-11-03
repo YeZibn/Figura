@@ -1,0 +1,113 @@
+## 一、此刻生效的 Figure（run 28991ef6…，digest 0a0082bc…，已渲染）
+
+### Figure 级
+
+| 字段 | 值 |
+|---|---|
+| title | 2025 Regional Sales and Operations (Revised) |
+| layout.columns | 2 |
+| schema_version | 2 |
+| charts 数量 / 顺序 | 3；quarterly_revenue → monthly_orders → monthly_conversion |
+| 画面位置 | 第一行左=收入、右=订单；第二行左=转化率；右下留白（3 图入两列的余格） |
+
+### 子图 1：quarterly_revenue
+
+| 字段 | 值 |
+|---|---|
+| metadata.chart_type | bar |
+| metadata.title | Quarterly Revenue by Region |
+| metadata.source | Figura synthetic operations dataset |
+| metadata.note | ""（空） |
+| x_axis | categorical / Quarter |
+| y_axis | numeric / Revenue (M USD) |
+| dataset | orientation=vertical，mode=grouped |
+| categories | Q1、Q2、Q3、Q4（id q1–q4） |
+| North | 34、39、43、50 |
+| South | 27、32、36、41 |
+| Central | 22、26、31、35 |
+| measurement_refs | [] |
+
+### 子图 2：monthly_orders
+
+| 字段 | 值 |
+|---|---|
+| metadata.chart_type | line |
+| metadata.title | Monthly Orders (Corrected) |
+| metadata.source | Figura synthetic operations dataset |
+| metadata.note | July corrected from the source ledger. |
+| x_axis | categorical / Month |
+| y_axis | numeric / Orders (count) |
+| 系列 | id=orders，label=Orders |
+| 数据（Jan→Dec） | 82、90、87、95、101、108、**109**、115、123、119、130、138 |
+| measurement_refs | [] |
+
+### 子图 3：monthly_conversion
+
+| 字段 | 值 |
+|---|---|
+| metadata.chart_type | line |
+| metadata.title | Monthly Conversion Rate |
+| metadata.source | Figura synthetic operations dataset |
+| metadata.note | ""（空） |
+| x_axis | categorical / Month |
+| y_axis | numeric / Conversion (%) |
+| 系列 | id=conversion_rate，label=Conversion rate |
+| 数据（Jan→Dec） | 2.4、2.6、2.5、2.8、3.0、3.1、3.0、3.3、3.4、3.2、3.6、3.8 |
+| measurement_refs | [] |
+
+## 二、已撤销候选（不在 Figure 内，且无任何痕迹）
+
+| 候选 | 提出 | 撤销 | 现状 |
+|---|---|---|---|
+| 布局改为单列（columns=1） | 第 3 轮 | 第 4 轮 | 已撤销、从未装配；当前 columns=2 |
+| Monthly Conversion Rate 移到第一位 | 第 3 轮 | 第 4 轮 | 已撤销、从未装配；当前顺序仍为收入→订单→转化率 |
+
+约束：任何重组都不得把这两项写入 Figure；如需再评估，必须由你重新明确指令。
+
+## 三、July：源图 105 与修订 109
+
+| 项目 | 内容 |
+|---|---|
+| 源图读数 | **105**（源图 Monthly Orders 面板 July 点的数据标签；保留为历史事实，源图附件与早期 Figure 版本 digest e1f33d48… / 64b25672… 中仍可查） |
+| 修订值 | **109**（你核实订单台账后确认；当前 Figure 采用） |
+| 差值 | +4 单（相对 +3.81%）；其余 11 个月两口径完全相同 |
+| 受影响的派生量 | 全年合计 1,293 → 1,297；全年月均 107.75 → 108.08（+0.33）；Q3 合计 343 → 347、月均 114.33 → 115.67（+1.33） |
+| 记录方式 | note 仅写定性来源说明，不含“105→109”的数值差；105 不出现在最终 Figure 内 |
+
+## 四、即将重组的 Figure 合同
+
+以下为重组时必须满足的条款；任何一条不满足即视为违约，需修正后重交。
+
+**条款 1｜容器**
+- schema_version = 2；layout.columns = 2；charts 恰为 3 项，顺序固定为 quarterly_revenue → monthly_orders → monthly_conversion（chart_id 与列表位置均须对应）
+- figure.title 精确等于 `2025 Regional Sales and Operations (Revised)`
+
+**条款 2｜子图 1（冻结）**
+- 全部字段沿用第一节所列值，逐字逐值不变：title `Quarterly Revenue by Region`、chart_type `bar`、grouped/vertical、X `Quarter`、Y `Revenue (M USD)`、source `Figura synthetic operations dataset`、note 空、类别 Q1–Q4、三系列 12 个数值（34/39/43/50、27/32/36/41、22/26/31/35）
+
+**条款 3｜子图 2（唯一变量，但仅限已确认的部分）**
+- 固定部分：chart_id `monthly_orders`、chart_type `line`、X `Month`、y_axis.kind `numeric`、series id `orders` / label `Orders`、source `Figura synthetic operations dataset`、月份 12 项顺序 Jan→Dec
+- 已确认取值：title `Monthly Orders (Corrected)`；y_axis.label `Orders (count)`；note `July corrected from the source ledger.`；July = 109；其余 11 个月 = 82、90、87、95、101、108、115、123、119、130、138（不得出现 105）
+- note 不得被清空或替换（原字段为空，无历史内容让位）
+
+**条款 4｜子图 3（冻结）**
+- 全部字段沿用第一节所列值：title `Monthly Conversion Rate`、chart_type `line`、X `Month`、Y `Conversion (%)`、source 同上、note 空、系列 conversion_rate / `Conversion rate`、12 个值不变
+
+**条款 5｜候选排除**
+- columns 必须为 2；第一位必须是季度收入；不得出现单列或转化率置首的任何痕迹
+
+**条款 6｜来源与证据**
+- 三个子图的 source 字符串必须完全相同，不得因修订而改写或加注
+- 重组后的数据值以已确认取值为准；105 仅作为“源图读数”存在于历史与源图中，不得写入当前 Figure，也不得被误认为渲染或计算得出
+- 装配成功与渲染成功都只证明结构与绘制成立，**不构成数据正确性的证明**；July=109 的依据是台账确认，不是图像
+
+**条款 7｜仓库式自检清单（提交前逐项对照）**
+1. title 字符串逐字符一致（含 “(Revised)” 与年份前缀）
+2. columns = 2；charts 长度 = 3；chart_id 序列正确
+3. 子图 1、3 的每个字段与第一节表格逐项相等（含空 note 与空 measurement_refs）
+4. 子图 2 的 12 个 y 值中恰有 1 个与源图不同（July 109 vs 105），其余 11 个相等
+5. 三个 source 字符串相同；只有子图 2 的 note 非空
+6. 12 个月类别齐全、顺序 Jan→Dec，无重复无缺失
+7. measurement_refs 均为空数组；无凭空新增的类别、单位或系列
+
+若你确认按此合同重组，我会提交一次完整装配（并可按需渲染）；在你明确指示之前，我不会新增任何修改。

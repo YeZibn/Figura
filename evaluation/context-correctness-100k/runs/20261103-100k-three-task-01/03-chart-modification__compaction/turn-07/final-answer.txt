@@ -1,0 +1,41 @@
+## 一、按性质分为四类
+
+**1) 当前有效修改（已应用在最终 Figure 中）**
+| 变更 | 前 | 后 | 生效时点 |
+|---|---|---|---|
+| 子图标题 | Monthly Orders | Monthly Orders (Corrected) | 第 2 步 |
+| 子图 Y 轴 | Orders | Orders (count) | 第 2 步 |
+| Orders 的 July 值 | 105 | 109 | 第 5 步（含 note 记录） |
+| Figure 总标题 | Regional Operations Dashboard, 2025 | 2025 Regional Sales and Operations (Revised) | 第 6 步（最终） |
+
+最终 Figure 的结构保持不变：采用两列布局，面板顺序仍为 Quarterly Revenue by Region → Monthly Orders (Corrected) → Monthly Conversion Rate。
+
+**2) 已撤销的候选（从未应用，也不出现在任何已装配的 Figure 中）**
+- 改为单列布局（`columns: 1`）
+- 将 Monthly Conversion Rate 移到第一位（顺序因此变为 Conversion → Revenue → Orders）
+
+这两项计划先记录为候选；随后在下一轮中被明确撤销，因此没有执行装配或绘制。
+
+**3) 原始图像读数（源图 `quarterly-regional-sales.png` 上的标注/刻度）**
+- Orders 逐月：Jan 82、Feb 90、Mar 87、Apr 95、May 101、Jun 108、**Jul 105**、Aug 115、Sep 123、Oct 119、Nov 130、Dec 138（Y 轴 Orders 80–140）
+- 轴与单位：X 为 Month、Y 为 Orders；Conversion 面板 Y 为 Conversion (%)
+- 柱状图 Q1 34/27/22、Q2 39/32/26、Q3 43/36/31、Q4 50/41/35（North/South/Central）；Conversion 2.4→3.8
+
+**4) 用户确认的修订值（依据订单台账，不是从图上读出的）**
+- July Orders = **109**（明确说明“图上原始读取值为 105”）；六月、八月等其余月份不修订
+
+## 二、Orders 三个月的取值
+
+| 月份 | 原图读数 | 最终 Figure 采用值 | 是否修订 |
+|---|---|---|---|
+| June | 108 | 108 | 否 |
+| July | 105 | **109** | 是（台账核对） |
+| August | 115 | 115 | 否 |
+
+## 三、July 最终值与源图值不同的原因
+
+差异来自两个性质不同的来源：源图该点标注的文字是 **105**；而经核对订单台账后，用户确认实际值为 **109**。因此，最终 Figure 采用 109，并在该面板 note 中写入 `July corrected from the source ledger.` 以记录修订来源。
+
+105 并未被抹去或改写为“从未存在”，它仍是源图的真实标注读数，只是当前图表采用台账值。两者不会互相替换，也不能混用：105 代表图像证据，109 代表经业务数据确认的修订值。视觉上也有对应变化：原图中 Jul（105）略低于 Jun（108）；修正后 Jul（109）略高于 Jun。
+
+另需说明一处易混点：子图标题里的 “(Corrected)” 是第 2 步为轴标签修订所加，早于第 5 步的数值修订；它并不表示“该面板数据已修正过 July”。数据的修正依据应看 note，而非标题措辞。

@@ -23,7 +23,10 @@ from figura.providers.config import ProviderSettings
 from figura.providers.models import ProviderId
 
 ROOT = Path(__file__).resolve().parents[2]
-PILOT = ROOT / "evaluation/context-correctness-pilot"
+PILOT = Path(os.environ.get(
+    "FIGURA_CONTEXT_PILOT_DIR",
+    str(ROOT / "evaluation/context-correctness-pilot"),
+)).resolve()
 PROVIDER = ProviderId.DEEPSEEK
 PROVIDER_ID = PROVIDER.value
 TURN_TIMEOUT_SECONDS = int(os.environ.get("FIGURA_CONTEXT_PILOT_TURN_TIMEOUT_SECONDS", "600"))
@@ -60,13 +63,14 @@ def parse_turns(task_id):
     task_dir = PILOT / task_id
     source = (task_dir / "conversation.md").read_text()
     headings = list(re.finditer(r"(?m)^## 第 (\d+) 轮：[^\n]*\n", source))
-    if len(headings) != 3:
-        raise ValueError(f"{task_id}: expected exactly three fixed turns")
+    turn_numbers = [int(heading.group(1)) for heading in headings]
+    if not headings or turn_numbers != list(range(1, len(headings) + 1)):
+        raise ValueError(f"{task_id}: turns must be numbered consecutively from 1")
     turns = []
     for index, heading in enumerate(headings):
         end = headings[index + 1].start() if index + 1 < len(headings) else len(source)
         turns.append({
-            "turn": int(heading.group(1)),
+            "turn": turn_numbers[index],
             "text": source[heading.end():end].strip(),
             "attachments": [],
         })
@@ -202,18 +206,25 @@ def export_turn(gateway, runtime, session_id, run, turn, output):
     attempts = db_rows(
         runtime,
         "SELECT a.attempt_id,a.request_id,a.status,a.response_record_id,a.failure_code,a.http_status,"
-        "a.usage_json,a.attempt_sequence,q.purpose FROM run_provider_attempts a "
+        "a.usage_json,a.attempt_sequence,q.purpose,q.context_estimate_json FROM run_provider_attempts a "
         "JOIN run_provider_requests q ON q.request_id=a.request_id "
         "WHERE a.run_id=? ORDER BY a.run_attempt_sequence",
         (run["runId"],),
     )
-    by_purpose, missing = {}, []
+    by_purpose, missing, estimate_values = {}, [], []
     for attempt in attempts:
         usage = json.loads(attempt["usage_json"]) if attempt["usage_json"] else None
+        estimate = json.loads(attempt["context_estimate_json"]) if attempt["context_estimate_json"] else None
         if not usage and attempt.get("response_record_id"):
             usage = by_id.get(attempt["response_record_id"], {}).get("usage")
         attempt.pop("usage_json")
+        attempt.pop("context_estimate_json")
         attempt["usage"] = usage
+        attempt["context_estimate"] = estimate
+        if attempt["purpose"] == "agent_turn" and isinstance(estimate, dict):
+            input_tokens = estimate.get("input_tokens")
+            if isinstance(input_tokens, int):
+                estimate_values.append(input_tokens)
         if not isinstance(usage, dict):
             missing.append(attempt["attempt_id"])
             continue
@@ -243,6 +254,7 @@ def export_turn(gateway, runtime, session_id, run, turn, output):
         "provider_attempt_count": len(attempts), "usage_by_purpose": by_purpose,
         "usage_total_including_compaction": total, "usage_complete": not missing,
         "usage_missing_attempts": missing, "compaction_operations": operations,
+        "max_estimated_agent_input_tokens": max(estimate_values, default=None),
     }
     write_json(turn_dir / "evidence.json", evidence)
     return evidence
@@ -369,6 +381,10 @@ def summarize(executions):
             "compaction_operations": operations,
             "successful_compaction_count": sum(op["status"] == "completed" for op in operations),
             "all_turns_completed": all(turn["status"] == "completed" for turn in execution["turns"]),
+            "max_estimated_agent_input_tokens": max(
+                (turn.get("max_estimated_agent_input_tokens") or 0 for turn in execution["turns"]),
+                default=0,
+            ),
         })
     pairs = {}
     for task_id in sorted({row["task_id"] for row in rows}):
@@ -400,20 +416,30 @@ def write_report(path, summary, metadata):
         f"- 条件：压缩组 {metadata['conditions']['compaction']} tokens；基线组 100,000,000 tokens。",
         "- Provider 总 Token 包含摘要压缩请求；压缩正确性只对至少成功压缩一次的任务评分。",
         "- 原始 usage 差异与可归因于压缩的降幅分开列示。", "",
-        "| 任务 | 基线总 Token | 压缩组总 Token | 原始 usage 差异 | 可归因压缩降幅 | 成功压缩次数 | usage 完整 |",
-        "|---|---:|---:|---:|---:|---:|---|",
+        "| 任务 | 条件 | 总 Token | 最大估算输入 | 成功压缩次数 | 全部轮次完成 | usage 完整 |",
+        "|---|---|---:|---:|---:|---|---|",
     ]
     by_task = {}
     for row in summary["executions"]:
         by_task.setdefault(row["task_id"], {})[row["condition"]] = row
+    for task_id, conditions in by_task.items():
+        for condition, row in conditions.items():
+            lines.append(
+                f"| {task_id} | {condition} | {row['provider_usage_including_compaction']['total_tokens']} | "
+                f"{row['max_estimated_agent_input_tokens']} | {row['successful_compaction_count']} | "
+                f"{'是' if row['all_turns_completed'] else '否'} | {'是' if row['usage_complete'] else '否'} |"
+            )
+    lines += [
+        "", "## 配对 Token 用量对比", "",
+        "| 任务 | 基线总 Token | 压缩组总 Token | 原始 usage 差异 | 可归因压缩降幅 | 可归因 |",
+        "|---|---:|---:|---:|---:|---|",
+    ]
     for task_id, pair in summary["paired_tasks"].items():
-        compact = by_task[task_id]["compaction"]
         raw = f"{pair['observed_usage_delta_percent']}%" if pair["observed_usage_delta_percent"] is not None else "—"
         saving = f"{pair['compression_saving_percent']}%" if pair["compression_saving_eligible"] else "不适用"
         lines.append(
             f"| {task_id} | {pair['baseline_total_tokens']} | {pair['compaction_total_tokens']} | "
-            f"{raw} | {saving} | {compact['successful_compaction_count']} | "
-            f"{'是' if pair['usage_complete'] else '否'} |"
+            f"{raw} | {saving} | {'是' if pair['compression_saving_eligible'] else '否'} |"
         )
     if metadata.get("omitted_schedule_entries"):
         lines += ["", "## 未在本批次启动的项目", ""]
@@ -481,6 +507,16 @@ def main():
     metadata = {
         "batch_id": batch, "status": "running", "started_at": now(),
         "git_revision": revision, "provider_id": PROVIDER_ID,
+        "suite_root": str(PILOT.relative_to(ROOT)) if PILOT.is_relative_to(ROOT) else str(PILOT),
+        "runner_sha256": sha_file(Path(__file__)),
+        "fixture_generator_sha256": (
+            sha_file(PILOT / "generate_fixtures.py")
+            if (PILOT / "generate_fixtures.py").is_file() else None
+        ),
+        "materials_validator_sha256": (
+            sha_file(PILOT / "validate_materials.py")
+            if (PILOT / "validate_materials.py").is_file() else None
+        ),
         "model_id": profile.model_id,
         "thinking_mode": profile.thinking_mode,
         "reasoning_effort": profile.reasoning_effort,
@@ -490,6 +526,10 @@ def main():
         "compaction_threshold_fraction": 0.8, "turn_timeout_seconds": TURN_TIMEOUT_SECONDS,
         "schedule_range": {"start_index": start_schedule_index, "end_index_exclusive": end_schedule_index},
         "schedule": [{"task_id": task, "condition": condition} for task, condition in schedule],
+        "task_turn_counts": {
+            task_id: len(parse_turns(task_id))
+            for task_id in sorted({task for task, _condition in schedule})
+        },
         "omitted_schedule_entries": [
             {
                 "task_id": task,
@@ -505,7 +545,8 @@ def main():
             "每个任务与条件使用隔离的 Gateway、SQLite 数据目录和 Session。",
             "图表构建任务的 dataset.json 原文内嵌首轮消息；两组提交内容相同。",
             "Provider 总 Token 包含 agent_turn 与 context_compaction 的所有物理 attempt。",
-            "每类一个配对样本，结果作固定任务的描述性比较。",
+            "每类一个配对样本，结果作固定任务的描述性比较；不外推为总体性能。",
+            "压缩正确性须有至少一次成功 compaction operation；turn 数和累计 Provider usage 不能替代压缩触发证据。",
         ],
     }
     write_json(output_root / "batch.json", metadata)

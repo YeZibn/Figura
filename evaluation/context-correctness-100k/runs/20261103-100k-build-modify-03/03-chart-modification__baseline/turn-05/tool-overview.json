@@ -1,0 +1,20 @@
+[
+  {
+    "call_id": "call_00_brcysxJ4NjRPTIqDp5o76391",
+    "tool_name": "read_history",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_ET_ubKl3yBBY3xFDfAca25u4643",
+    "tool_name": "assemble_chart_figure",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_ET_j5MpPrLxMKFvt5DbklPI3278",
+    "tool_name": "render_chart_figure",
+    "outcome": "succeeded",
+    "error": null
+  }
+]

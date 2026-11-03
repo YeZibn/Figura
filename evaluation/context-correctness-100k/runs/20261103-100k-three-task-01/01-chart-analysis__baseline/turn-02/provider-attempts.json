@@ -1,0 +1,32 @@
+[
+  {
+    "attempt_id": "412d72535b99448181d4f6329a72be26",
+    "request_id": "f1005cf9593b4dcf812eeb60383195d1",
+    "status": "response_committed",
+    "response_record_id": "f3d81142ec3c47eb991fa11cbc1728c1",
+    "failure_code": null,
+    "http_status": 200,
+    "attempt_sequence": 1,
+    "purpose": "agent_turn",
+    "usage": {
+      "completion_tokens": 877,
+      "prompt_tokens": 26132,
+      "total_tokens": 27009
+    }
+  },
+  {
+    "attempt_id": "c9a8cf1b75bf40a2b8ee39207d8b14e0",
+    "request_id": "dbdb9484159f4e21a149614b1eb7e05e",
+    "status": "response_committed",
+    "response_record_id": "f05f44b2ef7043908f286303a00addce",
+    "failure_code": null,
+    "http_status": 200,
+    "attempt_sequence": 1,
+    "purpose": "agent_turn",
+    "usage": {
+      "completion_tokens": 1217,
+      "prompt_tokens": 31742,
+      "total_tokens": 32959
+    }
+  }
+]

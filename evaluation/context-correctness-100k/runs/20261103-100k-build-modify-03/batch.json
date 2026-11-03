@@ -1,0 +1,108 @@
+{
+  "batch_id": "20261103-100k-build-modify-03",
+  "status": "execution_complete_with_failures",
+  "started_at": "2026-11-03T13:39:06.397654+08:00",
+  "git_revision": "55cd791ab713569e3da50cb6c25412a3d4308962",
+  "provider_id": "deepseek",
+  "suite_root": "evaluation/context-correctness-100k",
+  "runner_sha256": "b236921dcf1ece687102f8a5d65c960c5a2a9784e9857d49f476ede0d03e4aea",
+  "fixture_generator_sha256": "11092a461cfaf747fdf622bf6d6b94f3ae7b7cf8ee1f0b208859cdf00ac089c5",
+  "materials_validator_sha256": "88f3278b2444e66dbae47e332a20168b0c28cf5ee5a9501ff2d8ef557400a330",
+  "model_id": "deepseek-flash",
+  "thinking_mode": true,
+  "reasoning_effort": "high",
+  "max_completion_tokens": null,
+  "profile_capacity_before_override": 200000,
+  "conditions": {
+    "baseline": 100000000,
+    "compaction": 100000
+  },
+  "compaction_threshold_fraction": 0.8,
+  "turn_timeout_seconds": 600,
+  "schedule_range": {
+    "start_index": 2,
+    "end_index_exclusive": 6
+  },
+  "schedule": [
+    {
+      "task_id": "02-chart-construction",
+      "condition": "baseline"
+    },
+    {
+      "task_id": "02-chart-construction",
+      "condition": "compaction"
+    },
+    {
+      "task_id": "03-chart-modification",
+      "condition": "compaction"
+    },
+    {
+      "task_id": "03-chart-modification",
+      "condition": "baseline"
+    }
+  ],
+  "task_turn_counts": {
+    "02-chart-construction": 30,
+    "03-chart-modification": 34
+  },
+  "omitted_schedule_entries": [
+    {
+      "task_id": "01-chart-analysis",
+      "condition": "compaction",
+      "index": 0,
+      "reason": "before_selected_range"
+    },
+    {
+      "task_id": "01-chart-analysis",
+      "condition": "baseline",
+      "index": 1,
+      "reason": "before_selected_range"
+    }
+  ],
+  "input_hashes": {
+    "02-chart-construction": {
+      "conversation_sha256": "af9a16866d95a7c1129bb5560d38adec1f8834836c50c95144dd2ae86320bc03",
+      "answer_key_sha256": "3c4b7315565cb000a55e6db4c135c45f882b0357226a14188b6a649caf022425",
+      "scorecard_sha256": "70a5dec48b84ac48fde53e0ef97ad41ac14d3c238245277da00e9181848490be",
+      "input_sha256": {
+        "input/dataset.json": "da59024a950413ddbc0d3666a8a15a03545782de2779f87f19654ba002a3e012"
+      }
+    },
+    "03-chart-modification": {
+      "conversation_sha256": "89037eaa95729702c3850da8886caecd57d0ac413858717d38a6d79afdc636bd",
+      "answer_key_sha256": "7893aba96407fac7ef6739020d15b35a5125d1665d21479ceca258c4deb94867",
+      "scorecard_sha256": "053dd61007adef102ee012335ab3ddce7037bc746f4378ce57e19a0ab61de2ee",
+      "input_sha256": {
+        "input/quarterly-regional-sales.png": "dac2bf22ad4432579666d372fd59dd5863ba47340097031a3192f63ffd9a2a22"
+      }
+    }
+  },
+  "protocol_notes": [
+    "每个任务与条件使用隔离的 Gateway、SQLite 数据目录和 Session。",
+    "图表构建任务的 dataset.json 原文内嵌首轮消息；两组提交内容相同。",
+    "Provider 总 Token 包含 agent_turn 与 context_compaction 的所有物理 attempt。",
+    "每类一个配对样本，结果作固定任务的描述性比较；不外推为总体性能。",
+    "压缩正确性须有至少一次成功 compaction operation；turn 数和累计 Provider usage 不能替代压缩触发证据。"
+  ],
+  "completed_at": "2026-11-03T13:50:00.035958+08:00",
+  "execution_failures": [
+    {
+      "task_id": "02-chart-construction",
+      "condition": "baseline",
+      "type": "RuntimeError",
+      "message": "02-chart-construction baseline turn 2 ended as failed; remaining turns in this session were not submitted"
+    },
+    {
+      "task_id": "02-chart-construction",
+      "condition": "compaction",
+      "type": "RuntimeError",
+      "message": "02-chart-construction compaction turn 2 ended as failed; remaining turns in this session were not submitted"
+    },
+    {
+      "task_id": "03-chart-modification",
+      "condition": "compaction",
+      "type": "RuntimeError",
+      "message": "03-chart-modification compaction turn 20 ended as failed; remaining turns in this session were not submitted"
+    }
+  ]
+}

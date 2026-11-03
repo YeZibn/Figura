@@ -1,0 +1,26 @@
+[
+  {
+    "call_id": "call_00_ET_17pOtdf7sN71mI5eOFy35953",
+    "tool_name": "load_image",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_60m8y2ABEdlCS3mQwn535485",
+    "tool_name": "extract_text",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_g7fuy3wtUIU290kWmnzK4413",
+    "tool_name": "assemble_chart_figure",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_t4j3m67H1Pe41eGR02E47368",
+    "tool_name": "render_chart_figure",
+    "outcome": "succeeded",
+    "error": null
+  }
+]

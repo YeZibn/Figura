@@ -1,0 +1,26 @@
+## 总览
+
+四个面板都来自同一数据源：**Figura synthetic operations dataset**（`dataset_id: regional-operations-2025-2026-v2`），属于合成运营数据。
+
+| 面板 | 图表类型 | 类别/数值轴 | 系列或矩阵方向 | 数据点 | 单位（来自 note/轴名） |
+|---|---|---|---|---|---|
+| Quarterly Revenue by Region | 柱状图（垂直、分组） | x 轴为分类轴：季度；y 轴为数值轴：Revenue | 3 个系列（North / East / West），按季度并排分组 | 12 个类别 × 3 个系列 = **36 个柱** | 百万美元（M USD） |
+| Monthly Orders in 2026 | 折线图 | x 轴为分类轴：月份；y 轴为数值轴：Orders | 1 个系列（Orders） | **12 个点**（其中 1 个为 null） | 订单数（count） |
+| Orders by Region and Channel | 热力图 | 矩阵；列（x）为渠道，行（y）为区域 | 4 渠道（Retail/Web/Partner/Direct）× 4 区域（North/East/West/Central） | **16 个单元格**（其中 1 个为 null） | 订单数（order counts） |
+| Delivery Time and Satisfaction | 散点图 | x 轴为数值轴：配送时长；y 轴为数值轴：满意度 | 1 个系列（Delivery batches，每个点代表一个配送批次） | **24 个点** | 小时（hours）/ 满意度分数（score） |
+
+合计 88 个数据位置（36 + 12 + 16 + 24），其中 2 个是缺失观测。
+
+## 缺失值（非零）
+
+- **Orders 折线图：March（2026 年 3 月）为 `null`**。这是缺失观测，不能当作 0，也不应插值。因此该系列实际有 11 个数值，介于 168（Jan）到 228（Dec）；已知数值合计 2,183 单，均值约 198.5 单（不含 3 月）。
+- **热力图：North 行 × Direct 列为 `null`**（第一行第四列）。同样是缺失观测，不代表该区域直营渠道订单为 0。其余 15 个单元格有值，已知单元格合计 167 单；按行看：North 37（缺 1 格）、East 47、West 45、Central 38。
+
+## 各面板要点
+
+- **Revenue**：覆盖 2024Q1 至 2026Q4 共 12 个连续季度。三个区域均为逐季上升：North 41→75、East 35→69、West 28→60（M USD）；North 始终最高，West 最低。
+- **Orders**：2026 年 1–12 月，整体上行（168 → 228 单），但 3 月缺测，因此该月前后的折线不能视为连续实测趋势。
+- **Heatmap**：行是区域（y 方向），列是渠道（x 方向）。数值型颜色编码表示订单数，最高为 North×Web 的 16，最低为 Central×Retail 的 7。
+- **Delivery scatter**：配送时长从 1.1 递增到 5.7 小时（步长 0.2），满意度从 4.7 递减到 2.4 分，呈现明显的负向关系；数据为合成数据的规则序列，不代表真实抽样分布。
+
+如需把这四个面板装配成一张 2×2 组合图并渲染出来，我可以直接基于上述数据生成（缺失值保持为空，不补零）。

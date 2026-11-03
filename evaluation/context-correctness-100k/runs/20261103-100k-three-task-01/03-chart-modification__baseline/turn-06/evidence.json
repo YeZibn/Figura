@@ -1,0 +1,38 @@
+{
+  "turn": 6,
+  "run_id": "af8dab7ccee0451db61dbe6b56300cb2",
+  "session_id": "7ac7308ac6c04d25b99e1bd8e6072bb3",
+  "status": "completed",
+  "terminal_code": null,
+  "final_answer_committed": true,
+  "figures": [
+    {
+      "file": "figure-01.json",
+      "figure_digest": "a284457d5f379ebd7f63671b4da5dcaf7ecea440ae064745a979ddd7a6600cc1",
+      "verified": true
+    }
+  ],
+  "renders": [
+    {
+      "file": "render-01.png",
+      "image_sha256": "f8f35d88fa914bbc7a5e35ec0cb2fe7d60f59ea083ac80bdabfda79c386d2def",
+      "verified": true
+    }
+  ],
+  "provider_attempt_count": 3,
+  "usage_by_purpose": {
+    "agent_turn": {
+      "prompt_tokens": 87287,
+      "completion_tokens": 1505,
+      "total_tokens": 88792
+    }
+  },
+  "usage_total_including_compaction": {
+    "prompt_tokens": 87287,
+    "completion_tokens": 1505,
+    "total_tokens": 88792
+  },
+  "usage_complete": true,
+  "usage_missing_attempts": [],
+  "compaction_operations": []
+}

@@ -1,0 +1,6 @@
+{
+  "turn": 10,
+  "text": "分别计算 North、South、Central 四季度收入总额和季度均值。指出总额排名与 Q4 单季排名是否一致，并引用具体数字。",
+  "attachment_sha256": [],
+  "provider_id": "deepseek"
+}

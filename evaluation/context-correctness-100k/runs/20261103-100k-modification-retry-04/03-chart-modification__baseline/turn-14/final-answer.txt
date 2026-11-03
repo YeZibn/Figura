@@ -1,0 +1,43 @@
+## 当前 Figure 总览（最新已装配版本，run 6）
+
+| 项目 | 当前值 |
+|---|---|
+| Figure 总标题 | 2025 Regional Sales and Operations (Revised) |
+| 列数 | 2（`layout.columns = 2`） |
+| 子图数量 | 3 |
+| 排列顺序 | ① revenue_by_region → ② monthly_orders → ③ monthly_conversion |
+| 位置表现 | ① 左上、② 右上、③ 第二行左，右下留白 |
+| schema_version | 2 |
+
+## 三个子图的元数据与轴
+
+| # | chart_id | 标题 | chart_type | X 轴 | Y 轴 | source | note |
+|---|---|---|---|---|---|---|---|
+| ① | revenue_by_region | Quarterly Revenue by Region | bar | categorical · Quarter | numeric · Revenue (M USD) | Figura synthetic operations dataset | 数值取自柱顶标注 |
+| ② | monthly_orders | Monthly Orders (Corrected) | line | categorical · Month | numeric · **Orders (count)** | Figura synthetic operations dataset | July corrected from the source ledger. 其余月份数值取自折线点标注（源图 July 为 105） |
+| ③ | monthly_conversion | Monthly Conversion Rate | line | categorical · Month | numeric · Conversion (%) | Figura synthetic operations dataset | 数值取自折线点标注 |
+
+系列标识：① North / South / Central；② Orders；③ Conversion rate。三幅均无 measurement_refs。
+
+## 重点核查：目标面板 ② 的元数据保留情况
+
+| 核查项 | 初始 Figure | 当前 Figure | 是否保留 |
+|---|---|---|---|
+| source | Figura synthetic operations dataset | Figura synthetic operations dataset | ✔ 完全一致 |
+| chart_type | line | line | ✔ |
+| X 轴 | categorical · Month | categorical · Month | ✔ |
+| Y 轴 | numeric · Orders | numeric · **Orders (count)** | 按用户要求更新 |
+| 原 note 内容 | 数值取自折线点标注 | 内含“数值取自折线点标注”原样片段 | ✔ 未被替换 |
+| 修订来源记录 | — | “July corrected from the source ledger.” | ✔ 已加入 |
+| 源图原值记录 | July 标注 105 | 括注“（源图 July 为 105）” | ✔ 保留可追溯 |
+| 系列 label / id | Orders / orders | Orders / orders | ✔ |
+| 12 个月份及顺序 | Jan…Dec | Jan…Dec | ✔ 顺序、月份齐全 |
+| 其他 11 个月数值 | 82/90/87/95/101/108/115/123/119/130/138 | 同左 | ✔ 逐一相同 |
+| July 数值 | 105 | 109 | 按台账修订（唯一数据变动） |
+
+结论：目标面板的 note 字段中的**两条信息同时保留**——新增其修订来源说明（“July corrected from the source ledger.”）与源图原值说明；同时，原有的“数值取自折线点标注”这一数据获取方式说明，以及 source、chart_type、轴类型、系列标识、月份顺序等其余原有元数据均未被覆盖或删除。也就是说，这是一次“追加式”的 note 更新，并非替换原有的来源说明。
+
+## 补充说明
+
+- 该面板标题由 Monthly Orders 变为 Monthly Orders (Corrected)，Y 轴标签由 Orders 变为 Orders (count)，均按用户明确要求；①②③ 之间的布局与顺序保持不变，已撤销的“单列 + Conversion 置首”候选未出现在本版本中。
+- 这些检查基于装配结果中的字段比对，逐项取自图表规格定义，并非视觉判断；最近一次渲染（run 6）已确认标题、轴标签与 7 月点位显示正常，但渲染图本身不能替代上述字段核对。

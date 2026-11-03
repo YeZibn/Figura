@@ -1,0 +1,137 @@
+{
+  "paired_tasks": {
+    "01-chart-analysis": {
+      "baseline_total_tokens": 1650148,
+      "compaction_total_tokens": 1717554,
+      "observed_usage_delta_percent": -4.08,
+      "compression_saving_percent": -4.08,
+      "compression_saving_eligible": true,
+      "compaction_triggered": true,
+      "usage_complete": true,
+      "all_turns_completed": true
+    },
+    "02-chart-construction": {
+      "baseline_total_tokens": 33223,
+      "compaction_total_tokens": 34395,
+      "observed_usage_delta_percent": -3.53,
+      "compression_saving_percent": null,
+      "compression_saving_eligible": false,
+      "compaction_triggered": false,
+      "usage_complete": true,
+      "all_turns_completed": false
+    },
+    "03-chart-modification": {
+      "baseline_total_tokens": 1330167,
+      "compaction_total_tokens": 1093944,
+      "observed_usage_delta_percent": 17.76,
+      "compression_saving_percent": null,
+      "compression_saving_eligible": false,
+      "compaction_triggered": false,
+      "usage_complete": true,
+      "all_turns_completed": true
+    }
+  },
+  "executions": [
+    {
+      "task_id": "01-chart-analysis",
+      "condition": "compaction",
+      "status": "completed",
+      "turns": 20,
+      "provider_usage_including_compaction": {
+        "prompt_tokens": 1610007,
+        "completion_tokens": 107547,
+        "total_tokens": 1717554
+      },
+      "usage_complete": true,
+      "compaction_operations": [
+        {
+          "operation_id": "a6659eed02724efeae8d846b0ec6434c",
+          "status": "completed",
+          "failure_code": null
+        },
+        {
+          "operation_id": "17b9aac9ed504d66a08f5a57e8d4348e",
+          "status": "completed",
+          "failure_code": null
+        }
+      ],
+      "successful_compaction_count": 2,
+      "all_turns_completed": true
+    },
+    {
+      "task_id": "01-chart-analysis",
+      "condition": "baseline",
+      "status": "completed",
+      "turns": 20,
+      "provider_usage_including_compaction": {
+        "prompt_tokens": 1592199,
+        "completion_tokens": 57949,
+        "total_tokens": 1650148
+      },
+      "usage_complete": true,
+      "compaction_operations": [],
+      "successful_compaction_count": 0,
+      "all_turns_completed": true
+    },
+    {
+      "task_id": "02-chart-construction",
+      "condition": "baseline",
+      "status": "error",
+      "turns": 2,
+      "provider_usage_including_compaction": {
+        "prompt_tokens": 30325,
+        "completion_tokens": 2898,
+        "total_tokens": 33223
+      },
+      "usage_complete": true,
+      "compaction_operations": [],
+      "successful_compaction_count": 0,
+      "all_turns_completed": false
+    },
+    {
+      "task_id": "02-chart-construction",
+      "condition": "compaction",
+      "status": "error",
+      "turns": 2,
+      "provider_usage_including_compaction": {
+        "prompt_tokens": 30911,
+        "completion_tokens": 3484,
+        "total_tokens": 34395
+      },
+      "usage_complete": true,
+      "compaction_operations": [],
+      "successful_compaction_count": 0,
+      "all_turns_completed": false
+    },
+    {
+      "task_id": "03-chart-modification",
+      "condition": "compaction",
+      "status": "completed",
+      "turns": 20,
+      "provider_usage_including_compaction": {
+        "prompt_tokens": 1067090,
+        "completion_tokens": 26854,
+        "total_tokens": 1093944
+      },
+      "usage_complete": true,
+      "compaction_operations": [],
+      "successful_compaction_count": 0,
+      "all_turns_completed": true
+    },
+    {
+      "task_id": "03-chart-modification",
+      "condition": "baseline",
+      "status": "completed",
+      "turns": 20,
+      "provider_usage_including_compaction": {
+        "prompt_tokens": 1302301,
+        "completion_tokens": 27866,
+        "total_tokens": 1330167
+      },
+      "usage_complete": true,
+      "compaction_operations": [],
+      "successful_compaction_count": 0,
+      "all_turns_completed": true
+    }
+  ]
+}

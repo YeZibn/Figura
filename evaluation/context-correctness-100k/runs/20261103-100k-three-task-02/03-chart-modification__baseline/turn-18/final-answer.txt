@@ -1,0 +1,59 @@
+核对完成，现行 Figure 通过全部检查项；随后已渲染，生成 PNG 与既有渲染逐字节相同（sha256 `63438425…0c01`，1280×1002），说明该版本内容稳定、未在期间漂移。
+
+## 1. Figure 总标题
+- JSON：`2025 Regional Sales and Operations (Revised)`
+- 渲染：标题显示于顶部，文字完整、无截断，与字段一致 ✅
+
+## 2. 两列布局
+- JSON：`layout.columns = 2` ✅
+- 渲染：第一行两个面板并排（左柱状图、右折线图），第二行仅左列有面板、右列留空 —— 符合“两列 + 3 个面板”的预期排布 ✅
+- 未出现单列或重排痕迹 ✅
+
+## 3. 面板顺序
+- 数组顺序：`quarterly_revenue` → `monthly_orders` → `monthly_conversion` ✅
+- 渲染位置：Quarterly Revenue（左上）、Monthly Orders (Corrected)（右上）、Monthly Conversion Rate（左下）✅
+
+## 4. 三个子图数据完整性
+
+| 子图 | 应有结构 | 实际 | 判定 |
+|---|---|---|---|
+| Quarterly Revenue | 4 类别 × 3 系列 = 12 值 | Q1–Q4 齐全；North 34/39/43/50、South 27/32/36/41、Central 22/26/31/35，共 12 值，无 null | ✅ |
+| Monthly Orders | 12 点 | Jan 82、Feb 90、Mar 87、Apr 95、May 101、Jun 108、**Jul 109**、Aug 115、Sep 123、Oct 119、Nov 130、Dec 138，无 null，月份连续无缺 | ✅ |
+| Monthly Conversion | 12 点 | 2.4、2.6、2.5、2.8、3.0、3.1、3.0、3.3、3.4、3.2、3.6、3.8，无 null | ✅ |
+
+- 数值量级与图表类型匹配：柱状图 22–50、订单 82–138、转化率 2.4–3.8，均与源图面板一致。
+- 渲染可见：柱高递增、订单曲线 Jul 略高于 Jun（109 vs 108）、转化率 Dec 收于最高点，与 JSON 相符。
+
+## 5. 缺失项检查
+- 数据结构层面：**无缺失值、无空类别、无空系列、无 null y**。
+- 三个子图 `x_axis` 均无轴标签：这是**源图本就没有横轴标题**，属一致而非缺失 ✅
+- `measurement_refs` 三者均为空：本图数据取自图上标注值（July 另有台账依据），并非由像素测量产生，因此无测量引用属预期状态；这是数据来源的说明性限制，不影响图形正确性。
+- 面板 1、3 的 `note` 为空字符串而非缺失字段；面板 2 的 note 非空 ✅
+
+## 6. source / note
+
+| 子图 | source | note |
+|---|---|---|
+| ① Quarterly Revenue | Figura synthetic operations dataset | 空 |
+| ② Monthly Orders | Figura synthetic operations dataset | `July corrected from the source ledger.` |
+| ③ Monthly Conversion | Figura synthetic operations dataset | 空 |
+
+- 渲染中可见：三个面板底部各有 source 行；仅订单面板多出 note 行，且与 source 分行显示、无重叠 ✅
+
+## 7. 修订来源
+- July=109 的由来仅通过订单面板 note 记录，未污染其他字段 ✅
+- 原图读数 July=105 仍保留在源图及初始 Figure（digest `1619687d…5530`）中，未被覆盖或删除 ✅
+- 标题 Monthly Orders (Corrected) 与 y 轴 Orders (count) 同属本次修订范围；note 与它们一致，指向同一处台账更正 ✅
+- 修订未扩散：收入面板 12 值与转化率面板 12 值均无其他改动 ✅
+
+## 8. 目标外图表未变化
+与初始 Figure 逐字段比对结果：
+- Quarterly Revenue：标题、chart_type、source、note、x/y 轴、orientation/mode、类别、三系列 12 值、schema_version 全部相同 ✅
+- Monthly Conversion Rate：标题、chart_type、source、note、轴标签、系列 id/label、12 值、schema_version 全部相同（两个 3.0 在 JSON 中写作 `3`，数值相等）✅
+- 仅 4 处改动全部落在许可范围：总标题、订单面板标题、订单 y 轴标签、July 值（外加随之写入的 note）
+
+## 渲染中值得注意的两处细节（非错误，无需修正）
+- Q4 的 North 柱与转化率面板 Dec 点分别正好等于坐标轴上限（50、3.8），略贴绘图区上沿；这是数据本身即等于轴最大值所致，不影响读数。
+- 订单面板图例文字为 `Orders`，而 y 轴标签为 `Orders (count)`，二者并存是“系列名不改、仅改轴标签”的直接结果。
+
+结论：可以按此版本交付；未发现数据缺失、字段错配、修订来源丢失或候选布局残留。

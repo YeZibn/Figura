@@ -1,0 +1,32 @@
+复核完成。本轮**没有任何测量资源**，也就是没有已提交的 `measure_chart` 结果可供引用；可用的全部是 OCR 与面板图像资源。我已按目录中原样的类型化引用读取它们的精确结果。
+
+## 一、本轮可用的资源清单（类型化引用）
+
+| 类型 | 引用 | 来源 | 规模/状态 |
+|---|---|---|---|
+| Attachment | `attachment / 5ee4e2dfffe044f4b18a3057e6ef51a5` | bar_line_dashboard.png，2700×1800 | 原图可用 |
+| OCR | `ocr / run_id=a35b339b065d4512935bb67549cd89a3 / call_id=call_00_K32JXf8K0Qp85YKu3KJQ2229` | 整张附件，整图范围 | available，80 片段，未截断 |
+| Panel | `panel / e0574f052189723bdfad1b76a8222214f6b4b1efd678a95c1d6210eb2983caac` | Monthly Orders 面板 | 1364×855 |
+| OCR | `ocr / run_id=83efe82903a14db497ef06087204c2ae / call_id=call_01_Cj84vxwqjRiY1KCDcLv73523` | 同上面板 | available，22 片段，未截断 |
+| Panel | `panel / ff7152b243c766bd941bb45cd50767112735f9e5063d7c47a433c36a799abbd9` | Monthly Conversion Rate 面板 | 1324×886 |
+| OCR | `ocr / run_id=2a6674322d234bae8abfad367acac468 / call_id=call_01_ET_PQer47qUwZgO03EDCZfh4927` | 同上面板 | available，22 片段，未截断 |
+| Panel | `panel / 5042fc8bd259328d4f6bf63e659c003ced20e1c499b06204b9976a4197a899e6` | Returns by Product and Region 面板 | 1402×886 |
+| OCR | `ocr / run_id=9d14060d92884060bb9696fb7051ff76 / call_id=call_01_ET_hCrQBh186P53fwUjdiBE4787` | 同上面板 | available，19 片段，未截断 |
+| Panel + OCR | `panel / 2cba56899c6cd0255e3e26001167532d00b6dafba781ed1a8a1e320898d3638c`；`ocr / run_id=f172d60333724aa1b785920eacf5a18b / call_id=call_01_ET_hkBMwWxXkZBd2FUaFCMs2959` | Quarterly Revenue by Region 面板（本轮新建） | 1329×846，28 片段 |
+
+## 二、四项复核结果
+
+| 复核项 | 复核值 | 采用的类型化引用 | 定位与读取依据 | 结论 |
+|---|---|---|---|---|
+| Q2 South 收入 | **44 M USD** | `ocr / f172d603… / call_01_ET_hkBMwWxXkZBd2FUaFCMs2959`（片段 text_13） | 面板像素框 [532,229,32,23]，置信 0.99992；位于 Q2 组三柱中间那根**橙色**柱顶，图例 North=蓝（左）、South=橙（中）、Central=绿（右） | 与先前转录一致 |
+| May Orders | **151 单** | `ocr / 83efe829… / call_01_Cj84vxwqjRiY1KCDcLv73523`（text_12） | 框 [457,495,41,26]，置信 0.99878；“May” 标签框 [445,798,58,45]，中心 x≈474 与数值中心 x≈477 对齐（月间距约 95 px） | 一致 |
+| Sep Conversion | **4.6%** | `ocr / 2a667432… / call_01_ET_PQer47qUwZgO03EDCZfh4927`（text_5） | 框 [906,241,35,23]，置信 0.99988；已知刻度“Mar”中心≈354、“May”≈541、“Nov”≈1108，按 ≈94 px/月外推 9 月点 x≈907，与该框吻合 | 一致 |
+| Sports–North Returns | **3 件**（Returned units） | `ocr / 9d14060d… / call_01_ET_hCrQBh186P53fwUjdiBE4787`（text_14） | 框 [342,672,17,24]，置信 0.99923；列“North”标签中心 x≈350（[312,823,76,30]），“Sports”行标签 y 669–705 | 一致 |
+
+四项全部由直接 OCR 检出的数值确认，无需用色块或柱高反推，因此**未调用测量工具**。
+
+## 三、需要留意的证据边界
+
+- 收入面板是**本轮新切出的 Panel**，此前只有整张图的 OCR（80 片段）可用；其对 Q2 South 的框为 [532,305,33,24]、置信 0.99957，与面板级读数 44 相互印证。系列归属主要靠**颜色 + 图例**判定，这在加载面板原图后清晰可见。
+- 热力图面板的 OCR 只稳定识别出部分单元格（如 Electronics–Online 11、Home–South 8、Sports–North 3），其余单元格未检出——本次复核目标恰好是被检出的 “3”，故可直接引用；这不代表其他单元格不存在或数值不同。
+- 转化率面板 OCR 未检出 3.3、4.1、4.4、4.8 四处标注（工具 `truncated=false`，属实际漏检），四月值 4.8 仅见于整图 OCR 与本轮视觉读数；本次目标 9 月（4.6）不受此影响。

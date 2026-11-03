@@ -1,0 +1,90 @@
+{
+  "paired_tasks": {
+    "02-chart-construction": {
+      "baseline_total_tokens": 33051,
+      "compaction_total_tokens": 32835,
+      "observed_usage_delta_percent": 0.65,
+      "compression_saving_percent": null,
+      "compression_saving_eligible": false,
+      "compaction_triggered": false,
+      "usage_complete": true,
+      "all_turns_completed": false
+    },
+    "03-chart-modification": {
+      "baseline_total_tokens": 3047733,
+      "compaction_total_tokens": 1071197,
+      "observed_usage_delta_percent": 64.85,
+      "compression_saving_percent": null,
+      "compression_saving_eligible": false,
+      "compaction_triggered": false,
+      "usage_complete": true,
+      "all_turns_completed": false
+    }
+  },
+  "executions": [
+    {
+      "task_id": "02-chart-construction",
+      "condition": "baseline",
+      "status": "error",
+      "turns": 2,
+      "provider_usage_including_compaction": {
+        "prompt_tokens": 30685,
+        "completion_tokens": 2366,
+        "total_tokens": 33051
+      },
+      "usage_complete": true,
+      "compaction_operations": [],
+      "successful_compaction_count": 0,
+      "all_turns_completed": false,
+      "max_estimated_agent_input_tokens": 16357
+    },
+    {
+      "task_id": "02-chart-construction",
+      "condition": "compaction",
+      "status": "error",
+      "turns": 2,
+      "provider_usage_including_compaction": {
+        "prompt_tokens": 30583,
+        "completion_tokens": 2252,
+        "total_tokens": 32835
+      },
+      "usage_complete": true,
+      "compaction_operations": [],
+      "successful_compaction_count": 0,
+      "all_turns_completed": false,
+      "max_estimated_agent_input_tokens": 16298
+    },
+    {
+      "task_id": "03-chart-modification",
+      "condition": "compaction",
+      "status": "error",
+      "turns": 20,
+      "provider_usage_including_compaction": {
+        "prompt_tokens": 1046009,
+        "completion_tokens": 25188,
+        "total_tokens": 1071197
+      },
+      "usage_complete": true,
+      "compaction_operations": [],
+      "successful_compaction_count": 0,
+      "all_turns_completed": false,
+      "max_estimated_agent_input_tokens": 52490
+    },
+    {
+      "task_id": "03-chart-modification",
+      "condition": "baseline",
+      "status": "completed",
+      "turns": 34,
+      "provider_usage_including_compaction": {
+        "prompt_tokens": 2996096,
+        "completion_tokens": 51637,
+        "total_tokens": 3047733
+      },
+      "usage_complete": true,
+      "compaction_operations": [],
+      "successful_compaction_count": 0,
+      "all_turns_completed": true,
+      "max_estimated_agent_input_tokens": 93974
+    }
+  ]
+}

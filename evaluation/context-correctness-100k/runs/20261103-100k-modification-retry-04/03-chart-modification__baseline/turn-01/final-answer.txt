@@ -1,0 +1,19 @@
+已根据源图重建初始 Figure（共 3 个子图、两列布局），并已完成绘制。渲染结果中的曲线、柱体与数值均与源图标注一致。
+
+**重建内容（顺序与原图一致）**
+
+| # | 子图标题 | 图表类型 | X 轴 | Y 轴 | 内容 |
+|---|---|---|---|---|---|
+| 1 | Quarterly Revenue by Region | 分组柱状图 | Quarter（Q1–Q4） | Revenue (M USD) | 3 个系列：North、South、Central |
+| 2 | Monthly Orders | 折线图 | Month（Jan–Dec） | Orders | 单系列：Orders |
+| 3 | Monthly Conversion Rate | 折线图 | Month（Jan–Dec） | Conversion (%) | 单系列：Conversion rate |
+
+**数值（图上标注）**
+
+- 收入（North、South、Central）：Q1 34、27、22；Q2 39、32、26；Q3 43、36、31；Q4 50、41、35。
+- 月度订单：82、90、87、95、101、108、105、115、123、119、130、138（1–12 月）。
+- 月度转化率（%）：2.4、2.6、2.5、2.8、3.0、3.1、3.0、3.3、3.4、3.2、3.6、3.8（1–12 月）。
+
+整体 Figure 标题为 “Regional Operations Dashboard, 2025”，每个子图的 source 字段均填入 “Figura synthetic operations dataset”。
+
+**依据与说明**：数值来自柱顶、折线点旁的文字标注，并与 OCR 结果（如 34、27、22、39 等，及 138、130、82 等）一致；因此，这里采用读出值，未进行像素刻度反推。两幅折线图的图例在源图中未显示可辨识的系列名，此处以中性名称 “Orders” 和 “Conversion rate” 标识；Y 轴标签与标题则沿用图上文字。两列布局中的第三幅子图独占第二行左侧，因此右下角留白。

@@ -1,0 +1,6 @@
+{
+  "turn": 7,
+  "text": "把 Figure 列数从 2 改为 1，按原面板顺序保留四个图表。不要改变任何子图的数据、标题、轴标签或来源。",
+  "attachment_sha256": [],
+  "provider_id": "deepseek"
+}

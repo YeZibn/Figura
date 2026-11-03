@@ -1,0 +1,13 @@
+我已核对：当前生效的最终 Figure 已经满足这一要求，因此无需再装配新图。对比初始版和最终版的渲染图，可以发现：
+
+**最终 Figure 的现状**
+- 总标题：`2025 Regional Sales and Operations (Revised)`
+- 布局与顺序：两列，Quarterly Revenue by Region（左上）→ Monthly Orders (Corrected)（右上）→ Monthly Conversion Rate（左下），保持初始顺序，候选布局没有应用
+- Monthly Orders：标题 `Monthly Orders (Corrected)`；Y 轴 `Orders (count)`；Jul = 109；note 为「单序列折线图，数值为图上标注值。July corrected from the source ledger.」
+
+**与初始 Figure 的逐项比对**
+- Quarterly Revenue by Region：完全一致，包括 Q1 34/27/22、Q2 39/32/26、Q3 43/36/31、Q4 50/41/35，系列 North/South/Central，轴 Quarter 与 Revenue (M USD)，Y 轴 0–50，以及子图标题、note、source；两张渲染图中柱高、图例和刻度位置一致。
+- Monthly Conversion Rate：完全一致，包括 2.4、2.6、2.5、2.8、3.0、3.1、3.0、3.3、3.4、3.2、3.6、3.8，轴 Month 与 Conversion (%)，Y 轴 2.4–3.8，以及子图标题、note、source；两张渲染图中折线轨迹一致。
+- Monthly Orders：仅 Jul 点由 105 变为 109（该点由略低于 Jun 变为略高于 Jun），其余 11 个月份、X 轴 Month 均未变；不同之处只有标题、Y 轴标签和 note 这三处文字。
+
+也就是说，除了上述被明确允许的五个更新点，其余内容与初始 Figure 完全相同，我没有进行任何数据重解释。

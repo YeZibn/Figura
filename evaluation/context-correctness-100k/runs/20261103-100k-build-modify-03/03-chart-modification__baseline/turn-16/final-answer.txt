@@ -1,0 +1,24 @@
+## 候选状态：已撤销（revoked）
+
+| 候选改动 | 提出 | 撤销 | 当前状态 |
+|---|---|---|---|
+| 改为单列布局（columns = 1） | 第 3 轮 | 第 4 轮 | **已撤销，未应用**。从未装配、从未渲染 |
+| 将 Monthly Conversion Rate 移到第一位 | 第 3 轮 | 第 4 轮 | **已撤销，未应用**。转换率始终在第三位 |
+
+## 对当前 Figure 的实际核验（只读取，未改动）
+
+| 检查项 | 实际值 | 与候选的关系 |
+|---|---|---|
+| figure.layout.columns | **2** | 不是候选要求的 1 → 候选未写入 |
+| 子图数量 | 3 | 与候选无关 |
+| 顺序 1 | quarterly_revenue / Quarterly Revenue by Region（bar） | 首位仍是收入，不是转化率 → 候选未写入 |
+| 顺序 2 | monthly_orders / Monthly Orders (Corrected)（line，Y 轴 Orders (count)，July=109） | 保持 |
+| 顺序 3 | monthly_conversion / Monthly Conversion Rate（line，Y 轴 Conversion (%)） | 末位仍是转化率 |
+
+结论：当前生效 Figure（digest 0a0082bc…，标题 2025 Regional Sales and Operations (Revised)）中，单列和重排这两项候选**均无任何痕迹**，两列布局与"收入 → 订单 → 转化率"的顺序仍是初始确立的配置。
+
+## 本轮执行边界
+
+- 本轮只做了历史内容的读取核验（读取 layout 与 charts 结构），**没有调用装配，也没有调用渲染**；不存在新增产物，也没有把候选重新写入 Figure 的路径被触发。
+- 说明一点操作约束：修改 Figure 只能以"提交完整新 Figure"的方式完成，若真要把候选写入，必然需要一次新的装配；本轮未进行此类装配，故候选状态保持撤销不变。
+- 后续若你再次希望评估该候选，需要重新明确请求；在此之前它保持撤销状态，不会自动生效。

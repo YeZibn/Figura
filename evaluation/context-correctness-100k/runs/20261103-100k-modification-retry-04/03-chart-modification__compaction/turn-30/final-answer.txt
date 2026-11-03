@@ -1,0 +1,61 @@
+已分别读取初始 Figure（run `a04fac4…`，digest `04363382…`）与当前 Figure（run `9083994…`，digest `b8194b22…`）中这两个子图的 `chart_spec`。
+
+## 一、Quarterly Revenue 子图
+
+**当前生效值（`chart_id` = `quarterly_revenue`）**
+
+| 字段 | 值 |
+|---|---|
+| 标题 | `Quarterly Revenue by Region` |
+| 图表类型 | `bar`（分组柱状，竖向 `vertical` / `grouped`） |
+| y 轴 | `numeric`，标签 `Revenue (M USD)` |
+| x 轴 | `categorical`，**无轴标签**（无轴标题） |
+| source | `Figura synthetic operations dataset` |
+| note | `""`（空） |
+| 类别 | `q1`→Q1、`q2`→Q2、`q3`→Q3、`q4`→Q4（共 4 个，按 Q1→Q4 顺序） |
+
+| 系列（id / 标签） | Q1 | Q2 | Q3 | Q4 |
+|---|---|---|---|---|
+| `north` / North | 34 | 39 | 43 | 50 |
+| `south` / South | 27 | 32 | 36 | 41 |
+| `central` / Central | 22 | 26 | 31 | 35 |
+| （季度合计，计算值） | 83 | 97 | 110 | 126 |
+
+**与初始 Figure 对照**：标题、类型、y 轴类型与标签、x 轴类型与无标签、source、note（仍为空）、4 个类别及其 id/标签、3 个系列的 id/标签、12 个数值与顺序——**逐项完全一致，0 处差异**。该面板自建立后从未被修改。
+
+## 二、Monthly Conversion Rate 子图
+
+**当前生效值（`chart_id` = `monthly_conversion`）**
+
+| 字段 | 值 |
+|---|---|
+| 标题 | `Monthly Conversion Rate` |
+| 图表类型 | `line`（折线） |
+| y 轴 | `numeric`，标签 `Conversion (%)` |
+| x 轴 | `categorical`，**无轴标签**（刻度 Jan–Dec） |
+| source | `Figura synthetic operations dataset` |
+| note | `""`（空） |
+| 类别 | Jan、Feb、Mar、Apr、May、Jun、Jul、Aug、Sep、Oct、Nov、Dec（12 个，按时间顺序） |
+| 系列 | `conversion` / `Conversion Rate`（单系列） |
+
+| 月份 | Jan | Feb | Mar | Apr | May | Jun | Jul | Aug | Sep | Oct | Nov | Dec |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 值（%） | 2.4 | 2.6 | 2.5 | 2.8 | 3.0 | 3.1 | 3.0 | 3.3 | 3.4 | 3.2 | 3.6 | 3.8 |
+
+**与初始 Figure 对照**：标题、类型、y 轴类型与标签、x 轴类型与无标签、source、note（仍为空）、12 个月类别及顺序、系列 id/标签、12 个数值——**逐项完全一致，0 处差异**。
+
+## 三、一致性声明
+
+| 核对维度 | Quarterly Revenue | Monthly Conversion Rate |
+|---|---|---|
+| 标题 | 一致 ✅ | 一致 ✅ |
+| 图表类型 | 一致（bar）✅ | 一致（line）✅ |
+| 轴标签（含 x 轴无标题） | 一致 ✅ | 一致 ✅ |
+| source | 一致 ✅ | 一致 ✅ |
+| note | 一致（均为空）✅ | 一致（均为空）✅ |
+| 类别 | 一致（Q1–Q4）✅ | 一致（Jan–Dec）✅ |
+| 系列标识 | 一致（North/South/Central）✅ | 一致（conversion / Conversion Rate）✅ |
+| 全部数值 | 12/12 相同 ✅ | 12/12 相同 ✅ |
+| `schema_version` / `measurement_refs` | 2 / `[]`，一致 ✅ | 2 / `[]`，一致 ✅ |
+
+**结论**：这两个面板与初始 Figure **完全相同，无任何字段或数值变动**；本次会话的全部实际修改仅落在 Figure 总标题与 Monthly Orders 面板（标题、y 轴标签、note、July 105→109）。上表数值为 Figure 记录值；它们与源图的一致性来自建图时的读取核对，本轮只作结构对照，未重新读图。

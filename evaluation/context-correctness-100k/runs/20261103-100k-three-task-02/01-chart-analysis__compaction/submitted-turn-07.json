@@ -1,0 +1,6 @@
+{
+  "turn": 7,
+  "text": "复核 Q2 South 收入、May Orders、Sep Conversion 和 Sports–North Returns。先检查本轮可用的 OCR/测量资源；报告各自的类型化资源引用和读取依据。若目录已有合适资源引用，直接使用该引用读取精确结果。",
+  "attachment_sha256": [],
+  "provider_id": "deepseek"
+}

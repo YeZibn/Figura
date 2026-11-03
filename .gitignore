@@ -34,3 +34,6 @@ coverage/
 .chartagent/
 .figura/
 /output/
+
+# Evaluation reports and fixtures are versioned; per-case runtime snapshots stay local.
+/evaluation/**/cases/*/data/

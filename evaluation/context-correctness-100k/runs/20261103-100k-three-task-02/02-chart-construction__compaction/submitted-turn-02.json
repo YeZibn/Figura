@@ -1,0 +1,6 @@
+{
+  "turn": 2,
+  "text": "调用 assemble_chart_figure 生成完整四面板 ChartFigure，顺序为 Quarterly Revenue、Monthly Orders、Orders by Region and Channel、Delivery Time and Satisfaction；采用两列布局。保留所有值、类别/系列顺序、标题、source 和 note，不增加轴范围、刻度步长、颜色或数据标签要求。",
+  "attachment_sha256": [],
+  "provider_id": "deepseek"
+}

@@ -1,0 +1,26 @@
+最终 Figure 已根据完整 ChartSpec 重新装配并渲染，PNG 为 1280×1002；装配摘要 digest 为 `844cbe0c28dd…27db8ef`，与上一版一致，说明重新装配出的内容与已确认的最终版相同。
+
+**最终 ChartSpec 摘要**
+
+| 顺序 | chart_id | 类型 | 子图标题 | 坐标轴 | 数据 |
+|---|---|---|---|---|---|
+| 1 | quarterly_revenue_by_region | bar（分组，vertical） | Quarterly Revenue by Region | X: Quarter（分类）; Y: Revenue (M USD) | North [34,39,43,50]; South [27,32,36,41]; Central [22,26,31,35] |
+| 2 | monthly_orders | line | Monthly Orders (Corrected) | X: Month（分类）; Y: Orders (count) | 82、90、87、95、101、108、**109**、115、123、119、130、138 |
+| 3 | monthly_conversion_rate | line | Monthly Conversion Rate | X: Month（分类）; Y: Conversion (%) | 2.4、2.6、2.5、2.8、3.0、3.1、3.0、3.3、3.4、3.2、3.6、3.8 |
+
+- 总标题：`2025 Regional Sales and Operations (Revised)`；schema_version 2
+- 子图 source 均为「Figura synthetic operations dataset」；note 依次为「分组柱状图，数值为图上标注值」「单序列折线图，数值为图上标注值。July corrected from the source ledger.」「单序列折线图，单位为百分比」
+
+**布局与面板顺序**
+- 两列（`columns: 2`），三个面板按原顺序：Quarterly Revenue by Region（左上）→ Monthly Orders (Corrected)（右上）→ Monthly Conversion Rate（左下），右下留空。渲染图中位置与此一致。
+
+**July 修订及来源**
+- 修订：Monthly Orders 的 Jul 由 105 改为 109；其余 11 个月份未改。
+- 来源：用户依据订单台账确认 July 应为 109，源图该点标注读数为 105；该修订记录在该面板 note 中（图中可见）。105 仍作为源图原始读数保留在历史与初始 Figure 中，两个数值不互相替代。视觉上 Jul（109）现略高于 Jun（108）。
+
+**确认事项**
+- 临时单列布局与将 Monthly Conversion Rate 前置的重排：均已撤销且在这版及之前各版本中均未出现，本版为两列、原始顺序。
+- 两个非目标面板未被修改：Quarterly Revenue 的 12 个数值、分组/类别、双轴标签与图例，以及 Conversion 的 12 个数值与轴设置，均与初始 Figure 逐字段相同；渲染图中柱类分布、折线轨迹与刻度范围一致。
+- 其他订单月份（Jan 82、Feb 90、Mar 87、Apr 95、May 101、Jun 108、Aug 115、Sep 123、Oct 119、Nov 130、Dec 138）保持初始值。
+
+渲染成功仅表示图像已生成；图中数值依据为源图标注读取与台账修订记录。

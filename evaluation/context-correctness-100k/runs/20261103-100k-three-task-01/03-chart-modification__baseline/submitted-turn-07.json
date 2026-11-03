@@ -1,0 +1,6 @@
+{
+  "turn": 7,
+  "text": "逐项区分：当前有效修改、已撤销候选、原始图像读数、用户确认的修订值。列出 Orders 的 June、July、August 值，并说明 July 最终值与原图值为何不同。",
+  "attachment_sha256": [],
+  "provider_id": "deepseek"
+}

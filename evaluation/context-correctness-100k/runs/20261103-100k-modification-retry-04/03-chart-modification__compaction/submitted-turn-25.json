@@ -1,0 +1,6 @@
+{
+  "turn": 25,
+  "text": "列出允许变化的字段：Figure title、Monthly Orders title、Monthly Orders y 轴 label、July Orders、Monthly Orders note。对所有其他字段声明保留初始值，并在 Figure 上逐项核对。",
+  "attachment_sha256": [],
+  "provider_id": "deepseek"
+}

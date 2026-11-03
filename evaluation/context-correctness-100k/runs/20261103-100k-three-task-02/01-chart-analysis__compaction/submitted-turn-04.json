@@ -1,0 +1,6 @@
+{
+  "turn": 4,
+  "text": "说明 Returns by Product and Region 面板的行列含义与单位，并按商品类别列出 North、South、Central、Online 的数值。指出最大和最小单元格。",
+  "attachment_sha256": [],
+  "provider_id": "deepseek"
+}

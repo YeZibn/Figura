@@ -1,0 +1,118 @@
+## 一、当前生效 Figure 总览
+
+| 项 | 值 |
+|---|---|
+| 总标题 | `2025 Regional Sales and Operations (Revised)` |
+| 布局 | `columns: 2`（2 列 × 2 行，3 图占 3 格，右下为空位） |
+| 子图顺序 | `quarterly_revenue` → `monthly_orders` → `monthly_conversion` |
+| 子图数量 | 3 |
+| `schema_version` | 2 |
+| Figure 引用 | run `908399490058411e91a60cdf906311d8` / call `call_00_ET_xDj7KLtnfM1Sw3b2q4mV4652` |
+| digest | `b8194b22e7d97fbcbc40ab04dcd43b3ae44c42460536736d7a538dd4ae0b1056` |
+| 渲染 | 1280×1002，sha256 `dfb13a91321e9916aa5e50ad8e3fd7e85608a62f7c7f6cbbbcfe5f3d3ff3ba9e` |
+
+## 二、子图 1 · Quarterly Revenue
+
+`chart_id` = `quarterly_revenue`
+
+| 字段 | 值 |
+|---|---|
+| 标题 | `Quarterly Revenue by Region` |
+| 类型 | `bar`；`orientation: vertical`，`mode: grouped` |
+| y 轴 | `numeric` / `Revenue (M USD)` |
+| x 轴 | `categorical` / 无轴标签 |
+| 坐标系统 | `cartesian` |
+| source | `Figura synthetic operations dataset` |
+| note | `""` |
+| 类别 | `q1`–`q4` → Q1、Q2、Q3、Q4 |
+| 系列 | `north`/North：34, 39, 43, 50；`south`/South：27, 32, 36, 41；`central`/Central：22, 26, 31, 35 |
+| `measurement_refs` | `[]` |
+
+## 三、子图 2 · Monthly Orders
+
+`chart_id` = `monthly_orders`
+
+| 字段 | 值 |
+|---|---|
+| 标题 | `Monthly Orders (Corrected)` |
+| 类型 | `line` |
+| y 轴 | `numeric` / `Orders (count)` |
+| x 轴 | `categorical` / 无轴标签（Jan–Dec） |
+| 坐标系统 | `cartesian` |
+| source | `Figura synthetic operations dataset` |
+| note | `July corrected from the source ledger.` |
+| 系列 | `orders` / `Orders`（单系列，12 点） |
+| 点位 | Jan 82、Feb 90、Mar 87、Apr 95、May 101、Jun 108、**Jul 109**、Aug 115、Sep 123、Oct 119、Nov 130、Dec 138 |
+| `measurement_refs` | `[]` |
+
+## 四、子图 3 · Monthly Conversion Rate
+
+`chart_id` = `monthly_conversion`
+
+| 字段 | 值 |
+|---|---|
+| 标题 | `Monthly Conversion Rate` |
+| 类型 | `line` |
+| y 轴 | `numeric` / `Conversion (%)` |
+| x 轴 | `categorical` / 无轴标签（Jan–Dec） |
+| 坐标系统 | `cartesian` |
+| source | `Figura synthetic operations dataset` |
+| note | `""` |
+| 系列 | `conversion` / `Conversion Rate`（单系列，12 点） |
+| 点位（%） | 2.4、2.6、2.5、2.8、3.0、3.1、3.0、3.3、3.4、3.2、3.6、3.8 |
+| `measurement_refs` | `[]` |
+
+## 五、已撤销候选（不得出现在任何后续 Figure 中）
+
+| 候选 | 提出轮次 | 状态 | 处理结果 |
+|---|---|---|---|
+| 改为**单列**布局 | 第 3 轮 | **已撤销**（第 4 轮明确撤销） | 从未装配、从未渲染，未写入任何 Figure 版本 |
+| 把 **Monthly Conversion Rate 置首** | 第 3 轮 | **已撤销**（第 4 轮明确撤销） | 同上；三个子图首位始终是 `quarterly_revenue` |
+
+四项历史版本（digest `04363382…`、`97b8af73…`、`2afe12f4…`、`b8194b22…`）均为两列布局、首个子图均为 Quarterly Revenue，可印证候选从未落地。
+
+## 六、July：源图 105 与修订 109 的并存关系
+
+| 维度 | 值 | 性质 |
+|---|---|---|
+| 源图标注读数 | **105** | 历史事实，保留在初始 Figure（`04363382…`）与读取记录中，未被抹除 |
+| 用户台账确认值 | **109** | 当前权威值，本会话内无台账原件可复核 |
+| 差异 | +4 单；相对 +4/105 ≈ **+3.81%** | 计算值 |
+| 影响 | 全年合计 1293→1297；月均 107.75→108.08（+1/3）；Q3 月均 114.33→115.67 | 计算值 |
+| 记录方式 | 仅以 note 文字说明；`measurement_refs` 仍为 `[]` | 图内无台账凭据 |
+| 唯一性 | 12 个月中**仅 July** 两口径不同，其余 11 个月完全一致 | 已逐月核对 |
+
+## 七、本轮未作任何修改
+
+本轮仅为汇总与合同说明：未调用装配、未渲染、未改写任何字段。上列值即当前生效 Figure 的实际内容，digest 仍为 `b8194b22…0b1056`。
+
+## 八、即将重组的 Figure 合同
+
+若后续执行重组，新 Figure 必须满足以下合同（任一不满足即视为不合格）：
+
+**A. 顶层结构**
+1. `schema_version` = 2；
+2. `layout.columns` = 2（不得改单列、不得改 3 列）；
+3. `charts` 长度 = 3，顺序严格为 `quarterly_revenue` → `monthly_orders` → `monthly_conversion`；
+4. `title` = `2025 Regional Sales and Operations (Revised)`。
+
+**B. 逐子图不变式**
+
+| 子图 | 必须保持 | 允许的差异 |
+|---|---|---|
+| Quarterly Revenue | 全部字段与 12 个数值（见第二节） | **无** |
+| Monthly Orders | 标题 `Monthly Orders (Corrected)`、y 轴 `Orders (count)`、note `July corrected from the source ledger.`、series `orders`/`Orders`、除 July 外 11 个点、July = **109** | 本轮无；如未来获新授权才可改 |
+| Monthly Conversion Rate | 全部字段与 12 个数值（见第四节） | **无** |
+
+**C. 禁止项**
+5. 不得出现单列布局；
+6. 不得把 `monthly_conversion` 前移或改为首位；
+7. 不得把 July 改回 105，也不得把 109 挪到 Jun/Aug；
+8. 不得修改另外 11 个月的任何值；
+9. 不得给两处空 `note` 填入新内容，不得覆写任何 `source`；
+10. 不得为消除 Warning 而引入未经授权的数据或虚构 `measurement_refs`（三处均保持 `[]`）。
+
+**D. 验收方式**
+11. 重组后应能逐字段复述上表；§二至§四与本合同一致即通过；
+12. 若重新渲染，需检查：标题、两列位置（左上柱图/右上订单/左下转化率/右下空位）、订单面板 source 与 note 两行同时可见、月份标签未被裁切；
+13. 结构通过只说明合同合规，**不构成数据正确性证明**；July = 109 的依据仍是用户确认，105 的依据是源图读数。

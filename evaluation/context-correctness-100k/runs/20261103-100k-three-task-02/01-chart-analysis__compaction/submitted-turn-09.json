@@ -1,0 +1,6 @@
+{
+  "turn": 9,
+  "text": "计算 Q1→Q2、Q2→Q3、Q3→Q4 的季度总收入增速百分比。列出分子、分母和四舍五入口径，说明增速不表示原因。",
+  "attachment_sha256": [],
+  "provider_id": "deepseek"
+}

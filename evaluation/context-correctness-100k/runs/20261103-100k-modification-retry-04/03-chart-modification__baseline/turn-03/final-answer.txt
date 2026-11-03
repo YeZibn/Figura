@@ -1,0 +1,18 @@
+已记录该方案为**候选，未应用**；当前 Figure 没有做任何改动。
+
+**当前仍生效的状态（即为当前 Figure 的实际配置）**
+
+| 项目 | 当前值 |
+|---|---|
+| 整体标题 | Regional Operations Dashboard, 2025 |
+| 布局 | 两列（`columns: 2`） |
+| 面板顺序（从第 1 到第 3） | ① Quarterly Revenue by Region（分组柱状图） → ② Monthly Orders (Corrected)（折线图） → ③ Monthly Conversion Rate（折线图） |
+| 位置表现 | ① 在左上、② 在右上、③ 在第二行左侧，右下留白 |
+| 其他 | 各子图的 source 字段仍为 “Figura synthetic operations dataset”；② 的 Y 轴标签仍为 “Orders (count)”；三幅子图的数据均未变 |
+
+**候选方案（待定，尚未应用）**
+
+- 布局改为单列（`columns: 1`），也就是三幅子图纵向依次排列；
+- 面板顺序改为：① Monthly Conversion Rate → ② Quarterly Revenue by Region → ③ Monthly Orders (Corrected)。也就是，把原来位于第三位的面板移到第一位，其余两幅子图的相对顺序保持不变（这一推断基于“把转换率放到第一位”这一表述；如果您希望后两幅也换序，请告诉我）。
+
+如果要应用这个候选方案，需要重新装配一个完整的新 Figure，然后再次绘制；当前 Figure 及上一次渲染的结果不受影响。您希望现在应用，还是继续保留候选？

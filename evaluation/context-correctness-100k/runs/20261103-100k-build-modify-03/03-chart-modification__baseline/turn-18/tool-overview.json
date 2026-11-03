@@ -1,0 +1,48 @@
+[
+  {
+    "call_id": "call_00_QndqGTYksE7SLJOYQjRh8999",
+    "tool_name": "read_history",
+    "outcome": "failed",
+    "error": {
+      "code": "history_reference_unavailable",
+      "field_path": null,
+      "message": "请求的历史来源不可用或不在当前授权范围内。",
+      "retryable": false
+    }
+  },
+  {
+    "call_id": "call_01_Jk9rjE7zkuFyC0rddJjm4617",
+    "tool_name": "read_history",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_02_zhkiAP0SBhMNdKFGMWSm1079",
+    "tool_name": "read_history",
+    "outcome": "failed",
+    "error": {
+      "code": "history_reference_unavailable",
+      "field_path": null,
+      "message": "请求的历史来源不可用或不在当前授权范围内。",
+      "retryable": false
+    }
+  },
+  {
+    "call_id": "call_00_Lcif9TM5jdV9jjuTEB3j1965",
+    "tool_name": "read_history",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_J8X78zOPW8f69J1KQIvS8622",
+    "tool_name": "read_history",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_7TRppUVmQuhSYPMys3hm9789",
+    "tool_name": "render_chart_figure",
+    "outcome": "succeeded",
+    "error": null
+  }
+]

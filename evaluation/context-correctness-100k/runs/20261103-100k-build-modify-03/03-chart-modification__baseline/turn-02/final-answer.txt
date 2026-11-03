@@ -1,0 +1,12 @@
+完整 Figure 已重新装配并绘制，只改动了 Monthly Orders 子图：
+
+**修改点**
+- 标题：Monthly Orders → **Monthly Orders (Corrected)**
+- Y 轴标签：Orders → **Orders (count)**
+
+**保持不变**
+- 整体标题 Regional Operations Dashboard, 2025，两列布局，子图顺序仍为条形图 → 折线图 → 折线图
+- 另两个子图完全未动：Quarterly Revenue by Region（Q1–Q4 × North/South/Central，34/39/43/50、27/32/36/41、22/26/31/35）、Monthly Conversion Rate（2.4–3.8 的 12 个月序列）
+- Monthly Orders 的 12 个数据点（82, 90, 87, 95, 101, 108, 105, 115, 123, 119, 130, 138）、月份类别与 “Figura synthetic operations dataset” 来源标注均保持原样
+
+**渲染回看**：新标题 “Monthly Orders (Corrected)” 与 Y 轴 “Orders (count)” 均在图中正常显示，未与图例或刻度重叠；月份标签倾斜排布完整，坐标范围约 80–140，折线走势与原图一致。第三张子图因两列布局位于第二行左侧，右侧留空属正常排版。

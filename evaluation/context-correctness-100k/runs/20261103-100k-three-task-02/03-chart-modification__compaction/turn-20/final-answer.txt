@@ -1,0 +1,43 @@
+已按最终有效要求在本次运行中重新装配并渲染完成。PNG 见上（1280×1002，sha256 `65c31b5c…e6807`）。
+
+**引用**：Figure run `0164f339…`，call `call_00_pLEnmYjIxPFSg3e6SZD96270`，digest `ec2c08bbc071903d959580a75dbe5e4eb1690383b234684226215f455b673a19`；渲染 call `call_00_ET_nsmdDyTYqOWPAFxhZ9H81323`。
+
+## Figure 级
+
+- 标题：**2025 Regional Sales and Operations (Revised)**（图面可见）
+- 布局：**两列**（`columns = 2`）
+- 面板顺序：**① Quarterly Revenue by Region → ② Monthly Orders (Corrected) → ③ Monthly Conversion Rate**
+
+## ChartSpec 摘要
+
+| # | chart_id | 类型 | 子图标题 | x 轴 | y 轴 | 数据 |
+|---|---|---|---|---|---|---|
+| 1 | revenue_by_region | bar（vertical / grouped） | Quarterly Revenue by Region | categorical（无标签）：Q1–Q4 | numeric：Revenue (M USD) | North 34/39/43/50；South 27/32/36/41；Central 22/26/31/35 |
+| 2 | monthly_orders | line | Monthly Orders (Corrected) | categorical（无标签）：Jan–Dec | numeric：**Orders (count)** | 82, 90, 87, 95, 101, 108, **109**, 115, 123, 119, 130, 138 |
+| 3 | monthly_conversion_rate | line | Monthly Conversion Rate | categorical（无标签）：Jan–Dec | numeric：Conversion (%) | 2.4, 2.6, 2.5, 2.8, 3.0, 3.1, 3.0, 3.3, 3.4, 3.2, 3.6, 3.8 |
+
+- 三面板 source 均为 `Figura synthetic operations dataset`（三处均在图下可见）
+- note：面板 1 空、面板 3 空、面板 2 为 `July corrected from the source ledger.`（图下可见）
+- `measurement_refs` 均为空：数值来自首轮对源图标注的读取与台账修订，未经独立测量校准
+
+## July 修订与其来源
+
+| 项 | 内容 |
+|---|---|
+| 位置 | 面板 ②，系列 `orders`（label `Orders`）的 `Jul` 点 |
+| 源图读数 | **105**（`quarterly-regional-sales.png` 折线标签原始读数，属历史事实，未抹除） |
+| 最终值 | **109** |
+| 差值 | +4（约 +3.81%），'Jul' 与 12 个月中唯一被改动的点 |
+| 来源 | 订单台账核实（你在第 5 轮确认），记录于面板 note |
+| 影响 | 全年合计 1293 → 1297，全年月均 107.75 → 108.08；Q3 月均 114.33 → 115.67；最大值 Dec 138、最小值 Jan 82、Jan→Dec 净增 +56 均不变 |
+
+## 明确确认
+
+- **临时单列/重排无残留**：`columns` 为 2，面板 3 位于第二行左侧而非首位，营收面板仍居首；两者系第 3 轮候选、第 4 轮撤销，从未产生 Figure 版本，本次装配也未包含。（图面右下留白即两列网格的预期结果，不是缺失面板。）
+- **两个非目标面板未被修改**：面板 1 与面板 3 的标题、图表类型、类别、轴标签、source、空 note 与全部数值，与初始 Figure 逐字段一致（面板 1 的 North Q4 = 50，面板 3 的 Dec = 3.8 已于核对中确认）。
+- **其他订单月份未被修改**：Jan–Jun、Aug–Dec 共 11 个点与初始 Figure 完全相同（82, 90, 87, 95, 101, 108, 115, 123, 119, 130, 138），只有 July 变化。
+- 订单面板的系列 label 仍为 `Orders`，与轴标签 `Orders (count)` 并存，是「其他字段保持原样」的预期结果。
+
+## 一项需要你知道的图面限制
+
+渲染图**没有数值标签**（源图每个柱/点都标了数字）。当前 ChartSpec 结构不含数据标签字段，无法通过重装配恢复；因此图上的精确值需借助刻度近似读取。若要求数值在图面可读，需改用其他交付方式（例如附数据表），我可按你的偏好处理。

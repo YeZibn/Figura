@@ -1,0 +1,13 @@
+已修改整张 Figure 的标题，并重新装配、渲染出图。
+
+**本次唯一改动**
+- Figure 标题：`Regional Operations Dashboard, 2025` → `2025 Regional Sales and Operations (Revised)`
+
+**按要求保持**
+- 布局：2 列，未改成单列；上一轮已撤销的候选方案仍未生效
+- 面板顺序：Quarterly Revenue by Region（左上）→ Monthly Orders (Corrected)（右上）→ Monthly Conversion Rate（左下）
+- 各面板内容均未改动：柱状图 34/39/43/50、27/32/36/41、22/26/31/35 及图例 North/South/Central；订单 82…138（July 已更正为 109）；转化率 2.4…3.8；面板标题、轴标签（Revenue (M USD)、Orders (count)、Conversion (%)）、source 说明与订单面板 note `July corrected from the source ledger.` 全部保留
+
+**回看渲染图**：新标题正确显示在顶部；三个子图的标题、图例、轴标签与刻度均可见，无遮挡或裁切；柱子与折线的高度和拐点与数据一致（June 108、July 109 处 July 略高；Dec 订单 138、转化率 3.8%）。
+
+新产物引用：Figure `call_00_kcePLceujkG1CuXKv5LD2306`，渲染 `call_00_ET_4RWjQL46oPJcMguepGip0205`，digest `715644b7…cf4970`（前一版为 `620bcf61…3c75d`）。

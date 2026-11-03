@@ -1,0 +1,16 @@
+已按台账核实结果更新，并重新装配、绘制了整个 Figure（两列布局与面板顺序不变）。
+
+**本次唯一的数据改动**
+- Monthly Orders 面板，July：105 → **109**（依据：订单台账核实）
+- 该面板 `note` 写入：`July corrected from the source ledger.`
+
+**未改动的部分**
+- 其他 11 个月份保持原值：82、90、87、95、101、108、115、123、119、130、138
+- 面板标题仍为 `Monthly Orders (Corrected)`，纵轴仍为 `Orders (count)`
+- 季度柱图与转化率折线的全部数据、标题、轴名未动；Figure 标题仍为 `Regional Operations Dashboard, 2025`；三个子图 source 仍为 `Figura synthetic operations dataset`
+
+从生成图上看：Jul 现落在 Jun（108）与 Aug（115）之间，纵轴刻度 80–140 下位置合理；面板下方同时显示 source 与新的 note 文本，未见遮挡或裁切。
+
+**源读数的记录状态**
+
+源图中的原始标注读数 105 仍作为历史事实保留，未被覆盖或删除——它记录在上一次运行（`a04fac4…` 与 `9cfc0670…`）的 Figure 版本和当时的读取说明中；当前版本仅在 July 的数值上采用了台账值 109，并通过 note 说明这一更正来源。也就是说，“源图标注 105”与“台账值 109”两条事实并存，不会互相抹除。

@@ -1,0 +1,29 @@
+## 一、四个面板一览
+
+| 位置 | 图表类型 | 标题 | X 轴（含义/单位） | Y 轴（含义/单位） | 其他标识 |
+|---|---|---|---|---|---|
+| 左上 | 簇状（分组）柱形图，3 个系列 | Quarterly Revenue by Region | Q1–Q4，季度（无单位） | Revenue (M USD)，百万美元 | 图例：North（蓝）、South（橙）、Central（绿）；刻度 0–60，间隔 10 |
+| 右上 | 折线图（带数据点标记） | Monthly Orders | Jan–Dec，月份 | Orders (count)，订单数量（单） | 刻度 120–220，间隔 20 |
+| 左下 | 折线图（带数据点标记，橙线） | Monthly Conversion Rate | Jan–Dec，月份 | Conversion (%)，转化率（百分比） | 刻度 3.25–5.00，间隔 0.25 |
+| 右下 | 热力图（含色标） | Returns by Product and Region | 列：North、South、Central、Online（区域） | 行：Electronics、Home、Sports（品类） | 色标为 Returned units，单位：件/退货单位，范围 3–11 |
+
+整体标题（位于图顶部）：**Regional Sales and Operations Dashboard, 2025**
+
+## 二、「Quarterly Revenue by Region」完整数值转录（单位：M USD）
+
+| 季度 | North | South | Central |
+|---|---|---|---|
+| Q1 | 42 | 36 | 31 |
+| Q2 | 47 | 44 | 39 |
+| Q3 | 53 | 49 | 45 |
+| Q4 | 61 | 58 | 50 |
+
+**数值来源：这些数值并非通过柱高估算得到，而是直接来自图上的数值标注。** 每根柱的顶端都印有具体数值，OCR 也提取到这些标注文本（例如 Q1 的三处 42/36/31、Q4 的 61/58/50 等）；它们的位置与各柱一一对应，且与图例句柄配色一致。因此，我**没有**对柱高做像素测量。图上清晰可辨、系列颜色与图例也明确对应，所以 `measure_chart` 不必要。
+
+## 三、其余三个面板的读数（同样来自图上标注）
+
+- **Monthly Orders（count）**：Jan 120、Feb 132、Mar 128、Apr 145、May 151、Jun 167、Jul 164、Aug 178、Sep 191、Oct 187、Nov 205、Dec 219。整体呈上升趋势，其中 Mar、Jul、Oct 小幅回落。
+- **Monthly Conversion Rate（%）**：3.2、3.5、3.3、3.8、4.0、4.2、4.1、4.4、4.6、4.5、4.8、5.1（从 Jan 到 Dec）。总体缓慢上行，Mar、Jul、Oct 有轻微下跌。
+- **Returns by Product and Region（Returned units）**：Electronics 为 9 / 7 / 5 / 11（North/South/Central/Online），Home 为 6 / 8 / 4 / 9，Sports 为 3 / 4 / 6 / 5。最高为 Electronics–Online（11），最低为 Sports–North（3）。
+
+需要注意：以上都是图上印刷的数字，我按原样转录，未与底层数据核对；热力图的色标刻度为 3–11。

@@ -1,0 +1,6 @@
+{
+  "turn": 10,
+  "text": "基于完整 Figure 重新装配并渲染最终结果。交付最终 ChartSpec 摘要和 PNG；列出最终保留的面板顺序/布局、July 修订及其来源，并明确确认临时单列/重排没有残留，两个非目标面板和其他订单月份未被修改。",
+  "attachment_sha256": [],
+  "provider_id": "deepseek"
+}

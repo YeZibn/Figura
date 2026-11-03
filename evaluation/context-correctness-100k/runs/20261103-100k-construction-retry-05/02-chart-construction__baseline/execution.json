@@ -1,0 +1,77 @@
+{
+  "task_id": "02-chart-construction",
+  "condition": "baseline",
+  "capacity_tokens": 100000000,
+  "provider_id": "deepseek",
+  "batch_id": "20261103-100k-construction-retry-05",
+  "started_at": "2026-11-03T14:18:11.733128+08:00",
+  "session_id": "698b0a38f1f64a568153fd104fecf398",
+  "turns": [
+    {
+      "turn": 1,
+      "run_id": "3553dc1874c74e46ba8c4e9213a29243",
+      "session_id": "698b0a38f1f64a568153fd104fecf398",
+      "status": "completed",
+      "terminal_code": null,
+      "final_answer_committed": true,
+      "figures": [],
+      "renders": [],
+      "provider_attempt_count": 1,
+      "usage_by_purpose": {
+        "agent_turn": {
+          "prompt_tokens": 14414,
+          "completion_tokens": 1355,
+          "total_tokens": 15769
+        }
+      },
+      "usage_total_including_compaction": {
+        "prompt_tokens": 14414,
+        "completion_tokens": 1355,
+        "total_tokens": 15769
+      },
+      "usage_complete": true,
+      "usage_missing_attempts": [],
+      "compaction_operations": [],
+      "max_estimated_agent_input_tokens": 14017,
+      "wall_seconds": 10.045,
+      "timed_out": false
+    },
+    {
+      "turn": 2,
+      "run_id": "7d4a896e07bf4d8fbdb5cf834f3afc9b",
+      "session_id": "698b0a38f1f64a568153fd104fecf398",
+      "status": "failed",
+      "terminal_code": "execution_failed",
+      "final_answer_committed": false,
+      "figures": [],
+      "renders": [],
+      "provider_attempt_count": 1,
+      "usage_by_purpose": {
+        "agent_turn": {
+          "prompt_tokens": 16305,
+          "completion_tokens": 1105,
+          "total_tokens": 17410
+        }
+      },
+      "usage_total_including_compaction": {
+        "prompt_tokens": 16305,
+        "completion_tokens": 1105,
+        "total_tokens": 17410
+      },
+      "usage_complete": true,
+      "usage_missing_attempts": [],
+      "compaction_operations": [],
+      "max_estimated_agent_input_tokens": 16357,
+      "wall_seconds": 6.049,
+      "timed_out": false
+    }
+  ],
+  "execution_status": "error",
+  "input_adjustments": [
+    "dataset.json 原文内嵌至第 1 轮用户消息；附件入口只接受图片，JSON 内容保持不变。"
+  ],
+  "attachment_sha256": {},
+  "error_type": "RuntimeError",
+  "error_message": "02-chart-construction baseline turn 2 ended as failed; remaining turns in this session were not submitted",
+  "completed_at": "2026-11-03T14:18:30.268184+08:00"
+}

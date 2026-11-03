@@ -1,0 +1,32 @@
+## 面板含义与单位
+
+**Returns by Product and Region**（按商品类别与区域划分的退货量）是一张 3 行 × 4 列的热力图：
+
+- **行 = 商品类别**（3 类）：Electronics（电子）、Home（家居）、Sports（运动）
+- **列 = 区域**（4 个）：North、South、Central、Online（前三个为实体区域，Online 为线上渠道）
+- **单元格数值 = 该商品在该区域的退货件数**，单位为“件”（count）。面板右侧竖排色标标题为 **Returned units**，刻度范围 3–11；颜色越深退货越多，从浅黄（约 3 件）到深藏青（11 件）。
+
+## 数值（按商品类别列出）
+
+| 商品类别 | North | South | Central | Online | 行合计 |
+|---|---|---|---|---|---|
+| Electronics | 9 | 7 | 5 | **11** | 32 |
+| Home | 6 | 8 | 4 | 9 | 27 |
+| Sports | **3** | 4 | 6 | 5 | 18 |
+| 列合计 | 18 | 19 | 15 | 25 | 77 |
+
+单位均为退货件数。
+
+## 最大与最小单元格
+
+- **最大：Electronics × Online = 11 件**，图中颜色最深（深藏青），同时也是 Electronics 行和 Online 列各自的最高值。
+- **最小：Sports × North = 3 件**，颜色最浅（近白浅黄），也是 Sports 行与 North 列的最低值。
+- 全体单元格极差为 11 − 3 = 8 件。
+
+几个可读的对照：Electronics 四区合计最高（32 件），但主要集中在本渠道 Online（11）与 North（9）；Online 列总计 25 件为四区最高，Central 列 15 件最低；Sports 整体最低（18 件），其最低值出现在 North。
+
+## 依据与不确定点
+
+- 12 个单元格数字均取自格子内直接印刷的数字。本轮 OCR 明确读出 8 个（Electronics-Central 5、Electronics-Online 11、Home-North 6、Home-South 8、Home-Online 9、Sports-North 3、Sports-Central 6、Sports-Online 5）；其余 4 个（Electronics-North 9、Electronics-South 7、Home-Central 4、Sports-South 4）在 OCR 结果中漏检，但我在整图放大视图中已逐一确认读出，且与色阶一致。
+- 颜色交叉校验支持这一读数：数值同为 9 的 Electronics-North 与 Home-Online，颜色完全相同（#225da7）；数值同为 5 的 Electronics-Central 与 Sports-Online 同为 #c6e8b4；11 与 3 分别对应色标两端最深的 #081d58 和最浅的 #ffffd9。
+- 需要提示：热力图测量虽然检出了网格，但把相邻格合并、且行列标签关联失败（工具明确警告 “row or column labels were not reliably associated with the detected grid”）；因此行列与数值的对应关系来自标题、行列标签文字与格内数字的位置判断，未采用该测量的合并格结果。

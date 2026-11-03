@@ -1,0 +1,6 @@
+{
+  "turn": 3,
+  "text": "我想评估一个候选方案：把 Figure 改成单列，并把 Monthly Conversion Rate 放到第一位。先只记录为候选，不要应用；说明当前仍生效的布局和面板顺序。",
+  "attachment_sha256": [],
+  "provider_id": "deepseek"
+}

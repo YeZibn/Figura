@@ -1,0 +1,14 @@
+**候选方案（仅记录，未应用）**
+- 提案内容：改为单列布局（`columns: 1`），并将 Monthly Conversion Rate 移至第一位，顺序变为：Monthly Conversion Rate → Quarterly Revenue by Region → Monthly Orders (Corrected)。
+- 状态：未执行。当前没有为此装配新 Figure，也没有重新绘制；它只是一个待评估的候选方案，不改变任何已提交结果。
+
+**当前仍生效的版本**（最近一次成功装配，Figure 标题「Regional Operations Dashboard, 2025」）
+- 布局：两列（`columns: 2`）
+- 面板顺序，即按图中从上到下、从左到右的视觉顺序：
+  1. Quarterly Revenue by Region：分组柱状图；横轴 Quarter，纵轴 Revenue (M USD)；North、South、Central 三个系列
+  2. Monthly Orders (Corrected)：折线图；横轴 Month，纵轴 Orders (count)；12 个月数值 82–138
+  3. Monthly Conversion Rate：折线图；横轴 Month，纵轴 Conversion (%)；12 个月数值 2.4–3.8
+- 视觉排布：面板 1 在左上，面板 2 在右上，面板 3 在左下，右下为空白
+- 子图 source 均为「Figura synthetic operations dataset」；数据与该版本的标题、轴标签（含上一步更正的 `Monthly Orders (Corrected)` 与 `Orders (count)`）保持原样。
+
+如果确认要应用，我再据此装配并绘制新的单列版本。

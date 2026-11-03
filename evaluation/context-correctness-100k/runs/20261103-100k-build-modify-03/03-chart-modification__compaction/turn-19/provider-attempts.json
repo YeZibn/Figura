@@ -1,0 +1,22 @@
+[
+  {
+    "attempt_id": "e59eb42e26bf4ce98c7b6973c29175ee",
+    "request_id": "fe0f60b2ab8947438384642340520e41",
+    "status": "response_committed",
+    "response_record_id": "8a7e2ac95bef43bdba91eb93d9e2307e",
+    "failure_code": null,
+    "http_status": 200,
+    "attempt_sequence": 1,
+    "purpose": "agent_turn",
+    "usage": {
+      "completion_tokens": 1321,
+      "prompt_tokens": 48966,
+      "total_tokens": 50287
+    },
+    "context_estimate": {
+      "context_window_tokens": 100000,
+      "estimator_version": "tiktoken-o200k-v1",
+      "input_tokens": 50846
+    }
+  }
+]

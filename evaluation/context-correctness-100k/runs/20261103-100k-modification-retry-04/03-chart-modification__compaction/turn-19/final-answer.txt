@@ -1,0 +1,55 @@
+## 一、逐项结构对比
+
+对比对象：初始版（run `a04fac4…`，call `…996wXIiGLA…`）和当前版（run `9083994…`，call `…ET_xDj7KLtnfM1…`）。两版的结构化内容均已在本次请求内读取核对。
+
+| 结构项 | 初始 Figure | 当前 Figure | 是否变化 |
+|---|---|---|---|
+| `schema_version` | 2 | 2 | 不变 |
+| **Figure 标题** | **Regional Operations Dashboard, 2025** | **2025 Regional Sales and Operations (Revised)** | **变化** |
+| `layout.columns` | **2** | **2** | 不变（单列候选未写入） |
+| 子图数量 | 3 | 3 | 不变 |
+| 子图 id 序列（即顺序） | `quarterly_revenue` → `monthly_orders` → `monthly_conversion` | 同左 | 不变（无重排） |
+| 第 1 位图表类型 | bar | bar | 不变 |
+| 第 2 位图表类型 | line | line | 不变 |
+| 第 3 位图表类型 | line | line | 不变 |
+| 第 1 位数据集形态 | vertical + grouped，4 类别 × 3 系列 | 同 | 不变 |
+| 第 2、3 位数据集形态 | 单系列折线，12 个类别点 | 同 | 不变 |
+| 各子图 `measurement_refs` | 均为 `[]` | 均为 `[]` | 不变 |
+
+## 二、目标子图（`monthly_orders`，第 2 位）的标题与 y 轴
+
+| 字段 | 初始 | 当前 | 是否变化 |
+|---|---|---|---|
+| 子图**标题** | **Monthly Orders** | **Monthly Orders (Corrected)** | **变化** |
+| **y 轴标签** | **Orders** | **Orders (count)** | **变化** |
+| y 轴类型 | numeric | numeric | 不变 |
+| x 轴类型与标签 | categorical，无轴标题 | categorical，无轴标题 | 不变 |
+| 坐标系统 | cartesian | cartesian | 不变 |
+| 系列 id / label | `orders` / `Orders` | `orders` / `Orders` | 不变 |
+| `metadata.source` | Figura synthetic operations dataset | 同 | 不变 |
+| `metadata.note` | `""`（空） | `July corrected from the source ledger.` | 变化（元数据，非结构） |
+
+## 三、非目标子图（确认结构未变）
+
+| 字段 | 第 1 位 Quarterly Revenue | 第 3 位 Monthly Conversion |
+|---|---|---|
+| 标题 | Quarterly Revenue by Region → 同 | Monthly Conversion Rate → 同 |
+| y 轴标签 | Revenue (M USD) → 同 | Conversion (%) → 同 |
+| x 轴 | categorical、无标题 → 同 | categorical、无标题 → 同 |
+| 类别/月份 | q1–q4 / Q1–Q4 → 同 | Jan–Dec → 同 |
+| 系列 id/label | north/North、south/South、central/Central → 同 | conversion/Conversion Rate → 同 |
+| source、note | 同、仍为空 | 同、仍为空 |
+
+## 四、汇总
+
+**发生变化的字段（共 4 类，均涉及文字或元数据）**
+1. Figure 标题：`Regional Operations Dashboard, 2025` → `2025 Regional Sales and Operations (Revised)`
+2. 目标子图标题：`Monthly Orders` → `Monthly Orders (Corrected)`
+3. 目标子图 y 轴标签：`Orders` → `Orders (count)`
+4. 目标子图 note：空 → `July corrected from the source ledger.`
+
+**保持不变的结构要素**：`schema_version`、列数（2）、子图数量（3）、面板 id 与顺序、三张图的图表类型、坐标系统与轴类型、分组模式与系列数量、两个非目标子图的全部元数据与字段。
+
+**另有一点属数据而非结构的变化**：目标子图的 July 值由 105 改为 109，这是 12 个月点位中唯一变化的数值；该点位的结构（`x: "Jul"`，同一系列、同一位置）未变。
+
+**已撤销候选的落实情况**：列数仍为 2、顺序仍以 Quarterly Revenue 开始，说明单列与“转化率置首”两项候选改动在两版之间从未生效。

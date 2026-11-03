@@ -1,0 +1,39 @@
+## 总览
+
+四个面板共用同一数据来源：**Figura synthetic operations dataset**；数据集 ID 为 `regional-operations-2025-2026-v2`。这四个面板覆盖柱状图、折线图、热力图和散点图，其中两个面板包含缺失观测（null）。
+
+| 面板 | 图表类型 | 坐标/结构 | 类别轴 | 系列数 | 数据点 | 单位 |
+|---|---|---|---|---|---|---|
+| Quarterly Revenue by Region | 柱状图（垂直、分组） | 笛卡尔坐标 | X：季度（Quarter），12 类：24Q1–26Q4 | 3 个（North、East、West） | 12×3 = **36 个数值** | 百万美元（Revenue，M USD） |
+| Monthly Orders in 2026 | 折线图 | 笛卡尔坐标 | X：月份（Month），12 类：Jan–Dec | 1 个（Orders） | **12 个点**（其中 1 个为 null） | 订单数（Orders，count，无量纲计数） |
+| Orders by Region and Channel | 热力图 | 矩阵 | X：渠道 Retail、Web、Partner、Direct；Y：区域 North、East、West、Central | 不适用（单值矩阵） | 4×4 = **16 个单元**（其中 1 个为 null） | 订单数（order counts） |
+| Delivery Time and Satisfaction | 散点图 | 笛卡尔坐标 | X：数值轴，配送时长；Y：数值轴，满意度得分 | 1 个（Delivery batches） | **24 个点** | X：小时（hours）；Y：满意度得分（score） |
+
+## 各面板细节
+
+**1. Quarterly Revenue by Region（柱状图）**
+- 方向为 `vertical`，分组模式为 `grouped`：每个季度内并排显示 North、East、West 三根柱。
+- 类别轴是季度，包含 24Q1 至 26Q4 的 12 个季度；Y 轴是数值轴，轴标题为 “Revenue (M USD)”。
+- 三条序列的数值都在上升：North 从 41 升到 75，East 从 35 升到 69，West 从 28 升到 60。每个季度内，North 的数值都最高，West 的数值最低。
+- 没有 null；36 个数值都完整。
+
+**2. Monthly Orders in 2026（折线图）**
+- 只有一条名为 “Orders” 的序列；X 轴按月份为类别轴，共有 12 个月。
+- 已知值在 168（Jan）到 228（Dec）之间波动，大致呈上升趋势，但 Jul（194）和 Oct（208）比前一个月略有回落。
+- **缺失：Mar 的 y = null**。它不是 0（真实订单数不可能为 0 并排在 175 和 184 之间），也不应当插值补出近似值。折线在 Mar 处应断开，并保留可见缺口。因此，可用的观测为 11 个，Mar 的订单数未知。
+
+**3. Orders by Region and Channel（热力图）**
+- 矩阵方向：行（Y）= 区域 4 个，列（X）= 渠道 4 个；每个单元格的值是一个订单计数。
+- 行顺序为 North、East、West、Central；列顺序为 Retail、Web、Partner、Direct。
+- **缺失：North × Direct 单元格 = null**。这表示该区域—渠道组合的订单计数缺失，不是 0 单；因此该单元格不应着色为最低值。有效单元格为 15 个。
+- 其余单元格的范围为 7–16；其中 North×Retail 为 12、East×Direct 为 15、West×Partner 为 14、Central×Web 为 12 等，均属可用观测。
+
+**4. Delivery Time and Satisfaction（散点图）**
+- 只有一个系列 “Delivery batches”，一个点代表一批配送。
+- X 轴是数值轴：配送时长（小时），范围为 1.1–5.7；Y 轴是满意度得分，范围为 2.4–4.7。
+- 当前数据点按 X 轴递增排列，Y 值大致单调下降；这表示数据读取本身如此，不能据此断言配送时长与满意度之间存在统计上的因果关系。24 个点没有 null。
+
+## 需要注意的缺失语义
+
+- Orders 折线的 **Mar null** 与热力图的 **North×Direct null** 都表示“未观测到”，应在图上保留空缺（线断开、单元格留白或阴影填色），而不能显示为 0，也不能用相邻值填补。
+- 除这两个 null 外，其余字段（类别标签、单位、序列归属）在消息数据中都有明确定义；单位来自各面板的 `note` 与轴标签。

@@ -1,0 +1,20 @@
+[
+  {
+    "call_id": "call_00_XWPMCYcDEOGAp0QzT6xu1503",
+    "tool_name": "extract_text",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_01_MB7UKVU8fpxr6veE7RZx5938",
+    "tool_name": "measure_chart",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_02_kpdYbCuI22JJEddYBbqw7704",
+    "tool_name": "decompose_chart_image",
+    "outcome": "succeeded",
+    "error": null
+  }
+]

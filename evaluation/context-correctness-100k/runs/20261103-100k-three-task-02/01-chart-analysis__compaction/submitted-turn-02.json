@@ -1,0 +1,6 @@
+{
+  "turn": 2,
+  "text": "转录 Monthly Orders 面板 Jan–Dec 的全部数值，按月份顺序列出。标明最大值、最小值及月份，并说明两端净变化。",
+  "attachment_sha256": [],
+  "provider_id": "deepseek"
+}

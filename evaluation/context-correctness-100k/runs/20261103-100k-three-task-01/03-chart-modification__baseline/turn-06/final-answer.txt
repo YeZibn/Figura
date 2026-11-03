@@ -1,0 +1,14 @@
+已按新标题重新装配并渲染完成。
+
+**变更点**
+- Figure 整体标题：`Regional Operations Dashboard, 2025` → **`2025 Regional Sales and Operations (Revised)`**（渲染图中已显示在顶部）
+
+**保持不变（渲染图中核对一致）**
+- 列数：**2**（第 1 行两图并排，第 2 行左侧一图、右下留白）
+- 图表顺序：**Quarterly Revenue by Region → Monthly Orders (Corrected) → Monthly Conversion Rate**
+- 季度收入：Q1–Q4 三地区分组柱，34/27/22、39/32/26、43/36/31、50/41/35，Y 轴 Revenue (M USD)
+- 月度订单：82、90、87、95、101、108、**109**、115、123、119、130、138，Y 轴 Orders (count)，面板下方保留注记 `July corrected from the source ledger.`
+- 月度转化率：2.4 → 3.8，10 月回落至 3.2，Y 轴 Conversion (%)
+- 三个子图 source 均为 `Figura synthetic operations dataset`
+
+新 Figure：`af8dab7ccee0451db61dbe6b56300cb2` / `call_00_i5OvHHslfuTLXsHkhI0i0984`（digest `a284457d…6600cc1`），PNG 尺寸 1280×1002。标题为较长的单行文字，在 1280px 宽度下未换行、不与子图标题重叠。

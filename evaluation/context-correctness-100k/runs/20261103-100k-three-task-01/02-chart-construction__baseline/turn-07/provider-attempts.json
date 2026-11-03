@@ -1,0 +1,47 @@
+[
+  {
+    "attempt_id": "a76c4fa0e3934afbb5b986e40d62bdee",
+    "request_id": "284c76f863fe4e9a84d58bc341f17694",
+    "status": "response_committed",
+    "response_record_id": "1a6615ae40f7421a9a9dc6f41864eeeb",
+    "failure_code": null,
+    "http_status": 200,
+    "attempt_sequence": 1,
+    "purpose": "agent_turn",
+    "usage": {
+      "completion_tokens": 196,
+      "prompt_tokens": 28201,
+      "total_tokens": 28397
+    }
+  },
+  {
+    "attempt_id": "8d800cf2812c4ed6bb6a22c4ba80799a",
+    "request_id": "b30402260b714b3db6a86cd405ee06c4",
+    "status": "response_committed",
+    "response_record_id": "581963014ba8436298bc5c3e4700b7f6",
+    "failure_code": null,
+    "http_status": 200,
+    "attempt_sequence": 1,
+    "purpose": "agent_turn",
+    "usage": {
+      "completion_tokens": 1713,
+      "prompt_tokens": 29788,
+      "total_tokens": 31501
+    }
+  },
+  {
+    "attempt_id": "c5871dc25b834edeb63aa5a4dd670691",
+    "request_id": "2ef889c8826f4b848482cad2d88eb8fb",
+    "status": "response_committed",
+    "response_record_id": "15be030b226146ea82fc0955418c8a6d",
+    "failure_code": null,
+    "http_status": 200,
+    "attempt_sequence": 1,
+    "purpose": "agent_turn",
+    "usage": {
+      "completion_tokens": 284,
+      "prompt_tokens": 31954,
+      "total_tokens": 32238
+    }
+  }
+]

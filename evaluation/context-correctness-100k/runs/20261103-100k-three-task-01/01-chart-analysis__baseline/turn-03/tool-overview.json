@@ -1,0 +1,14 @@
+[
+  {
+    "call_id": "call_00_cSorlabPSuybAscQGJsb6741",
+    "tool_name": "measure_chart",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_01_OjV38XTXzI5z218mkoRf9683",
+    "tool_name": "extract_text",
+    "outcome": "succeeded",
+    "error": null
+  }
+]

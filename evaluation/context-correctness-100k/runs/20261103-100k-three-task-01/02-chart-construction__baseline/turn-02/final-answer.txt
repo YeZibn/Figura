@@ -1,0 +1,17 @@
+四面板 ChartFigure 已装配并通过结构校验。
+
+**装配结果**
+- figure_ref：run `c0eae8eb6c9a47d1b8c4560944e5ebe2` / call `call_00_sfEmmMJbsRO9ao8SCa3W4440`
+- 布局：2 列，按下列顺序排版
+  1. `quarterly_revenue` — Quarterly Revenue by Region（bar，垂直分组，12 季度 × North/East/West）
+  2. `monthly_orders` — Monthly Orders in 2026（line，12 个月单系列）
+  3. `channel_heatmap` — Orders by Region and Channel（heatmap，4 渠道 × 4 区域）
+  4. `delivery_scatter` — Delivery Time and Satisfaction（scatter，24 个批次点）
+
+**保留情况**
+- 各面板标题、`source`（Figura synthetic operations dataset）与 `note` 原样保留，未改写。
+- 所有数值按原顺序照录：Revenue 36 个值、Orders 12 个点、Heatmap 16 个单元格、Scatter 24 个 (x, y)。类别与系列顺序未调整（24Q1→26Q4；North/East/West；Jan→Dec；Retail/Web/Partner/Direct；North/East/West/Central）。
+- 两个缺失观测仍为 `null`，未被填成 0 或插值：Orders 的 Mar（2026 年 3 月）、Heatmap 的 North×Direct 单元格。
+- 未添加轴范围、刻度步长、配色或数据标签等额外要求；坐标轴类型与标签沿用原数据结构（Revenue 为 M USD、Orders 为 count、Delivery time 为 hours、Satisfaction 为 score）。
+
+该结果目前只是已装配的 Figure 定义，尚未生成 PNG。需要看图时我可以按此引用渲染；渲染只能确认图像生成情况，不能替代对原数据的核对。

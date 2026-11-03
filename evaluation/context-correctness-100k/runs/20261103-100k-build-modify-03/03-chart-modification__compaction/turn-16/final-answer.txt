@@ -1,0 +1,22 @@
+**状态：已撤销（作废），且不写入 Figure**
+
+本轮只执行了两次历史消息读取，用于核对原文，没有调用 `assemble_chart_figure` 或 `render_chart_figure`，因此没有发生任何重装配，候选不可能被重新写入。
+
+**一、候选与撤销的原文依据**
+- 第 3 轮（`68d805f4…`）：提出“把 Figure 改成单列，并把 Monthly Conversion Rate 放到第一位”，并明确要求“先只记录为候选，不要应用”。
+- 第 4 轮（`af152bbc…`）：明确要求“撤销上一轮的单列与重排方案。保持两列布局和原面板顺序”，并声明这两项候选“都不应出现在最终 Figure”。
+- 结论：候选自始至终只停留在文字记录层面，撤销指令有效且优先于先前提案。
+
+**二、当前 Figure 的实际结构（`715644b7…cf4970`，装配 `call_00_kcePLceujkG1CuXKv5LD2306`，渲染 `call_00_ET_4RWjQL46oPJcMguepGip0205`）**
+- `layout.columns` = **2** → 不是单列
+- chart 顺序：`revenue_by_region` → `monthly_orders` → `monthly_conversion_rate` → Monthly Conversion Rate 仍在**第三位**，未前置
+- 即两项候选均未生效
+
+**三、全版本一致性核对**
+- 会话中所有已装配 Figure（第 1、2、5、6 轮对应版本，digest 依次为 `d422b433…`、`711d433b…`、`620bcf61…`、`715644b7…`）都是 `columns = 2`、三面板原顺序。
+- 没有任何一个版本的装配参数包含单列或重排，撤销不涉及回滚旧产物，只需要保证后续不引入。
+
+**四、结论与约束确认**
+- 候选状态：**已撤销 / 不生效**。
+- 最终 Figure 的两列布局与面板顺序（Quarterly Revenue → Monthly Orders → Monthly Conversion Rate）保持原样。
+- 后续如需再次讨论该方向，应作为新的提案重新评估；在获得你明确授权前，我不会把单列或转换率前置写入任何 Figure。

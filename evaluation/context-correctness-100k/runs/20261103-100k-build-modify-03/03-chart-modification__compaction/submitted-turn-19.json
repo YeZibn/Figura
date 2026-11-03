@@ -1,0 +1,6 @@
+{
+  "turn": 19,
+  "text": "逐项对比初始 Figure 与当前有效 Figure 的结构。报告 Figure 标题、列数、面板顺序、目标子图标题和 y 轴标签；明确哪些字段发生变化、哪些不变。",
+  "attachment_sha256": [],
+  "provider_id": "deepseek"
+}

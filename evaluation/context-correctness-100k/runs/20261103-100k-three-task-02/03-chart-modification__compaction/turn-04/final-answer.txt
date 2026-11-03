@@ -1,0 +1,20 @@
+撤销已确认：单列布局与“转化率置顶”重排这两项候选**均已作废**，且从未写入任何 Figure——上一轮只做了记录，没有调用装配，因此无需回滚，也没有产生新版本。
+
+## 最终 Figure 应为（当前即为此状态）
+
+- Figure 标题：Regional Operations Dashboard, 2025
+- 有效引用：run `17a90edd…`，call `call_00_nTq8swDbHmpEQ24HLCmA1633`，digest `6476105381bcf3639409ad554f2ceaebb85e25fd0a84e7866687683c07b6325c`
+- 布局：**两列**（`columns = 2`）
+- 面板顺序：① revenue_by_region（Quarterly Revenue by Region）→ ② monthly_orders（Monthly Orders (Corrected)）→ ③ monthly_conversion_rate（Monthly Conversion Rate），即前两张在第一行，第三张在第二行左侧。
+- 状态：已装配通过校验，未渲染 PNG；数据仍为首轮从图上标注读取的结果。
+
+## 两项被排除的改动
+
+| 被撤销项 | 最终 Figure 中的状态 |
+|---|---|
+| 改为单列 | 不采用；`columns` 保持 2 |
+| Monthly Conversion Rate 移到第一位 | 不采用；转化率仍为第三张，营收面板仍居首 |
+
+同时保留第二轮的唯一改动：Monthly Orders 的标题为 "Monthly Orders (Corrected)"、y 轴标签为 "Orders (count)"；其余标题、轴标签、类别、系列与全部数值不变。
+
+如果你希望把“不使用单列、不重排”作为后续修改的固定约束，我可以在之后每次改动时按此校验；当前不必新建 Figure。

@@ -1,0 +1,13 @@
+已按要求重新装配完整 Figure 并绘制出图像。
+
+**本次修改（仅两处）**
+- 右上子图标题：`Monthly Orders` → `Monthly Orders (Corrected)`
+- 该子图 y 轴标签：`Orders` → `Orders (count)`
+
+**保持不变**
+- Figure 整体标题 `Regional Operations Dashboard, 2025`、两列布局、子图顺序（柱状图 → 订单折线 → 转化率折线）均未变。
+- 柱状图的 Q1–Q4 分类、North、South、Central 三个系列及数值（34/39/43/50、27/32/36/41、22/26/31/35）未变；两个折线图的 12 个月份标签与全部数值（82…138；2.4…3.8）未变；三个子图的 y 轴名称中，Revenue (M USD) 与 Conversion (%) 未变，三处 source 说明也未变。
+
+**回看结果**：渲染图中新标题与新轴名均已正确显示，其余两个面板的外观与数值位置与上一版一致，无标签遮挡或裁切；订单折线走势（Mar、Jul、Oct 回落，Dec 峰值 138）与标注一致。
+
+新 Figure 引用：`call_00_OuYEyJajQI2T0wp6zjYu8572`（渲染 `call_00_ET_JE79D2hgKyrtx08wsTtX4963`），digest 为 `711d433b…6afb44`，与前一版（`d422b433…b7948`）不同，两版可分别追溯。

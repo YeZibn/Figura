@@ -1,0 +1,21 @@
+已按你的要求重新装配，新 Figure 通过校验。
+
+**修改点**
+- 整体标题由空值改为 **“Regional Operations: Revenue, Orders and Delivery”**。
+- 四个子图的 `source` 仍统一为数据文件提供的 **“Figura synthetic operations dataset”**，未改动。
+- `quarterly_revenue` 的 note 变为：“Revenue is recorded in million USD. Quarterly revenue values are unchanged.”，即保留原句并追加你指定的句子。
+- 其余三个 note 原样保留：
+  - Orders：“A null y value is a missing observation; do not replace it with zero or interpolate it.”
+  - Heatmap：“Cell values are order counts.”
+  - Scatter：“Each point represents one delivery batch.”
+
+**完整数据保持原样**（本次只改描述字段）：
+- Revenue：12 个季度 × North/East/West，36 个值，顺序 24Q1→26Q4，垂直分组。
+- Orders：12 个点，Mar 仍为 `null`（缺失观测，未填 0、未插值）。
+- Heatmap：4 渠道（列）× 4 区域（行），16 格，North×Direct 仍为 `null`。
+- Scatter：24 个批次点，x 为 Delivery time (hours) 1.1–5.7，y 为 Satisfaction (score) 4.7–2.4。
+- 布局仍为 2 列，子图顺序不变。
+
+**新引用**
+- figure_ref：run `5d749b71887e492a82332924d73e20f7` / call `call_00_R6xoTo4gh5L0qo6RcQSe9287`
+- 该 Figure 为已装配定义，尚未生成 PNG；需要看图我可按此引用渲染。

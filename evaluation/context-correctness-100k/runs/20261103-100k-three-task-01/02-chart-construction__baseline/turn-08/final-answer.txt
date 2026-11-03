@@ -1,0 +1,26 @@
+## 当前有效 Figure
+
+| 项目 | 内容 |
+|---|---|
+| 整体标题 | Regional Operations: Revenue, Orders and Delivery |
+| 布局列数 | **1 列**（最新一次装配，此前为 2 列） |
+| 面板顺序 | 1 → `quarterly_revenue`：Quarterly Revenue by Region（bar）<br>2 → `monthly_orders`：Monthly Orders in 2026（line）<br>3 → `channel_heatmap`：Orders by Region and Channel（heatmap）<br>4 → `delivery_scatter`：Delivery Time and Satisfaction（scatter） |
+| 有效 Figure 引用 | `{"kind":"chart_figure","run_id":"7f0257009f6f4fd7b6f33b3498c220f2","call_id":"call_00_KPzGK0k8HBo4p5j6qJ0R6438"}` |
+| 状态 | 已装配通过校验，尚未渲染 PNG |
+
+## 2026Q4 收入合计
+
+- North 75 + East 69 + West 60 = **204 百万美元（M USD）**
+
+## 缺失观测位置（均为缺失，不是 0）
+
+- **Orders 面板**：`Mar`，即 2026 年 3 月，`y = null`；该月只有位置、没有观测值，不插值、不填零。
+- **Heatmap 面板**：`values[0][3]` = **North 行 × Direct 列（North/Direct）** 单元格为 `null`，即该区域—渠道组合的订单数未记录；North 行只有 Retail 12、Web 16、Partner 9 三个已观测格。
+
+## 资源目录中已列出的成功 ChartFigure 类型化 ref（原样记录）
+
+1. `{"kind":"chart_figure","run_id":"c0eae8eb6c9a47d1b8c4560944e5ebe2","call_id":"call_00_sfEmmMJbsRO9ao8SCa3W4440"}` — 标题为空，2 列布局版本
+2. `{"kind":"chart_figure","run_id":"5d749b71887e492a82332924d73e20f7","call_id":"call_00_R6xoTo4gh5L0qo6RcQSe9287"}` — 标题为 “Regional Operations: Revenue, Orders and Delivery”，2 列布局版本
+3. `{"kind":"chart_figure","run_id":"7f0257009f6f4fd7b6f33b3498c220f2","call_id":"call_00_KPzGK0k8HBo4p5j6qJ0R6438"}` — 同标题，**1 列布局，当前有效**
+
+三条均为 `succeeded`，且资源目录中 `image_available` 均标为 false，即尚无渲染图像；我未对这些引用做任何改动或推测。

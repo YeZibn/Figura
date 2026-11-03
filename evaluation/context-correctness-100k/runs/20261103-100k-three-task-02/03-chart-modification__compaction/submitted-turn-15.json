@@ -1,0 +1,6 @@
+{
+  "turn": 15,
+  "text": "以字段清单比较：Monthly Orders 允许修改的字段和 July 值；Quarterly Revenue 与 Monthly Conversion Rate 的字段和值必须保持不变。逐项报告通过或发现的偏差。",
+  "attachment_sha256": [],
+  "provider_id": "deepseek"
+}

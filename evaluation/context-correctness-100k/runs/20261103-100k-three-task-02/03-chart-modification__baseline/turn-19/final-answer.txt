@@ -1,0 +1,24 @@
+已按资源目录中的原始 ChartFigure 类型化引用直接读取（run `315c8a9bf44a49a0bd7dea9de7b00580` / call `call_00_kQPB3RDKrrTkrmun1RTu4951`），确认这就是**修改前的初始版本**：Figure 标题为 `Regional Operations Dashboard, 2025`，Monthly Orders 的 July 仍为 **105**。
+
+## 核对项
+
+| 核对项 | 初始 Figure 中的值 | 出处字段 |
+|---|---|---|
+| Quarterly Revenue — North Q4 | **50** | `/figure/charts/0/chart_spec/dataset/series` → north: [34, 39, 43, **50**] |
+| Monthly Orders — June | **108** | `/figure/charts/1/chart_spec/dataset/series/0/points` |
+| Monthly Orders — July | **105**（未经台账修订的原值） | 同上 |
+| Monthly Orders — August | **115** | 同上 |
+| Monthly Conversion — December | **3.8** | `/figure/charts/2/chart_spec/dataset/series/0/points` |
+
+## 判定
+- 版本归属正确：该引用的 July=105，且标题为初始标题，说明它早于台账更正（109）与标题修订，符合“修改前、July 仍为 105”的定位。
+- North Q4=50 与同系列 Q1–Q3 的 34/39/43 构成连续递增；对应源图该柱标注同为 50。
+- Orders 三个月度值 108 → 105 → 115 表明 7 月是原图中的小幅回落点（−3），修订后变为 109（+1）；此处读取的是原值。
+- December 转化率 3.8 为该面板最高点，与源图 12 月标注一致。
+
+## 同时可确认的其他原始数据（同一引用）
+- North：34 / 39 / 43 / 50；South：27 / 32 / 36 / 41；Central：22 / 26 / 31 / 35
+- Orders 完整序列：82、90、87、95、101、108、105、115、123、119、130、138
+- Conversion 完整序列：2.4、2.6、2.5、2.8、3.0、3.1、3.0、3.3、3.4、3.2、3.6、3.8
+
+本次仅做只读核对，未装配或渲染，现行 Figure（digest `cfe3bdd9…f476`，July=109）未受影响。

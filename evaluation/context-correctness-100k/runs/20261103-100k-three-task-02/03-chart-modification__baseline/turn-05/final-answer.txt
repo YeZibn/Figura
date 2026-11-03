@@ -1,0 +1,16 @@
+已按台账更正并重新装配、绘制完成。
+
+**本次唯一的数据改动**
+- Monthly Orders 面板：July `105` → `109`；其余 11 个月份数值原封未动（82、90、87、95、101、108、115、123、119、130、138）
+- 该面板 note 已写入：`July corrected from the source ledger.`（图中显示在面板底部数据集来源下方）
+
+**关于源图读数**
+- 原图标注的 July = 105 作为历史事实保留，未被覆盖或删除：它仍是上一版 Figure（digest `50b7921a…3f44d`）以及原始 PNG 中的取值。本次是在新版本中记录一次有依据的更正，而不是改写历史。
+- 因此当前 Figure 的 July 109 来自订单台账核验，而非图上读数；两者差异有据可查，追溯链条完整。
+
+**其余保持不变**
+- 整体标题 Regional Operations Dashboard, 2025；两列布局；子图顺序 收入柱状图 → Monthly Orders (Corrected) → Monthly Conversion Rate
+- 订单面板标题 Monthly Orders (Corrected)、y 轴 Orders (count)；其他两面板的标题、轴标签、数值与 note 均未改
+- 对照渲染结果：June 108 → July 109 现在呈小幅上升（此前为下降），Aug 115 继续上行；曲线整体单调性更连贯，其余点位位置无异常偏移
+
+新版本 digest `0b30661f…7102`。

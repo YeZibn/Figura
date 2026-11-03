@@ -1,0 +1,22 @@
+## Monthly Orders 当前字段完整清单（当前有效 Figure，run 6）
+
+| 字段 | 值 |
+|---|---|
+| chart_id | `monthly_orders` |
+| title | `Monthly Orders (Corrected)` |
+| 图表类型（metadata.chart_type） | `line`（折线图） |
+| X 轴标签（x_axis.label） | `Month`（类型 categorical） |
+| Y 轴标签（y_axis.label） | `Orders (count)`（类型 numeric） |
+| source | `Figura synthetic operations dataset` |
+| note | `July corrected from the source ledger. 其余月份数值取自折线点标注（源图 July 为 105）` |
+| 系列 label | `Orders`（series.id = `orders`，单系列） |
+
+补充字段（未要求但一并说明，均未变）：`coordinate_system.kind` = cartesian；X 轴类别为 Jan、Feb、Mar、Apr、May、Jun、Jul、Aug、Sep、Oct、Nov、Dec；`schema_version` = 2；`measurement_refs` = 空。
+
+## 本轮变更
+
+没有对 Figure 做改动，也没有重新装配，因此不存在新的字段变更。
+
+本轮允许修改的字段是：title、X 轴标签、Y 轴标签、source、note 和系列 label。其中，title、Y 轴标签和 note 此前已按用户要求更新，现在保持为已确认的最终值；X 轴标签（`Month`）、source（`Figura synthetic operations dataset`）和系列 label（`Orders`）与初始 Figure 相同，没有变化。
+
+只有当允许范围内的任一值需要修正时，才应提交新的完整 Figure；本轮不涉及这类修正。

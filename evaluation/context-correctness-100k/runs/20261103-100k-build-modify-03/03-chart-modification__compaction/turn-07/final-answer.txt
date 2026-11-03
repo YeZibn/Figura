@@ -1,0 +1,36 @@
+**一、当前生效的 Figure 状态**（最终版 digest `715644b7…cf4970`，装配 `call_00_kcePLceujkG1CuXKv5LD2306`，渲染 `call_00_ET_4RWjQL46oPJcMguepGip0205`）
+
+| 类别 | 内容 | 来源轮次 |
+|---|---|---|
+| 当前有效修改 | 整体标题由 `Regional Operations Dashboard, 2025` 改为 `2025 Regional Sales and Operations (Revised)` | 第 6 轮 |
+| 当前有效修改 | 订单面板标题由 `Monthly Orders` 改为 `Monthly Orders (Corrected)` | 第 2 轮 |
+| 当前有效修改 | 订单面板 y 轴由 `Orders` 改为 `Orders (count)` | 第 2 轮 |
+| 当前有效修改 | 订单面板 July 由 105 改为 109，并在该面板 note 写入 `July corrected from the source ledger.` | 第 5 轮 |
+| 保持不变（初始设定，仍然有效） | 两列布局；顺序 Quarterly Revenue → Monthly Orders → Monthly Conversion Rate；整体标题之外的其余面板标题、轴名、source 说明、全部其他数值 | 第 1 轮 |
+
+**二、已撤销候选（不在最终 Figure 中）**
+- 改为单列布局 —— 第 3 轮提出并仅作记录，第 4 轮明确撤销，最终仍为 2 列。
+- 将 Monthly Conversion Rate 移至第一位 —— 同轮提出、同轮撤销，最终仍是第三位。
+- 附带说明：单列与重排从未被装配到任何已生成的 Figure 中，因此没有需要回滚的产物。
+- 但即使从未应用，最终仍需注意：最终 Figure 属 2 列、转换率在末位，与撤销结论一致。
+
+**三、原始图像读数**（源图 `quarterly-regional-sales.png`，面板 Monthly Orders 的数据点标注，OCR 高置信度复现）
+- June = 108
+- July = 105
+- August = 115
+- 源图本身未被修改；105 仍是对该图原始读数的既有事实。
+
+**四、用户确认的修订值**
+- 订单台账核实：July 应为 **109**（用户在第 5 轮确认）。
+- 修订范围严格限定为 July 一个点，June 108 与 August 115 未动。
+
+**五、Orders 的 June / July / August**
+
+| 月份 | 源图读数 | 最终 Figure 值 | 状态 |
+|---|---|---|---|
+| June | 108 | 108 | 未修改 |
+| July | 105 | 109 | 依据订单台账更正 |
+| August | 115 | 115 | 未修改 |
+
+**六、July 为何与原图值不同**
+原图把 July 标为 105，这是对图像标注的直接读数（OCR 也读到 105，据此最初建图确为 105）。之后你核对了订单台账，确认 July 的真实值为 109，于是只把 Figure 中 July 这一点改为 109，并保留此前读到的 105 作为历史读数事实，不加以抹除。差异因此不是读取误差的重复，而是一次性、有来源依据的数据更正：源图数值与台账不一致，以台账为准；且为免新图看起来静默改数，在面板 note 中留下更正说明。这也让折线在 June/July 处由原先的下凹（108 → 105）变为基本持平略升（108 → 109）。

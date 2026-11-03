@@ -1,0 +1,20 @@
+当前生效的 Figure 已经满足这项最终要求，因此无需再次装配或修改；我已逐字段核对初始 Figure 与当前 Figure。
+
+**核对结果（初始 `8c654661…` vs 当前 `af8dab7c…`）**
+
+| 项目 | 初始 Figure | 当前 Figure | 判定 |
+|---|---|---|---|
+| Figure 标题 | `Regional Operations Dashboard, 2025` | `2025 Regional Sales and Operations (Revised)` | 按要求更新 ✅ |
+| 布局 | 两列 | 两列 | 未变 ✅ |
+| 面板顺序 | revenue → orders → conversion | revenue → orders → conversion | 未变 ✅ |
+| Quarterly Revenue（标题/轴/系列/16 个值） | 完全一致 | 完全一致 | 没有任何改动 ✅ |
+| Monthly Conversion Rate（标题/轴/12 个值） | 完全一致（2.4, 2.6, 2.5, 2.8, 3.0, 3.1, 3.0, 3.3, 3.4, 3.2, 3.6, 3.8） | 完全一致 | 没有任何改动 ✅ |
+| Monthly Orders 标题 | `Monthly Orders` | `Monthly Orders (Corrected)` | 按要求更新 ✅ |
+| Monthly Orders 轴标签 | `Orders` | `Orders (count)` | 按要求更新 ✅ |
+| Monthly Orders July | 105 | 109 | 按要求更新 ✅ |
+| Monthly Orders 其他 11 个月 | 82, 90, 87, 95, 101, 108, 115, 123, 119, 130, 138 | 与初始完全一致 | 未变 ✅ |
+| Monthly Orders note | 空 | `July corrected from the source ledger.` | 按要求新增 ✅ |
+
+**未应用的项**：单列布局、把 Monthly Conversion Rate 提前，这两个候选方案都没有进入任何 Figure；当前仍是两列布局和原有面板顺序。
+
+交付版本为 `af8dab7ccee0451db61dbe6b56300cb2` / `call_00_i5OvHHslfuTLXsHkhI0i0984`（digest `a284457d…6600cc1`），于第 6 轮装配并渲染，PNG 尺寸为 1280×1002。如果还需要基于这个版本做任何改动，请直接说明。

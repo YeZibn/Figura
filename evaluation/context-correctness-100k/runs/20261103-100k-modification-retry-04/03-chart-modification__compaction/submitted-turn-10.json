@@ -1,0 +1,6 @@
+{
+  "turn": 10,
+  "text": "完整列出源图中的 Jan–Dec Orders 序列，标记原图最大值、最小值、Jan→Dec 净变化。明确 July 的 105 是原图值，不是后续台账修订值。",
+  "attachment_sha256": [],
+  "provider_id": "deepseek"
+}

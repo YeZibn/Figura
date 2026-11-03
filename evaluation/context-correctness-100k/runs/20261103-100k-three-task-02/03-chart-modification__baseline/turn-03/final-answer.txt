@@ -1,0 +1,16 @@
+已记为候选方案，未做任何修改：我没有重新装配或渲染，当前生效的仍是你上一轮确认的版本（digest `50b7921a…3f44d`，即 run e468…/call_00_1dg2z8hO0ZiXGFNkbEtz5576 的装配结果）。
+
+**当前仍生效的状态**
+- 布局：两列（`columns: 2`）
+- 面板顺序（按列表自上而下）：
+  1. `quarterly_revenue` — Quarterly Revenue by Region（柱状图）
+  2. `monthly_orders` — Monthly Orders (Corrected)（折线图）
+  3. `monthly_conversion` — Monthly Conversion Rate（折线图）
+- 实际排布：第 1 行 = 季度收入柱状图（左）+ 修正后的月度订单（右）；第 2 行 = 月度转化率（左列，右侧留空）
+- 其他保持：整体标题 Regional Operations Dashboard, 2025；各子图 source 为 Figura synthetic operations dataset；全部数值与轴标签同上一版
+
+**候选方案（仅记录，未应用）**
+- 布局由两列改为单列，三个子图纵向依次排列
+- 面板顺序改为 Monthly Conversion Rate 置首，即：Monthly Conversion Rate → Quarterly Revenue by Region → Monthly Orders (Corrected)（后两者的相对次序我按现序保留，如有不同意图可指出）
+
+需要说明的一点：候选方案改变了面板顺序，但转化率子图的标题、轴标签、数值都不受影响，因此这是一次纯布局/排序调整，不涉及数据修订。若你之后决定应用，我会基于当前完整 Figure 重新装配整套三个子图，而不是局部修改。

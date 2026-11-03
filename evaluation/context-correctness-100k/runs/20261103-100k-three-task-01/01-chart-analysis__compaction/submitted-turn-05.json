@@ -1,0 +1,6 @@
+{
+  "turn": 5,
+  "text": "逐季度计算三地区收入合计，并给出每个地区 Q4 相对 Q1 的变化量。列出计算用到的原始值，不推断原因。",
+  "attachment_sha256": [],
+  "provider_id": "deepseek"
+}

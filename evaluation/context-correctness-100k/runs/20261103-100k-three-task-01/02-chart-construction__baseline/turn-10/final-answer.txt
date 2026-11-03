@@ -1,0 +1,39 @@
+PNG 已生成（640 × 1962，单列纵向），并已回看图像与合同逐项核对。
+
+**渲染结果引用**：`{"kind":"chart_render","run_id":"89a9ccd36a294354a63c94791f281af4","call_id":"call_00_FvPC9BMjGBMh5XpLprdj5557"}`
+**Figure 引用**：run `89a9ccd36a294354a63c94791f281af4` / call `call_00_kUdUYAq2JALRNgXZ23od7796`
+
+## 简明 ChartSpec 摘要
+
+| 顺序 | chart_id | 类型 | 数据形状 | 标题 |
+|---|---|---|---|---|
+| 1 | quarterly_revenue | bar（垂直、grouped） | 12 季度 × North/East/West = 36 值 | Quarterly Revenue by Region |
+| 2 | monthly_orders | line | 12 个月 × 1 系列（11 个观测 + 1 个 null） | Monthly Orders in 2026 |
+| 3 | channel_heatmap | heatmap（matrix） | 4 列渠道 × 4 行区域 = 16 格（1 个 null） | Orders by Region and Channel |
+| 4 | delivery_scatter | scatter | 24 个 (x, y) 点 | Delivery Time and Satisfaction |
+
+- 整体标题：Regional Operations: Revenue, Orders and Delivery
+- 布局：columns = 1
+- 轴：Quarter / Revenue (M USD)；Month / Orders (count)；矩阵；Delivery time (hours) / Satisfaction (score)
+- 四面板的 `source` 均为 “Figura synthetic operations dataset”
+
+## 合同条款核对（第 6–9 轮）
+
+| 检查项 | 结果 |
+|---|---|
+| 面板顺序 | ✅ 1 Revenue → 2 Orders → 3 Heatmap → 4 Scatter，与第 7 轮要求一致 |
+| 列数 | ✅ 1 列（第 7 轮由 2 改为 1 的最终约定） |
+| 数据完整性 | ✅ Revenue 12 季度全在（24Q1 41/35/28 … 26Q4 75/69/60）；Orders 12 个位置；Heatmap 16 格；Scatter 24 点，无遗漏或重复 |
+| 类别/系列顺序 | ✅ 24Q1→26Q4；North/East/West；Jan→Dec；Retail/Web/Partner/Direct；North/East/West/Central，均未重排 |
+| null 语义 | ✅ Orders 的 Mar 无数据点、折线在 Feb 与 Apr 之间断开（未连成 175→184 实线，也未落到 0）；Heatmap 的 North/Direct 显示为浅灰空白格、不在 7–16 色标范围内，未被当作最小值或 0 着色 |
+| 标题 | ✅ 整体标题与四个面板标题均按合同 |
+| 来源 | ✅ 四个子图均显示 “Figura synthetic operations dataset” |
+| 备注 | ✅ Revenue note = “Revenue is recorded in million USD. Quarterly revenue values are unchanged.”（第 6 轮追加句已加入）；另三条 note 原文保留并显示在对应面板下方 |
+
+## 可见内容要点
+- Revenue：三地区逐季递增，柱高与数值对应，图例 North/East/West 颜色区分清晰，26Q4 最高（75/69/60）。
+- Orders：Jan 168 起升，Sep 212 后 Oct 小幅回落 208，末月 228；3 月位置保留但无点，构成视觉缺口。
+- Heatmap：North 行 Web 最高（16），North/Direct 为空；Central/Retail 最低（7）。
+- Scatter：24 点呈单调下降排列，仅显示批次点与图例，未添加拟合线或标签（未超出合同）。
+
+说明：渲染成功只表示图像已生成；上述核对基于图像可见内容与 Figure 定义的比对，不构成对原始数据真实性的验证。

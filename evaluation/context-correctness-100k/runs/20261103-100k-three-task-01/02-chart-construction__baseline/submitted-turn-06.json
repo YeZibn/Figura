@@ -1,0 +1,6 @@
+{
+  "turn": 6,
+  "text": "将整体标题改为“Regional Operations: Revenue, Orders and Delivery”，将四个子图的 `source` 统一保留为数据文件提供的来源；只在 Quarterly Revenue 的 note 中添加“Quarterly revenue values are unchanged.”。保留原有的其他 note 和完整数据，重新装配。",
+  "attachment_sha256": [],
+  "provider_id": "deepseek"
+}

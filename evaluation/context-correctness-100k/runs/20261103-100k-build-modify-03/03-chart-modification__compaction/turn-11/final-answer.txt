@@ -1,0 +1,28 @@
+**源图 Monthly Conversion Rate 面板的 Jan–Dec 原始读数（单位 %）**
+
+| 月份 | Conversion (%) |
+|---|---|
+| Jan | 2.4 |
+| Feb | 2.6 |
+| Mar | 2.5 |
+| Apr | 2.8 |
+| May | 3.0 |
+| Jun | 3.1 |
+| Jul | 3.0 |
+| Aug | 3.3 |
+| Sep | 3.4 |
+| Oct | 3.2 |
+| Nov | 3.6 |
+| Dec | 3.8 |
+
+**极值与变化**
+- **最高**：**3.8%（Dec）**，为序列最大点；次高 3.6%（Nov）。
+- **最低**：**2.4%（Jan）**，为序列起点；次低 2.5%（Mar）。
+- **Jan → Dec 变化：3.8 − 2.4 = +1.4 个百分点**（相对增幅约 +58.3%，1.4/2.4）。
+- 过程中三处小幅回调：Mar（2.6→2.5，−0.1）、Jul（3.1→3.0，−0.1）、Oct（3.4→3.2，−0.2）；其余月份为上升或持平。
+
+**本轮状态确认：转化率子图不修改**
+- 本轮我只做上述读数整理与计算，未调用装配或渲染，转化率子图没有任何改动。
+- 该子图与初始 Figure 完全相同、也延续至最新 Figure：标题 `Monthly Conversion Rate`、y 轴 `Conversion (%)`、source `Figura synthetic operations dataset`、note 为空、单系列 `Conversion`、上述 12 个点原样保留。
+- 现有最新产物仍为：Figure `call_00_kcePLceujkG1CuXKv5LD2306`（digest `715644b7…cf4970`），渲染 `call_00_ET_4RWjQL46oPJcMguepGip0205`；两列布局与三面板顺序亦未变。
+- 折线与数据点上的 3.8%、2.4% 等标注均直接来自源图，未做像素或刻度估算。

@@ -1,0 +1,34 @@
+## 仪表盘总览
+
+整体标题：**Regional Sales and Operations Dashboard, 2025**（OCR text_1）。版面为 2×2 四面板：
+
+| 位置 | 标题 | 图表类型 | 横轴 | 纵轴（单位） |
+|---|---|---|---|---|
+| 左上 | Quarterly Revenue by Region | 分组柱状图（3 系列并排） | 季度 Q1–Q4 | Revenue（M USD，百万美元）；刻度 0–60 |
+| 右上 | Monthly Orders | 折线图（带数据点标记） | Jan–Dec 月份 | Orders（count，订单数）；刻度 120–220 |
+| 左下 | Monthly Conversion Rate | 折线图（带数据点标记，单系列） | Jan–Dec 月份 | Conversion（%）；刻度 3.25–5.00 |
+| 右下 | Returns by Product and Region | 热力图（3 行 × 4 列，格内标数值 + 色阶） | 区域列：North、South、Central、Online | 产品行：Electronics、Home、Sports；色阶 Returned units（3–11） |
+
+图例与系列对应关系清晰：左上图例为 North（蓝）、South（橙）、Central（绿），与每组柱子的左→中→右顺序一致，因此没有触发额外的测量调用。
+
+## Quarterly Revenue by Region：North / South / Central 的 Q1–Q4（M USD）
+
+| 季度 | North | South | Central |
+|---|---|---|---|
+| Q1 | 42 | 36 | 31 |
+| Q2 | 47 | 44 | 39 |
+| Q3 | 53 | 49 | 45 |
+| Q4 | 61 | 58 | 50 |
+
+**数值来源**：全部为图上直接标注的数据标签（每根柱子顶端打印的数字），不是我从坐标轴刻度推算的。OCR 逐个读出了这些标签，置信度均在 0.999 左右，并且位置与对应柱子一一匹配：例如 Q4 组“61/58/50”对应 x≈1022/1087/1155 px，位于 Q4 柱子上方。柱高与刻度也相互一致（如 North-Q4 柱顶略高于 60 刻度线，标注为 61）。
+
+## 其他面板文字标注（供核对）
+
+- 右上面板标注值：120、132、128、145、151、167、164、178、191、187、205、219（1 月到 12 月）；注意纵轴从 120 起，不是从 0 起，视觉上放大了波动幅度。
+- 左下面板标注值：3.2、3.5、3.3、3.8、4.0、4.2、4.1、4.4、4.6、4.5、4.8、5.1（%）。
+- 右下面板单元格：Electronics 9/7/5/11、Home 6/8/4/9、Sports 3/4/6/5（Returned units）。
+
+## 不确定之处
+
+- 下方两个折线图的横轴月份标签在渲染中相互挤压（Feb、Mar、Apr 有重叠），我按 Jan–Dec 的顺序排列，并依据右侧“Dec”终点标签判断；OCR 对这些旋转标签的覆盖不完整，因此没有逐个与文字框核对。
+- 左上标题在 OCR 中呈现为“QuarterlyRevenue by Region”（缺空格），这属于识别层面的连写，并不代表原图使用不同措辞。

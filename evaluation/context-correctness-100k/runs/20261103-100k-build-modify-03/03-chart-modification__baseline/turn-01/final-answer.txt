@@ -1,0 +1,13 @@
+初始 Figure 已建立并绘制完成：整体标题为 **Regional Operations Dashboard, 2025**，两列布局，三个子图按原图从上到下顺序排为「条形图 → 折线图 → 折线图」，每个子图的 source 均为 “Figura synthetic operations dataset”。
+
+**读出的面板内容**
+
+| 子图 | 图表类型 | X 轴 | Y 轴 | 系列/类别与数值 |
+|---|---|---|---|---|
+| Quarterly Revenue by Region | 分组柱状图 | Quarter（Q1–Q4） | Revenue (M USD) | North 34/39/43/50；South 27/32/36/41；Central 22/26/31/35（按 Q1→Q4） |
+| Monthly Orders | 折线图（单一折线） | Month（Jan–Dec） | Orders | 82, 90, 87, 95, 101, 108, 105, 115, 123, 119, 130, 138 |
+| Monthly Conversion Rate | 折线图（单一折线） | Month（Jan–Dec） | Conversion (%) | 2.4, 2.6, 2.5, 2.8, 3.0, 3.1, 3.0, 3.3, 3.4, 3.2, 3.6, 3.8 |
+
+**可见布局核对**：三个子图的图例、轴刻度与类别标签均完整显示，无遮挡或裁切；渲染后图形走势与源图数据标签一致（如收入各区域逐季上升、订单整体上行但 3/7/10 月有回落、转化率 12 月最高 3.8%）。
+
+说明两点依据边界：数值全部取自图上直接标注的标签，未做像素测量或刻度反推；源面板标题（如 “Quarterly Revenue by Region”）与轴名沿用图中文字，Figure 总标题与 source 按你的要求给出。

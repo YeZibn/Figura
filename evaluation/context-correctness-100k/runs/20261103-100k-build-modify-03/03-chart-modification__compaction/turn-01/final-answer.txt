@@ -1,0 +1,27 @@
+已按图中三个面板读取并装配为初始 Figure，并已绘制出图像。
+
+**读取到的内容（自上而下）**
+
+1. **Quarterly Revenue by Region** — 分组柱状图
+ - x 轴：季度 Q1–Q4；y 轴：Revenue (M USD)，刻度 0–50，步长 10
+ - 系列（图例）：North、South、Central
+ - 数值（柱顶标注）：North 34 / 39 / 43 / 50；South 27 / 32 / 26→32→36 / 41，即 Q1–Q4 依次为 27、32、36、41；Central 22 / 26 / 31 / 35
+ - 三个区域均逐季上升，Q4 最高（50、41、35）
+
+2. **Monthly Orders** — 折线图（单系列）
+ - x 轴：Jan–Dec；y 轴：Orders，刻度 80–140，步长 10
+ - 数值：82、90、87、95、101、108、105、115、123、119、130、138
+ - 整体上行，Mar、Jul、Oct 有回落，Dec 达峰值 138
+
+3. **Monthly Conversion Rate** — 折线图（单系列）
+ - x 轴：Jan–Dec；y 轴：Conversion (%)，刻度 2.4–3.8，步长 0.2
+ - 数值：2.4、2.6、2.5、2.8、3.0、3.1、3.0、3.3、3.4、3.2、3.6、3.8
+ - 由 2.4% 升至 3.8%，Mar、Jul、Oct 小幅回调
+
+**已生成内容**
+- Figure 标题：Regional Operations Dashboard, 2025；两列布局
+- 子图顺序：柱状图（左上）→ Monthly Orders（右上）→ Monthly Conversion Rate（左下）
+- 三个子图 source 均填 “Figura synthetic operations dataset”，并保留各自的 y 轴名称
+- 所有数值均取自图上标注（并已被 OCR 在高置信度下复现），没有依据刻度的估算；渲染后回看，柱高、折线走势与标注值一致，图例与月份标签无遮挡。
+
+存储的图引用：chart_figure `call_00_f7ywZBI0cGfkh3E11xwt7757`（渲染 `call_00_nPEc201FkQhCkcGs2KdB7939`）。如需改为单列竖排、合并长表或调整 y 轴范围，我可以基于现有数据重新装配。

@@ -1,0 +1,38 @@
+## 1. 当前有效修改（已写入最终 Figure）
+
+| # | 修改项 | 原状态 | 现状态 | 提出轮次 |
+|---|---|---|---|---|
+| 1 | Monthly Orders 面板标题 | Monthly Orders | **Monthly Orders (Corrected)** | 第 2 轮 |
+| 2 | 该面板 Y 轴标签 | Orders | **Orders (count)** | 第 2 轮 |
+| 3 | 该面板 July 数值 | 105（源图读数） | **109**，note 记 “July corrected from the source ledger.” | 第 5 轮 |
+| 4 | 整体 Figure 标题 | Regional Operations Dashboard, 2025 | **2025 Regional Sales and Operations (Revised)** | 第 6 轮 |
+
+这些修改都已在当前生效的 Figure 中体现，并已渲染确认。
+
+## 2. 已撤销的候选（不应出现在最终 Figure）
+- 第 3 轮提出的“单列布局”；第 3 轮提出、计划中的“把 Monthly Conversion Rate 放到第一位”。
+- 这两项在第 4 轮被明确撤销，从未装配到任何 Figure 中。最终仍为**两列布局**，顺序仍为 Revenue → Orders → Conversion。
+
+## 3. 原始图像读数（2025 年源图，未改动）
+- 整体标题：Regional Sales and Operations Dashboard, 2025
+- 面板标题：Quarterly Revenue by Region / Monthly Orders / Monthly Conversion Rate
+- 收入（M USD，North/South/Central）：Q1 34/27/22、Q2 39/32/26、Q3 43/36/31、Q4 50/41/35
+- 月度订单：82、90、87、95、101、108、**105**、115、123、119、130、138
+- 月度转化率（%）：2.4、2.6、2.5、2.8、3.0、3.1、3.0、3.3、3.4、3.2、3.6、3.8
+
+## 4. 用户确认的修订值
+- 仅一项：**July Orders = 109**（依据订单台账核实）。其余 11 个月份、收入、转化率均未经用户修订，仍为源图读数。
+- 未修改：源图 July 读数 105 仍作为历史事实保留在 note 说明中，没有被抹去。
+
+## 5. Orders 的 June / July / August
+
+| 月份 | 最终 Figure 值 | 源图读数 | 说明 |
+|---|---|---|---|
+| June | 108 | 108 | 一致，未修订 |
+| July | **109** | 105 | 唯一修订点 |
+| August | 115 | 115 | 一致，未修订 |
+
+## 6. July 最终值与原图值不同的原因
+原图折线点在 7 月旁标注为 105，这是从图像上读到的数值；随后核对订单台账，确认该月实际订单为 **109**，因此按用户明确指令只把 7 月从 105 改为 109，并在该面板 note 中记录 “July corrected from the source ledger.”。
+
+两者差异的性质是**源图标注值与台账实际值不符**，而非读数或录入错误——这一点从修订后的曲线上也能看出：7 月点由原本明显低于 6 月（105 < 108）变为略高于 6 月（109 > 108），走势在 7 月由小幅回落改为小幅上升，其余月份位置不变。

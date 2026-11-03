@@ -1,0 +1,15 @@
+最终要求已满足，当前生效版本（digest `cfe3bdd9…f476`，run 4fdea6f9 / call_00_f04MzIFBXY8ETWv0pcgg6947）与初始 Figure 逐字段比对后，差异仅有你指定的五项，无需再次改图。
+
+**已比对确认的差异（全部位于指定范围）**
+- Figure 总标题：`Regional Operations Dashboard, 2025` → `2025 Regional Sales and Operations (Revised)`
+- Monthly Orders 标题：`Monthly Orders` → `Monthly Orders (Corrected)`
+- Monthly Orders y 轴标签：`Orders` → `Orders (count)`
+- Monthly Orders July：`105` → `109`
+- Monthly Orders note：空 → `July corrected from the source ledger.`
+
+**与初始 Figure 完全一致（逐字段相同）**
+- Quarterly Revenue：标题、Revenue (M USD)、Q1–Q4、North 34/39/43/50、South 27/32/36/41、Central 22/26/31/35，note 仍为空
+- Monthly Conversion Rate：标题、Conversion (%)、12 个月全部取值、note 仍为空
+- 结构：`columns: 2`，顺序 quarterly_revenue → monthly_orders → monthly_conversion，与初始版一致
+
+已撤销的单列与重排候选未出现在该版本中，本次也未重新应用。现成渲染 PNG 对应同一版本（1280×1002），无需重绘。

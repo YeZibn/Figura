@@ -1,0 +1,67 @@
+## 一、子图 1：Quarterly Revenue by Region（分组柱状图）
+
+类别（X 轴，4 个）：Q1、Q2、Q3、Q4
+
+| 系列 | Q1 | Q2 | Q3 | Q4 |
+|---|---|---|---|---|
+| North | 34 | 39 | 43 | 50 |
+| South | 27 | 32 | 36 | 41 |
+| Central | 22 | 26 | 31 | 35 |
+
+（共 3 系列 × 4 类别 = 12 个值；该子图与初始 Figure 完全一致）
+
+## 二、子图 2：Monthly Orders (Corrected)（折线图，单系列）
+
+类别（X 轴，12 个，顺序 Jan→Dec）：Jan、Feb、Mar、Apr、May、Jun、Jul、Aug、Sep、Oct、Nov、Dec
+
+| 月份 | 源图读数 | 最终 Figure 值 |
+|---|---|---|
+| Jan | 82 | 82 |
+| Feb | 90 | 90 |
+| Mar | 87 | 87 |
+| Apr | 95 | 95 |
+| May | 101 | 101 |
+| Jun | 108 | 108 |
+| **Jul** | **105** | **109** |
+| Aug | 115 | 115 |
+| Sep | 123 | 123 |
+| Oct | 119 | 119 |
+| Nov | 130 | 130 |
+| Dec | 138 | 138 |
+
+- 只有 July 存在两个值：**源图 105**（图像标签原始读数，保留为历史事实）；**最终 109**（核对台账后确认的修订值，图中采用）。
+- 其余 11 个月源图读数与最终值相同，未做任何调整；修订差值 July +4。
+- 因该差异，最终序列合计 1,297、月均约 108.08；按源图口径则为 1,293、月均 107.75。
+
+## 三、子图 3：Monthly Conversion Rate（折线图，单系列）
+
+类别（X 轴，12 个，顺序 Jan→Dec）：Jan、Feb、Mar、Apr、May、Jun、Jul、Aug、Sep、Oct、Nov、Dec
+
+| 月份 | Jan | Feb | Mar | Apr | May | Jun | Jul | Aug | Sep | Oct | Nov | Dec |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Conversion (%) | 2.4 | 2.6 | 2.5 | 2.8 | 3.0 | 3.1 | 3.0 | 3.3 | 3.4 | 3.2 | 3.6 | 3.8 |
+
+（该子图与初始 Figure 完全一致，未受任何修订影响）
+
+## 四、所有生效的标题、轴标签、source 与 note
+
+**Figure 级**
+
+| 项目 | 值 |
+|---|---|
+| 总标题 | 2025 Regional Sales and Operations (Revised) |
+| 列数 | 2 |
+| 子图顺序 | Quarterly Revenue by Region → Monthly Orders (Corrected) → Monthly Conversion Rate |
+
+**子图级**
+
+| 字段 | 子图 1（quarterly_revenue） | 子图 2（monthly_orders） | 子图 3（monthly_conversion） |
+|---|---|---|---|
+| 标题 | Quarterly Revenue by Region | Monthly Orders (Corrected) | Monthly Conversion Rate |
+| 图表类型 | bar（grouped，vertical） | line | line |
+| X 轴标签 | Quarter（类别型） | Month（类别型） | Month（类别型） |
+| Y 轴标签 | Revenue (M USD)（数值型） | Orders (count)（数值型） | Conversion (%)（数值型） |
+| source | Figura synthetic operations dataset | Figura synthetic operations dataset | Figura synthetic operations dataset |
+| note | 无记录（空） | July corrected from the source ledger. | 无记录（空） |
+
+补充说明：三个子图的 source 字符串相同，均为 “Figura synthetic operations dataset”；只有子图 2 的 note 有内容，用于标注 July 的来源台账更正，但该 note 未写入数值差（105→109），原始读数 105 仅存于源图附件与早期 Figure 版本中。全图数值均取自源图数据标签与台账确认值，未经像素测量校正。

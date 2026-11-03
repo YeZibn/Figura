@@ -1,0 +1,8 @@
+{
+  "turn": 1,
+  "text": "读取三个面板的标题、图表类型、轴标签、系列/类别和值。所有数值都在图上标注。调用 assemble_chart_figure 建立初始 Figure，按图中从上到下的顺序排列，采用两列布局；Figure 标题使用 Regional Operations Dashboard, 2025，子图 source 使用 Figura synthetic operations dataset。",
+  "attachment_sha256": [
+    "dac2bf22ad4432579666d372fd59dd5863ba47340097031a3192f63ffd9a2a22"
+  ],
+  "provider_id": "deepseek"
+}

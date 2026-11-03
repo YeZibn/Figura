@@ -1,0 +1,48 @@
+## 一、Jan–Dec Conversion (%) 12 个值
+
+| 月份 | Jan | Feb | Mar | Apr | May | Jun | Jul | Aug | Sep | Oct | Nov | Dec |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Conversion (%) | 2.4 | 2.6 | 2.5 | 2.8 | 3.0 | 3.1 | 3.0 | 3.3 | 3.4 | 3.2 | 3.6 | 3.8 |
+
+## 二、最小值 / 最大值
+
+| 项目 | 月份 | 值 |
+|---|---|---|
+| **最小值** | Jan | **2.4%** |
+| **最大值** | Dec | **3.8%** |
+| 极差 | — | 3.8 − 2.4 = **1.4 个百分点** |
+
+极值无并列：3.8% 为唯一最高（次高 Nov 3.6%），2.4% 为唯一最低（次低 Mar 2.5%）。
+
+## 三、Jan → Dec 变化
+
+- **百分点差：3.8% − 2.4% = +1.4 个百分点（pp）**，这是本指标的规范表述
+- 若另需相对变化作参考：1.4 ÷ 2.4 ≈ **+58.3%**，属比值口径，不能与“1.4 pp”混用或互换
+
+## 四、走势补充
+
+12 个月中回落 3 次，幅度均仅 0.1–0.2 pp：Mar（2.6→2.5）、Jul（3.1→3.0）、Oct（3.4→3.2）；季度末值 2.5 → 3.1 → 3.4 → 3.8 逐季抬升，全年为平稳上行，无跳变。
+
+## 五、最终 Figure 中该子图数据与元数据未变化（再次确认）
+
+比对对象：初始 Figure（run e2426d3a…，digest e1f33d48…）的子图 2 与最终 Figure（run 28991ef6…，digest 0a0082bc…，已渲染）的子图 2，本次逐字段重新读取两份内容比对。
+
+| 字段 | 初始 Figure | 最终 Figure | 结果 |
+|---|---|---|---|
+| chart_id | monthly_conversion | monthly_conversion | 一致 |
+| chart_type | line | line | 一致 |
+| metadata.title | Monthly Conversion Rate | Monthly Conversion Rate | 一致 |
+| metadata.source | Figura synthetic operations dataset | 同左 | 一致 |
+| metadata.note | 空 | 空 | 一致 |
+| x_axis.kind / label | categorical / Month | categorical / Month | 一致 |
+| y_axis.kind / label | numeric / Conversion (%) | numeric / Conversion (%) | 一致 |
+| coordinate_system.kind | cartesian | cartesian | 一致 |
+| series.id / label | conversion_rate / Conversion rate | conversion_rate / Conversion rate | 一致 |
+| 12 个数据点 | 2.4, 2.6, 2.5, 2.8, 3.0, 3.1, 3.0, 3.3, 3.4, 3.2, 3.6, 3.8 | 逐值相同，月份对位相同 | 一致 |
+| 月份类别与顺序 | Jan…Dec | Jan…Dec | 一致 |
+| measurement_refs | [] | [] | 一致 |
+| schema_version | 2 | 2 | 一致 |
+
+结论：该子图数据与元数据在最终 Figure 中**零变化**，两份 JSON 内容彼此等价。全部修订（July 105→109、订单面板标题与 Y 轴名、订单面板 note、Figure 总标题）均未触及此面板；已撤销的单列/重排候选也从未写入装配。
+
+以上数值来自两版 Figure 的结构化数据（图内标签读数，未经像素测量）；本轮只做读取与计算，未产生新的装配或渲染。

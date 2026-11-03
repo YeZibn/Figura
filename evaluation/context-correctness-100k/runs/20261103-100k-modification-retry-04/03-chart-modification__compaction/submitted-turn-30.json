@@ -1,0 +1,6 @@
+{
+  "turn": 30,
+  "text": "分别列出 Quarterly Revenue 与 Monthly Conversion Rate 的标题、图表类型、轴标签、source、note、类别和全部值，并对照初始 Figure 声明是否一致。",
+  "attachment_sha256": [],
+  "provider_id": "deepseek"
+}

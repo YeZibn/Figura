@@ -1,0 +1,16 @@
+已更新并重新装配、绘制完整 Figure。
+
+**唯一数据改动**
+- Monthly Orders 面板中 July：105 → **109**。其他 11 个月份数值未动：82、90、87、95、101、108、Aug 115、Sep 123、Oct 119、Nov 130、Dec 138。
+
+**面板 note**（Monthly Orders (Corrected)）
+> July corrected from the source ledger. 其余月份数值取自折线点标注（源图 July 为 105）
+
+这样既记录了台账依据，也保留了源图原始读数为 July 105 这一事实，使源图与台账之间的差异可以追溯，而没有被覆盖。
+
+**其余不变**
+- 两列布局、面板顺序（Quarterly Revenue by Region → Monthly Orders (Corrected) → Monthly Conversion Rate）、整体标题 Regional Operations Dashboard, 2025；
+- 收入面板与转化率面板的数据、轴标签均保持原状；
+- 三个子图的 source 仍为 “Figura synthetic operations dataset”。
+
+渲染图已核对：July 点位于 Jun 108 与 Aug 115 之间、略高于 108，曲线形状随之在 7 月小幅抬升，其余月份位置与改动前一致，标题和 note 正常显示，无被截断的内容。

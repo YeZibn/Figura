@@ -1,0 +1,29 @@
+已回看最新渲染图（1280×1002），实际版面如下。
+
+## 面板位置图（按渲染图像素坐标，近似值）
+
+| 位置 | 面板 | 标题 | 图表区大致范围 |
+|---|---|---|---|
+| 上方整行 | 全图标题 “2025 Regional Sales and Operations (Revised)” | — | y≈20，x 从左缘起，横跨整幅 |
+| **第一行 · 左** | Quarterly Revenue by Region | y≈67，x≈16 | x≈65–598，y≈105–437 |
+| **第一行 · 右** | Monthly Orders (Corrected) | y≈67，x≈653 | x≈705–1240，y≈105–405（月份标签倾斜，底部轴位置略低） |
+| **第二行 · 左** | Monthly Conversion Rate | y≈535，x≈16 | x≈65–598，y≈572–895 |
+| **第二行 · 右** | 无（空白） | — | x≈640–1264，y≈520–1002 全部留白 |
+
+各面板下方的灰字为 source（“Figura synthetic operations dataset”），订单面板另有第二行 note（“July corrected from the source ledger.”）；这些文字位于各自面板内，不占独立行。
+
+## 顺序确认
+
+- 首位是 **Quarterly Revenue by Region**（第一行左侧，分组柱状，Y 轴 Revenue (M USD)，North/South/Central 图例）✅
+- 第二位是 **Monthly Orders (Corrected)**（第一行右侧，折线，Y 轴 Orders (count)，图例 Orders）✅
+- 第三位是 **Monthly Conversion Rate**（第二行左侧，折线，Y 轴 Conversion (%)，图例 Conversion rate）✅
+
+从结构侧看，图列（charts）列表顺序即装配顺序：quarterly_revenue → monthly_orders → monthly_conversion，与画面位置一致；布局参数只有 `columns: 2` 一项，不含任何显式行列坐标。
+
+## 右下空白的成因
+
+Figure 含 3 个子图、布局为 2 列，按行优先顺序填充：第 1 个子图 → 第 1 行左格；第 2 个 → 第 1 行右格；第 3 个 → 第 2 行左格。3 ÷ 2 除不尽，第 2 行右格没有被分配子图，因此留白。换言之，右下的空白是“奇数个子图放进两列网格”的必然余格，不是缺少数据、渲染失败或面板被裁掉。
+
+需要说明两点：一是“行优先填充”属于渲染器的排版约定，Figure 的结构里只声明列数和子图顺序，这一具体落位是通过这张渲染图确定的；二是两列宽度相当，但同排两面板的绘图区高度略有差异（第一行右图的月份标签倾斜占位，底部轴略高于左侧收入图），属于标签排布造成的细节差别，不影响行列结构与顺序。
+
+已撤销的候选方案在此图中仍无痕迹：若采用单列，三个面板会纵向堆叠、不存在右下余格；若把转化率置首，它应出现在第一行左格——图中两者均未发生。

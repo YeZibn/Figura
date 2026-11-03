@@ -1,0 +1,34 @@
+## Monthly Orders 子图当前字段（当前生效 Figure，digest 0a0082bc…）
+
+| 字段 | 值 |
+|---|---|
+| chart_id | `monthly_orders` |
+| title | Monthly Orders (Corrected) |
+| 图表类型（chart_type） | line |
+| X 轴 | 类别型（categorical），标签 **Month** |
+| Y 轴 | 数值型（numeric），标签 **Orders (count)** |
+| source | Figura synthetic operations dataset |
+| note | July corrected from the source ledger. |
+| 系列 label | Orders（series id 为 `orders`，单系列） |
+
+补充：坐标系为 cartesian；数据为 Jan–Dec 12 个点，July = 109，其余月份为 82、90、87、95、101、108、115、123、119、130、138。
+
+## 本轮字段变更状态
+
+你要求“只对本轮允许修改的字段作变更”。上表所列内容与当前已生效版本**完全一致**，因此本轮无需装配或渲染任何新 Figure——没有产生新的变更，也没有任何字段被改动。
+
+各字段的变更归属（历史事实，非本轮改动）：
+
+| 字段 | 状态 | 变更来源 |
+|---|---|---|
+| title | 已变更 | 早前一轮：Monthly Orders → Monthly Orders (Corrected) |
+| Y 轴标签 | 已变更 | 同一轮：Orders → Orders (count) |
+| note | 已变更 | 台账更正轮：空 → July corrected from the source ledger. |
+| July 值 | 已变更 | 同一轮：105 → 109 |
+| chart_id | 未变 | 与初始 Figure 一致 |
+| 图表类型 | 未变 | line |
+| X 轴标签 | 未变 | Month |
+| source | 未变 | Figura synthetic operations dataset |
+| 系列 label | 未变 | Orders |
+
+上述读取基于当前 Figure 的结构化内容（metadata 与 coordinate_system 字段），未做像素测量；本轮没有新增装配或渲染产物。

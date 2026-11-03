@@ -1,0 +1,33 @@
+已取回初始 Figure（run 1）与当前 Figure（run 6，最新版）中 `revenue_by_region` 的完整规格，逐字段比对结果如下。
+
+## 逐系列数值核对（四季度）
+
+| 季度 | North（初始 → 当前） | South（初始 → 当前） | Central（初始 → 当前） |
+|---|---|---|---|
+| Q1 | 34 → 34 ✔ | 27 → 27 ✔ | 22 → 22 ✔ |
+| Q2 | 39 → 39 ✔ | 32 → 32 ✔ | 26 → 26 ✔ |
+| Q3 | 43 → 43 ✔ | 36 → 36 ✔ | 31 → 31 ✔ |
+| Q4 | 50 → 50 ✔ | 41 → 41 ✔ | 35 → 35 ✔ |
+
+12 个柱值全部逐一对应，数值、系列顺序（north、south、central）与系列 id 均无差异。
+
+## 其他字段核对
+
+| 字段 | 初始 Figure | 当前 Figure | 结论 |
+|---|---|---|---|
+| chart_id | revenue_by_region | revenue_by_region | 一致 |
+| 面板标题 | Quarterly Revenue by Region | Quarterly Revenue by Region | 一致 |
+| source | Figura synthetic operations dataset | Figura synthetic operations dataset | 一致 |
+| note | 数值取自柱顶标注 | 数值取自柱顶标注 | 一致 |
+| X 轴 | categorical / Quarter | categorical / Quarter | 一致 |
+| Y 轴 | numeric / Revenue (M USD) | numeric / Revenue (M USD) | 一致 |
+| 类别 | Q1–Q4（id q1–q4） | Q1–Q4（id q1–q4） | 一致 |
+| 数据集结构 | vertical / grouped | vertical / grouped | 一致 |
+| chart_type / schema_version | bar / 2 | bar / 2 | 一致 |
+| measurement_refs | 空 | 空 | 一致 |
+
+结论：**本轮的修改没有影响 Quarterly Revenue 面板**；它的数值、标题、source、note、轴标签及数据集结构均与初始 Figure 完全相同。整体层面变化的只有 Figure 总标题，以及 Monthly Orders 面板的 July 值、标题、Y 轴标签和 note；布局仍为两列，三个面板的顺序也没有改变。
+
+## 一处显示差异，并非数据变化
+
+Monthly Conversion Rate 的数据点在两个版本的序列化数值写法上略有差异（初始写成 `3.0`，当前写成 `3`，出现在 May 与 Jul）。两点均为数值 3.0，渲染结果与含义相同，只是 JSON 表示形式不同，不属于数据改动；该面板的标题、轴标签、source、note 和 12 个点值都一致。

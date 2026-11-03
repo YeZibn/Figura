@@ -1,0 +1,19 @@
+## 候选方案状态：已撤销（未应用，且不会写入 Figure）
+
+| 候选改动 | 提出轮次 | 处理结果 | 当前状态 |
+|---|---|---|---|
+| 布局改为单列（`columns: 1`） | 第 3 轮 | 第 4 轮明确撤销 | **已撤销**，未装配进任何 Figure |
+| 将 Monthly Conversion Rate 移到第一位（重排面板） | 第 3 轮 | 第 4 轮明确撤销 | **已撤销**，未装配进任何 Figure |
+
+## 当前 Figure 的实际状态（与本轮前一致，未改动）
+
+- 布局：`layout.columns = 2`（两列）
+- 排列顺序：① revenue_by_region（Quarterly Revenue by Region）→ ② monthly_orders（Monthly Orders (Corrected)）→ ③ monthly_conversion（Monthly Conversion Rate）
+- 位置：① 左上、② 右上、③ 第二行左侧，右下留白
+- 总标题：2025 Regional Sales and Operations (Revised)
+- 三幅子图的标题、轴、source、note 与数据：与上一轮核对通过的版本完全相同（含 July = 109 这一唯一数据修订，转化率面板未被改动）
+
+## 本轮操作说明
+
+- **未调用装配工具**，未提交任何新的 Figure，因此不存在把单列或 Conversion 置首重新写入的风险；当前生效的仍是最新已装配版本（run 6）。
+- 上述状态判断依据这两项候选从未出现在任何成功装配的 Figure 规格中：列举的全部 Figure 版本（run 1、run 2、run 5、run 6）均为 `columns: 2`，且首个子图始终是 revenue_by_region。这一核查不依赖视觉观察，也不涉及对该 Figure 的任何修改。

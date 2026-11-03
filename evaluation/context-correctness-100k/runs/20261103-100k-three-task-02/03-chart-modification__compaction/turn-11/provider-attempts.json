@@ -1,0 +1,17 @@
+[
+  {
+    "attempt_id": "bc289c8350ea40fbb6198c8bca1990e4",
+    "request_id": "4e1c08a538014891a967d5b1a0d9ac8e",
+    "status": "response_committed",
+    "response_record_id": "3ad21dcbb9054b90bd32cf9175b3f1f5",
+    "failure_code": null,
+    "http_status": 200,
+    "attempt_sequence": 1,
+    "purpose": "agent_turn",
+    "usage": {
+      "completion_tokens": 716,
+      "prompt_tokens": 30853,
+      "total_tokens": 31569
+    }
+  }
+]

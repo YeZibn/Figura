@@ -1,0 +1,6 @@
+{
+  "turn": 29,
+  "text": "准确列出 Monthly Orders 的 chart_id、title、图表类型、x/y 轴标签、source、note 和系列 label。只对本轮允许修改的字段作变更。",
+  "attachment_sha256": [],
+  "provider_id": "deepseek"
+}

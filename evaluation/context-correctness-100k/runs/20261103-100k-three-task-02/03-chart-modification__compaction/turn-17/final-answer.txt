@@ -1,0 +1,53 @@
+以下为最终 Figure（run `07a98a5a…`，digest `ec2c08bb…673a19`）的完整内容。
+
+## Figure 级
+
+- **标题**：2025 Regional Sales and Operations (Revised)
+- **布局**：两列；顺序 ① 营收 → ② 订单 → ③ 转化率
+
+## 子图 ① Quarterly Revenue by Region（bar，vertical / grouped）
+
+**类别**：Q1、Q2、Q3、Q4（id `q1`–`q4`）
+
+| 系列 id | 系列 label | Q1 | Q2 | Q3 | Q4 |
+|---|---|---|---|---|---|
+| north | North | 34 | 39 | 43 | 50 |
+| south | South | 27 | 32 | 36 | 41 |
+| central | Central | 22 | 26 | 31 | 35 |
+
+## 子图 ② Monthly Orders (Corrected)（line）
+
+**类别**：Jan、Feb、Mar、Apr、May、Jun、Jul、Aug、Sep、Oct、Nov、Dec
+**系列**：`orders` / label `Orders`（单系列，12 点）
+
+| 项 | Jan | Feb | Mar | Apr | May | Jun | **Jul** | Aug | Sep | Oct | Nov | Dec |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| **源图读数** | 82 | 90 | 87 | 95 | 101 | 108 | **105** | 115 | 123 | 119 | 130 | 138 |
+| **最终 Figure 值** | 82 | 90 | 87 | 95 | 101 | 108 | **109** | 115 | 123 | 119 | 130 | 138 |
+
+- 唯一差异单元格：**July，源图 105 → 最终 109**（差值 +4，约 +3.81%），依据订单台账核实。
+- 其余 11 个月两列完全相同：82、90、87、95、101、108、115、123、119、130、138。
+- 准确表述：源图标注为 105，经台账更正后 Figure 采用 109；不能说成「原图即 109」。105 仍保留在首轮读取记录与旧版本（如 digest `6476105…6325c`）中。
+
+## 子图 ③ Monthly Conversion Rate（line）
+
+**类别**：Jan、Feb、Mar、Apr、May、Jun、Jul、Aug、Sep、Oct、Nov、Dec
+**系列**：`conversion` / label `Conversion rate`（单系列，12 点）
+
+| 项 | Jan | Feb | Mar | Apr | May | Jun | Jul | Aug | Sep | Oct | Nov | Dec |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Conversion (%) | 2.4 | 2.6 | 2.5 | 2.8 | 3.0 | 3.1 | 3.0 | 3.3 | 3.4 | 3.2 | 3.6 | 3.8 |
+
+## 生效的标题、轴标签、source、note
+
+| 项 | 子图 ① 营收 | 子图 ② 订单 | 子图 ③ 转化率 |
+|---|---|---|---|
+| 子图标题 | Quarterly Revenue by Region | **Monthly Orders (Corrected)** | Monthly Conversion Rate |
+| x 轴 | categorical，**无轴标签**；Q1–Q4 | categorical，**无轴标签**；Jan–Dec | categorical，**无轴标签**；Jan–Dec |
+| y 轴 | numeric，Revenue (M USD) | numeric，**Orders (count)** | numeric，Conversion (%) |
+| source | Figura synthetic operations dataset | Figura synthetic operations dataset | Figura synthetic operations dataset |
+| note | 空 | **July corrected from the source ledger.** | 空 |
+
+Figure 总标题：**2025 Regional Sales and Operations (Revised)**。
+
+加粗的三处即本轮全部生效的文字改动（订单子图标题、订单 y 轴标签、订单 note），加上 July 数值与 Figure 总标题；营收、转化率两面板的标题、轴标签、source、note 均与初始 Figure 一致，已撤销的单列与重排未出现。note 为元数据，是否在图面上可见未作渲染核对。

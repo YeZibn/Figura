@@ -1,0 +1,31 @@
+已逐系列核对：现行 Figure 的 Quarterly Revenue 面板与初始 Figure **完全一致**，本轮未发生任何改动。
+
+## 逐字段比对（初始 digest `1619687d…5530` vs 现行 digest `cfe3bdd9…f476`）
+
+| 核对项 | 初始 Figure | 现行 Figure | 结论 |
+|---|---|---|---|
+| 子图标题 | Quarterly Revenue by Region | 同 | 无变化 |
+| chart_type | bar | 同 | 无变化 |
+| source | Figura synthetic operations dataset | 同 | 无变化 |
+| note | 空（""） | 空（""） | 无变化 |
+| y 轴标签 | Revenue (M USD) | 同 | 无变化 |
+| x 轴 | categorical，无轴名 | 同 | 无变化 |
+| 轴类型 | cartesian | 同 | 无变化 |
+| 数据集结构 | vertical / grouped | 同 | 无变化 |
+| 类别 | Q1、Q2、Q3、Q4（id q1–q4，顺序不变） | 同 | 无变化 |
+
+## 逐系列数值
+
+| 系列 | Q1 | Q2 | Q3 | Q4 | 与初始版 |
+|---|---|---|---|---|---|
+| North | 34 | 39 | 43 | 50 | 四值全部一致 |
+| South | 27 | 32 | 36 | 41 | 四值全部一致 |
+| Central | 22 | 26 | 31 | 35 | 四值全部一致 |
+
+12 个取值逐一相等，无涂改、无新增或缺失类别，系列 id/标签/顺序均未变。
+
+## 图像层面复核
+
+同批加载初始渲染图与现行渲染图对照，柱状面板可见部分一致：三系列配色（蓝/橙/红）、图例顺序 North→South→Central、y 轴 0–50 刻度、各柱高度（Q4 的 North 柱顶贴近 50）、下方 source 文字位置均无差异。两图差异仅在两处，且都在指定范围之外：总标题文字，以及右上订单面板的标题、y 轴标签、July 点位置（105→109）与其 note 行。
+
+结论：Quarterly Revenue 本轮数值、标题、source、note、轴标签全部无变化，可视为与初始 Figure 相同；无需重新装配或渲染。

@@ -1,0 +1,44 @@
+核对通过，已渲染出 PNG（1280×1002，sha256 `65c31b5c…e6807`）。
+
+## 一、逐项核对结果（依据 Figure 规格 run `07a98a5a…`）
+
+| 核查项 | 期望 | 实际 | 结果 |
+|---|---|---|---|
+| Figure 总标题 | 2025 Regional Sales and Operations (Revised) | 同左 | ✅ 图面可见 |
+| 列数 | 2 | `columns = 2` | ✅ |
+| 面板顺序 | 营收 → 订单 → 转化率 | revenue_by_region → monthly_orders → monthly_conversion_rate | ✅ 图面为左上、右上、左下 |
+| 子图① 数据 | North 34/39/43/50；South 27/32/36/41；Central 22/26/31/35 | 逐值一致 | ✅ |
+| 子图② 数据 | 82,90,87,95,101,108,**109**,115,123,119,130,138 | 一致，Jul=109 | ✅ |
+| 子图③ 数据 | 2.4,2.6,2.5,2.8,3.0,3.1,3.0,3.3,3.4,3.2,3.6,3.8 | 逐值一致 | ✅ |
+| 子图② 标题 | Monthly Orders (Corrected) | 同左 | ✅ 图面可见 |
+| 子图② y 轴 | Orders (count) | 同左 | ✅ 图面可见 |
+| 子图① y 轴 | Revenue (M USD) | 同左 | ✅ |
+| 子图③ y 轴 | Conversion (%) | 同左 | ✅ |
+| x 轴标签 | 三者均无标签，仅 Q1–Q4 / Jan–Dec 刻度 | 一致（与源图相同，源图亦无 x 轴标题） | ✅ |
+| source | 三面板均为 Figura synthetic operations dataset | 一致 | ✅ 三处均在图下可见 |
+| note | 仅订单面板为 "July corrected from the source ledger."，另两个为空 | 一致 | ✅ 订单面板下方可见该行 |
+| 修订来源 | note 表达「按台账更正」，July=109 | 一致 | ✅ 可见 |
+| 越权改动 | 无单列、无重排 | 未出现 | ✅ |
+
+## 二、目标外图表未变的确认
+
+- **Quarterly Revenue by Region**：标题、bar/vertical/grouped、Q1–Q4 类别、三系列 id 与 label、12 个数值、Revenue (M USD)、source、空 note——与初始 Figure 逐字段相同（已在早前做过字段级对比）。
+- **Monthly Conversion Rate**：标题、line、Jan–Dec、单系列 `conversion`/`Conversion rate`、12 个数值、Conversion (%)、source、空 note——同样与初始 Figure 逐字段相同。
+- 图面上也能看出：两个面板下方只出现 source 一行，没有多出 note 文本。
+
+## 三、发现的一个实质差异（需你决定是否处理）
+
+**渲染图没有数值标签**：源图 `quarterly-regional-sales.png` 在每根柱、每个折线点上标注了数值，本次渲染只有坐标刻度，没有数据标注。这意味着：
+- 精确数值只能通过坐标刻度近似读取（例如订单面板 Jul 与 Jun 几乎齐平，仅靠图面难以判断是 109 还是 108）；
+- 当前 ChartSpec 结构不含「数据标签」字段，我无法通过重装配加回数值标注。若必须让数值在图面上可读，可行路径是在标题/note 中写入关键值，或改用别的方式交付数据表（例如随图附数据清单）。
+
+其它可接受的现象：三图放进两列网格，第三张位于左下，右下留白；订单面板系列 label 仍为 `Orders`，与轴标签 `Orders (count)` 并存，属既定不改动的结果。
+
+## 四、缺失项清单
+
+1. 无数值标签（如上）。
+2. 三个面板均无 x 轴标题（与源图一致，非缺失遗漏）。
+3. 营收与转化率面板 note 为空（初始即空，未要求填写）。
+4. `measurement_refs` 为空——所有数值来自首轮对源图标注的读取与你的台账修订，没有独立的测量校准证据；这不是渲染缺陷，但说明数据未经二次测量核验。
+
+如果你希望补上数值标签或让 105→109 的对比在图面显式呈现，告诉我倾向的方式，我可以据此重新装配并再渲染一版。

@@ -1,0 +1,19 @@
+已完成更新：装配了新 Figure，并渲染出图像。
+
+**本次唯一的数据改动**
+- Monthly Orders — July：105 → **109**（净空台账值）
+- 其他 11 个月不变：82、90、87、95、101、108、**109**、115、123、119、130、138
+- 连续性影响：原本 7 月为小幅回落（108→105→115），修正后 7 月与 6 月基本持平（108→109），折线在 6–7 月近乎走平，8 月起继续上行
+
+**note 记录**
+- Monthly Orders 面板 `metadata.note` = `July corrected from the source ledger.`，在渲染图中显示于该面板的 source 行下方
+- 另外两个面板的 note 保持为空
+
+**保持不变**
+- 整体标题 `Regional Operations Dashboard, 2025`，两列布局，面板顺序 `quarterly_revenue → monthly_orders → monthly_conversion`
+- Monthly Orders 标题 `Monthly Orders (Corrected)`、Y 轴 `Orders (count)`；季度收入与转化率面板的数据、标题、轴名全部未动
+
+**历史事实保留**
+- 源图原始读数值 105 仍保留在历史记录中（首次读取与首次装配均以 105 记录，对应 Figure `8c654661…` 及 `cefa0e08…`），本次只在新 Figure 中体现为 109，并由 note 说明修正来源，未覆盖或删除此前的 105 读数。
+
+新 Figure：`271986e2f8304a5eb8e18a1e3150fe73` / `call_00_hji3PdBAawOYeT9oeNCa0076`（digest `d4f74ad8…391db860f`）；渲染 PNG 1280×1002 已生成，图中可核对 Jul 点高于 Jun 且注记行可见。

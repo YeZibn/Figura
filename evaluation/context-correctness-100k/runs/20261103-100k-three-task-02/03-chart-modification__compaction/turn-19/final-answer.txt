@@ -1,0 +1,23 @@
+已用资源目录中原始初始 ChartFigure 的类型化 ref（run `b820262d…`，call `call_00_9F9VHp2wnMESvCmr7XYx9258`）直接读取完整 Figure，未做搜索，也未使用摘要的 message/tool-result 引用。
+
+该版本确认为修改前的初始版：总标题 `Regional Operations Dashboard, 2025`，订单面板标题仍为 `Monthly Orders`、y 轴为 `Orders`、note 为空，**July 仍为 105**。
+
+## 四个指定值核对
+
+| 指定项 | 所属面板 | 读取结果 | 与预期 |
+|---|---|---|---|
+| **North · Q4** | Quarterly Revenue by Region（系列 `north`，值序列 34, 39, 43, 50） | **50** | 一致 |
+| **June Orders** | Monthly Orders（`Jun`） | **108** | 一致 |
+| **July Orders** | Monthly Orders（`Jul`） | **105**（初始值，未经台账修订） | 一致 |
+| **August Orders** | Monthly Orders（`Aug`） | **115** | 一致 |
+| **December Conversion** | Monthly Conversion Rate（`Dec`） | **3.8**（%） | 一致 |
+
+## 该版本的完整关键上下文（供对照后续修订版）
+
+- Figure 标题：Regional Operations Dashboard, 2025；`columns = 2`；顺序 营收 → 订单 → 转化率
+- 营收：North 34/39/43/**50**；South 27/32/36/41；Central 22/26/31/35；y 轴 `Revenue (M USD)`；note 空
+- 订单：82, 90, 87, 95, 101, **108**, **105**, **115**, 123, 119, 130, 138；y 轴 `Orders`；note 空
+- 转化率：2.4, 2.6, 2.5, 2.8, 3.0, 3.1, 3.0, 3.3, 3.4, 3.2, 3.6, **3.8**；y 轴 `Conversion (%)`；note 空
+- 三面板 source 均为 `Figura synthetic operations dataset`；`measurement_refs` 均为空
+
+对照当前最终版（run `07a98a5a…`）：只有订单面板的 July 由 105 变为 109，另加订单标题、订单 y 轴标签、订单 note 与 Figure 总标题的改动；本次核对的另外三个值（North Q4 = 50、June = 108、August = 115、December Conversion = 3.8）在两版中完全相同。

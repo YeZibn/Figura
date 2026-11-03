@@ -1,0 +1,64 @@
+已按合同重新装配并渲染完成；生成的 PNG 如上。图像校验值与上一版相等，说明内容完全一致。
+
+- 新装配：`figure_digest = 76a24ce8041d35e9bc1e10cff496ea7837f6c7b60452e95189924ca3d123fbba`（`run_id 5874dfb9…` / `call_id call_00_rczS5TbHMwuwVdgwtgCY8620`）
+- 渲染图：1280×1002，`image_sha256 = 918c85e78c0049370f3aeb50a8317567e8b08419ce1f795ba42aa2f531c92652`，与修订版上一次渲染的校验值完全相同
+
+## 一、最终布局与面板顺序
+
+| 项 | 值 |
+|---|---|
+| Figure 总标题 | 2025 Regional Sales and Operations (Revised) |
+| 布局 | 两列（`layout.columns = 2`），3 个子图 |
+| 顺序 | ① Quarterly Revenue by Region → ② Monthly Orders (Corrected) → ③ Monthly Conversion Rate |
+| 版面 | ① 左上（柱状）、② 右上（折线）、③ 第二行左（折线），右下单元格留空（3 面板放入两列） |
+
+## 二、ChartSpec 摘要
+
+**Figure**：schema_version 2；title 如上；columns 2；charts = `["revenue_by_region", "monthly_orders", "monthly_conversion"]`。
+
+| 字段 | ① revenue_by_region | ② monthly_orders | ③ monthly_conversion |
+|---|---|---|---|
+| chart_type | bar | line | line |
+| title | Quarterly Revenue by Region | Monthly Orders (Corrected) | Monthly Conversion Rate |
+| X 轴 | categorical · Quarter | categorical · Month | categorical · Month |
+| Y 轴 | numeric · Revenue (M USD) | numeric · Orders (count) | numeric · Conversion (%) |
+| source | Figura synthetic operations dataset | Figura synthetic operations dataset | Figura synthetic operations dataset |
+| note | 数值取自柱顶标注 | July corrected from the source ledger. 其余月份数值取自折线点标注（源图 July 为 105） | 数值取自折线点标注 |
+| 系列 | North / South / Central | Orders | Conversion rate |
+| measurement_refs | 空 | 空 | 空 |
+
+**数据**
+- ① North 34/39/43/50，South 27/32/36/41，Central 22/26/31/35（季度合计 83/97/110/126，全年 416）
+- ② Jan–Dec：82、90、87、95、101、108、**109**、115、123、119、130、138（合计 1 297）
+- ③ Jan–Dec：2.4、2.6、2.5、2.8、3.0、3.1、3.0、3.3、3.4、3.2、3.6、3.8
+
+## 三、July 修订及其来源
+
+| 项 | 内容 |
+|---|---|
+| 修订点 | Monthly Orders 的 July：**105 → 109**（唯一数据改动） |
+| 源图读数 | 105（`quarterly-regional-sales.png` 折线点旁打印标注，OCR 识别一致） |
+| 修订依据 | 用户核实订单台账后确认 109；属用户权威值，本会话未独立查阅台账 |
+| 记录位置 | 该面板 note：前半句为修订来源，后半句保留原“数值取自折线点标注”说明，并以“（源图 July 为 105）”保留源值，105 未被抹去 |
+| 计算影响 | 合计 1 293 → 1 297（+4）；月均 107.75 → 108.083（+1/3 单/月）；Q3 月均 114.333 → 115.667（+4/3） |
+
+## 四、逐项确认
+
+**1）临时单列 / 重排无残留**
+- 装配入参 `layout.columns = 2`，渲染图可见第 1 行两幅并排、第 2 行仅左幅，右下空位——**不是**单列纵排。
+- 首个子图是 `revenue_by_region`（左上为柱状图），**不是** `monthly_conversion`；第三位仍是转化率折线。
+- 结论：单列布局与“Conversion 置首”两项候选**零残留**，均为已撤销状态。
+
+**2）两个非目标面板未被修改**
+| 面板 | 核对结果 |
+|---|---|
+| Quarterly Revenue by Region | 标题、图表类型、X/Y 轴标签、source、note、Q1–Q4 类别、North/South/Central 系列及 12 个柱值（34/39/43/50、27/32/36/41、22/26/31/35）全部与初始 Figure 逐字段一致；渲染图中 Q4 蓝柱顶齐 50 刻度，North Q4 = 50 无误 |
+| Monthly Conversion Rate | 标题、图表类型、X/Y 轴标签、source、note、12 个点值（2.4→3.8，Jan 最低、Dec 最高，Mar/Jun→Jul/Sep→Oct 三处回落）全部与初始 Figure 一致 |
+
+**3）其他订单月份未被修改**
+- 除 July 外的 11 个月份：82、90、87、95、101、108、115、123、119、130、138 —— 与源图读数逐一相同；June 仍 108、August 仍 115，109 仅出现在 Jul（第 7 个刻度）。
+- 渲染图中 Jun→Jul 为平缓微升（108→109），Aug 明显抬升至 115；源图原有的 7 月 105“凹陷”已不复存在，说明是原位置抬高而非月份错位。
+
+## 五、边界说明
+
+装配成功表示规格通过结构与语义校验，渲染成功表示该规格已被正确绘出；二者都不证明数据事实本身。数据依据为：除 July 外取自源图标注，July=109 取自用户对订单台账的确认；派生数值（合计、均值、百分比）由这两组输入计算得出。图中未逐点打印数值，因此 ①③ 与 ② 其余月份的数值一致性以装配字段比对为准，图面用于确认标签、顺序、July 点位与版面可读性。

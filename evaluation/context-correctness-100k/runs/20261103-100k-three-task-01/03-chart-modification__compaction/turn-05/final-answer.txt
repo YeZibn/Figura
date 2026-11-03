@@ -1,0 +1,14 @@
+已按订单台账修正 July，并重新装配和绘制 Figure（1280×1002）。
+
+**本次唯一的数据改动：Monthly Orders**
+- Jul：105 → 109（其余 11 个月份数值未变：82、90、87、95、101、108、115、123、119、130、138）
+- 子图 note 追加：`July corrected from the source ledger.`（渲染图中显示在右上子图下方说明中）
+- 面板标题仍为 `Monthly Orders (Corrected)`，Y 轴仍为 `Orders (count)`
+
+**原读数仍作为历史事实保留**：源图 July 标注为 105，这是图像上的实际读数；105 与台账更正后的 109 是两类不同依据的事实，前者没有被改写或抹去，后者只是当前 Figure 采用的值。绘图上 Jul 现略高于 Jun（108），与 105 时略低于 Jun 的走势不同。
+
+**未变动部分**
+- 两列布局、Figure 标题「Regional Operations Dashboard, 2025」、面板顺序（Quarterly Revenue by Region 左上 → Monthly Orders (Corrected) 右上 → Monthly Conversion Rate 左下）
+- Quarterly Revenue by Region：Q1 34/27/22、Q2 39/32/26、Q3 43/36/31、Q4 50/41/35
+- Monthly Conversion Rate：2.4、2.6、2.5、2.8、3.0、3.1、3.0、3.3、3.4、3.2、3.6、3.8
+- 单列布局与重排方案仍未应用（此前已撤销）

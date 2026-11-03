@@ -1,0 +1,43 @@
+**核对方法**：将最新 Figure 的 `revenue_by_region` 子图，与初始 Figure（第 1 轮）的同一子图逐字段比较，双方均取自各自完整 ChartSpec；源图侧数值以柱顶标注（并经 OCR 复读）交叉验证。
+
+**一、逐系列季度数值**
+
+| 系列（图例） | 季度 | 源图标注 | 初始 Figure | 最新 Figure | 一致性 |
+|---|---|---|---|---|---|
+| North | Q1 | 34 | 34 | 34 | ✔ |
+| North | Q2 | 39 | 39 | 39 | ✔ |
+| North | Q3 | 43 | 43 | 43 | ✔ |
+| North | Q4 | 50 | 50 | 50 | ✔ |
+| South | Q1 | 27 | 27 | 27 | ✔ |
+| South | Q2 | 32 | 32 | 32 | ✔ |
+| South | Q3 | 36 | 36 | 36 | ✔ |
+| South | Q4 | 41 | 41 | 41 | ✔ |
+| Central | Q1 | 22 | 22 | 22 | ✔ |
+| Central | Q2 | 26 | 26 | 26 | ✔ |
+| Central | Q3 | 31 | 31 | 31 | ✔ |
+| Central | Q4 | 35 | 35 | 35 | ✔ |
+
+三系列 × 四季度共 12 个值全部逐位一致；数值顺序 North → South → Central，分类顺序 Q1 → Q4，均未变。
+
+**二、结构与非数值字段**
+
+| 项目 | 初始 Figure | 最新 Figure | 结果 |
+|---|---|---|---|
+| chart_type | bar | bar | 未变 |
+| 面板标题 | Quarterly Revenue by Region | Quarterly Revenue by Region | 未变 |
+| source | Figura synthetic operations dataset | Figura synthetic operations dataset | 未变 |
+| note | （空） | （空） | 未变 |
+| y 轴标签 | Revenue (M USD) | Revenue (M USD) | 未变 |
+| x 轴 | categorical（无轴名） | categorical（无轴名） | 未变 |
+| 分类集合 | Q1、Q2、Q3、Q4 | Q1、Q2、Q3、Q4 | 未变 |
+| series id/label | north/ North、south/ South、central/ Central | 同左 | 未变 |
+| 排列方式 | vertical + grouped | vertical + grouped | 未变 |
+| measurement_refs | 空 | 空 | 未变 |
+
+**三、结论**
+- 本轮及此前各轮，Quarterly Revenue 子图的数值、面板标题、source、note、轴标签**均无任何变化**；它与初始 Figure 完全一致，也与源图读数一致。
+- 该子图的渲染外观（四组柱、三系列配色与图例位置）在最新渲染图中与初始版一致，无标签遮挡或裁切。
+- 发生变化的部分只在其他位置：Figure 总标题、Monthly Orders 面板（标题、y 轴、July 值与 note），以及订单/转化率子图之外的布局仍保持两列；已撤销的单列与重排候选从未进入任何版本。
+
+**四、附带的一处说明**
+- 上文“无变化”仅指子图内容层面的逐项相等；最新 Figure 与初始 Figure 的整体 digest 不同（`715644b7…cf4970` vs `d422b433…b7948`），差异来源是总标题和订单面板，与该柱状子图无关。

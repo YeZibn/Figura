@@ -1,0 +1,26 @@
+已读取 `regional-operations-2025-2026-v2` 的全部四个面板。四个面板的数据来源同样是 **Figura synthetic operations dataset**（合成运营数据集），各面板之间没有跨面板关联的计算。
+
+## 面板总览
+
+| 面板 | 标题 | 类型 | 类别/坐标轴 | 系列或方向 | 数据点 | 单位 |
+|---|---|---|---|---|---|---|
+| quarterly_revenue | Quarterly Revenue by Region | 柱状图（bar，垂直、分组 grouped） | x：类别轴 = Quarter；y：数值轴 = Revenue (M USD) | 3 个系列：North、East、West | 12 个季度 × 3 个系列 = **36 个柱值** | 百万美元（M USD） |
+| monthly_orders | Monthly Orders in 2026 | 折线图（line） | x：类别轴 = Month；y：数值轴 = Orders (count) | 1 个系列：Orders | **12 个点**（2026 年 1–12 月，其中 1 个 null） | 订单数（count，无量纲计数） |
+| channel_heatmap | Orders by Region and Channel | 热力图（heatmap，矩阵 matrix） | x（列）：渠道 = Retail、Web、Partner、Direct；y（行）：区域 = North、East、West、Central | 4 列 × 4 行矩阵，共 **16 个单元格**（其中 1 个 null） | 16 | 订单数（cell values = order counts） |
+| delivery_scatter | Delivery Time and Satisfaction | 散点图（scatter） | x：数值轴 = Delivery time (hours)；y：数值轴 = Satisfaction (score) | 1 个系列：Delivery batches（每点 = 一个配送批次） | **24 个点** | x：小时；y：满意度得分（score） |
+
+补充细节：
+
+- **Revenue**：类别按 24Q1 → 26Q4 顺序排列，正好覆盖 2024Q1–2026Q4（12 个季度）。三个系列取值整体上升，例如 North 从 41 升到 75、East 从 35 升到 69、West 从 28 升到 60（单位均为百万美元）。
+- **Orders** 折线：1 月 168 → 12 月 228，中间有小幅回落（9–10 月 212 → 208）。
+- **Heatmap** 采用「供应商—区域」的矩阵布局，同一行共享一个区域，同一列共享一个渠道，并非时间序列。
+- **Scatter**：x 从 1.1 到 5.7 小时（步长 0.2），y 从 4.7 到 2.4，呈明显负向关系。
+
+## 两个 null（缺失观测，不是 0）
+
+1. **Orders 面板（monthly_orders）**：`{"x": "Mar", "y": null}` —— 2026 年 3 月的订单数**缺失**。原数据备注明确要求：null 表示缺失观测，不得用 0 替代，也不得插值。绘制时应表现为折线在该点断开（2 月 175 与 4 月 184 之间不应连成实线），而不是该月跌到 0。
+2. **Heatmap 面板（channel_heatmap）**：`values[0][3] = null`，即 **North 行 × Direct 列** 单元格（North–Direct）的订单数**缺失**。该格应显示为空白或“无数据”标识，不应着色为最低值或填 0。
+
+其余位置均无 null：Revenue 的 36 个值、Scatter 的 24 个 (x, y) 均为完整数值。
+
+如需把这四个面板装配成一张可视化图（含上述断线处理与空单元格），我可以直接生成。

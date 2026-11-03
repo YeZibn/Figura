@@ -1,0 +1,76 @@
+核对方式：将初始 Figure（run `a04fac4…`，digest `04363382…bd45e`）与当前最终 Figure（run `9083994…`，digest `b8194b22…b1056`）的完整 spec 逐字段对比。
+
+## 一、Figure 层
+
+| 字段 | 初始 | 当前 | 判定 |
+|---|---|---|---|
+| `title` | Regional Operations Dashboard, 2025 | 2025 Regional Sales and Operations (Revised) | **允许内变更**（你明确要求改总标题）· 通过 |
+| `layout.columns` | 2 | 2 | 通过（单列候选未应用） |
+| `schema_version` | 2 | 2 | 通过 |
+| 子图数量 | 3 | 3 | 通过 |
+| 子图 id 与顺序 | quarterly_revenue → monthly_orders → monthly_conversion | 同左 | 通过（重排候选未应用） |
+
+## 二、Monthly Orders（允许变更面：标题、轴标签、note、July 值）
+
+| 字段 | 初始 | 当前 | 是否在允许范围内 | 判定 |
+|---|---|---|---|---|
+| `metadata.title` | Monthly Orders | Monthly Orders (Corrected) | 是（标题） | 通过 |
+| `metadata.note` | `""` | July corrected from the source ledger. | 是（note） | 通过 |
+| `coordinate_system.y_axis.label` | Orders | Orders (count) | 是（轴标签） | 通过 |
+| `dataset.series[0].points[6].y`（Jul） | 105 | 109 | 是（July 值） | 通过 |
+| `metadata.chart_type` | line | line | 否，须不变 | 通过（未变） |
+| `metadata.source` | Figura synthetic operations dataset | 同 | 否，须不变 | 通过（未变） |
+| `coordinate_system.kind` | cartesian | 同 | 否 | 通过 |
+| `x_axis.kind` | categorical | 同 | 否 | 通过 |
+| `x_axis.label` | 缺省（无） | 缺省（无） | 否 | 通过 |
+| `dataset.series[0].id` / `label` | orders / Orders | 同 | 否 | 通过 |
+| 其余 11 个月点位与顺序 | Jan 82 … Dec 138 | 完全相同 | 否 | 通过（仅 July 变化） |
+| `schema_version` | 2 | 2 | 否 | 通过 |
+| `measurement_refs` | `[]` | `[]` | 否 | 通过 |
+
+小计：允许变更面 4 项全部落在允许范围内，未被允许的字段全部逐字符一致，**无偏差**。
+
+## 三、Quarterly Revenue（全部字段须不变）
+
+| 字段 | 初始 → 当前 | 判定 |
+|---|---|---|
+| `metadata.title` | Quarterly Revenue by Region → 同 | 通过 |
+| `metadata.chart_type` | bar → 同 | 通过 |
+| `metadata.source` | Figura synthetic operations dataset → 同 | 通过 |
+| `metadata.note` | `""` → `""` | 通过 |
+| `y_axis.label` | Revenue (M USD) → 同 | 通过 |
+| `x_axis.kind` / 轴标题 | categorical / 无 → 同 | 通过 |
+| `dataset.orientation` / `mode` | vertical / grouped → 同 | 通过 |
+| `categories`（q1–q4, Q1–Q4） | → 同 | 通过 |
+| `series[0]` North [34,39,43,50] | → 同 | 通过 |
+| `series[1]` South [27,32,36,41] | → 同 | 通过 |
+| `series[2]` Central [22,26,31,35] | → 同 | 通过 |
+| `measurement_refs`、`schema_version` | `[]`、2 → 同 | 通过 |
+
+小计：**12/12 字段一致，无偏差**。
+
+## 四、Monthly Conversion Rate（全部字段须不变）
+
+| 字段 | 初始 → 当前 | 判定 |
+|---|---|---|
+| `metadata.title` | Monthly Conversion Rate → 同 | 通过 |
+| `metadata.chart_type` | line → 同 | 通过 |
+| `metadata.source` | Figura synthetic operations dataset → 同 | 通过 |
+| `metadata.note` | `""` → `""` | 通过 |
+| `y_axis.label` | Conversion (%) → 同 | 通过 |
+| `x_axis.kind` / 轴标题 | categorical / 无 → 同 | 通过 |
+| `series[0].id` / `label` | conversion / Conversion Rate → 同 | 通过 |
+| 12 个点位与顺序（Jan 2.4 … Dec 3.8） | → 完全相同 | 通过 |
+| `measurement_refs`、`schema_version` | `[]`、2 → 同 | 通过 |
+
+小计：**9/9 字段一致，无偏差**。
+
+## 五、总体结论
+
+- 逐字段核对共 34 项：**34 项通过，0 项偏差**。
+- 实际变化仅 5 处，全部在你授权的范围内：Figure 总标题、Monthly Orders 的面板标题、纵轴标签、note、July 值（105→109）。
+- 未授权的改动一律未发生：季度柱图与转化率折线逐字段原样；列数仍为 2；子图顺序未重排。
+
+两点需如实说明的限制（不属偏差，供判断使用）：
+1. **July=109 无测量或台账凭据嵌入 Figure**：`measurement_refs` 为空，该项数值来源仅为你在对话中的确认，Figure 内以 note 文字说明。
+2. **目标面板的 `source` 仍指向合成数据集**，而 July 来自台账户核，即同一面板的 `source` 与其中一点的 `note` 描述了不同来源；按你的指令 `source` 未改，这是取舍而非遗漏。

@@ -1,0 +1,435 @@
+{
+  "charts": [
+    {
+      "chart_id": "quarterly_revenue",
+      "chart_spec": {
+        "coordinate_system": {
+          "kind": "cartesian",
+          "x_axis": {
+            "kind": "categorical",
+            "label": "Quarter"
+          },
+          "y_axis": {
+            "kind": "numeric",
+            "label": "Revenue (M USD)"
+          }
+        },
+        "dataset": {
+          "categories": [
+            {
+              "id": "24q1",
+              "label": "24Q1"
+            },
+            {
+              "id": "24q2",
+              "label": "24Q2"
+            },
+            {
+              "id": "24q3",
+              "label": "24Q3"
+            },
+            {
+              "id": "24q4",
+              "label": "24Q4"
+            },
+            {
+              "id": "25q1",
+              "label": "25Q1"
+            },
+            {
+              "id": "25q2",
+              "label": "25Q2"
+            },
+            {
+              "id": "25q3",
+              "label": "25Q3"
+            },
+            {
+              "id": "25q4",
+              "label": "25Q4"
+            },
+            {
+              "id": "26q1",
+              "label": "26Q1"
+            },
+            {
+              "id": "26q2",
+              "label": "26Q2"
+            },
+            {
+              "id": "26q3",
+              "label": "26Q3"
+            },
+            {
+              "id": "26q4",
+              "label": "26Q4"
+            }
+          ],
+          "mode": "grouped",
+          "orientation": "vertical",
+          "series": [
+            {
+              "id": "north",
+              "label": "North",
+              "values": [
+                41,
+                44,
+                46,
+                49,
+                52,
+                55,
+                58,
+                62,
+                65,
+                68,
+                72,
+                75
+              ]
+            },
+            {
+              "id": "east",
+              "label": "East",
+              "values": [
+                35,
+                38,
+                40,
+                43,
+                46,
+                50,
+                52,
+                56,
+                59,
+                62,
+                65,
+                69
+              ]
+            },
+            {
+              "id": "west",
+              "label": "West",
+              "values": [
+                28,
+                30,
+                34,
+                36,
+                39,
+                42,
+                44,
+                47,
+                50,
+                53,
+                56,
+                60
+              ]
+            }
+          ]
+        },
+        "metadata": {
+          "chart_type": "bar",
+          "note": "Revenue is recorded in million USD. Quarterly revenue values are unchanged.",
+          "source": "Figura synthetic operations dataset",
+          "title": "Quarterly Revenue by Region"
+        },
+        "schema_version": 2
+      },
+      "measurement_refs": []
+    },
+    {
+      "chart_id": "monthly_orders",
+      "chart_spec": {
+        "coordinate_system": {
+          "kind": "cartesian",
+          "x_axis": {
+            "kind": "categorical",
+            "label": "Month"
+          },
+          "y_axis": {
+            "kind": "numeric",
+            "label": "Orders (count)"
+          }
+        },
+        "dataset": {
+          "series": [
+            {
+              "id": "orders",
+              "label": "Orders",
+              "points": [
+                {
+                  "x": "Jan",
+                  "y": 168
+                },
+                {
+                  "x": "Feb",
+                  "y": 175
+                },
+                {
+                  "x": "Mar",
+                  "y": null
+                },
+                {
+                  "x": "Apr",
+                  "y": 184
+                },
+                {
+                  "x": "May",
+                  "y": 191
+                },
+                {
+                  "x": "Jun",
+                  "y": 198
+                },
+                {
+                  "x": "Jul",
+                  "y": 194
+                },
+                {
+                  "x": "Aug",
+                  "y": 205
+                },
+                {
+                  "x": "Sep",
+                  "y": 212
+                },
+                {
+                  "x": "Oct",
+                  "y": 208
+                },
+                {
+                  "x": "Nov",
+                  "y": 220
+                },
+                {
+                  "x": "Dec",
+                  "y": 228
+                }
+              ]
+            }
+          ]
+        },
+        "metadata": {
+          "chart_type": "line",
+          "note": "A null y value is a missing observation; do not replace it with zero or interpolate it.",
+          "source": "Figura synthetic operations dataset",
+          "title": "Monthly Orders in 2026"
+        },
+        "schema_version": 2
+      },
+      "measurement_refs": []
+    },
+    {
+      "chart_id": "channel_heatmap",
+      "chart_spec": {
+        "coordinate_system": {
+          "kind": "matrix"
+        },
+        "dataset": {
+          "values": [
+            [
+              12,
+              16,
+              9,
+              null
+            ],
+            [
+              8,
+              11,
+              13,
+              15
+            ],
+            [
+              10,
+              9,
+              14,
+              12
+            ],
+            [
+              7,
+              12,
+              8,
+              11
+            ]
+          ],
+          "x_categories": [
+            {
+              "id": "retail",
+              "label": "Retail"
+            },
+            {
+              "id": "web",
+              "label": "Web"
+            },
+            {
+              "id": "partner",
+              "label": "Partner"
+            },
+            {
+              "id": "direct",
+              "label": "Direct"
+            }
+          ],
+          "y_categories": [
+            {
+              "id": "north",
+              "label": "North"
+            },
+            {
+              "id": "east",
+              "label": "East"
+            },
+            {
+              "id": "west",
+              "label": "West"
+            },
+            {
+              "id": "central",
+              "label": "Central"
+            }
+          ]
+        },
+        "metadata": {
+          "chart_type": "heatmap",
+          "note": "Cell values are order counts.",
+          "source": "Figura synthetic operations dataset",
+          "title": "Orders by Region and Channel"
+        },
+        "schema_version": 2
+      },
+      "measurement_refs": []
+    },
+    {
+      "chart_id": "delivery_scatter",
+      "chart_spec": {
+        "coordinate_system": {
+          "kind": "cartesian",
+          "x_axis": {
+            "kind": "numeric",
+            "label": "Delivery time (hours)"
+          },
+          "y_axis": {
+            "kind": "numeric",
+            "label": "Satisfaction (score)"
+          }
+        },
+        "dataset": {
+          "series": [
+            {
+              "id": "delivery_batches",
+              "label": "Delivery batches",
+              "points": [
+                {
+                  "x": 1.1,
+                  "y": 4.7
+                },
+                {
+                  "x": 1.3,
+                  "y": 4.6
+                },
+                {
+                  "x": 1.5,
+                  "y": 4.4
+                },
+                {
+                  "x": 1.7,
+                  "y": 4.5
+                },
+                {
+                  "x": 1.9,
+                  "y": 4.2
+                },
+                {
+                  "x": 2.1,
+                  "y": 4.3
+                },
+                {
+                  "x": 2.3,
+                  "y": 4.0
+                },
+                {
+                  "x": 2.5,
+                  "y": 4.1
+                },
+                {
+                  "x": 2.7,
+                  "y": 3.9
+                },
+                {
+                  "x": 2.9,
+                  "y": 3.8
+                },
+                {
+                  "x": 3.1,
+                  "y": 3.7
+                },
+                {
+                  "x": 3.3,
+                  "y": 3.6
+                },
+                {
+                  "x": 3.5,
+                  "y": 3.5
+                },
+                {
+                  "x": 3.7,
+                  "y": 3.4
+                },
+                {
+                  "x": 3.9,
+                  "y": 3.3
+                },
+                {
+                  "x": 4.1,
+                  "y": 3.2
+                },
+                {
+                  "x": 4.3,
+                  "y": 3.1
+                },
+                {
+                  "x": 4.5,
+                  "y": 3.0
+                },
+                {
+                  "x": 4.7,
+                  "y": 2.9
+                },
+                {
+                  "x": 4.9,
+                  "y": 2.8
+                },
+                {
+                  "x": 5.1,
+                  "y": 2.7
+                },
+                {
+                  "x": 5.3,
+                  "y": 2.6
+                },
+                {
+                  "x": 5.5,
+                  "y": 2.5
+                },
+                {
+                  "x": 5.7,
+                  "y": 2.4
+                }
+              ]
+            }
+          ]
+        },
+        "metadata": {
+          "chart_type": "scatter",
+          "note": "Each point represents one delivery batch.",
+          "source": "Figura synthetic operations dataset",
+          "title": "Delivery Time and Satisfaction"
+        },
+        "schema_version": 2
+      },
+      "measurement_refs": []
+    }
+  ],
+  "layout": {
+    "columns": 1
+  },
+  "schema_version": 2,
+  "title": "Regional Operations: Revenue, Orders and Delivery"
+}

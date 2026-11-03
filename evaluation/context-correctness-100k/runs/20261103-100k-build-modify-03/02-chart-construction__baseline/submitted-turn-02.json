@@ -1,0 +1,6 @@
+{
+  "turn": 2,
+  "text": "调用 assemble_chart_figure 先建立一个两面板 ChartFigure，包含 Quarterly Revenue 和 Monthly Orders，采用两列布局。保留所有值、类别/系列顺序、标题、source 和 note；保留 Orders 的 March null，不插值。",
+  "attachment_sha256": [],
+  "provider_id": "deepseek"
+}

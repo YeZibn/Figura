@@ -1,0 +1,53 @@
+## 一、Figure 级结构（当前生效版本，digest 0a0082bc…）
+
+| 项目 | 值 |
+|---|---|
+| 标题 | 2025 Regional Sales and Operations (Revised) |
+| 列数 | 2（columns = 2） |
+| 面板顺序 | 1. Quarterly Revenue by Region → 2. Monthly Orders (Corrected) → 3. Monthly Conversion Rate |
+| 排版位置 | 面板 1、2 第一行左右并列；面板 3 位于第二行左侧，右下留空 |
+| schema_version | 2 |
+| 子图数 | 3 |
+
+## 二、三个子图的标题、轴标签、source、note
+
+| 字段 | ① quarterly_revenue | ② monthly_orders（目标面板） | ③ monthly_conversion |
+|---|---|---|---|
+| 标题 | Quarterly Revenue by Region | **Monthly Orders (Corrected)** | Monthly Conversion Rate |
+| 图表类型 | bar（分组柱状，vertical） | line | line |
+| X 轴标签 | Quarter（categorical） | Month（categorical） | Month（categorical） |
+| Y 轴标签 | Revenue (M USD)（numeric） | **Orders (count)**（numeric） | Conversion (%)（numeric） |
+| source | Figura synthetic operations dataset | Figura synthetic operations dataset | Figura synthetic operations dataset |
+| note | 空 | **July corrected from the source ledger.** | 空 |
+| 系列标识 | North / South / Central | Orders | Conversion rate |
+| 数据点 | 4 季度 × 3 系列 = 12 值 | 12 个月 | 12 个月 |
+| measurement_refs | 空 | 空 | 空 |
+
+三处 source 字符串完全一致，均为 “Figura synthetic operations dataset”，未因修订而被替换或添加后缀。
+
+## 三、目标面板（Monthly Orders）元数据核查
+
+| 原始元数据项 | 初始 Figure（首轮） | 当前 Figure | 是否保留 |
+|---|---|---|---|
+| chart_id | monthly_orders | monthly_orders | ✅ 保留 |
+| chart_type | line | line | ✅ 保留 |
+| X 轴 kind / label | categorical / Month | categorical / Month | ✅ 保留 |
+| 月份类别与顺序 | Jan…Dec（12 项） | Jan…Dec（12 项） | ✅ 保留 |
+| series id / label | orders / Orders | orders / Orders | ✅ 保留 |
+| source | Figura synthetic operations dataset | 同左 | ✅ 保留 |
+| Y 轴 kind | numeric | numeric | ✅ 保留 |
+| coordinate_system | cartesian | cartesian | ✅ 保留 |
+| schema_version | 2 | 2 | ✅ 保留 |
+| measurement_refs | 空 | 空 | ✅ 保留 |
+| note | 空 | July corrected from the source ledger. | ⚠️ 被占用（原为空，无内容损失） |
+| 标题 | Monthly Orders | Monthly Orders (Corrected) | 有意变更 |
+| Y 轴标签 | Orders | Orders (count) | 有意变更 |
+| 数据 | July = 105 | July = 109 | 有意变更 |
+
+**结论：用户修订来源与其他原有元数据同时保留，未互相挤占。** 修订来源以 note 字段承载；标题、轴标签、source、系列标识、类别顺序等原元数据仍各自完整存在于原字段中，没有被改写为承载修订信息。目标面板仅 July 一个数据点变化，其余 11 个月与初始版本逐值相同。
+
+## 四、两点限制（供使用结果时注意）
+
+1. **note 只含定性来源说明，不含数值差**：字段内容即你指定的原句，未写入 “105 → 109” 或具体差值；160 字符上限允许加注，但按你的指示未扩写。因此若要追溯“原图 105”，需借助早期 Figure 版本或源图附件，而非当前 Figure 本身。
+2. **note 是替代而非叠加**：初始版本该字段为空，所以本次写入没有覆盖既有说明；但若后续需要在 note 中同时记录其他信息（如数据口径、更新时间），只能在同一字段内拼接，届时请注意不要挤掉台账说明。
+3. 当前 Figure 已有对应渲染产物（digest 与装配结果一致），本次汇总是读取结构化内容得到，未新增装配或渲染。

@@ -1,0 +1,36 @@
+## 总览
+
+四个面板都来自同一数据源 **Figura synthetic operations dataset**（`dataset_id`：`regional-operations-2025-2026-v2`），它们是结构化的合成运营数据，并非图像抽取结果。
+
+| 面板 | 类型 | 坐标系、方向 | 类别轴 | 系列 | 数据点 | 单位 |
+|---|---|---|---|---|---|---|
+| quarterly_revenue | 柱状图（BAR） | 笛卡尔坐标；垂直、分组（grouped） | x 轴：季度（分类，24Q1–26Q4，**12 个**） | 3 个（North / East / West） | **36**（3×12） | Revenue (M USD)，即百万美元 |
+| monthly_orders | 折线图（LINE） | 笛卡尔坐标；x 轴分类（月份），y 轴数值 | x 轴：月份（分类，**12 个**：Jan–Dec） | 1 个（Orders） | **12**（其中 1 个为 null） | Orders (count)，即订单数 |
+| channel_heatmap | 热力图（HEATMAP） | 矩阵（matrix） | x 轴横轴：渠道 Retail / Web / Partner / Direct（**4 个**）；y 轴纵轴：区域 North / East / West / Central（**4 个**） | 无系列概念（单值矩阵） | **16 个单元格**（4×4，其中 1 个为 null） | 订单计数（cell values are order counts） |
+| delivery_scatter | 散点图（SCATTER） | 笛卡尔坐标；双数值轴 | x 轴：Delivery time (hours)，数值；y 轴：Satisfaction (score)，数值 | 1 个（Delivery batches） | **24** | 小时（h）、满意度分值（score） |
+
+## 各面板补充说明
+
+**1. Quarterly Revenue by Region（柱状图）**
+- 垂直分组柱，覆盖 **2024Q1–2026Q4 共 12 个季度**，每个季度三根柱（North、East、West）。
+- 三个系列各有 12 个值，且无缺失：North 从 41 升到 75，East 从 35 升到 69，West 从 28 升到 60（百万美元）。
+- 柱体编码业务值，因此柱越高，收入越高。
+
+**2. Monthly Orders in 2026（折线图）**
+- 单系列 12 个点，覆盖 2026 年 1–12 月，y 单位为订单数（count）。
+- **特别注意的 null：`Mar`（3 月）的 y 为 null**。这是**缺失观测**，并非 0；也明确要求不插值，因此折线在该处应断开，不应画一条穿过零值或补值点的连续线。其余 11 个月为 168（Jan）到 228（Dec）。
+
+**3. Orders by Region and Channel（热力图）**
+- 矩阵为 4 个渠道（列）× 4 个区域（行），共 16 格，每格是订单数。
+- **特别注意的 null：North 行 × Direct 列这一格为 null**（`values[0] = [12, 16, 9, null]`，第 4 列即 Direct）。它代表**缺失观测**，既不是 0 个订单，也不是"该渠道无订单"这一业务结论。渲染时该格应留空或标注缺失。
+- 其余 15 格为 7–16 之间的整数，例如 North×Retail = 12、North×Web = 16、East×Direct = 15。
+
+**4. Delivery Time and Satisfaction（散点图）**
+- 24 个点，每个点代表一个 delivery batch（配送批次）。
+- x 轴配送时长单位小时，从 1.1 到 5.7 小时；y 轴为满意度评分，从 4.7 降到 2.4，无缺失。
+
+## 使用这些数据时需注意的界限
+
+- 上述数字、类别与单位均直接来自你提供的结构化数据集，不是从图上读出的估计值。
+- 两个 null 都按缺失处理：既不能当作 0，也不能自动补全；否则会改变 Orders 的月度趋势形态和 North/Direct 渠道的比较结论。
+- 该数据集是合成数据（synthetic），来源字段已自我声明，因此其数值不宜当作真实经营事实引用。

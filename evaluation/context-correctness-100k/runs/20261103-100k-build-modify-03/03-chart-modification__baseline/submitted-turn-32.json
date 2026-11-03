@@ -1,0 +1,6 @@
+{
+  "turn": 32,
+  "text": "生成最终 ChartSpec 摘要草稿，包含三个面板全量序列数据、Figure 标题/列数/顺序、修订来源和非目标字段保留说明。不得遗漏图表标签。",
+  "attachment_sha256": [],
+  "provider_id": "deepseek"
+}

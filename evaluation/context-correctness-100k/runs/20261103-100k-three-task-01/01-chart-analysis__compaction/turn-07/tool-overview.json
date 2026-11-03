@@ -1,0 +1,44 @@
+[
+  {
+    "call_id": "call_00_dYwucT1pHN68A6HT4bpD6600",
+    "tool_name": "read_history",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_01_l7RqkUThCQSEBAx0xovm0738",
+    "tool_name": "read_history",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_02_mgOW2GfhrhQSc0TNwZUb5793",
+    "tool_name": "read_history",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_03_ijOGtnWdE774ocgtFT7r2703",
+    "tool_name": "read_history",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_auSNsgbZsb4j4cGd1OYt9793",
+    "tool_name": "decompose_chart_image",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_ET_GKewFcKHLqkTTeMcrCLQ1762",
+    "tool_name": "load_image",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_01_ET_hkBMwWxXkZBd2FUaFCMs2959",
+    "tool_name": "extract_text",
+    "outcome": "succeeded",
+    "error": null
+  }
+]

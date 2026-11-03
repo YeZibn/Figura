@@ -1,0 +1,37 @@
+最终 Figure 已完成装配和渲染，生成图已核对，并随本回复一并提供。
+
+## 交付物
+- Figure：`e1f0b1629c8e4f3ba095a4fdc3fe6cd8` / `call_00_MysNeLA2b1XyFPhkzJoU5780`，digest `a284457d5f379ebd7f63671b4da5dcaf7ecea440ae064745a979ddd7a6600cc1`
+- PNG：`call_00_ET_4uanz02VT8yxo8Fu1p5c8999`，1280×1002，已附于上方
+
+## 最终布局与面板顺序
+- 整体标题：`2025 Regional Sales and Operations (Revised)`
+- 布局：**两列**（`columns: 2`）；第 1 行并列两图，第 2 行左侧一图、右下留白
+- 顺序（与源图自上而下一致）：
+  1. `quarterly_revenue` — Quarterly Revenue by Region
+  2. `monthly_orders` — Monthly Orders (Corrected)
+  3. `monthly_conversion` — Monthly Conversion Rate
+
+## 最终 ChartSpec 摘要
+
+| 面板 | 类型 | 坐标/轴 | 系列与数据 |
+|---|---|---|---|
+| `quarterly_revenue` | 分组柱状，纵向 | X：Q1–Q4（类别）；Y：`Revenue (M USD)`，0–50 | North 34/39/43/50；South 27/32/36/41；Central 22/26/31/35；图例含 North/South/Central |
+| `monthly_orders` | 折线 | X：Jan–Dec（类别）；Y：`Orders (count)`，渲染自动 80–140 | 单系列 `Orders`：82, 90, 87, 95, 101, 108, **109**, 115, 123, 119, 130, 138 |
+| `monthly_conversion` | 折线 | X：Jan–Dec（类别）；Y：`Conversion (%)`，2.4–3.8 | 单系列 `Conversion`：2.4, 2.6, 2.5, 2.8, 3.0, 3.1, 3.0, 3.3, 3.4, 3.2, 3.6, 3.8 |
+
+- 三个子图的 `source` 均为 `Figura synthetic operations dataset`；`metadata.note` 仅 `monthly_orders` 非空，为 `July corrected from the source ledger.`（渲染图中显示在该面板 source 行下方）
+- 所有面板均无 `measurement_refs`（数据来自源图标注与用户确认，而非测量工具）
+
+## July 修订与来源
+- 源图 `quarterly-regional-sales.png` 的 July 数据点标注为 **105**；初始 Figure `8c654661…` 与第 2 轮 Figure `cefa0e08…` 均按 105 记录。
+- 用户核对订单台账后确认 July 应为 **109**，因此最终值取 109，并在该面板 note 中留痕说明。
+- 结论差异来源：源图该点标签与台账不一致；105 作为原始读数继续保留在历史中，未被抹除或改写。
+
+## 确认项（对照渲染图与初始 Figure 逐字段核对）
+- **临时单列/重排无残留**：`columns` 为 2；顺序仍以 Quarterly Revenue 开头，Monthly Conversion Rate 在最后；单列与“转化率置首”两个候选从未进入装配，也未在本次出现。
+- **两个非目标面板未修改**：Quarterly Revenue 的标题、轴名、系列标签及 16 个数值与初始 Figure 完全一致；Monthly Conversion Rate 的标题、轴名及 12 个数值（2.4→3.8）完全一致。
+- **其他订单月份未修改**：除 July 外 11 个月与初始 Figure 完全一致（Jan 82、Feb 90、Mar 87、Apr 95、May 101、Jun 108、Aug 115、Sep 123、Oct 119、Nov 130、Dec 138）；July 之外无任何数值变动。
+- 允许的改动集恰为：Figure 总标题、Monthly Orders 面板标题、其 Y 轴标签、July 值、该面板 note——无额外改动。
+
+说明：源图为每点标注数值，当前 Figure 规范不含逐点数值标签，因此重绘图中数值通过柱高与折线位置呈现；单元格数值以上表与 Figure 数据为准。

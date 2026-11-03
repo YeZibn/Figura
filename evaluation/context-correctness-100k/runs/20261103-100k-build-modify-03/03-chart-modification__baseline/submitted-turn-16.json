@@ -1,0 +1,6 @@
+{
+  "turn": 16,
+  "text": "再次检查早先的单列/重排候选。报告其状态为已撤销；不得通过重新装配把候选重新写入 Figure。",
+  "attachment_sha256": [],
+  "provider_id": "deepseek"
+}

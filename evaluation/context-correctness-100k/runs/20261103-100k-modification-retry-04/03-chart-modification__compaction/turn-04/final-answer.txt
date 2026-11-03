@@ -1,0 +1,20 @@
+**撤销已确认：上一轮的单列与重排候选方案作废，不予应用。**
+
+当前有效的 Figure 已经是满足你要求的状态，因此本轮未做任何装配或重绘，也没有新建 Figure 版本；上一轮运行 `9cfc067002e746f99a76e0d08499b9e9` 的结果继续有效。
+
+**候选改动的最终处置**
+
+| 候选改动 | 处置 |
+|---|---|
+| `layout.columns` 由 2 改为 1（单列） | 撤销，不出现 |
+| 将 Monthly Conversion Rate 移到首位（重排） | 撤销，不出现 |
+
+**最终 Figure 的既定状态**
+
+- Figure 标题：Regional Operations Dashboard, 2025
+- 布局：两列（`columns: 2`）
+- 子图顺序：① `quarterly_revenue`（Quarterly Revenue by Region，柱图，Revenue (M USD)）→ ② `monthly_orders`（Monthly Orders (Corrected)，折线，Orders (count)）→ ③ `monthly_conversion`（Monthly Conversion Rate，折线，Conversion (%)）
+- 实际排版：第一行左侧季度柱图、右侧月度订单；第二行左侧转化率折线
+- 数据与上一版完全一致：North/South/Central 各季 34/27/22、39/32/26、43/36/31、50/41/35；订单 82、90、87、95、101、108、105、115、123、119、130、138；转化率 2.4–3.8；三图 source 均为 `Figura synthetic operations dataset`
+
+后续任何新方案都会作为独立候选记录，需你明确同意后才会改动现有 Figure。

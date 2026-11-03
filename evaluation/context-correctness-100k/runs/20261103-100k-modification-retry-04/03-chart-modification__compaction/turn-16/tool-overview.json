@@ -1,0 +1,25 @@
+[
+  {
+    "call_id": "call_00_HUymNaKjwvJh4hkZtJfd5316",
+    "tool_name": "read_history",
+    "outcome": "failed",
+    "error": {
+      "code": "history_reference_unavailable",
+      "field_path": null,
+      "message": "请求的历史来源不可用或不在当前授权范围内。",
+      "retryable": false
+    }
+  },
+  {
+    "call_id": "call_00_Mqkp2xGYOde3MIIcuTRr8396",
+    "tool_name": "read_history",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_YftIaeo0unSmkVt82Z3E2126",
+    "tool_name": "read_history",
+    "outcome": "succeeded",
+    "error": null
+  }
+]

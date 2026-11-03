@@ -1,0 +1,23 @@
+## Monthly Orders 面板字段清单（当前生效 Figure，run `908399490058411e91a60cdf906311d8`）
+
+| 字段 | 位置 | 当前值 |
+|---|---|---|
+| `chart_id` | Figure 内子图标识 | `monthly_orders` |
+| 子图标题 | `metadata.title` | `Monthly Orders (Corrected)` |
+| 图表类型 | `metadata.chart_type` | `line`（折线） |
+| x 轴类型 | `coordinate_system.x_axis.kind` | `categorical` |
+| x 轴标签 | `coordinate_system.x_axis.label` | **未设置**（无轴标题；刻度为 Jan–Dec 12 个类别） |
+| y 轴类型 | `coordinate_system.y_axis.kind` | `numeric` |
+| y 轴标签 | `coordinate_system.y_axis.label` | `Orders (count)` |
+| source | `metadata.source` | `Figura synthetic operations dataset` |
+| note | `metadata.note` | `July corrected from the source ledger.` |
+| 系列 id | `dataset.series[0].id` | `orders` |
+| 系列 label | `dataset.series[0].label` | `Orders` |
+
+补充（为使清单可核对，不属上述字段）：坐标系 `cartesian`；共 12 个数据点 Jan 82、Feb 90、Mar 87、Apr 95、May 101、Jun 108、**Jul 109**、Aug 115、Sep 123、Oct 119、Nov 130、Dec 138；`measurement_refs` 为 `[]`。
+
+## 本轮变更情况
+
+本轮未提出新的字段修改，因此**未做任何变更**：上述 11 项取值即现有 Figure 中的实际取值，其中标题、y 轴标签、note 三项是此前已获授权的修订结果，series label 仍为原始的 `Orders`，source 未被覆写。未执行装配或渲染，Figure digest 保持 `b8194b22e7d97fbcbc40ab04dcd43b3ae44c42460536736d7a538dd4ae0b1056`。
+
+如你希望本轮改动其中某个字段（例如把 y 轴标签再调整、给 x 轴补标题、或修改 series label），请明确指定目标字段与新值，我再按要求重新装配完整 Figure。

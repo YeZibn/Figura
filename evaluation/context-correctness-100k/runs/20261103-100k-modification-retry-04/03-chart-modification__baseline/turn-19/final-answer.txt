@@ -1,0 +1,47 @@
+## 逐项结构对比（基准：初始 Figure run 1；对照：当前有效 Figure run 6）
+
+| 结构项 | 初始 Figure | 当前有效 Figure | 变化 |
+|---|---|---|---|
+| **Figure 标题** | Regional Operations Dashboard, 2025 | 2025 Regional Sales and Operations (Revised) | **已变化** |
+| **列数** | 2 | 2 | 不变 |
+| **子图数量** | 3 | 3 | 不变 |
+| **面板顺序** | ① revenue_by_region → ② monthly_orders → ③ monthly_conversion | ① revenue_by_region → ② monthly_orders → ③ monthly_conversion | 不变 |
+| 位置排布 | ①左上 ②右上 ③第二行左，右下留白 | 同左 | 不变 |
+| schema_version | 2 | 2 | 不变 |
+
+## 目标子图（Monthly Orders）字段对比
+
+| 字段 | 初始 Figure | 当前有效 Figure | 变化 |
+|---|---|---|---|
+| 子图标题 | Monthly Orders | Monthly Orders (Corrected) | **已变化** |
+| y 轴标签 | Orders | Orders (count) | **已变化** |
+| y 轴类型 | numeric | numeric | 不变 |
+| x 轴类型/标签 | categorical / Month | categorical / Month | 不变 |
+| chart_id | monthly_orders | monthly_orders | 不变 |
+| chart_type | line | line | 不变 |
+| source | Figura synthetic operations dataset | Figura synthetic operations dataset | 不变 |
+| note | 数值取自折线点标注 | July corrected from the source ledger. 其余月份数值取自折线点标注（源图 July 为 105） | **已变化**（原说明以原样片段保留） |
+| 系列 id / label | orders / Orders | orders / Orders | 不变 |
+| 月份类别序列 | Jan…Dec（12 项，顺序一致） | Jan…Dec（12 项，顺序一致） | 不变 |
+| July 值 | 105 | 109 | **已变化**（唯一数据改动） |
+| 其余 11 月值 | 82/90/87/95/101/108/115/123/119/130/138 | 同左 | 不变 |
+
+## 非目标子图的字段与值
+
+| 字段 | Quarterly Revenue | Monthly Conversion Rate |
+|---|---|---|
+| 标题 | Quarterly Revenue by Region = 同左，不变 | Monthly Conversion Rate = 同左，不变 |
+| x 轴（类型/标签） | categorical / Quarter，不变 | categorical / Month，不变 |
+| y 轴（类型/标签） | numeric / Revenue (M USD)，不变 | numeric / Conversion (%)，不变 |
+| chart_type | bar，不变 | line，不变 |
+| source | 同值，不变 | 同值，不变 |
+| note | 数值取自柱顶标注，不变 | 数值取自折线点标注，不变 |
+| 类别 | Q1–Q4，不变 | Jan–Dec，不变 |
+| 系列 | North / South / Central（id、顺序、标签均不变） | conversion / Conversion rate，不变 |
+| 数值 | 12 个柱值全部一致 | 12 个点值数值一致（May、Jul 规格由 3.0 写作 3，等值） |
+
+## 结论
+
+- **发生变化的字段共 5 项**：Figure 标题、目标子图标题、目标子图 y 轴标签、目标子图 note、目标子图 July 值（105 → 109）。
+- **保持不变的项**：列数（2）、面板顺序与位置、子图数量、三个 chart_id、图类型、x 轴类型与标签、三处 source、两个非目标子图的全部字段与数值（转化率仅数值书写形式差异，值相等）。
+- **未生效项**：曾提出的“单列布局”与“Monthly Conversion Rate 置首”两项候选均已撤销，本版本仍为两列、收入→订单→转化率顺序。

@@ -1,0 +1,20 @@
+已读取用户消息中的结构化数据（`dataset_id: regional-operations-2025-2026-v2`）。四个面板都直接以结构化数据提供，来源统一为 “Figura synthetic operations dataset”（即该数据集为合成数据，并非真实运营记录）。汇总如下：
+
+| 面板 | 图表类型 | 坐标系与轴 | 类别轴、矩阵方向 | 系列数与数据点 | 单位 |
+|---|---|---|---|---|---|
+| Quarterly Revenue by Region | 柱状图（`bar`） | 笛卡尔坐标；x = 分类轴 Quarter，y = 数值轴 Revenue | x 轴为 12 个季度，从 24Q1 到 26Q4，按时间顺序排列 | 3 个系列（North、East、West），每个系列 12 个值，共 36 根柱 | 百万美元（M USD） |
+| Monthly Orders in 2026 | 折线图（`line`） | 笛卡尔坐标；x = 分类轴 Month，y = 数值轴 Orders | x 轴为 1–12 月，共 12 个分类点 | 1 个系列（Orders），12 个点 | 订单数（count），无量纲计数 |
+| Orders by Region and Channel | 热力图（`heatmap`） | 矩阵（`matrix`） | 列为渠道：Retail、Web、Partner、Direct；行为区域：North、East、West、Central | 单系列矩阵，4×4，共 16 个单元格 | 订单数（count） |
+| Delivery Time and Satisfaction | 散点图（`scatter`） | 笛卡尔坐标；x = 数值轴 Delivery time，y = 数值轴 Satisfaction | 数值轴无分类维度；每个点代表一个配送批次 | 1 个系列（Delivery batches），24 个点 | x = 小时；y = 满意度得分（score，数据中未给出分制范围） |
+
+方向细节：柱状图为 `orientation: vertical`、`mode: grouped`（同一季度内三地区分组并排）；折线图和散点图都只有一条系列，没有堆叠；热力图的矩阵按行存储，`values` 的第 i 行对应 `y_categories[i]`，每行第 j 列对应 `x_categories[j]`。
+
+**两个 null 的位置与含义**
+
+- 折线图 Orders：**2026 年 3 月**的 `y` 为 `null`。该月订单数缺失，属于缺失观测；它不等于 0，也不应在折线中按零处理或插值补点，因此该系列实际有 11 个可用数值点。
+- 热力图：**North（行）与 Direct（列）交叉处**的单元格为 `null`（`values[0][3]`）。该区域渠道组合的订单数缺失；它不等于 0，因此不应着色为零值单元。其编辑可用单元格为 15 个。
+
+**其他值得注意的结构不一致**（仅据数据本身）
+
+- 地区维度不一致：柱状图的地区为 North、East、West，热力图多出一个 Central，且柱状图没有 Central 的季度营收。
+- 散点图的 x 从 1.1 到 5.7、y 从 4.7 到 2.4，呈明显负向排列；但数据中没有说明这些批次是否重叠、是否属于同一时间窗口，因此无法据此判断样本代表性。

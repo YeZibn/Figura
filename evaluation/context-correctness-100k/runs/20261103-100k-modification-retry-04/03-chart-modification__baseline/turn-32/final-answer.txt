@@ -1,0 +1,158 @@
+# 最终 ChartSpec 摘要草稿
+
+> 性质说明：本稿为**文本摘要草稿**，仅供确认规格之用；本轮未调用装配或渲染，Figure 未发生任何改动。当前生效 Figure 仍是 run 6 版本。
+
+## 1. Figure 级字段
+
+| 字段 | 值 |
+|---|---|
+| schema_version | `2` |
+| title | `2025 Regional Sales and Operations (Revised)` |
+| layout.columns | `2` |
+| charts 数量 | `3` |
+| charts 顺序（即面板顺序） | ① `revenue_by_region` → ② `monthly_orders` → ③ `monthly_conversion` |
+| 版面落实 | ① 左上、② 右上、③ 第二行左列，右下单元格留空（3 面板 ÷ 2 列） |
+
+---
+
+## 2. 子图 ① `revenue_by_region`
+
+| 字段 | 值 |
+|---|---|
+| chart_id | `revenue_by_region` |
+| metadata.chart_type | `bar` |
+| metadata.title | `Quarterly Revenue by Region` |
+| metadata.source | `Figura synthetic operations dataset` |
+| metadata.note | `数值取自柱顶标注` |
+| coordinate_system.kind | `cartesian` |
+| x_axis.kind / label | `categorical` / `Quarter` |
+| y_axis.kind / label | `numeric` / `Revenue (M USD)` |
+| dataset.orientation / mode | `vertical` / `grouped` |
+| categories | `q1`→`Q1`、`q2`→`Q2`、`q3`→`Q3`、`q4`→`Q4` |
+| measurement_refs | `[]` |
+| schema_version | `2` |
+
+**系列与全量数值**
+
+| series.id | series.label | Q1 | Q2 | Q3 | Q4 |
+|---|---|---|---|---|---|
+| `north` | `North` | 34 | 39 | 43 | 50 |
+| `south` | `South` | 27 | 32 | 36 | 41 |
+| `central` | `Central` | 22 | 26 | 31 | 35 |
+
+共 3 系列 × 4 季度 = 12 个值；季度合计 83 / 97 / 110 / 126，全年 416。
+
+---
+
+## 3. 子图 ② `monthly_orders`
+
+| 字段 | 值 |
+|---|---|
+| chart_id | `monthly_orders` |
+| metadata.chart_type | `line` |
+| metadata.title | `Monthly Orders (Corrected)` |
+| metadata.source | `Figura synthetic operations dataset` |
+| metadata.note | `July corrected from the source ledger. 其余月份数值取自折线点标注（源图 July 为 105）` |
+| coordinate_system.kind | `cartesian` |
+| x_axis.kind / label | `categorical` / `Month` |
+| y_axis.kind / label | `numeric` / `Orders (count)` |
+| series.id / series.label | `orders` / `Orders` |
+| measurement_refs | `[]` |
+| schema_version | `2` |
+
+**全量序列（x 标签与 y 值，按绘制顺序）**
+
+| 序 | x | y |
+|---|---|---|
+| 1 | `Jan` | 82 |
+| 2 | `Feb` | 90 |
+| 3 | `Mar` | 87 |
+| 4 | `Apr` | 95 |
+| 5 | `May` | 101 |
+| 6 | `Jun` | 108 |
+| 7 | `Jul` | **109** |
+| 8 | `Aug` | 115 |
+| 9 | `Sep` | 123 |
+| 10 | `Oct` | 119 |
+| 11 | `Nov` | 130 |
+| 12 | `Dec` | 138 |
+
+合计 1 297；月均 ≈ 108.083；Q3 合计 347、Q3 月均 ≈ 115.667。
+
+---
+
+## 4. 子图 ③ `monthly_conversion`
+
+| 字段 | 值 |
+|---|---|
+| chart_id | `monthly_conversion` |
+| metadata.chart_type | `line` |
+| metadata.title | `Monthly Conversion Rate` |
+| metadata.source | `Figura synthetic operations dataset` |
+| metadata.note | `数值取自折线点标注` |
+| coordinate_system.kind | `cartesian` |
+| x_axis.kind / label | `categorical` / `Month` |
+| y_axis.kind / label | `numeric` / `Conversion (%)` |
+| series.id / series.label | `conversion` / `Conversion rate` |
+| measurement_refs | `[]` |
+| schema_version | `2` |
+
+**全量序列（x 标签与 y 值，%）**
+
+| 序 | x | y |
+|---|---|---|
+| 1 | `Jan` | 2.4 |
+| 2 | `Feb` | 2.6 |
+| 3 | `Mar` | 2.5 |
+| 4 | `Apr` | 2.8 |
+| 5 | `May` | 3.0 |
+| 6 | `Jun` | 3.1 |
+| 7 | `Jul` | 3.0 |
+| 8 | `Aug` | 3.3 |
+| 9 | `Sep` | 3.4 |
+| 10 | `Oct` | 3.2 |
+| 11 | `Nov` | 3.6 |
+| 12 | `Dec` | 3.8 |
+
+极值：最高 3.8（Dec）、最低 2.4（Jan）；Jan→Dec **+1.4 个百分点**（相对增幅约 +58.3%，两者不可混用）。
+
+---
+
+## 5. 修订来源说明（July 105 → 109）
+
+| 项 | 内容 |
+|---|---|
+| 源图 | `quarterly-regional-sales.png` |
+| 源图读数 | July = **105**（图上折线点旁的打印标注，OCR 识别一致） |
+| 修订值 | July = **109** |
+| 依据 | 用户核实订单台账后确认；属用户权威断言，本会话未独立查看台账 |
+| 修订命令 | “只将 Monthly Orders 的 July 从 105 更新为 109；在该面板 note 中记录 July corrected from the source ledger.；不要把源图读数 105 从历史事实中抹去；不要修改其他月份” |
+| 影响面 | 仅该面板 1 个数据点；全序列合计 1 293 → 1 297（+4），月均 107.75 → 108.083（+1/3）；Q3 月均 114.333 → 115.667（+4/3） |
+| 溯源留存 | 数据字段为 109；note 同时含修订来源句与“（源图 July 为 105）”括注，105 未被删除 |
+| 性质 | 源图标注与台账实际不符；修订在同一下标位置抬高数值，未移动月份、未改动相邻月份 |
+
+---
+
+## 6. 非目标字段保留说明
+
+以下内容**自初始 Figure 起未被任何修改触及**，本稿要求继续保持：
+
+- **Panel ①（Quarterly Revenue）**：标题、图表类型、X/Y 轴标签、source、note、类别与顺序、三个系列 id/标签/顺序、12 个值、measurement_refs、schema_version —— 全部与初始版本逐字段一致。
+- **Panel ③（Monthly Conversion Rate）**：标题、图表类型、X/Y 轴标签、source、note、类别与顺序、系列 id/标签、12 个点值、measurement_refs、schema_version —— 全部与初始版本逐字段一致（仅存在 `3` 与 `3.0` 的等值写法差异，不改变数值）。
+- **Panel ② 的冻结部分**：`chart_id`、`chart_type`、X 轴（categorical / Month）、Y 轴类型（numeric）、source、系列 id `orders` 与 label `Orders`、Jan–Dec 月份顺序、除 July 外的 11 个值 —— 保持初始值。
+- **Figure 层冻结部分**：`schema_version` = 2、`layout.columns` = 2、子图数量 3、`chart_id` 序列与顺序 —— 不变。
+- **撤销项**：单列布局（`columns = 1`）与 Monthly Conversion Rate 置首两项候选已撤销，不得进入本规格；其判定特征为列数为 1、首个子图为 `monthly_conversion`。
+- **未采用测量**：三子图 `measurement_refs` 均为空；此前对源图收入面板的柱体测量仅用于交叉核对 North Q4 = 50，未纳入 Figure 证据链。
+
+---
+
+## 7. 装备前检查清单（草稿确认后执行）
+
+1. 三处 `metadata.title` 与 Figure 总标题逐字匹配第 1–4 节；
+2. `x_axis.label` 分别为 `Quarter` / `Month` / `Month`；`y_axis.label` 分别为 `Revenue (M USD)` / `Orders (count)` / `Conversion (%)`；
+3. Panel ② 的 `points[6]` 为 `{x:"Jul", y:109}`，`points[5]` 为 `Jun 108`、`points[7]` 为 `Aug 115`；
+4. 三处 source 均为 `Figura synthetic operations dataset`；note 与第 2–4 节一致，含 July 溯源句；
+5. `layout.columns = 2`，charts 顺序为 revenue → orders → conversion，无第四子图；
+6. 装配成功后渲染，核对总标题、两列版面与右下留白、轴标签、图例、source/note 可读性，以及 July 点位于 Jun 与 Aug 之间且略高于 Jun。
+
+如需我按此稿装配并渲染一版新 Figure（内容与 run 6 等价），请明确指示；若仅作确认，本稿到此即完整。

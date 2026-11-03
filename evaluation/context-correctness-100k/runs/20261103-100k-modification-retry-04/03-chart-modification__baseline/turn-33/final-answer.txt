@@ -1,0 +1,18 @@
+我按资源目录中的原始类型化引用读取了**修改前的初始 Figure**（`figure_digest` = `8d5676173f372c0987038efe51334dcd241a35ceb2af780f346ad2c60169ccb1`，总标题 “Regional Operations Dashboard, 2025”，三子图均为初始标题 `Monthly Orders` 等），确认其中 Orders 的 July 仍为 105。
+
+## 指定的四项核对（均取自该 Figure 的字段，非摘要）
+
+| 核对项 | 读取结果 | 位置/依据 |
+|---|---|---|
+| Quarterly Revenue · **North Q4** | **50** | `revenue_by_region.dataset.series[0]`（id `north`，label `North`）的 `values[3]`，完整值 34/39/43/50，对应类别 q4 |
+| Monthly Orders · **June** | **108** | `monthly_orders` 的 `points[5]`，`{x:"Jun", y:108}` |
+| Monthly Orders · **July** | **105**（原始值，尚未修订） | `points[6]`，`{x:"Jul", y:105}` |
+| Monthly Orders · **August** | **115** | `points[7]`，`{x:"Aug", y:115}` |
+| Monthly Conversion · **December** | **3.8**（%） | `monthly_conversion` 的 `points[11]`，`{x:"Dec", y:3.8}` |
+
+## 上下文确认
+
+- 该版本的月度订单 Y 轴标签仍是 `Orders`（非 `Orders (count)`），标题仍是 `Monthly Orders`（非 `(Corrected)`），note 为 `数值取自折线点标注` —— 与“修改前初始版本”一致，July = 105 确认未变。
+- 同一 Figure 的收入面板中，North 四季度为 34、39、43、**50**，即 North Q4 = 50，与源图柱顶标注及此前柱体测量的交叉核对结果相同。
+- 转化率序列末端为 Nov 3.6、Dec **3.8**。
+- 该次读取为完整 Figure 内容，`error` 为 null、`outcome` 为 succeeded；未进行任何装配或修改，当前生效 Figure 未受影响。

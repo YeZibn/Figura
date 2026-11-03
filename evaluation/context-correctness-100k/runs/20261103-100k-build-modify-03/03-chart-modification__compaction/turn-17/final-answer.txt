@@ -1,0 +1,100 @@
+以下是当前最终 Figure 的完整字段清单。当前最终 Figure 的 digest 为 `715644b7…cf4970`，装配引用为 `call_00_kcePLceujkG1CuXKv5LD2306`，渲染引用为 `call_00_ET_4RWjQL46oPJcMguepGip0205`，内容取自为此读取的完整 ChartSpec。
+
+## 总览
+
+- Figure 总标题：**2025 Regional Sales and Operations (Revised)**
+- 布局：**2 列**，3 个子图
+- 顺序：① Quarterly Revenue by Region → ② Monthly Orders (Corrected) ③ Monthly Conversion Rate
+- 三子图 source 统一为：**Figura synthetic operations dataset**
+
+---
+
+## 子图 1｜revenue_by_region（柱状，分组）
+
+| 字段 | 生效值 |
+|---|---|
+| 标题 | Quarterly Revenue by Region |
+| x 轴 | categorical，**无轴标签**；分类 Q1、Q2、Q3、Q4 |
+| y 轴 | numeric，**Revenue (M USD)** |
+| source | Figura synthetic operations dataset |
+| note | 空 |
+
+| 类别 → 系列 | Q1 | Q2 | Q3 | Q4 |
+|---|---|---|---|---|
+| North | 34 | 39 | 43 | 50 |
+| South | 27 | 32 | 36 | 41 |
+| Central | 22 | 26 | 31 | 35 |
+
+（共 4 个类别 × 3 个系列 = 12 个值，与源图柱顶标注一致）
+
+---
+
+## 子图 2｜monthly_orders（折线，单系列）
+
+| 字段 | 生效值 |
+|---|---|
+| 标题 | **Monthly Orders (Corrected)** |
+| x 轴 | categorical，**无轴标签**；类别 Jan→Dec |
+| y 轴 | numeric，**Orders (count)** |
+| source | Figura synthetic operations dataset |
+| note | **July corrected from the source ledger.** |
+
+| 类别（月） | 最终 Figure 值 | 源图标注值 | 说明 |
+|---|---|---|---|
+| Jan | 82 | 82 | 一致 |
+| Feb | 90 | 90 | 一致 |
+| Mar | 87 | 87 | 一致 |
+| Apr | 95 | 95 | 一致 |
+| May | 101 | 101 | 一致 |
+| Jun | 108 | 108 | 一致 |
+| **Jul** | **109** | **105** | **唯一差异：最终采用台账修订值 109** |
+| Aug | 115 | 115 | 一致 |
+| Sep | 123 | 123 | 一致 |
+| Oct | 119 | 119 | 一致 |
+| Nov | 130 | 130 | 一致 |
+| Dec | 138 | 138 | 一致 |
+
+- 修订差值：109 − 105 = **+4**（仅 July 一点）
+- 源图 105 仍是该图的原始读数事实（图像标注与 OCR 均为 105），未被抹除；差异已通过 note 留痕
+- 全年合计：源图 1293 → 最终 1297（+4）
+
+---
+
+## 子图 3｜monthly_conversion_rate（折线，单系列）
+
+| 字段 | 生效值 |
+|---|---|
+| 标题 | Monthly Conversion Rate |
+| x 轴 | categorical，**无轴标签**；类别 Jan→Dec |
+| y 轴 | numeric，**Conversion (%)** |
+| source | Figura synthetic operations dataset |
+| note | 空 |
+
+| 类别（月） | 值（%） |
+|---|---|
+| Jan | 2.4 |
+| Feb | 2.6 |
+| Mar | 2.5 |
+| Apr | 2.8 |
+| May | 3.0 |
+| Jun | 3.1 |
+| Jul | 3.0 |
+| Aug | 3.3 |
+| Sep | 3.4 |
+| Oct | 3.2 |
+| Nov | 3.6 |
+| Dec | 3.8 |
+
+（与源图折线点标注逐位一致，本子图无任何修订）
+
+---
+
+## 生效元数据汇总
+
+| 子图 | 标题 | x 轴标签 | y 轴标签 | source | note |
+|---|---|---|---|---|---|
+| revenue_by_region | Quarterly Revenue by Region | 无 | Revenue (M USD) | Figura synthetic operations dataset | 空 |
+| monthly_orders | Monthly Orders (Corrected) | 无 | Orders (count) | Figura synthetic operations dataset | July corrected from the source ledger. |
+| monthly_conversion_rate | Monthly Conversion Rate | 无 | Conversion (%) | Figura synthetic operations dataset | 空 |
+
+补充两点：三个子图的 x 轴都是分类轴，没有轴名称（月份和季度本身作为类别标签显示）；Figure 总标题只有一处生效值 `2025 Regional Sales and Operations (Revised)`，已于第 6 轮替换原来的 `Regional Operations Dashboard, 2025`，原标题不再生效。

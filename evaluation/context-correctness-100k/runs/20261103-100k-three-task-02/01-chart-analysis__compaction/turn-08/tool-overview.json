@@ -1,0 +1,20 @@
+[
+  {
+    "call_id": "call_00_q35lY3gnNmMX9Rez5N7s2512",
+    "tool_name": "extract_text",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_01_NkuXzImhJV2lEpx9ey9V7897",
+    "tool_name": "extract_text",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_V4Jyf6I9De4RShvaGerm6447",
+    "tool_name": "extract_text",
+    "outcome": "succeeded",
+    "error": null
+  }
+]

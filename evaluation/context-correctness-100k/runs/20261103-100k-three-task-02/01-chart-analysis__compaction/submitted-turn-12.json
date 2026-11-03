@@ -1,0 +1,6 @@
+{
+  "turn": 12,
+  "text": "计算 Jan–Jun、Jul–Dec 的平均转化率，给出 Jan→Dec 的变化百分点、最高值和最低值。明确这是百分点差，不是相对百分比增幅。",
+  "attachment_sha256": [],
+  "provider_id": "deepseek"
+}

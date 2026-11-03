@@ -1,0 +1,251 @@
+{
+  "charts": [
+    {
+      "chart_id": "revenue_by_region",
+      "chart_spec": {
+        "coordinate_system": {
+          "kind": "cartesian",
+          "x_axis": {
+            "kind": "categorical",
+            "label": "Quarter"
+          },
+          "y_axis": {
+            "kind": "numeric",
+            "label": "Revenue (M USD)"
+          }
+        },
+        "dataset": {
+          "categories": [
+            {
+              "id": "q1",
+              "label": "Q1"
+            },
+            {
+              "id": "q2",
+              "label": "Q2"
+            },
+            {
+              "id": "q3",
+              "label": "Q3"
+            },
+            {
+              "id": "q4",
+              "label": "Q4"
+            }
+          ],
+          "mode": "grouped",
+          "orientation": "vertical",
+          "series": [
+            {
+              "id": "north",
+              "label": "North",
+              "values": [
+                34,
+                39,
+                43,
+                50
+              ]
+            },
+            {
+              "id": "south",
+              "label": "South",
+              "values": [
+                27,
+                32,
+                36,
+                41
+              ]
+            },
+            {
+              "id": "central",
+              "label": "Central",
+              "values": [
+                22,
+                26,
+                31,
+                35
+              ]
+            }
+          ]
+        },
+        "metadata": {
+          "chart_type": "bar",
+          "note": "数值取自柱顶标注",
+          "source": "Figura synthetic operations dataset",
+          "title": "Quarterly Revenue by Region"
+        },
+        "schema_version": 2
+      },
+      "measurement_refs": []
+    },
+    {
+      "chart_id": "monthly_orders",
+      "chart_spec": {
+        "coordinate_system": {
+          "kind": "cartesian",
+          "x_axis": {
+            "kind": "categorical",
+            "label": "Month"
+          },
+          "y_axis": {
+            "kind": "numeric",
+            "label": "Orders (count)"
+          }
+        },
+        "dataset": {
+          "series": [
+            {
+              "id": "orders",
+              "label": "Orders",
+              "points": [
+                {
+                  "x": "Jan",
+                  "y": 82
+                },
+                {
+                  "x": "Feb",
+                  "y": 90
+                },
+                {
+                  "x": "Mar",
+                  "y": 87
+                },
+                {
+                  "x": "Apr",
+                  "y": 95
+                },
+                {
+                  "x": "May",
+                  "y": 101
+                },
+                {
+                  "x": "Jun",
+                  "y": 108
+                },
+                {
+                  "x": "Jul",
+                  "y": 109
+                },
+                {
+                  "x": "Aug",
+                  "y": 115
+                },
+                {
+                  "x": "Sep",
+                  "y": 123
+                },
+                {
+                  "x": "Oct",
+                  "y": 119
+                },
+                {
+                  "x": "Nov",
+                  "y": 130
+                },
+                {
+                  "x": "Dec",
+                  "y": 138
+                }
+              ]
+            }
+          ]
+        },
+        "metadata": {
+          "chart_type": "line",
+          "note": "July corrected from the source ledger. 其余月份数值取自折线点标注（源图 July 为 105）",
+          "source": "Figura synthetic operations dataset",
+          "title": "Monthly Orders (Corrected)"
+        },
+        "schema_version": 2
+      },
+      "measurement_refs": []
+    },
+    {
+      "chart_id": "monthly_conversion",
+      "chart_spec": {
+        "coordinate_system": {
+          "kind": "cartesian",
+          "x_axis": {
+            "kind": "categorical",
+            "label": "Month"
+          },
+          "y_axis": {
+            "kind": "numeric",
+            "label": "Conversion (%)"
+          }
+        },
+        "dataset": {
+          "series": [
+            {
+              "id": "conversion",
+              "label": "Conversion rate",
+              "points": [
+                {
+                  "x": "Jan",
+                  "y": 2.4
+                },
+                {
+                  "x": "Feb",
+                  "y": 2.6
+                },
+                {
+                  "x": "Mar",
+                  "y": 2.5
+                },
+                {
+                  "x": "Apr",
+                  "y": 2.8
+                },
+                {
+                  "x": "May",
+                  "y": 3
+                },
+                {
+                  "x": "Jun",
+                  "y": 3.1
+                },
+                {
+                  "x": "Jul",
+                  "y": 3
+                },
+                {
+                  "x": "Aug",
+                  "y": 3.3
+                },
+                {
+                  "x": "Sep",
+                  "y": 3.4
+                },
+                {
+                  "x": "Oct",
+                  "y": 3.2
+                },
+                {
+                  "x": "Nov",
+                  "y": 3.6
+                },
+                {
+                  "x": "Dec",
+                  "y": 3.8
+                }
+              ]
+            }
+          ]
+        },
+        "metadata": {
+          "chart_type": "line",
+          "note": "数值取自折线点标注",
+          "source": "Figura synthetic operations dataset",
+          "title": "Monthly Conversion Rate"
+        },
+        "schema_version": 2
+      },
+      "measurement_refs": []
+    }
+  ],
+  "layout": {
+    "columns": 2
+  },
+  "schema_version": 2,
+  "title": "Regional Operations Dashboard, 2025"
+}

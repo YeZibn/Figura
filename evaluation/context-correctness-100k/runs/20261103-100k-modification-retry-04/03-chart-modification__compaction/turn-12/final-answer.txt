@@ -1,0 +1,31 @@
+我已分别读取初始 Figure（run `a04fac4cd27048969dbe04f4a5877817`）和当前最终 Figure（run `908399490058411e91a60cdf906311d8`）中 `quarterly_revenue` 子图的完整 spec，并逐字段比对。
+
+## 逐系列核对（数值，单位 M USD）
+
+| 系列 | Q1 | Q2 | Q3 | Q4 | 结论 |
+|---|---|---|---|---|---|
+| North | 34 | 39 | 43 | 50 | 一致 |
+| South | 27 | 32 | 36 | 41 | 一致 |
+| Central | 22 | 26 | 31 | 35 | 一致 |
+
+三个系列 × 四个季度共 12 个数值全部一致，系列的顺序也相同（North → South → Central，`id` 与 `label` 均未变）；类别同样为 Q1、Q2、Q3、Q4，`id` 和 `label` 均未变。
+
+## 其他字段核对
+
+| 字段 | 初始 Figure | 当前 Figure | 是否变化 |
+|---|---|---|---|
+| 子图标题 `metadata.title` | Quarterly Revenue by Region | Quarterly Revenue by Region | 无变化 |
+| source `metadata.source` | Figura synthetic operations dataset | Figura synthetic operations dataset | 无变化 |
+| note `metadata.note` | 空字符串 `""` | 空字符串 `""` | 无变化 |
+| 图表类型 `metadata.chart_type` | bar | bar | 无变化 |
+| 纵轴标签 | Revenue (M USD) | Revenue (M USD) | 无变化 |
+| 横轴类型 | categorical（无轴标题） | categorical（无轴标题） | 无变化 |
+| 数据结构 | vertical、grouped | vertical、grouped | 无变化 |
+| `schema_version` | 2 | 2 | 无变化 |
+| `measurement_refs` | 空 | 空 | 无变化 |
+
+## 结论
+
+本轮对这个柱图没有任何改动：数值、系列与类别、标题、source、note（仍为空）、轴标签、图表类型和排布方式全部与初始 Figure 完全相同，该子图在历次重装配中始终原样传递。本次修改只涉及另外两个面板的标题与轴名、订单 July 值及其 note、以及 Figure 总标题。
+
+需要说明一点边界：以上核对针对 Figure 的结构化内容（规范记录），不是逐像素图像对比；但既然规范中该子图的字段完全一致，绘制的图形也就相同。初始版本的渲染图与最终版本的渲染图，我没有在同一次请求中同时载入做像素级对照。

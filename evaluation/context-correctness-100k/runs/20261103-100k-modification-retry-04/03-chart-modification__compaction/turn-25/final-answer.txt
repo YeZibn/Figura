@@ -1,0 +1,73 @@
+依据当前生效 Figure（run `908399490058411e91a60cdf906311d8`）完整内容逐字段核对。
+
+## 一、允许变化的 5 个字段（逐项核对结果）
+
+| # | 字段 | 初始值 | 当前值 | 核对结果 |
+|---|---|---|---|---|
+| 1 | Figure `title` | Regional Operations Dashboard, 2025 | 2025 Regional Sales and Operations (Revised) | ✅ 已按授权变化，无额外改动 |
+| 2 | `monthly_orders.metadata.title` | Monthly Orders | Monthly Orders (Corrected) | ✅ 已按授权变化 |
+| 3 | `monthly_orders.y_axis.label` | Orders | Orders (count) | ✅ 已按授权变化 |
+| 4 | `monthly_orders` July 值 | 105 | 109 | ✅ 已按授权变化，且仅此一点数值变动 |
+| 5 | `monthly_orders.metadata.note` | `""` | July corrected from the source ledger. | ✅ 已按授权写入 |
+
+## 二、其余字段声明保留初始值，并逐项核对（共 33 行）
+
+**Figure 级（5 行）**
+
+| 字段 | 初始值 | 当前值 | 结果 |
+|---|---|---|---|
+| `schema_version` | 2 | 2 | ✅ |
+| `layout.columns` | 2 | 2 | ✅ |
+| 子图数量 | 3 | 3 | ✅ |
+| 子图 id 及顺序 | quarterly_revenue → monthly_orders → monthly_conversion | 同 | ✅ |
+| 各子图 `measurement_refs` | `[]` | `[]` | ✅ |
+
+**Quarterly Revenue（11 行）**
+
+| 字段 | 初始值 | 当前值 | 结果 |
+|---|---|---|---|
+| `metadata.title` | Quarterly Revenue by Region | 同 | ✅ |
+| `metadata.chart_type` | bar | 同 | ✅ |
+| `metadata.source` | Figura synthetic operations dataset | 同 | ✅ |
+| `metadata.note` | `""` | 同 | ✅ |
+| `y_axis.kind` / `label` | numeric / Revenue (M USD) | 同 | ✅ |
+| `x_axis.kind` / `label` | categorical / 无 | 同 | ✅ |
+| `coordinate_system.kind` | cartesian | 同 | ✅ |
+| `dataset.orientation` / `mode` | vertical / grouped | 同 | ✅ |
+| `categories` | q1–q4，Q1–Q4 | 同 | ✅ |
+| `series` 的 id / label | north/North、south/South、central/Central | 同 | ✅ |
+| `series` 的 12 个 values | 34/39/43/50、27/32/36/41、22/26/31/35 | 同 | ✅ |
+
+**Monthly Orders · 除允许改动外的字段（7 行）**
+
+| 字段 | 初始值 | 当前值 | 结果 |
+|---|---|---|---|
+| `metadata.chart_type` | line | 同 | ✅ |
+| `metadata.source` | Figura synthetic operations dataset | 同（保留，未被 note 取代） | ✅ |
+| `coordinate_system.kind` | cartesian | 同 | ✅ |
+| `x_axis.kind` / `label` | categorical / 无 | 同 | ✅ |
+| `series[0].id` / `label` | orders / Orders | 同 | ✅ |
+| 其余 11 个点位（x 与 y、顺序） | Jan 82、Feb 90、Mar 87、Apr 95、May 101、Jun 108、Aug 115、Sep 123、Oct 119、Nov 130、Dec 138 | 逐点同 | ✅ |
+| `measurement_refs` | `[]` | 同 | ✅ |
+
+**Monthly Conversion Rate（10 行）**
+
+| 字段 | 初始值 | 当前值 | 结果 |
+|---|---|---|---|
+| `metadata.title` | Monthly Conversion Rate | 同 | ✅ |
+| `metadata.chart_type` | line | 同 | ✅ |
+| `metadata.source` | Figura synthetic operations dataset | 同 | ✅ |
+| `metadata.note` | `""` | 同 | ✅ |
+| `y_axis.kind` / `label` | numeric / Conversion (%) | 同 | ✅ |
+| `x_axis.kind` / `label` | categorical / 无 | 同 | ✅ |
+| `coordinate_system.kind` | cartesian | 同 | ✅ |
+| `series[0].id` / `label` | conversion / Conversion Rate | 同 | ✅ |
+| 12 个点位（x、y、顺序） | Jan 2.4 … Dec 3.8 | 逐点同 | ✅ |
+| `measurement_refs` | `[]` | 同 | ✅ |
+
+## 三、核对结论
+
+- 允许变化的 5 个字段：**全部只出现预期变化，无越界修改**。
+- 其余 33 项保留字段/字段组：**全部与初始值逐字符、逐数值一致，0 项偏差**。
+- 交叉印证：当前渲染 digest `b8194b22…0b1056` 与上一次渲染的 PNG 字节完全一致（sha256 `dfb13a91…`），说明自上次渲染以来 Figure 内容无漂移；渲染图中可见的唯一数据层变化是 July 点从 105 位置抬到 109 位置。
+- 需要如实标注的一点：July=109 的来源仅以 note 文字体现，`measurement_refs` 仍为空，即 Figure 内没有嵌入台账凭据或测量引用；105 作为源图读数的历史事实保存在初始版 Figure 与读取记录中，当前版本不展示该原值。

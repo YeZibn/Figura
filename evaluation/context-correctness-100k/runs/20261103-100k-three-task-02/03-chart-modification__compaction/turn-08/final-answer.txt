@@ -1,0 +1,12 @@
+最终 Figure 已装配（未绘制 PNG）。
+
+**仅以下内容为更新项**
+- Figure 总标题：`2025 Regional Sales and Operations (Revised)`
+- Monthly Orders：标题 `Monthly Orders (Corrected)`、轴标签 `Orders (count)`、July 值 `109`、note `July corrected from the source ledger.`
+
+**保持与初始 Figure 完全一致**
+- Quarterly Revenue by Region：标题、`Revenue (M USD)` 轴标签、Q1–Q4 类别、North/South/Central 三系列及全部数值、source、空 note
+- Monthly Conversion Rate：标题、`Conversion (%)` 轴标签、Jan–Dec 分类、全部十二个转化率值、source、空 note
+- 布局 `columns = 2`，面板顺序 营收 → 订单 → 转化率
+
+**引用**：run `07a98a5a…`，call `call_00_GLh2Kunm0TuzlVHfTsIf8643`，digest `ec2c08bb…673a19`（与上一版同 digest，内容一致）。候选布局未应用。

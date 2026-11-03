@@ -1,0 +1,46 @@
+我重新读取了当前 Figure 和初始 Figure 的完整 ChartSpec，并逐字段比对，核对完成。本轮**未执行渲染**，也未做任何装配修改。
+
+## 1. Figure 总标题 ✅
+- 当前：`2025 Regional Sales and Operations (Revised)`
+- 初始：`Regional Operations Dashboard, 2025`
+- 这是唯一一次已获授权的标题替换，符合第 6 轮要求。
+
+## 2. 布局 ✅
+- `layout.columns = 2`（两列），与初始一致；单列候选仍处于撤销状态，未生效。
+
+## 3. 面板顺序 ✅
+1. `revenue_by_region` — Quarterly Revenue by Region
+2. `monthly_orders` — Monthly Orders (Corrected)
+3. `monthly_conversion_rate` — Monthly Conversion Rate
+与初始完全一致，转换率仍在末位。
+
+## 4. 三个子图数据 ✅
+
+**Quarterly Revenue**（4 个类别 × 3 个系列）：North 34/39/43/50、South 27/32/36/41、Central 22/26/31/35 —— 与初始逐位相同。
+
+**Monthly Orders**（12 个点）：82、90、87、95、101、108、**109**、115、123、119、130、138 —— 仅 July 与初始（105）不同，其余 11 点逐位相同。
+
+**Monthly Conversion Rate**（12 个点）：2.4、2.6、2.5、2.8、3.0、3.1、3.0、3.3、3.4、3.2、3.6、3.8 —— 与初始逐位相同。
+
+## 5. source / note ✅
+
+| 子图 | source | note |
+|---|---|---|
+| Quarterly Revenue | Figura synthetic operations dataset | 空（与初始同为空） |
+| Monthly Orders | Figura synthetic operations dataset（未变） | `July corrected from the source ledger.`（新增） |
+| Monthly Conversion Rate | Figura synthetic operations dataset | 空（与初始同为空） |
+
+## 6. 修订来源 ✅
+- 修订范围只限 July：105 → 109（+4）。
+- 修订依据已写入 Monthly Orders 的 note（`July corrected from the source ledger.`），并保留了原 source 与其余元数据，未被覆盖。
+- 源图的原始读数 105 依然可追溯（早期版本 July=105，digest `711d433b…`），未从历史事实中删除。
+
+## 7. 目标外图表零变化 ✅
+- **Quarterly Revenue**：标题、chart_type（bar）、分组/垂直模式、Q1–Q4 分类、三系列 id/label/values、y 轴 `Revenue (M USD)`、source、note、measurement_refs 全部与初始一致。
+- **Monthly Conversion Rate**：标题、chart_type（line）、12 个点的值、y 轴 `Conversion (%)`、source、note、series 标识全部与初始一致。
+- Figure 级 `schema_version`（2）、子图数量（3）、chart_id 均未变。
+
+## 结论
+7 项检查全部通过，未发现越界改动或字段漂移。当前 Figure（`call_00_kcePLceujkG1CuXKv5LD2306`，digest `715644b7…cf4970`，已有渲染 `call_00_ET_4RWjQL46oPJcMguepGip0205`）内容与上述核对完全一致。
+
+如需我把这一版重新渲染一次作为最终交付图像，告诉我即可；在收到确认前我不会重复渲染或重新装配。

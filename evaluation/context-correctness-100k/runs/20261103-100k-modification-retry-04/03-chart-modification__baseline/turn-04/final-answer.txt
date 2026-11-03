@@ -1,0 +1,12 @@
+已撤销该候选方案。单列布局和把 Monthly Conversion Rate 移到第一位这两项改动都不会出现在最终 Figure 中，当前 Figure 保持原样，不需要重新装配。
+
+**最终 Figure 的生效配置**
+- 布局：两列（`columns: 2`）。
+- 面板顺序：① Quarterly Revenue by Region（分组柱状图）→ ② Monthly Orders (Corrected)（折线图）→ ③ Monthly Conversion Rate（折线图）。
+- 位置：① 在左上，② 在右上，③ 在第二行左侧，右下留白。
+- 整体标题：Regional Operations Dashboard, 2025。
+- ② 的 Y 轴标签：Orders (count)。
+- 各子图 source：Figura synthetic operations dataset。
+- 数据：与上一轮一致，未变。收入 North、South、Central 从 Q1 到 Q4 分别为 34、27、22、39、32、26、43、36、31、50、41、35；订单 82–138；转化率 2.4–3.8。
+
+也就是说，“单列”和“Conversion Rate 置首”这两项都不会进入最终结果；当前生效的 Figure 就是两列布局、按收入柱状图→订单折线图→转化率折线图排列的上一版，其渲染结果已确认标题和轴名正确显示。

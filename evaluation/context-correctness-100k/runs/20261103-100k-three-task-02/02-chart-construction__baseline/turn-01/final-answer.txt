@@ -1,0 +1,20 @@
+已直接读取用户消息中的 JSON，无需额外调用图像工具。以下按面板逐项说明。
+
+**数据集**：`regional-operations-2025-2026-v2`；四个面板的 `source` 均为 “Figura synthetic operations dataset”（合成运营数据集，非真实业务记录）。
+
+| # | chart_id / 类型 | 类别轴与坐标 | 系列或矩阵方向 | 数据点/单元格数量 | 单位 |
+|---|---|---|---|---|---|
+| 1 | `quarterly_revenue` — 柱状图（垂直、分组） | x：分类轴 Quarter（季度）；y：数值轴 Revenue | 垂直分组柱，3 个系列：North、East、West | 12 个季度类别 × 3 系列 = 36 个数值（每系列 12 个），无 null | 百万美元（M USD） |
+| 2 | `monthly_orders` — 折线图 | x：分类轴 Month（月）；y：数值轴 Orders | 单一系列 “Orders”，按 12 个月顺序连线 | 12 个点，其中 **1 个 null** | 订单数（count） |
+| 3 | `channel_heatmap` — 热力图（矩阵） | x：4 个渠道（Retail、Web、Partner、Direct）；y：4 个地区（North、East、West、Central） | 矩阵 4×4，行=地区、列=渠道 | 16 个单元格，其中 **1 个 null** | 单元格值为订单数（count） |
+| 4 | `delivery_scatter` — 散点图 | x：数值轴 Delivery time（小时）；y：数值轴 Satisfaction（分数） | 单一系列 “Delivery batches”，每点代表一个配送批次 | 24 个点（x 从 1.1 到 5.7，步长约 0.2），无 null | x：小时（hours）；y：满意度得分（score） |
+
+**时间覆盖**
+- Revenue：12 个季度，24Q1–26Q4 连续覆盖（2024Q1 至 2026Q4），无缺失季度；数值随时间单调上升（North 41→75，East 35→69，West 28→60）。
+- Orders：2026 年 12 个月（Jan–Dec）全覆盖，但 3 月没有观测值。
+
+**两个 null（均为缺失观测，不等于 0，也不应插值）**
+1. `monthly_orders` → 系列 “Orders” 中 `{"x": "Mar", "y": null}`：2026 年 3 月订单量未记录。折线在该点应断开/留空，而不是落到 0 或按 2 月与 4 月线性补齐。
+2. `channel_heatmap` → `values[0][3]`，即 y=**North**、x=**Direct** 这一单元格为 null：北部地区直营渠道的订单数未记录。热力图中该格应显示为“无数据”，不可着色为 0 计数。
+
+其余说明：面板 note 亦明确标注了这两处缺失的语义——“A null y value is a missing observation”（折线）与“Cell values are order counts”（热力图，未记录即非零计数）。因数据表中不存在 `chart_type` 之外的度量换算字段，上述单位均按 note 与轴标签原样表述，未做任何数值推断。

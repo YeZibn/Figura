@@ -1,0 +1,6 @@
+{
+  "turn": 6,
+  "text": "将 Figure 标题改为 `2025 Regional Sales and Operations (Revised)`。保持最终列数为 2，保持图表顺序为 Quarterly Revenue、Monthly Orders、Monthly Conversion Rate。",
+  "attachment_sha256": [],
+  "provider_id": "deepseek"
+}

@@ -1,0 +1,16 @@
+已按要求重新装配完整 Figure 并完成绘制。
+
+**本次修改（仅涉及 Monthly Orders 面板）**
+- 面板标题：`Monthly Orders` → `Monthly Orders (Corrected)`
+- 纵轴标签：`Orders` → `Orders (count)`
+
+**保持不变的内容**
+- Figure 总标题：`Regional Operations Dashboard, 2025`；两列布局，三个子图顺序与位置不变
+- 季度柱图（Quarterly Revenue by Region）：North/South/Central × Q1–Q4，数值仍为 34/27/22、39/32/26、43/36/31、50/41/35，纵轴 `Revenue (M USD)`
+- 月度订单折线：Jan–Dec 的 12 个点数值未动（82、90、87、95、101、108、105、115、123、119、130、138），仅标题与轴名变化
+- 转化率折线（Monthly Conversion Rate）：2.4→3.8 的 12 个点及 `Conversion (%)` 轴名未动
+- 三个子图的 source 仍为 `Figura synthetic operations dataset`
+
+回看生成图确认：新标题与 `Orders (count)` 轴名均已显示，第二、三面板的月份标签、折线与刻度完整可读、无遮挡，其余两个面板外观与上一版一致。
+
+补充说明：`Orders (count)` 是本次按你的要求设定的轴名，并非源图中读出的原标签（源图为 `Orders`）；`(Corrected)` 同样属于你指定的标注，图内数据本身未作任何改动。

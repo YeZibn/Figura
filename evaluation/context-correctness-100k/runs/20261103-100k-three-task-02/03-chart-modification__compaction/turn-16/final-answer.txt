@@ -1,0 +1,24 @@
+**检查完成：状态为已撤销，且本轮未做任何装配或渲染操作。** 我没有重新装配任何 Figure，候选未被写入。
+
+## 候选状态
+
+| 候选 | 提出 | 撤销 | 当前状态 |
+|---|---|---|---|
+| 单列布局（`columns = 1`） | 第 3 轮，仅记录为候选、未应用 | 第 4 轮明确撤销 | **已撤销**，不进入最终 Figure |
+| Monthly Conversion Rate 置于第一位 | 第 3 轮，仅记录为候选、未应用 | 第 4 轮明确撤销 | **已撤销**，不进入最终 Figure |
+
+这两项从未落成任何 Figure 版本——第 3 轮只做了文字记录，没有调用装配，因此不存在需要回滚的产物；第 4 轮的撤销是对「尚未生效的意图」的作废。
+
+## 当前 Figure 中的实际状态（与撤销结果一致）
+
+- 布局：`columns = 2`（两列）
+- 顺序：① revenue_by_region（Quarterly Revenue by Region）→ ② monthly_orders（Monthly Orders (Corrected)）→ ③ monthly_conversion_rate（Monthly Conversion Rate）
+- 即营收与订单在第一行，转化率在第二行左侧；转化率**不是**第一张。
+
+## 版本未被改动的证据
+
+- 有效 Figure 仍为 run `07a98a5a…`，call `call_00_GLh2Kunm0TuzlVHfTsIf8643`，digest `ec2c08bb…673a19`——与上一轮字段核对时完全相同。
+- 若本轮误将候选装配，digest 必然改变并产生新版本；digest 未变说明 Figure 保持原状。
+- 本轮工具调用数为 0（既未 `assemble_chart_figure`，也未 `render_chart_figure`），因此不存在把候选写回的可能。
+
+后续任何修改我都会继续以「两列 + 原面板顺序」为前提；如果某次请求看起来会违背这两条约束，我会先向你确认，而不是直接装配。

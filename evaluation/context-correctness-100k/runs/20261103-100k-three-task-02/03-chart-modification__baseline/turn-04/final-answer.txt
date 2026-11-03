@@ -1,0 +1,15 @@
+已撤销，方案作废；两项候选改动都没有进入任何已装配的 Figure。
+
+**当前唯一生效版本**（digest `50b7921a…3f44d`，run e468…/call_00_1dg2z8hO0ZiXGFNkbEtz5576，已核对完整内容）
+- 整体标题：Regional Operations Dashboard, 2025
+- 布局：`columns: 2`（两列）
+- 面板顺序：`quarterly_revenue` → `monthly_orders` → `monthly_conversion`
+- 排布结果：第 1 行左＝Quarterly Revenue by Region（柱状），右＝Monthly Orders (Corrected)（折线）；第 2 行左＝Monthly Conversion Rate（折线），右侧留空
+
+**明确排除的两项候选**
+1. 单列布局 —— 不采用，保留两列。
+2. 将 Monthly Conversion Rate 移到首位并重排 —— 不采用，面板顺序维持收入 → 订单 → 转化率。
+
+**数据与标签未变**：Revenue (M USD) 的 North 34/39/43/50、South 27/32/36/41、Central 22/26/31/35；订单 82…138 的 12 个值；转化率 2.4…3.8 的 12 个值；订单面板标题 Monthly Orders (Corrected)、y 轴 Orders (count) 照旧生效。
+
+无需重新装配或渲染：撤销候选并未应用任何改动，现有 Figure 与上一轮已生成的 PNG 即为最终结果。若你希望我把“两列 + 原顺序”作为后续修改的固定约束继续遵守，我会在后续操作中依此保留。

@@ -1,0 +1,6 @@
+{
+  "turn": 13,
+  "text": "比较 July=105 的源图序列和 July=109 的修订序列。计算修订差值、全年月均 Orders 的变化、Q3 月均 Orders 的变化；说明除 July 外其他月份保持原值。",
+  "attachment_sha256": [],
+  "provider_id": "deepseek"
+}

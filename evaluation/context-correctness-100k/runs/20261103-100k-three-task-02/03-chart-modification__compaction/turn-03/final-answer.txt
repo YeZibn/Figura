@@ -1,0 +1,27 @@
+已记录为候选方案，**未应用**——没有重新装配，也没有改动任何 Figure。
+
+## 候选方案（待评估，未生效）
+
+- 名称：单列 + 转化率置顶
+- 布局：`layout.columns = 1`（当前为 2）
+- 子图顺序：① monthly_conversion_rate（Monthly Conversion Rate）→ ② revenue_by_region（Quarterly Revenue by Region）→ ③ monthly_orders（Monthly Orders (Corrected)）
+- 数据内容：不动。三个子图的标题、轴标签、类别、系列、全部数值与 source 均保持现状，仅改变排列与列数。
+- 若将来应用，会得到新的 figure digest，替代现版；现版 Figure 本身不可就地修改，需提交完整新 Figure。
+
+## 当前仍生效的版本
+
+- Figure：Regional Operations Dashboard, 2025
+- 引用：run `17a90edd…`，call `call_00_nTq8swDbHmpEQ24HLCmA1633`，digest `6476105381bcf3639409ad554f2ceaebb85e25fd0a84e7866687683c07b6325c`
+- 布局：**两列**（`columns = 2`）
+- 面板顺序（自上而下、从左到右）：
+ 1. `revenue_by_region` — Quarterly Revenue by Region（分组柱状图）
+ 2. `monthly_orders` — Monthly Orders (Corrected)（折线图，y 轴 Orders (count)）
+ 3. `monthly_conversion_rate` — Monthly Conversion Rate（折线图）
+ 即第一行两张图，第三张单独位于第二行左侧。
+- 状态：已装配通过校验，但**尚未渲染为 PNG**。
+
+## 初步影响提示
+
+若将来落单列，三张图会改为各占整行、单图宽度和高度都会变大，数值标签与月度 x 轴标签的可读性会提升；代价是纵向总高度约为原来的 1.5–2 倍。把转化率置顶会让「比率（% 量级）」先于「营收/订单（绝对量级）」呈现，读者第一眼看到的是相对指标而非规模指标——若这份面板主要用于汇报规模，置顶顺序可能与叙事重点不一致，这是评估时需要你确认的点。
+
+需要我把这个候选也写成一份完整规格清单（便于后续一键应用），或继续对比第二种候选布局吗？

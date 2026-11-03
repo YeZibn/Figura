@@ -1,0 +1,25 @@
+## 仪表盘总览
+
+图片是 2×2 的四个面板，总标题为 **Regional Sales and Operations Dashboard, 2025**（位于顶部居中）。
+
+| 位置 | 面板标题 | 图表类型 | X 轴含义 | Y 轴含义（单位） | 备注 |
+|---|---|---|---|---|---|
+| 左上 | Quarterly Revenue by Region | 分组柱状图（3 系列：North、South、Central，蓝、橙、绿） | 季度 Q1–Q4（无轴标题） | Revenue (M USD)，即百万美元；刻度 0–60，间隔 10 | 每根柱顶有数值标注 |
+| 右上 | Monthly Orders | 折线图（带数据点） | 月份 Jan–Dec（无轴标题） | Orders (count)，即订单量（单数）；刻度约 120–220，间隔 20 | 每点有数值标注 |
+| 左下 | Monthly Conversion Rate | 折线图（带数据点） | 月份 Jan–Dec（无轴标题） | Conversion (%)，即转化率（%）；刻度 3.25–5.00，间隔 0.25 | 每点有数值标注 |
+| 右下 | Returns by Product and Region | 热力图（单元格内标数值） | 列：North、South、Central、Online（区域/渠道） | 行：Electronics、Home、Sports（产品类别） | 右侧色条 Returned units，即退货件数；范围 3–11 |
+
+热力图单元格数值为：Electronics 9、7、5、11；Home 6、8、4、9；Sports 3、4、6、5，均按 North、South、Central、Online 的顺序读取。
+
+## Quarterly Revenue by Region：North／South／Central 的 Q1–Q4（Revenue，M USD）
+
+| 季度 | North | South | Central |
+|---|---|---|---|
+| Q1 | 42 | 36 | 31 |
+| Q2 | 47 | 44 | 39 |
+| Q3 | 53 | 49 | 45 |
+| Q4 | 61 | 58 | 50 |
+
+**数值来源**：这 12 个数全部来自图上直接印在每根柱顶的数据标签，不是根据柱高或刻度估算出来的。逐条 OCR 识别均以约 0.999 的置信度检出并与柱子上可见文字一致（如 Q1 的 42、36、31，Q4 的 61、58、50），也符合柱高递减次序（每个季度内部均为 North > South > Central）。由于系列归属由图例和柱色、排列一致可辨，未再另做几何测量。
+
+使用限制：OCR 把标题中的空格合并成整词（如“QuarterlyRevenue by Region”“MonthlyOrders”），原图实际显示为带空格的标题，上表已按可见形式书写；除图上标注的数值外，各轴没有其他刻度或单位说明可供进一步推算。

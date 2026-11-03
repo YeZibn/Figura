@@ -1,0 +1,37 @@
+## 仪表盘结构
+
+整体标题：**Regional Sales and Operations Dashboard, 2025**（区域销售与运营仪表盘，2025）。四个面板采用 2×2 布局：
+
+| 位置 | 标题 | 图表类型 | 横轴 | 纵轴与单位 | 图例／编码 |
+|---|---|---|---|---|---|
+| 左上 | Quarterly Revenue by Region | 分组柱状图 | 季度 Q1–Q4 | Revenue (M USD)，单位为百万美元，刻度 0–60 | North（蓝）、South（橙）、Central（绿） |
+| 右上 | Monthly Orders | 带数据点的折线图 | 月份 Jan–Dec | Orders (count)，单位为订单笔数，刻度 120–220 | 单序列，蓝色 |
+| 左下 | Monthly Conversion Rate | 带数据点的折线图 | 月份 Jan–Dec | Conversion (%)，单位为百分比，刻度 3.25–5.00 | 单序列，橙色 |
+| 右下 | Returns by Product and Region | 热力图 | 区域：North、South、Central、Online | 单元格数值表示退货件数，色标标题为 Returned units，范围 3–11 | 行：Electronics、Home、Sports |
+
+（OCR 把左上角标题中的空格漏掉，识别为 “QuarterlyRevenue by Region”；图像中实际为 “Quarterly Revenue by Region”。色标标题 “Returned units” 在 OCR 中为竖排，识别为 “Returnedunits”。）
+
+## Quarterly Revenue by Region：North、South、Central 的 Q1–Q4 数值
+
+| 季度 | North | South | Central |
+|---|---|---|---|
+| Q1 | 42 | 36 | 31 |
+| Q2 | 47 | 44 | 39 |
+| Q3 | 53 | 49 | 45 |
+| Q4 | 61 | 58 | 50 |
+
+单位：M USD（百万美元）。
+
+**数值来源**：这些数字并非通过柱子高度反推出的结果；它们直接来自每根柱子上方印着的数值标注。OCR 以 0.995 以上的置信度读出了全部 12 个标签（42/36/31、47/44/39、53/49/45、61/58/50），其横向位置与三根柱的位置一一对应：每组从左到右依次为蓝、橙、绿，与图例 North、South、Central 的顺序一致。
+
+几何核对也支持这一对应关系：按纵轴刻度（每 10 个单位约 118 px）换算，柱高约为 41.7、46.7、52.6、60.6（North 各季度）等，与标注值相差不超过 1 个单位，属于像素读数误差。因此这组数值可以视为图上明确标注的数据。
+
+另外两个面板的读数如下，同样来自图上数据标注：
+- **Monthly Orders（单笔/月）**：Jan 120、Feb 132、Mar 128、Apr 145、May 151、Jun 167、Jul 164、Aug 178、Sep 191、Oct 187、Nov 205、Dec 219，整体上升，10 月略回落。
+- **Monthly Conversion Rate（%）**：Jan 3.2、Feb 3.5、Mar 3.3、Apr 3.8、May 4.0、Jun 4.2、Jul 4.1、Aug 4.4、Sep 4.6、Oct 4.5、Nov 4.8、Dec 5.1。
+- **Returns 热力图**：Electronics 为 9、7、5、11；Home 为 6、8、4、9；Sports 为 3、4、6、5（列序 North、South、Central、Online）。
+
+## 需要说明的两点不确定性
+
+1. 热力图单元格内的数字**没有完整被 OCR 覆盖**（仅零星识别出 “6”“3”），上表的退货件数来自我对原图的目视读取，并与色标 3–11 的深浅方向吻合；热力图测量虽检出网格，但把相邻单元格合并成 500×500 大块、行列标签关联失败，因此其解析结果不能作为数值依据。
+2. 柱状图测量中的自动纵轴校准存在轻微偏差（部分柱高换算成 40.87、59.39 等），并且把系列标签错配为 “36”“45”，因此这里以图上印刷的标注值为准，未采用测量的换算值。

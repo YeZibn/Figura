@@ -1,0 +1,42 @@
+## 一、四类信息的状态划分
+
+**A. 原始图像读数（源图 `quarterly-regional-sales.png`，OCR 与目视一致）**
+- 面板标题：Quarterly Revenue by Region / Monthly Orders / Monthly Conversion Rate
+- 轴名：Revenue (M USD) / Orders / Conversion (%)
+- 季度收入（North/South/Central）：Q1 34/27/22、Q2 39/32/26、Q3 43/36/31、Q4 50/41/35
+- 订单：Jan 82、Feb 90、Mar 87、Apr 95、May 101、Jun 108、**Jul 105**、Aug 115、Sep 123、Oct 119、Nov 130、Dec 138
+- 转化率：2.4、2.6、2.5、2.8、3.0、3.1、3.0、3.3、3.4、3.2、3.6、3.8
+- 源图主标题：Regional Sales and Operations Dashboard, 2025；子图来源标注为合成操作系统数据集
+
+**B. 当前有效修改（最终 Figure，run `908399490058411e91a60cdf906311d8`，digest `b8194b22…0b1056`）**
+1. 面板标题 `Monthly Orders` → `Monthly Orders (Corrected)`（你的明确重命名要求，非源图原文字）
+2. 该面板纵轴 `Orders` → `Orders (count)`（同为你的重命名要求）
+3. July 订单 105 → **109**（台账核实后的修订值），并在该面板 note 写入 `July corrected from the source ledger.`
+4. Figure 总标题 `Regional Operations Dashboard, 2025` → `2025 Regional Sales and Operations (Revised)`
+5. 布局与顺序：两列；Quarterly Revenue → Monthly Orders (Corrected) → Monthly Conversion Rate
+- 除 July 外，全部数据与源图读数一致，未作修订
+
+**C. 已撤销候选（未出现在最终 Figure，也未生成过图像）**
+- 改为单列（`columns: 1`）
+- 把 Monthly Conversion Rate 移到首位
+- 状态：第 3 轮仅登记为候选，第 4 轮明确撤销，任何版本中均未应用
+
+**D. 用户确认的修订值**
+- 仅一项：Monthly Orders 的 July = **109**（依据订单台账，明确覆盖源图读出的 105）；其余月份与其余面板无用户提供的替代值
+
+## 二、Orders 的 June / July / August
+
+| 月份 | 原始图像读数 | 最终 Figure 值 | 说明 |
+|---|---|---|---|
+| June | 108 | 108 | 未修订 |
+| July | 105 | **109** | 唯一经台账修订的点，面板 note 已标注 |
+| August | 115 | 115 | 未修订 |
+
+## 三、July 为何最终是 109 而不是 105
+
+- 105 是**源图上的标注读数**：OCR 检出该标签 `105`（置信度约 0.999），位置在 Jun 108 与 Aug 115 之间，属图像可读内容，本身没有识别争议。
+- 109 是你基于**订单台账核实**后给出的确认值：源图标注与台账不一致，你明确指示以台账为准，只改 July 这一个月。
+- 因此两者的差异不是识别误差，而是**数据来源优先级**的差别：台账被认定为权威来源，图像标注被认定为过时/有误的显示值。最终图采用 109，并通过 note 说明更正出处，使读者知道此点非原图读数。
+- 105 并未被抹除：它仍作为历史事实保留在最初两版 Figure（run `a04fac4…`、`9cfc0670…`）及当时的读取记录中；当前版本只呈现修订后的 109。
+
+附带一点限制说明：109 的可靠性来自你提供的台账核实，当前会话内没有台账原件可独立复核；105 则有源图与 OCR 证据支撑。

@@ -1,0 +1,63 @@
+## 比较对象
+
+- 初始 Figure：run e2426d3a…，digest e1f33d48…（首轮装配）
+- 当前有效 Figure：run 28991ef6…，digest 0a0082bc…（最终版本，已渲染）
+
+---
+
+## 一、Figure 级结构对比
+
+| 字段 | 初始 Figure | 当前有效 Figure | 是否变化 |
+|---|---|---|---|
+| 标题 | Regional Operations Dashboard, 2025 | 2025 Regional Sales and Operations (Revised) | **已变** |
+| 列数（layout.columns） | 2 | 2 | 不变 |
+| 子图数量 | 3 | 3 | 不变 |
+| 面板顺序（按列表位置） | 1 quarterly_revenue → 2 monthly_orders → 3 monthly_conversion | 同左，完全一致 | 不变 |
+| 目标面板位置 | 第 2 位 | 第 2 位 | 不变 |
+| schema_version | 2 | 2 | 不变 |
+
+**要点**：Figure 级只有总标题一处变化；列数仍为两列，面板顺序未调整（收入第一、订单第二、转化率第三），已撤销的“单列 / 转化率置首”候选没有体现在任何字段上。
+
+---
+
+## 二、目标子图（Monthly Orders）结构对比
+
+| 字段 | 初始 Figure | 当前有效 Figure | 是否变化 |
+|---|---|---|---|
+| chart_id | monthly_orders | monthly_orders | 不变 |
+| chart_type | line | line | 不变 |
+| **标题（metadata.title）** | Monthly Orders | Monthly Orders (Corrected) | **已变** |
+| **Y 轴标签（y_axis.label）** | Orders | Orders (count) | **已变** |
+| Y 轴类型（y_axis.kind） | numeric | numeric | 不变 |
+| X 轴标签（x_axis.label） | Month | Month | 不变 |
+| X 轴类型（x_axis.kind） | categorical | categorical | 不变 |
+| coordinate_system.kind | cartesian | cartesian | 不变 |
+| metadata.source | Figura synthetic operations dataset | 同左 | 不变 |
+| metadata.note | 空 | July corrected from the source ledger. | **已变**（原为空，无内容被覆盖） |
+| 系列 id / 标签 | orders / Orders | orders / Orders | 不变 |
+| 类别与顺序 | Jan…Dec（12 项） | Jan…Dec（12 项） | 不变 |
+| July 值 | 105 | 109 | **已变**（唯一数值改动，+4） |
+| 其余 11 个月值 | 82, 90, 87, 95, 101, 108, 115, 123, 119, 130, 138 | 同左 | 不变 |
+| measurement_refs | [] | [] | 不变 |
+| schema_version | 2 | 2 | 不变 |
+
+---
+
+## 三、变化汇总
+
+**发生变化的 5 项**
+
+1. Figure 总标题：→ 2025 Regional Sales and Operations (Revised)
+2. 目标子图标题：Monthly Orders → Monthly Orders (Corrected)
+3. 目标子图 Y 轴标签：Orders → Orders (count)
+4. 目标子图 note：空 → July corrected from the source ledger.
+5. 目标子图 July 数据点：105 → 109
+
+**明确不变的项**
+
+- 列数（2）、面板数量（3）、面板顺序（收入 → 订单 → 转化率）、目标面板位置（第 2 位）
+- 目标子图的 chart_id、图表类型、X 轴标签与类型、Y 轴类型、坐标系、source、系列标识与标签、月份类别及顺序、其余 11 个月数值、measurement_refs、schema_version
+
+**另外两个子图**（本请求未要求列出，仅作边界说明）：Quarterly Revenue by Region 与 Monthly Conversion Rate 的全部字段和值均与初始 Figure 一致，未受影响。
+
+以上对比基于两次装配保存的结构化内容逐字段读取，不是渲染图像的视觉估计；其中 105 为源图标签读数，109 为用户依据台账确认的修订值，二者在历史记录中并存。

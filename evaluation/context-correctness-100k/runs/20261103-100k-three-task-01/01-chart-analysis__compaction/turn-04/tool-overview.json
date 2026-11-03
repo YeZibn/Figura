@@ -1,0 +1,20 @@
+[
+  {
+    "call_id": "call_00_Cs6z5IO4FZ4fvOpGOFF28346",
+    "tool_name": "decompose_chart_image",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_ET_1Yh9Kj0OflZrlNnO9SYe7027",
+    "tool_name": "load_image",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_01_ET_hCrQBh186P53fwUjdiBE4787",
+    "tool_name": "extract_text",
+    "outcome": "succeeded",
+    "error": null
+  }
+]

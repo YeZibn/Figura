@@ -1,0 +1,19 @@
+**候选方案（仅记录，未应用）**
+
+- 候选内容：`layout.columns` 由 2 改为 1；将 `monthly_conversion`（Monthly Conversion Rate）移到子图列表首位。
+- 未指定部分的默认假设（待你确认）：其余两个子图保持原有相对顺序，即预计顺序为 `monthly_conversion` → `quarterly_revenue` → `monthly_orders`。
+- 状态：**未装配、未渲染**。当前仍生效的仍是上一版 Figure（run `9cfc067002e746f99a76e0d08499b9e9`，digest `97b8af73…c731e`），没有任何数据、标题或轴标签被改动。
+
+**当前生效的布局与顺序**
+
+| 项 | 当前值 |
+|---|---|
+| Figure 标题 | Regional Operations Dashboard, 2025 |
+| 布局 | `columns: 2`（两列） |
+| 第 1 位 | `quarterly_revenue` · 柱图 · Quarterly Revenue by Region（Revenue (M USD)） |
+| 第 2 位 | `monthly_orders` · 折线 · Monthly Orders (Corrected)（Orders (count)） |
+| 第 3 位 | `monthly_conversion` · 折线 · Monthly Conversion Rate（Conversion (%)） |
+
+在两列布局下，实际呈现为：第一行左侧 = 季度柱图、右侧 = 月度订单；第二行左侧 = 转化率折线。若采用候选方案，三张图将改为纵向依次排列，且首图为转化率折线。
+
+需要我应用时告知即可（并确认上面关于其余两个子图顺序的假设）；如需保留对比，我也可以另装配一版候选而不覆盖现有结果。

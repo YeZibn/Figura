@@ -1,0 +1,20 @@
+已按资源目录中类型化引用直接读取，未先搜索历史，也未使用摘要中的 message/tool-result 引用。
+
+**读取对象**：`chart_figure`，run `e2426d3aeecb4c37b10f057819787f53`，call_id `call_00_SbnO55B38wD6NHUSyxOR0350`，digest `e1f33d48eaf29be4af8b4d3621634050ad9a96841885960daf059095ee7c347a`。这是表中首个、未经修订的初始 Figure（整体标题 “Regional Operations Dashboard, 2025”，两列、三图）。其 Orders 面板 July 仍为 105、标题仍为 “Monthly Orders”、Y 轴仍为 “Orders”、note 为空，确认所选对象正是修改前版本。
+
+## 指定项核对结果
+
+| 核对项 | 位数位置 | 读取值 | 上下文 |
+|---|---|---|---|
+| **Quarterly Revenue · North Q4** | series `north`（label North），values 第 4 位 | **50** | 该系列全量 34、39、43、50 依次对应 Q1–Q4；Q4 为最高柱，同季 South 41、Central 35 |
+| **Monthly Orders · Jun** | points 第 6 点，x = "Jun" | **108** | 与 May 101、Jul 105 相接 |
+| **Monthly Orders · Jul** | points 第 7 点，x = "Jul" | **105** | 即你指出的“修改前原始值”，尚未被台账值 109 替换 |
+| **Monthly Orders · Aug** | points 第 8 点，x = "Aug" | **115** | 与 Sep 123 相接 |
+| **Monthly Conversion · Dec** | series `conversion_rate`，points 第 12 点，x = "Dec" | **3.8** | 全序列 2.4…3.8 的最高点；Y 轴为 Conversion (%) |
+
+## 补充说明（同一读取内的相关事实）
+
+- 该初始 Figure 的订单面板元数据为：title `Monthly Orders`、y_axis.label `Orders`、note 空、source `Figura synthetic operations dataset`；后续的 “(Corrected)”“Orders (count)”“July corrected from the source ledger.” 均不在此版本中。
+- Jun/Jul/Aug = 108 / 105 / 115 的相邻关系与源图标签一致：6→7 月小幅回落 3，7→8 月回升 10。
+- 目录中另有 run `bc602e59…`（digest `64b25672…`）的版本同样 July=105，但它属于第二次装配（已改标题与轴名）；按“修改前、July 仍为 105”的最初状态，本次采用 run_ordinal 1 的初始 Figure。
+- 以上为结构化字段读取，非图像测量；North Q4=50 此前也已通过源图柱顶标签的视觉复核得到印证。

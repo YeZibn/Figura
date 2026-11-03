@@ -1,0 +1,42 @@
+已取回初始 Figure（run `b820262d…`，call `call_00_9F9…`）与当前最终 Figure（run `07a98a5a…`，call `call_00_GLh…`）的完整子图内容，逐字段比对结果如下。
+
+## 逐系列数值核对（Quarterly Revenue by Region）
+
+| 系列 | Q1 | Q2 | Q3 | Q4 | 初始版 | 最终版 | 结论 |
+|---|---|---|---|---|---|---|---|
+| North | 34 | 39 | 43 | 50 | 34, 39, 43, 50 | 34, 39, 43, 50 | 一致 |
+| South | 27 | 32 | 36 | 41 | 27, 32, 36, 41 | 27, 32, 36, 41 | 一致 |
+| Central | 22 | 26 | 31 | 35 | 22, 26, 31, 35 | 22, 26, 31, 35 | 一致 |
+
+12 个数值（3 系列 × 4 季度）逐项相同，无任何差异。
+
+## 其余字段核对
+
+| 字段 | 初始版 | 最终版 | 结论 |
+|---|---|---|---|
+| 子图标题 | Quarterly Revenue by Region | Quarterly Revenue by Region | 一致 |
+| source | Figura synthetic operations dataset | 同左 | 一致 |
+| note | `""`（空） | `""`（空） | 一致 |
+| y 轴标签 | Revenue (M USD) | Revenue (M USD) | 一致 |
+| y 轴类型 | numeric | numeric | 一致 |
+| x 轴 | categorical，无标签 | 同左 | 一致 |
+| 类别顺序 | Q1、Q2、Q3、Q4（id: q1–q4） | 同左 | 一致 |
+| 排列 | orientation vertical，mode grouped | 同左 | 一致 |
+| 系列标识 | north / south / central（标签 North/South/Central） | 同左 | 一致 |
+| chart_type | bar | bar | 一致 |
+| measurement_refs | 空 | 空 | 一致 |
+
+**结论：该子图与初始 Figure 完全相同，本轮无任何改动。**
+
+## 顺带确认的差异仅出现在订单面板
+
+| 字段 | 初始版 | 最终版 |
+|---|---|---|
+| Orders 标题 | Monthly Orders | Monthly Orders (Corrected) |
+| Orders y 轴标签 | Orders | Orders (count) |
+| July 值 | 105 | 109 |
+| Orders note | 空 | July corrected from the source ledger. |
+
+转化率子图（标题 Monthly Conversion Rate、Conversion (%) 轴标签、十二个值 2.4–3.8、空 note、source）在两版中同样逐字段一致。
+
+说明一点依据边界：以上是同两份已提交 Figure 规格的字段级比对，确认的是「未被修改」；它不重新测量源 PNG，因此不构成对营收数值本身是否准确的独立核验。

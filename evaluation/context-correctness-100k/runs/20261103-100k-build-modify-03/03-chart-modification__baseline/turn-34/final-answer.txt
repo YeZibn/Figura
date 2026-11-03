@@ -1,0 +1,58 @@
+已按有效合同重新装配并渲染完成。
+
+**交付物**
+- Figure：`figure_ref` = run `f27c67339176432ea9351f0d36ccffab` / call `call_00_4rxvU7N4UQ6Kdfi8Fjgg8373`，digest `0a0082bc…`（与合同版一致）
+- PNG：1280×1002，sha256 `a8a3ad30…`，已随本消息附上
+
+## 一、ChartSpec 摘要
+
+| 层级 | 字段 | 值 |
+|---|---|---|
+| Figure | title | 2025 Regional Sales and Operations (Revised) |
+| Figure | layout.columns / charts 数 | 2 / 3 |
+| Figure | 顺序 | quarterly_revenue → monthly_orders → monthly_conversion |
+
+| 子图 | 类型 | 面板标题 | X 轴 | Y 轴 | source | note |
+|---|---|---|---|---|---|---|
+| quarterly_revenue | bar（grouped, vertical） | Quarterly Revenue by Region | Quarter | Revenue (M USD) | Figura synthetic operations dataset | 空 |
+| monthly_orders | line | Monthly Orders (Corrected) | Month | Orders (count) | Figura synthetic operations dataset | July corrected from the source ledger. |
+| monthly_conversion | line | Monthly Conversion Rate | Month | Conversion (%) | Figura synthetic operations dataset | 空 |
+
+**全量数据**
+
+- 收入（Q1→Q4）：North 34/39/43/50；South 27/32/36/41；Central 22/26/31/35；类别 Q1–Q4，图例 North / South / Central
+- 订单（Jan→Dec）：82、90、87、95、101、108、**109**、115、123、119、130、138；图例 Orders
+- 转化率（Jan→Dec）：2.4、2.6、2.5、2.8、3.0、3.1、3.0、3.3、3.4、3.2、3.6、3.8；图例 Conversion rate
+
+## 二、最终保留的布局与面板顺序
+
+- 两列（columns = 2），自左至右、自上而下：**第一行左 = Quarterly Revenue by Region，第一行右 = Monthly Orders (Corrected)，第二行左 = Monthly Conversion Rate**，第二行右为空白余格（3 图入两列所致）
+- 渲染图中已核对：总标题独占顶部一行；三张子图标题、图例、轴名、source 行均在位且未被裁切；订单面板 Y 轴显示 “Orders (count)”，来源行下方第二行为更正说明
+
+## 三、July 修订及其来源
+
+| 项目 | 内容 |
+|---|---|
+| 修订位置 | Monthly Orders，Jul 点 |
+| 源图读数 | 105（源图该点数据标签；作为源图口径事实保留于源图及早期 Figure 版本） |
+| 最终值 | **109**（你核实订单台账后确认） |
+| 变化 | +4 单，约 +3.81% |
+| Figure 内追溯 | note = “July corrected from the source ledger.” |
+| 派生影响 | 全年合计 1,293 → 1,297；全年月均 107.75 → 108.08；Q3 月均 114.33 → 115.67 |
+| 证据性质 | 109 依据台账确认，而非图像读数；渲染成功不构成其正确性证明 |
+
+## 四、临时单列/重排无残留
+
+- layout.columns = **2**，非 1 → 单列方案未残留
+- 首位子图 chart_id = `quarterly_revenue`（季度收入），Monthly Conversion Rate 仍为第三位 → 重排方案未残留
+- 两张子图在渲染图中的实际落位（左上收入、右上订单、左下转化率）与结构顺序一致，画面中不存在单列堆叠或转化率置首的任何痕迹
+- 这两项候选自撤销后从未进入任何一次装配，本次重组同样未包含
+
+## 五、非目标面板与其他订单月份未被修改
+
+- **Quarterly Revenue by Region**：chart_id、图表类型、标题、source、note、X/Y 轴、分组方式、Q1–Q4 类别、North/South/Central 12 个值、空 measurement_refs，与初始 Figure 逐项相同（North Q4 = 50 亦经源图柱顶标签复核）
+- **Monthly Conversion Rate**：chart_id、图表类型、标题、source、note、X/Y 轴、系列 id 与标签、12 个值、空 measurement_refs，与初始 Figure 逐项相同（Dec = 3.8 最高、Jan = 2.4 最低）
+- **订单其余 11 个月**：82、90、87、95、101、108、115、123、119、130、138 全部保持原值；渲染图中 Jun=108、Jul=109（微升）、Aug=115（明显上行）三点对位正确，修订未串位至相邻月份，图中不出现 105
+- 三个子图 source 字符串完全一致；子图 1、3 的 note 仍为空
+
+补充说明两点边界：本次交付的 PNG 由上述 ChartSpec 生成，视觉回看确认的是**版面与标签呈现**，不构成数据真值核定；105→109 的依据是你对台账的确认，最终 Figure 内不保留 105 这一数值本身，只在源图与早期版本中可查。

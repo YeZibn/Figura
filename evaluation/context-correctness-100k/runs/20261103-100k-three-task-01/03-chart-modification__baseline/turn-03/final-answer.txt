@@ -1,0 +1,26 @@
+已记录为**候选方案，尚未应用**（未重新装配、未重新绘制，现有 Figure 保持不变）。
+
+## 当前仍生效的 Figure
+
+- 引用：`cefa0e08f2fe4c0e9a1d45cec2e9834d` / `call_00_LoBXhET5wCRiSmzIvIs04288`（digest `0ad3a53c…62ff8`）
+- 整体标题：`Regional Operations Dashboard, 2025`
+- 布局：**两列**（`columns: 2`），按源图自上而下顺序排列
+- 面板顺序与标题：
+  1. `quarterly_revenue` — Quarterly Revenue by Region（分组柱状图，Q1–Q4 × North/South/Central）
+  2. `monthly_orders` — Monthly Orders (Corrected)（折线，Y 轴 Orders (count)）
+  3. `monthly_conversion` — Monthly Conversion Rate（折线，Y 轴 Conversion (%)）
+
+即当前视觉排布为：第 1 行「季度收入柱状图 | 月度订单(已更正)」，第 2 行左侧「月度转化率」，右下留白。上一轮的标题与轴名修改仍在该 Figure 中生效。
+
+## 候选方案（待确认，未执行）
+
+- 布局改为 `columns: 1`（单列，三图纵向堆叠）
+- 面板顺序改为：`monthly_conversion` → `quarterly_revenue` → `monthly_orders`
+
+## 影响评估
+
+- 单列后每图横向空间更大，12 个月的类别标签与订单折线的点间距更宽松，可读性提升；代价是总高度约增至两列的 1.5 倍，三图需要连续滚动查看，跨面板对比（如订单与转化率的同步走势）视线跨度变大。
+- 把转化率放首位会改变“收入→订单→转化率”这一原有漏斗式阅读顺序；若目的是突出转化效率，新顺序更聚焦，但季度收入的“总览”地位会让位。
+- 该变更仅涉及布局与顺序，三个面板的标题、轴名、系列与全部数据不受影响，`Monthly Orders (Corrected)` 的修正会原样保留。
+
+需要我按此方案装配并绘制时告知即可；否则当前两列布局继续有效。

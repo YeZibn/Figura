@@ -1,0 +1,13 @@
+已重新装配，通过校验。
+
+**唯一改动**：布局列数 2 → **1**（单列纵向排列）。
+
+**保持不变**：
+- 四个子图顺序：Quarterly Revenue by Region → Monthly Orders in 2026 → Orders by Region and Channel → Delivery Time and Satisfaction。
+- 各子图标题、轴标签（Quarter / Revenue (M USD)、Month / Orders (count)、矩阵、Delivery time (hours) / Satisfaction (score)）、`source` 与 note 全部照旧（Revenue 的 note 仍包含 “Quarterly revenue values are unchanged.”）。
+- 全部数据未动：Revenue 12 季度 × 3 系列、Orders 12 个点（Mar 仍为 `null`）、Heatmap 4×4（North×Direct 仍为 `null`）、Scatter 24 点。
+- 整体标题仍为 “Regional Operations: Revenue, Orders and Delivery”。
+
+**新引用**：figure_ref run `7f0257009f6f4fd7b6f33b3498c220f2` / call `call_00_KPzGK0k8HBo4p5j6qJ0R6438`。
+
+该 Figure 仍只是已装配定义，尚未渲染成 PNG；需要查看单列排版效果时可据此引用绘制。

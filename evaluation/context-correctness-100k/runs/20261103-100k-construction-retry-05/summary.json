@@ -1,0 +1,48 @@
+{
+  "paired_tasks": {
+    "02-chart-construction": {
+      "baseline_total_tokens": 33179,
+      "compaction_total_tokens": 33325,
+      "observed_usage_delta_percent": -0.44,
+      "compression_saving_percent": null,
+      "compression_saving_eligible": false,
+      "compaction_triggered": false,
+      "usage_complete": true,
+      "all_turns_completed": false
+    }
+  },
+  "executions": [
+    {
+      "task_id": "02-chart-construction",
+      "condition": "baseline",
+      "status": "error",
+      "turns": 2,
+      "provider_usage_including_compaction": {
+        "prompt_tokens": 30719,
+        "completion_tokens": 2460,
+        "total_tokens": 33179
+      },
+      "usage_complete": true,
+      "compaction_operations": [],
+      "successful_compaction_count": 0,
+      "all_turns_completed": false,
+      "max_estimated_agent_input_tokens": 16357
+    },
+    {
+      "task_id": "02-chart-construction",
+      "condition": "compaction",
+      "status": "error",
+      "turns": 2,
+      "provider_usage_including_compaction": {
+        "prompt_tokens": 30723,
+        "completion_tokens": 2602,
+        "total_tokens": 33325
+      },
+      "usage_complete": true,
+      "compaction_operations": [],
+      "successful_compaction_count": 0,
+      "all_turns_completed": false,
+      "max_estimated_agent_input_tokens": 16404
+    }
+  ]
+}

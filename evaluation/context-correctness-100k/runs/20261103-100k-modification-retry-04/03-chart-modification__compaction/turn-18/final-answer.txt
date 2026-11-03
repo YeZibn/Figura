@@ -1,0 +1,46 @@
+核对已通过，随后按同一 Figure 渲染。以下为渲染前的字段核对结果。
+
+## 一、Figure 级核对
+
+| 检查项 | 要求 | 实际（run `9083994…`） | 结果 |
+|---|---|---|---|
+| Figure 总标题 | 2025 Regional Sales and Operations (Revised) | 同 | ✅ |
+| 列数 | 2 | `layout.columns: 2` | ✅（单列候选未写入） |
+| 面板顺序（第 1、2、3 位） | Quarterly Revenue → Monthly Orders → Monthly Conversion Rate | `quarterly_revenue` → `monthly_orders` → `monthly_conversion` | ✅（重排候选未写入） |
+| 子图数量、schema_version | 3、2 | 3、2 | ✅ |
+
+## 二、三个子图数据与元数据
+
+| 子图 | 数据核对 | 标题、轴标签 | source | note |
+|---|---|---|---|---|
+| Quarterly Revenue | Q1–Q4 分组柱：North 34/39/43/50、South 27/32/36/41、Central 22/26/31/35 | Quarterly Revenue by Region；`Revenue (M USD)` | Figura synthetic operations dataset | 空 ✅ |
+| Monthly Orders | Jan–Dec：82、90、87、95、101、108、**109**、115、123、119、130、138 | Monthly Orders (Corrected)；`Orders (count)` | Figura synthetic operations dataset（保留） | `July corrected from the source ledger.` ✅ |
+| Monthly Conversion | Jan–Dec：2.4、2.6、2.5、2.8、3.0、3.1、3.0、3.3、3.4、3.2、3.6、3.8 | Monthly Conversion Rate；`Conversion (%)` | Figura synthetic operations dataset | 空 ✅ |
+
+## 三、修订来源核查
+
+- July 最终值 **109**，与源图标注读数 **105** 相差 +4；note 明确写出 `July corrected from the source ledger.`，说明是台账户核结果，而非图像读数。
+- 其余 11 个月无修订；同一子图原有 source、系列 id/label（`orders` / `Orders`）、图表类型 `line` 均保留，修订说明与原元数据在同一面板内并存。
+- 未为 109 引入任何测量引用（`measurement_refs` 为空），因此图内唯一的来源标识就是这句 note。
+
+## 四、目标外图表确认无变化（与初始 Figure 逐字段比对）
+
+| 对照项 | Quarterly Revenue | Monthly Conversion Rate |
+|---|---|---|
+| 标题 | 未变 | 未变 |
+| 轴标签 | 未变（Revenue (M USD)） | 未变（Conversion (%)） |
+| source / note | 未变（note 仍为空） | 未变（note 仍为空） |
+| 类别/月份与全部数值 | 12 个值全同 | 12 个值全同 |
+| 系列 id/label、图表类型、排布 | 全同 | 全同 |
+
+结论：非目标面板 **零改动**；改动仅 5 处（Figure 总标题、订单面板标题、订单轴标签、订单 note、July 值），均在授权范围内。
+
+## 五、渲染结果与图像复核
+
+渲染成功（1280×1002，digest `b8194b22…0b1056`，与上一版渲染字节一致，说明内容未漂移）。图像上实际可见：
+
+- 顶部总标题为 `2025 Regional Sales and Operations (Revised)`；两列布局：左上季度柱图、右上订单折线、左下转化率折线，右下留空（三图两列的必然结果）。
+- 柱图三色图例 North/South/Central 齐全，四组柱高与数值档位相符；订单折线 Jul 点略高于 Jun（109 vs 108），Aug 起升至 115，Dec 为最高点 138；转化率折线形状与数据吻合（Mar、Jul、Oct 三处回落）。
+- 订单面板下方同时显示 `Figura synthetic operations dataset` 与 `July corrected from the source ledger.` 两行，无遮挡、无裁切；两个折线面板的旋转月份标签均可读。
+
+未发现需要修正的问题，图像可直接交付。

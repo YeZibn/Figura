@@ -1,0 +1,6 @@
+{
+  "turn": 3,
+  "text": "转录 Monthly Conversion Rate 的 12 个数值和单位。分别计算 Q1–Q4 的月均转化率，保留百分比单位，不把平均值写成订单数。",
+  "attachment_sha256": [],
+  "provider_id": "deepseek"
+}

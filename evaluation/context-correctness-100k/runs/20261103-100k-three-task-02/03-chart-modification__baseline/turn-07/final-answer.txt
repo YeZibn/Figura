@@ -1,0 +1,36 @@
+## 一、Orders 三个月份（当前生效 Figure）
+
+| 月份 | 原图读数 | 当前 Figure 值 | 差异 |
+|---|---|---|---|
+| June | 108 | 108 | 无变化 |
+| July | **105** | **109** | +4（经台账更正） |
+| August | 115 | 115 | 无变化 |
+
+## 二、July 最终值与原图值不同的原因
+- 原图该点标注为 **105**，这是图像上可直接读到的值，属于原始读数，保留为历史事实。
+- 你依据订单台账核验后确认 July 实际应为 **109**，并明确要求“只改 July、不抹去 105、不改其他月份”。
+- 因此当前 Figure 用 109，且该面板 note 记录 `July corrected from the source ledger.`，把差异连同依据一起留下。所以 105 与 109 的差别不是读取错误被悄悄覆盖，而是一次注明来源的修订：图上读数 105 → 台账确认值 109。
+
+## 三、当前有效修改（均已在生效版本中，digest `cfe3bdd9…f476`）
+1. 整体标题：Regional Operations Dashboard, 2025 → **2025 Regional Sales and Operations (Revised)**
+2. Monthly Orders 面板标题 → **Monthly Orders (Corrected)**
+3. Monthly Orders 的 y 轴标签：Orders → **Orders (count)**（原图仅写 Orders）
+4. July 数值 105 → **109**，并在该面板 note 写入更正说明
+5. 结构约束（已确认保留）：**两列布局**；顺序 **Quarterly Revenue → Monthly Orders → Monthly Conversion Rate**
+6. 未变的三项设定：子图 source 为 Figura synthetic operations dataset；收入三地区全季度数值；转化率 12 个月数值
+
+## 四、已撤销候选（不应出现在任何最终 Figure 中）
+- 改为**单列布局** —— 已撤销，未应用
+- 将 **Monthly Conversion Rate 移到第一位**并重排 —— 已撤销，未应用
+
+这两项在提出时仅登记为候选，未装配、未渲染；撤销后也未留下任何产物，当前版本仍是两列且顺序为收入 → 订单 → 转化率。
+
+## 五、版本沿革对照（便于追溯）
+| 版本 | 整体标题 | July | 订单面板 y 轴 |
+|---|---|---|---|
+| 初始版 `1619687d…5530` | Regional Operations Dashboard, 2025 | 105（原图读数） | Orders |
+| 标题修正版 `50b7921a…3f44d` | Regional Operations Dashboard, 2025 | 105 | Orders (count) |
+| 台账更正版 `0b30661f…7102` | Regional Operations Dashboard, 2025 | 109 | Orders (count) |
+| 现行版 `cfe3bdd9…f476` | 2025 Regional Sales and Operations (Revised) | 109 | Orders (count) |
+
+需要提醒的一点：现行版并未在图上单独标注“105 为原读数”，105 只存在于 note 之外的历史版本与原图中；若希望图面本身也能直接看出修订来源，可以把 note 扩写为同时提及 105，我可以据此重新装配。

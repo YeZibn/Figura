@@ -1,0 +1,82 @@
+[
+  {
+    "attempt_id": "3b6505a41bc040429f66398a65c5c227",
+    "request_id": "7ee42b74889b4e22bfeb4dcc6e2c9f56",
+    "status": "response_committed",
+    "response_record_id": "827bdf17fd91473a85967983bc51b3d1",
+    "failure_code": null,
+    "http_status": 200,
+    "attempt_sequence": 1,
+    "purpose": "agent_turn",
+    "usage": {
+      "completion_tokens": 144,
+      "prompt_tokens": 24671,
+      "total_tokens": 24815
+    },
+    "context_estimate": {
+      "context_window_tokens": 100000000,
+      "estimator_version": "tiktoken-o200k-v1",
+      "input_tokens": 24730
+    }
+  },
+  {
+    "attempt_id": "ecc57821726d4278853482741722b255",
+    "request_id": "7c3791a5277848059846a9685f30a7ca",
+    "status": "response_committed",
+    "response_record_id": "9f0e68c3ae0441c89a1afc9521f8a019",
+    "failure_code": null,
+    "http_status": 200,
+    "attempt_sequence": 1,
+    "purpose": "agent_turn",
+    "usage": {
+      "completion_tokens": 986,
+      "prompt_tokens": 25691,
+      "total_tokens": 26677
+    },
+    "context_estimate": {
+      "context_window_tokens": 100000000,
+      "estimator_version": "tiktoken-o200k-v1",
+      "input_tokens": 25799
+    }
+  },
+  {
+    "attempt_id": "32e21aa8b8be415c9195324db9953c23",
+    "request_id": "e870644f9ee54c4092f95d7bd9abb914",
+    "status": "response_committed",
+    "response_record_id": "d03dbdd23bae4bc58fff831ddc4f94ad",
+    "failure_code": null,
+    "http_status": 200,
+    "attempt_sequence": 1,
+    "purpose": "agent_turn",
+    "usage": {
+      "completion_tokens": 95,
+      "prompt_tokens": 27073,
+      "total_tokens": 27168
+    },
+    "context_estimate": {
+      "context_window_tokens": 100000000,
+      "estimator_version": "tiktoken-o200k-v1",
+      "input_tokens": 27219
+    }
+  },
+  {
+    "attempt_id": "bf0e22b3052044e48b8ebd019204586c",
+    "request_id": "d2bbb957f07748cbb23e6744201e15aa",
+    "status": "response_committed",
+    "response_record_id": "6d434729addf4e1fafa42c7bae6413b2",
+    "failure_code": null,
+    "http_status": 200,
+    "attempt_sequence": 1,
+    "purpose": "agent_turn",
+    "usage": {
+      "completion_tokens": 362,
+      "prompt_tokens": 28610,
+      "total_tokens": 28972
+    },
+    "context_estimate": {
+      "context_window_tokens": 100000000,
+      "estimator_version": "tiktoken-o200k-v1",
+      "input_tokens": 29078
+    }
+  }
+]

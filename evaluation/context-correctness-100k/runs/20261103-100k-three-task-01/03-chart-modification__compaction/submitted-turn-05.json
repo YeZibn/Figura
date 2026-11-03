@@ -1,0 +1,6 @@
+{
+  "turn": 5,
+  "text": "核实订单台账后，确认 July Orders 应为 109，而图上原始读取值为 105。只将 Monthly Orders 的 July 从 105 更新为 109；在该面板 note 中记录“July corrected from the source ledger.”。不要把源图读数 105 从历史事实中抹去，也不要修改其他月份。",
+  "attachment_sha256": [],
+  "provider_id": "deepseek"
+}

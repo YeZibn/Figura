@@ -1,0 +1,18 @@
+当前最新 Figure 已经是满足该要求的版本，我逐字段核对了它的完整内容，确认无需再做任何改动，因此没有新建装配或渲染；也就没有把已撤销的单列或重排候选方案带入。
+
+**核对结果（最新 Figure：`call_00_kcePLceujkG1CuXKv5LD2306`，渲染 `call_00_ET_4RWjQL46oPJcMguepGip0205`，digest `715644b7…cf4970`）**
+
+仅在约定的五项上有差异，且这些差异均已生效：
+- Figure 总标题：`2025 Regional Sales and Operations (Revised)`
+- Monthly Orders 标题：`Monthly Orders (Corrected)`
+- Monthly Orders y 轴：`Orders (count)`
+- Monthly Orders July：109
+- Monthly Orders note：`July corrected from the source ledger.`
+
+Quarterly Revenue 与 Monthly Conversion Rate 与初始 Figure 逐项一致：
+- revenue_by_region：chart_type `bar`、标题 `Quarterly Revenue by Region`、source `Figura synthetic operations dataset`、note 空、y 轴 `Revenue (M USD)`、分类 Q1–Q4、series north/south/central 的数值与顺序完全一致
+- monthly_conversion_rate：chart_type `line`、标题 `Monthly Conversion Rate`、source 同上、note 空、y 轴 `Conversion (%)`、series `Conversion` 的 12 个点完全一致
+
+其他结构保持初始状态：布局仍为两列（columns = 2），子图顺序仍为 revenue → orders → conversion，Monthly Orders 的其余 11 个点、series 标签与 x 轴设置未变。
+
+如需我把这版再渲染一次作为交付快照，或输出两个面板的字段级 diff，告诉我即可。

@@ -1,0 +1,59 @@
+以下为当前最终 Figure（run `07a98a5a…`，call `call_00_GLh2Kunm0TuzlVHfTsIf8643`，digest `ec2c08bb…673a19`）逐字段汇总。
+
+## Figure 级
+
+| 字段 | 值 |
+|---|---|
+| 标题 | 2025 Regional Sales and Operations (Revised) |
+| 布局列数 | 2（`columns = 2`） |
+| 顺序 | ① revenue_by_region → ② monthly_orders → ③ monthly_conversion_rate（营收、订单在第一行，转化率在第二行左侧） |
+
+## 子图 1：Quarterly Revenue by Region
+
+| 字段 | 值 |
+|---|---|
+| 标题 | Quarterly Revenue by Region |
+| 图表类型 | bar（分组柱，vertical / grouped） |
+| x 轴 | categorical，无标签；Q1–Q4 |
+| y 轴 | numeric，Revenue (M USD) |
+| source | Figura synthetic operations dataset |
+| note | 空 |
+
+## 子图 2：Monthly Orders (Corrected) —— 目标面板
+
+| 字段 | 值 |
+|---|---|
+| 标题 | Monthly Orders (Corrected) |
+| 图表类型 | line |
+| x 轴 | categorical，无标签；Jan–Dec |
+| y 轴 | numeric，**Orders (count)** |
+| source | Figura synthetic operations dataset |
+| note | **July corrected from the source ledger.** |
+| 数据 | 82, 90, 87, 95, 101, 108, **109**, 115, 123, 119, 130, 138 |
+
+## 子图 3：Monthly Conversion Rate
+
+| 字段 | 值 |
+|---|---|
+| 标题 | Monthly Conversion Rate |
+| 图表类型 | line |
+| x 轴 | categorical，无标签；Jan–Dec |
+| y 轴 | numeric，Conversion (%) |
+| source | Figura synthetic operations dataset |
+| note | 空 |
+
+## 目标面板核查：修订来源与原有元数据是否共存
+
+| 核查项 | 结果 |
+|---|---|
+| 修订来源是否记录 | ✅ note 存在且非空：`July corrected from the source ledger.` |
+| 原有 source 是否保留 | ✅ 仍为 `Figura synthetic operations dataset`，未改 |
+| chart_type / 系列结构是否保留 | ✅ 仍为 line；单系列 id `orders`、label `Orders`；x 分类 Jan–Dec 完整 12 项 |
+| 是否有其他原有元数据被覆盖或丢失 | ❌ 未发现；metadata 仅 title、note 两项内容发生变化，且均为本轮要求 |
+| 修订是否只触及一个值 | ✅ 12 个点中仅 July 由 105 变为 109，其余 11 个不变 |
+| 子图定位标识 | ✅ chart_id 仍为 `monthly_orders`，便于与初始版对应 |
+
+## 两点需要你知道的边界
+
+- note 记录了「已按台账更正」，但**没有写明被替换的原图值 105**。因此在 Figure 自身内部，读者只能看到 109 与一句更正说明，看不到 105；105 仅保留在会话历史与此前版本（digest `6476105…6325c` 等）中。
+- note 属于子图元数据，是否在图面上可见取决于渲染，我尚未渲染核对。若需要「105 → 109」这一信息随图可见，可考虑在 note 中补上原值，或改用图面可见的标注方式——需要你确认是否这样做。

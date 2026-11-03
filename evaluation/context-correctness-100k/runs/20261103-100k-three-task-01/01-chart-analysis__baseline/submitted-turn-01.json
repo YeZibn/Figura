@@ -1,0 +1,8 @@
+{
+  "turn": 1,
+  "text": "请识别仪表盘的四个面板、图表类型、标题、轴含义和单位。调用 `extract_text` 读取图中文字标注；若系列归属不清，再对相关面板调用 `measure_chart`。先完整转录“Quarterly Revenue by Region”面板中 North、South、Central 的 Q1–Q4 数值，并说明数值是否来自图上标注。",
+  "attachment_sha256": [
+    "6d3ba19069c34cff91a52df2e5d0f99aa4e8b9accfabe2b75c9361c642fad4f6"
+  ],
+  "provider_id": "deepseek"
+}

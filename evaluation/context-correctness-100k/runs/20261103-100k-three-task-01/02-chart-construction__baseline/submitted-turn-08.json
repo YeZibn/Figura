@@ -1,0 +1,6 @@
+{
+  "turn": 8,
+  "text": "汇总当前有效的 Figure 标题、列数、四个面板顺序、2026Q4 收入合计、Orders 的 null 位置，以及 heatmap 的 North/Direct 缺失状态。若已有资源目录列出成功的 ChartFigure，记录它的类型化 `ref`，不要复制或猜测引用。",
+  "attachment_sha256": [],
+  "provider_id": "deepseek"
+}

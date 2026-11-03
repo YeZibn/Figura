@@ -1,0 +1,10 @@
+撤销已记录：单列布局与「Monthly Conversion Rate 放第一位」这两项候选改动都不再有效，也不应出现在最终 Figure 中。
+
+**最终 Figure 应保持的配置**（即上一步实际生效并已绘制的版本）
+
+- 整体标题：Regional Operations Dashboard, 2025
+- 布局：两列（columns = 2），未改为单列
+- 面板顺序：Quarterly Revenue by Region → Monthly Orders (Corrected) → Monthly Conversion Rate，未重排，转换率仍在第三位
+- 各面板内容不变：条形图 Q1–Q4 × North/South/Central（34/39/43/50、27/32/36/41、22/26/31/35）；Monthly Orders (Corrected) 的 Y 轴为 Orders (count)，12 点 82…138；Monthly Conversion Rate 的 Y 轴为 Conversion (%)，12 点 2.4…3.8；三者 source 均为 “Figura synthetic operations dataset”
+
+**无需执行的动作**：这两项候选只停留在讨论层面，从未装配或渲染过，因此不存在需要回滚的产物；当前生效的 Figure 就是符合上述配置的版本，无需重新生成。若后续再提出布局或顺序调整，我会先明确记录为候选，只有你确认后才重新装配完整 Figure。

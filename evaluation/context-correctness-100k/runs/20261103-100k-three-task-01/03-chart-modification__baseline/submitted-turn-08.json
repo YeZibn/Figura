@@ -1,0 +1,6 @@
+{
+  "turn": 8,
+  "text": "最终要求：只更新 Monthly Orders 的 July 值、标题、轴标签与 note，以及 Figure 总标题；Quarterly Revenue 和 Monthly Conversion Rate 必须与初始 Figure 完全相同。不要重新解释数据，也不要应用候选布局。",
+  "attachment_sha256": [],
+  "provider_id": "deepseek"
+}

@@ -1,0 +1,77 @@
+{
+  "task_id": "02-chart-construction",
+  "condition": "compaction",
+  "capacity_tokens": 100000,
+  "provider_id": "deepseek",
+  "batch_id": "20261103-100k-build-modify-03",
+  "started_at": "2026-11-03T13:39:24.923548+08:00",
+  "session_id": "903aa349ea08483493612b49c9bc65ad",
+  "turns": [
+    {
+      "turn": 1,
+      "run_id": "959d63d5b4384a6b88980d0e7828b485",
+      "session_id": "903aa349ea08483493612b49c9bc65ad",
+      "status": "completed",
+      "terminal_code": null,
+      "final_answer_committed": true,
+      "figures": [],
+      "renders": [],
+      "provider_attempt_count": 1,
+      "usage_by_purpose": {
+        "agent_turn": {
+          "prompt_tokens": 14415,
+          "completion_tokens": 1227,
+          "total_tokens": 15642
+        }
+      },
+      "usage_total_including_compaction": {
+        "prompt_tokens": 14415,
+        "completion_tokens": 1227,
+        "total_tokens": 15642
+      },
+      "usage_complete": true,
+      "usage_missing_attempts": [],
+      "compaction_operations": [],
+      "max_estimated_agent_input_tokens": 14018,
+      "wall_seconds": 10.05,
+      "timed_out": false
+    },
+    {
+      "turn": 2,
+      "run_id": "656cf0d2883149cfbb6ddd967d7e600a",
+      "session_id": "903aa349ea08483493612b49c9bc65ad",
+      "status": "failed",
+      "terminal_code": "execution_failed",
+      "final_answer_committed": false,
+      "figures": [],
+      "renders": [],
+      "provider_attempt_count": 1,
+      "usage_by_purpose": {
+        "agent_turn": {
+          "prompt_tokens": 16168,
+          "completion_tokens": 1025,
+          "total_tokens": 17193
+        }
+      },
+      "usage_total_including_compaction": {
+        "prompt_tokens": 16168,
+        "completion_tokens": 1025,
+        "total_tokens": 17193
+      },
+      "usage_complete": true,
+      "usage_missing_attempts": [],
+      "compaction_operations": [],
+      "max_estimated_agent_input_tokens": 16298,
+      "wall_seconds": 6.05,
+      "timed_out": false
+    }
+  ],
+  "execution_status": "error",
+  "input_adjustments": [
+    "dataset.json 原文内嵌至第 1 轮用户消息；附件入口只接受图片，JSON 内容保持不变。"
+  ],
+  "attachment_sha256": {},
+  "error_type": "RuntimeError",
+  "error_message": "02-chart-construction compaction turn 2 ended as failed; remaining turns in this session were not submitted",
+  "completed_at": "2026-11-03T13:39:43.382272+08:00"
+}

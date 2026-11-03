@@ -1,0 +1,18 @@
+已用资源目录中初始 ChartFigure 的类型化 ref（run `eec8dad…` / call `call_00_jAmFo1OWNhoPh9vGx9358442`）直接读取完整 `/figure`，没有经过搜索，也没有改用摘要中的 message、tool_result 引用。
+
+**核对结果（初始 Figure 的存储值）**
+
+| 核对项 | 初始 Figure 中的值 | 定位依据 |
+|---|---|---|
+| Quarterly Revenue, North Q4 | **50** | 该子图中 categories 为 Q1–Q4；north 系列数组的第 4 项为 [34, 39, 43, 50] |
+| Monthly Orders, June | **108** | orders 序列中 `{x:"Jun", y:108}` |
+| Monthly Orders, July | **105** | orders 序列中 `{x:"Jul", y:105}` |
+| Monthly Orders, August | **115** | orders 序列中 `{x:"Aug", y:115}` |
+| Monthly Conversion Rate, December | **3.8** | conversion 序列中 `{x:"Dec", y:3.8}` |
+
+**同时确认的初始基线元数据**
+- 总标题为 `Regional Operations Dashboard, 2025`；布局为两列；子图顺序为 Quarterly Revenue by Region → Monthly Orders → Monthly Conversion Rate。
+- Monthly Orders 的子图标题为 `Monthly Orders`，Y 轴标签为 `Orders`，note 为「单序列折线图，数值为图上标注值」；这是后续三处文字修订前的原始状态。
+- Quarterly Revenue 的 North/South/Central 全量值为 [34,39,43,50] / [27,32,36,41] / [22,26,31,35]。
+
+这些就是图像读数在文本形式下的原始记录。当前生效的最终 Figure 中只有 July 与之不同（109，依据台账修订并写入 note）；June 108、August 115、North Q4 50、December 3.8 均与上述初始值一致。

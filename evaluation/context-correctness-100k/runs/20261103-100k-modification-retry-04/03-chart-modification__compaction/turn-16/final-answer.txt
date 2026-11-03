@@ -1,0 +1,34 @@
+**候选方案状态：已撤销（revoked），未在任何 Figure 版本中生效**
+
+## 一、候选内容与状态
+
+| 项 | 内容 | 当前状态 |
+|---|---|---|
+| 布局改动 | `layout.columns` 由 2 改为 1（单列） | **已撤销**，不生效 |
+| 顺序改动 | 将 Monthly Conversion Rate 移到首位 | **已撤销**，不生效 |
+
+撤销的时间线：第 3 轮（run `b46d3552…`）仅登记为候选、明确“不要应用”；在第 3 轮到第 4 轮之间没有进行任何装配；第 4 轮（run `5d299cf3…`）被明确撤销。此后各轮（面板标题/轴名、July 修订、总标题）均未引入候选内容。
+
+## 二、本轮核验结果（只读检查，未装配、未渲染）
+
+本次只调用了读取历史接口，没有调用 `assemble_chart_figure` 或 `render_chart_figure`，因此不存在通过重新装配把候选写回 Figure 的风险。
+
+当前生效 Figure（run `908399490058411e91a60cdf906311d8`，call `call_00_ET_xDj7KLtnfM1Sw3b2q4mV4652`，digest `b8194b22…0b1056`）实际内容：
+
+- `layout` = `{"columns": 2}` → **两列，非单列**
+- `charts` 顺序：① `quarterly_revenue` → ② `monthly_orders` → ③ `monthly_conversion` → **Quarterly Revenue 仍在首位，Monthly Conversion Rate 仍在第三位**
+
+即：候选的两个改动点在当前 Figure 中均不存在，且与最终要求（列数 2、顺序 Quarterly Revenue → Monthly Orders → Monthly Conversion Rate）一致。
+
+## 三、历次 Figure 版本对照（用于确认候选从未落地）
+
+| 版本 | run | 列数 | 首位子图 |
+|---|---|---|---|
+| 初始 | `a04fac4…` | 2 | quarterly_revenue |
+| 面板标题/轴名 | `9cfc0670…` | 2 | quarterly_revenue |
+| July=109 | `f0b5ad75…` | 2 | quarterly_revenue |
+| 当前（总标题修订） | `9083994…` | 2 | quarterly_revenue |
+
+四个版本全部为两列、转化率从未置首，说明候选自登记至撤销再至今日，没有任何一版被写入。
+
+后续如需比较“单列 + 转化率置首”的形态，应作为独立新 Figure 单独装配，且需你明确指示；不会覆盖或改写当前生效版本。

@@ -1,0 +1,8 @@
+已完成修改，并重新装配、重新绘制了完整 Figure。渲染图中可确认：
+
+- 右上角面板标题为 **Monthly Orders (Corrected)**，Y 轴标签为 **Orders (count)**
+- 该面板数据未改动：Jan–Dec 依次为 82、90、87、95、101、108、105、115、123、119、130、138
+- 其余两个面板保持原样：Quarterly Revenue by Region（Q1–Q4 三地区分组柱，Y 轴 Revenue (M USD)）、Monthly Conversion Rate（Y 轴 Conversion (%)，2.4–3.8）
+- 整体标题仍为 `Regional Operations Dashboard, 2025`，两列布局与源图自上而下顺序（柱状图、月度订单、月度转化率）不变
+
+说明：由于 Monthly Orders 的刻度和数据未变，绘图自动采用 80–140 的 Y 轴区间，与源图一致；新标题与轴名按你的要求设置，源图中的原标签为 `Monthly Orders` 与 `Orders`。

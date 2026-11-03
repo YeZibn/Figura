@@ -1,0 +1,6 @@
+{
+  "turn": 2,
+  "text": "将 Monthly Orders 面板的标题改为 `Monthly Orders (Corrected)`，轴标签改为 `Orders (count)`；其他两个面板及全部数据保持不变。重新装配完整 Figure。",
+  "attachment_sha256": [],
+  "provider_id": "deepseek"
+}

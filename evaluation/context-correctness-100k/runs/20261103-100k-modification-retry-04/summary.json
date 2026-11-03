@@ -1,0 +1,54 @@
+{
+  "paired_tasks": {
+    "03-chart-modification": {
+      "baseline_total_tokens": 2692738,
+      "compaction_total_tokens": 2838430,
+      "observed_usage_delta_percent": -5.41,
+      "compression_saving_percent": -5.41,
+      "compression_saving_eligible": true,
+      "compaction_triggered": true,
+      "usage_complete": true,
+      "all_turns_completed": true
+    }
+  },
+  "executions": [
+    {
+      "task_id": "03-chart-modification",
+      "condition": "compaction",
+      "status": "completed",
+      "turns": 34,
+      "provider_usage_including_compaction": {
+        "prompt_tokens": 2771726,
+        "completion_tokens": 66704,
+        "total_tokens": 2838430
+      },
+      "usage_complete": true,
+      "compaction_operations": [
+        {
+          "operation_id": "351729c0163a4552b9e7a1f3b6ddcbc3",
+          "status": "completed",
+          "failure_code": null
+        }
+      ],
+      "successful_compaction_count": 1,
+      "all_turns_completed": true,
+      "max_estimated_agent_input_tokens": 77828
+    },
+    {
+      "task_id": "03-chart-modification",
+      "condition": "baseline",
+      "status": "completed",
+      "turns": 34,
+      "provider_usage_including_compaction": {
+        "prompt_tokens": 2645275,
+        "completion_tokens": 47463,
+        "total_tokens": 2692738
+      },
+      "usage_complete": true,
+      "compaction_operations": [],
+      "successful_compaction_count": 0,
+      "all_turns_completed": true,
+      "max_estimated_agent_input_tokens": 90745
+    }
+  ]
+}

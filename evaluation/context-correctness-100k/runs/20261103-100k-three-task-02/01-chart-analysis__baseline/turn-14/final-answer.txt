@@ -1,0 +1,28 @@
+## 逐季度收入排名与领先额（单位：M USD）
+
+| 季度 | 三地区原值 | 排名（高→低） | 最高地区 | 领先第二名 |
+|---|---|---|---|---|
+| Q1 | North 42、South 36、Central 31 | North > South > Central | **North** | 42 − 36 = **+6** |
+| Q2 | North 47、South 44、Central 39 | North > South > Central | **North** | 47 − 44 = **+3** |
+| Q3 | North 53、South 49、Central 45 | North > South > Central | **North** | 53 − 49 = **+4** |
+| Q4 | North 61、South 58、Central 50 | North > South > Central | **North** | 61 − 58 = **+3** |
+
+## 用原值验证排名
+
+- **Q1**：42 > 36 > 31，逐对比较成立（North 比 South 多 6，South 比 Central 多 5，North 比 Central 多 11），名次无并列。
+- **Q2**：47 > 44 > 39，North 比 South 多 3，South 比 Central 多 5，North 比 Central 多 8。
+- **Q3**：53 > 49 > 45，North 比 South 多 4，South 比 Central 多 4，North 比 Central 多 8。
+- **Q4**：61 > 58 > 50，North 比 South 多 3，South 比 Central 多 8，North 比 Central 多 11。
+
+四个季度均为同一顺序 North > South > Central，且每个季度三值互不相同、无并列，因此“最高地区”判定不依赖四舍五入或估算——12 个数值都是图上柱顶打印的标注值。
+
+## 领先额的分布特征（仅陈述数值）
+
+- 领先额依次为 **6 → 3 → 4 → 3 M USD**：Q1 最大，Q2 与 Q4 同为最小（3 M USD），Q3 居中。
+- 相对幅度（领先额 ÷ 第二名）：Q1 6/36 ≈ 16.7%，Q2 3/44 ≈ 6.8%，Q3 4/49 ≈ 8.2%，Q4 3/58 ≈ 5.2%——虽然 Q3 的绝对领先额大于 Q2，但因基数变大，其相对领先幅度仍高于 Q4。
+- 与第三名的差距合计：Q1 11、Q2 8、Q3 8、Q4 11 M USD，说明 Q1 与 Q4 的三地分化大于中间两个季度。
+- 四季度领先额都未超过第二名水平的 17%，即 North 的领先始终是“小幅领先”，而不是数量级差距。
+
+## 说明
+
+以上仅对图中季度原始值做排序与相减，未涉及任何原因判断；图表没有提供价格、销量结构、渠道或季节信息，因此不对领先额为何变化、各地区为何增长作解释。

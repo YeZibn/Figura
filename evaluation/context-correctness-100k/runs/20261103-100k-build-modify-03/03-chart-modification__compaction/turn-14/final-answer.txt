@@ -1,0 +1,38 @@
+**Figure 整体**（当前最新版：装配 `call_00_kcePLceujkG1CuXKv5LD2306`，digest `715644b7…cf4970`，渲染 `call_00_ET_4RWjQL46oPJcMguepGip0205`）
+
+- 总标题：`2025 Regional Sales and Operations (Revised)`
+- 列数：**2**（两列；已撤销的单列方案未被采用）
+- 面板顺序（左→右、上→下）：
+ 1. `revenue_by_region` — Quarterly Revenue by Region（左上）
+ 2. `monthly_orders` — Monthly Orders (Corrected)（右上）
+ 3. `monthly_conversion_rate` — Monthly Conversion Rate（左下）
+
+**三个子图逐项**
+
+| 子图 | 图表类型 | 标题 | x 轴 | y 轴 | source | note |
+|---|---|---|---|---|---|---|
+| revenue_by_region | bar（分组柱） | Quarterly Revenue by Region | categorical，无轴名 | numeric，`Revenue (M USD)` | Figura synthetic operations dataset | （空） |
+| monthly_orders | line | **Monthly Orders (Corrected)** | categorical，无轴名 | numeric，**`Orders (count)`** | Figura synthetic operations dataset | **`July corrected from the source ledger.`** |
+| monthly_conversion_rate | line | Monthly Conversion Rate | categorical，无轴名 | numeric，`Conversion (%)` | Figura synthetic operations dataset | （空） |
+
+**目标面板（Monthly Orders）核查**
+
+修订来源与其他原有元数据**同时保留**，且相互不覆盖：
+
+| 元数据项 | 初始值 | 现值 | 状态 |
+|---|---|---|---|
+| 修订来源 | — | note = `July corrected from the source ledger.` | 新增并保留 |
+| source | Figura synthetic operations dataset | 同左 | **保留未动** |
+| 标题 | Monthly Orders | Monthly Orders (Corrected) | 按第 2 轮要求修改 |
+| y 轴 | Orders | Orders (count) | 按第 2 轮要求修改 |
+| x 轴 | categorical，无轴名 | 同左 | 保留未动 |
+| 图表类型 / 系列标识 | line / `Orders` | 同左 | 保留未动 |
+| 其余 11 个月份值 | 82,90,87,95,101,108,115,123,119,130,138 | 完全相同 | 保留未动 |
+| July | 105（源图读数） | 109（台账修订） | 仅此点更新 |
+
+- note 与 source 是两个独立字段，修订说明写在 note 中，原本的 source 说明未被替换或清空；因此既能看出数据来自何处，也能看出 July 为何被改。
+- 订单面板的 12 个点中只有 July 变化，其余沿用源图读数；源图原值 105 作为历史读数事实仍可追溯（见早期版本的 July = 105，digest `711d433b…6afb44`）。
+
+**另两个面板的完整性**
+- Quarterly Revenue by Region 与 Monthly Conversion Rate 的标题、轴标签、source、note（均为空）与初始 Figure 逐项一致，数据未变。
+- 三个子图的源说明统一为 `Figura synthetic operations dataset`，这是你指定的展示用来源标注，并非图中印制的原始文字。

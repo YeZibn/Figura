@@ -1,0 +1,6 @@
+{
+  "turn": 9,
+  "text": "使用当前资源目录中成功 ChartFigure 的完整 `ref` 直接调用 `read_history` 读取 Figure。核对 North 的 2025Q4 Revenue、2026-03 Orders 和 North/Direct cell；不得把缺失值改成零或插值。不要先搜索历史。",
+  "attachment_sha256": [],
+  "provider_id": "deepseek"
+}

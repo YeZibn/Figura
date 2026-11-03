@@ -1,0 +1,73 @@
+## 一、最终 Figure 的三个子图数据（当前生效版本：run 6，标题 “2025 Regional Sales and Operations (Revised)”）
+
+### 子图 1 — Quarterly Revenue by Region（bar，分组）
+
+类别（X 轴，按顺序）：Q1、Q2、Q3、Q4
+
+| 系列 | Q1 | Q2 | Q3 | Q4 |
+|---|---|---|---|---|
+| North | 34 | 39 | 43 | 50 |
+| South | 27 | 32 | 36 | 41 |
+| Central | 22 | 26 | 31 | 35 |
+
+单位：M USD；4 个季度 × 3 个地区，共 12 个柱值，与初始 Figure 完全相同。
+
+### 子图 2 — Monthly Orders (Corrected)（line）
+
+类别（X 轴，按顺序）：Jan、Feb、Mar、Apr、May、Jun、Jul、Aug、Sep、Oct、Nov、Dec
+
+| 月份 | 最终值 | 源图读数 | 是否修订 |
+|---|---|---|---|
+| Jan | 82 | 82 | — |
+| Feb | 90 | 90 | — |
+| Mar | 87 | 87 | — |
+| Apr | 95 | 95 | — |
+| May | 101 | 101 | — |
+| Jun | 108 | 108 | — |
+| **Jul** | **109** | **105** | **是（唯一修订点）** |
+| Aug | 115 | 115 | — |
+| Sep | 123 | 123 | — |
+| Oct | 119 | 119 | — |
+| Nov | 130 | 130 | — |
+| Dec | 138 | 138 | — |
+
+- 最终序列：82、90、87、95、101、108、**109**、115、123、119、130、138，合计 1 297，月均约 108.08。
+- 源图序列：同上但 Jul = **105**，合计 1 293，月均 107.75。
+- 唯一差异：Jul 从源图标注的 105 改为台账核实的 109（+4）；其余 11 个月两套口径完全相同。源图读数 105 未被抹去，仍保留在该面板 note 中。
+
+### 子图 3 — Monthly Conversion Rate（line）
+
+类别（X 轴，按顺序）：Jan、Feb、Mar、Apr、May、Jun、Jul、Aug、Sep、Oct、Nov、Dec
+
+| 月份 | 值（%） |
+|---|---|
+| Jan | 2.4 |
+| Feb | 2.6 |
+| Mar | 2.5 |
+| Apr | 2.8 |
+| May | 3.0 |
+| Jun | 3.1 |
+| Jul | 3.0 |
+| Aug | 3.3 |
+| Sep | 3.4 |
+| Oct | 3.2 |
+| Nov | 3.6 |
+| Dec | 3.8 |
+
+与初始 Figure 数值一致（May、Jul 在规格中写作 `3`，与 `3.0` 等值）。
+
+---
+
+## 二、所有生效的标题、轴标签、source 与 note
+
+| 层级 / 子图 | 标题 | X 轴标签 | Y 轴标签 | source | note |
+|---|---|---|---|---|---|
+| **Figure 总标题** | 2025 Regional Sales and Operations (Revised) | — | — | — | — |
+| ① revenue_by_region | Quarterly Revenue by Region | Quarter | Revenue (M USD) | Figura synthetic operations dataset | 数值取自柱顶标注 |
+| ② monthly_orders | Monthly Orders (Corrected) | Month | Orders (count) | Figura synthetic operations dataset | July corrected from the source ledger. 其余月份数值取自折线点标注（源图 July 为 105） |
+| ③ monthly_conversion | Monthly Conversion Rate | Month | Conversion (%) | Figura synthetic operations dataset | 数值取自折线点标注 |
+
+补充结构信息（随上述字段一并生效）：
+- 布局两列，顺序为 Revenue → Orders → Conversion；已撤销的“单列”与“Conversion 置首”两项候选未生效。
+- 系列标识：① North / South / Central；② Orders；③ Conversion rate。轴类型均为 cartesian，X 为分类轴、Y 为数值轴。
+- 与初始 Figure 的源图原文相关差异：Figure 总标题、②的标题/Y 轴标签/note、②的 July 值共 4 处为按用户要求更新；①与③的字段和数据未变。

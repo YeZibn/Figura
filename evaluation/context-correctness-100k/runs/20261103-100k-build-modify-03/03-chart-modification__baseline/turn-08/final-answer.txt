@@ -1,0 +1,14 @@
+最终 Figure 已符合该要求：无需再装配，因为当前生效版本（图整体标题为 “2025 Regional Sales and Operations (Revised)” 的那次装配，摘要 digest 0a0082bc…）正好只包含你允许的四类改动。
+
+**已核对：只改动了你指定的内容**
+- Monthly Orders 的 July 值：109（其余 11 个月与初始 Figure 相同）
+- Monthly Orders 面板标题：Monthly Orders (Corrected)
+- 该面板 Y 轴标签：Orders (count)
+- 该面板 note：July corrected from the source ledger.
+- Figure 总标题：2025 Regional Sales and Operations (Revised)
+
+**已核对：另两个面板与初始 Figure 完全一致**
+- Quarterly Revenue by Region：标题、source（Figura synthetic operations dataset）、X 轴 Quarter、Y 轴 Revenue (M USD)、分组模式与竖排方向、Q1–Q4 四个类别、North/South/Central 三系列及全部数值、空 note，均与初始版本逐字段相同
+- Monthly Conversion Rate：标题、source、X 轴 Month、Y 轴 Conversion (%)、系列 id 与标签、12 个数据点、空 note，同样逐字段相同
+
+**未应用候选布局**：两列布局（columns = 2）和面板顺序（收入 → 订单 → 转化率）保持初始状态；单列与把转化率提前的方案未进入任何装配。

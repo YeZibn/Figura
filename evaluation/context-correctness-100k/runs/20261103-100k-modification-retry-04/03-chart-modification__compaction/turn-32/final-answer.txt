@@ -1,0 +1,202 @@
+以下为**摘要草稿（文本形态，未提交装配、未渲染，也未新建 Figure 版本）**。它按当前生效内容完整描述三个面板，可直接用于后续装配核对。
+
+## 一、ChartSpec 草稿
+
+```json
+{
+  "schema_version": 2,
+  "title": "2025 Regional Sales and Operations (Revised)",
+  "layout": { "columns": 2 },
+  "charts": [
+    {
+      "chart_id": "quarterly_revenue",
+      "chart_spec": {
+        "schema_version": 2,
+        "metadata": {
+          "chart_type": "bar",
+          "title": "Quarterly Revenue by Region",
+          "source": "Figura synthetic operations dataset",
+          "note": ""
+        },
+        "coordinate_system": {
+          "kind": "cartesian",
+          "x_axis": { "kind": "categorical" },
+          "y_axis": { "kind": "numeric", "label": "Revenue (M USD)" }
+        },
+        "dataset": {
+          "orientation": "vertical",
+          "mode": "grouped",
+          "categories": [
+            { "id": "q1", "label": "Q1" },
+            { "id": "q2", "label": "Q2" },
+            { "id": "q3", "label": "Q3" },
+            { "id": "q4", "label": "Q4" }
+          ],
+          "series": [
+            { "id": "north",   "label": "North",   "values": [34, 39, 43, 50] },
+            { "id": "south",   "label": "South",   "values": [27, 32, 36, 41] },
+            { "id": "central", "label": "Central", "values": [22, 26, 31, 35] }
+          ]
+        }
+      },
+      "measurement_refs": []
+    },
+    {
+      "chart_id": "monthly_orders",
+      "chart_spec": {
+        "schema_version": 2,
+        "metadata": {
+          "chart_type": "line",
+          "title": "Monthly Orders (Corrected)",
+          "source": "Figura synthetic operations dataset",
+          "note": "July corrected from the source ledger."
+        },
+        "coordinate_system": {
+          "kind": "cartesian",
+          "x_axis": { "kind": "categorical" },
+          "y_axis": { "kind": "numeric", "label": "Orders (count)" }
+        },
+        "dataset": {
+          "series": [
+            {
+              "id": "orders",
+              "label": "Orders",
+              "points": [
+                { "x": "Jan", "y": 82 },
+                { "x": "Feb", "y": 90 },
+                { "x": "Mar", "y": 87 },
+                { "x": "Apr", "y": 95 },
+                { "x": "May", "y": 101 },
+                { "x": "Jun", "y": 108 },
+                { "x": "Jul", "y": 109 },
+                { "x": "Aug", "y": 115 },
+                { "x": "Sep", "y": 123 },
+                { "x": "Oct", "y": 119 },
+                { "x": "Nov", "y": 130 },
+                { "x": "Dec", "y": 138 }
+              ]
+            }
+          ]
+        }
+      },
+      "measurement_refs": []
+    },
+    {
+      "chart_id": "monthly_conversion",
+      "chart_spec": {
+        "schema_version": 2,
+        "metadata": {
+          "chart_type": "line",
+          "title": "Monthly Conversion Rate",
+          "source": "Figura synthetic operations dataset",
+          "note": ""
+        },
+        "coordinate_system": {
+          "kind": "cartesian",
+          "x_axis": { "kind": "categorical" },
+          "y_axis": { "kind": "numeric", "label": "Conversion (%)" }
+        },
+        "dataset": {
+          "series": [
+            {
+              "id": "conversion",
+              "label": "Conversion Rate",
+              "points": [
+                { "x": "Jan", "y": 2.4 },
+                { "x": "Feb", "y": 2.6 },
+                { "x": "Mar", "y": 2.5 },
+                { "x": "Apr", "y": 2.8 },
+                { "x": "May", "y": 3.0 },
+                { "x": "Jun", "y": 3.1 },
+                { "x": "Jul", "y": 3.0 },
+                { "x": "Aug", "y": 3.3 },
+                { "x": "Sep", "y": 3.4 },
+                { "x": "Oct", "y": 3.2 },
+                { "x": "Nov", "y": 3.6 },
+                { "x": "Dec", "y": 3.8 }
+              ]
+            }
+          ]
+        }
+      },
+      "measurement_refs": []
+    }
+  ]
+}
+```
+
+## 二、Figure 级要素
+
+| 项 | 值 |
+|---|---|
+| 总标题 | `2025 Regional Sales and Operations (Revised)` |
+| 列数 | `2`（2 列布局，3 图占 3 格，右下为结构性空位） |
+| 面板顺序 | 1 `quarterly_revenue` → 2 `monthly_orders` → 3 `monthly_conversion` |
+| 视觉落位 | 左上 = 季度收入柱图；右上 = 月度订单折线；左下 = 月度转化率折线；右下 = 空 |
+| 子图数量 | 3 |
+| `schema_version` | 2 |
+
+## 三、全量序列数据（便于逐值核对）
+
+**Quarterly Revenue by Region（bar）**
+
+| 系列 \ 类别 | Q1 | Q2 | Q3 | Q4 |
+|---|---|---|---|---|
+| North | 34 | 39 | 43 | 50 |
+| South | 27 | 32 | 36 | 41 |
+| Central | 22 | 26 | 31 | 35 |
+
+**Monthly Orders (Corrected)（line）**
+
+| 月 | Jan | Feb | Mar | Apr | May | Jun | Jul | Aug | Sep | Oct | Nov | Dec |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Orders | 82 | 90 | 87 | 95 | 101 | 108 | **109** | 115 | 123 | 119 | 130 | 138 |
+
+**Monthly Conversion Rate（line）**
+
+| 月 | Jan | Feb | Mar | Apr | May | Jun | Jul | Aug | Sep | Oct | Nov | Dec |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| % | 2.4 | 2.6 | 2.5 | 2.8 | 3.0 | 3.1 | 3.0 | 3.3 | 3.4 | 3.2 | 3.6 | 3.8 |
+
+## 四、修订来源说明
+
+| 项 | 内容 |
+|---|---|
+| 被修订字段 | `monthly_orders` 的 July 值：**105 → 109** |
+| 源图读数 | 105，属**历史事实**，保存在初始 Figure 与读取记录中，本稿不抹除、不覆盖该历史 |
+| 修订依据 | 用户核实订单台账后确认 July 应为 109；本会话内**无台账原件/编号/日期**可复核，故属"用户确认值" |
+| 图内记录方式 | `monthly_orders.metadata.note` = `July corrected from the source ledger.` |
+| 图内是否嵌入凭据 | 否；`measurement_refs` 为 `[]` |
+| 影响范围 | 仅 July 一点；其余 11 个月保持原值；全年合计 1293→1297，月均 107.75→108.08（+1/3），Q3 月均 114.33→115.67 |
+| 附带修订 | Figure 总标题 → `2025 Regional Sales and Operations (Revised)`；`monthly_orders` 标题 → `Monthly Orders (Corrected)`；其 y 轴 → `Orders (count)`；其 note 由空填入上句 |
+
+## 五、非目标字段保留说明
+
+| 对象 | 保留状态 |
+|---|---|
+| 布局列数 | 保持 `2`；早先"单列"候选**已撤销**，不得写入 |
+| 面板顺序 | 保持 quarterly_revenue → monthly_orders → monthly_conversion；"Monthly Conversion Rate 置首"候选**已撤销**，不得写入 |
+| Quarterly Revenue 全字段 | 标题、`bar`、y 轴 `Revenue (M USD)`、x 轴 `categorical` 且无轴标题、source、note 空、Q1–Q4 类别、三系列 North/South/Central 及 12 个值——与初始 Figure 完全一致 |
+| Monthly Orders 非目标字段 | `chart_type` `line`、source 原文、x 轴 `categorical` 且无轴标题、系列 `orders` / `Orders`、除 July 外 11 个点位与顺序——全部保留原值；source 未被 note 替换，二者并存 |
+| Monthly Conversion Rate 全字段 | 标题、`line`、y 轴 `Conversion (%)`、x 轴 `categorical` 且无轴标题、source、note 空、`conversion` / `Conversion Rate`、12 个值与顺序——与初始 Figure 完全一致 |
+| `measurement_refs` | 三处均为 `[]`，不新增、不虚构 |
+| 空 `note` | Quarterly Revenue 与 Monthly Conversion Rate 的 note 保持 `""`，未被填值 |
+
+## 六、标签完整性清单（无遗漏核对）
+
+| 类别 | 标签值 |
+|---|---|
+| Figure 标题 | `2025 Regional Sales and Operations (Revised)` |
+| 子图标题 ×3 | `Quarterly Revenue by Region`、`Monthly Orders (Corrected)`、`Monthly Conversion Rate` |
+| y 轴标签 ×3 | `Revenue (M USD)`、`Orders (count)`、`Conversion (%)` |
+| x 轴标签 ×3 | 均未设置（无轴标题） |
+| 系列标签 | `North`、`South`、`Central`、`Orders`、`Conversion Rate` |
+| 类别标签 | `Q1`、`Q2`、`Q3`、`Q4`；`Jan`–`Dec`（订单与转化率各 12 个） |
+| source 标签（×3） | `Figura synthetic operations dataset` |
+| note | `""`、`July corrected from the source ledger.`、`""` |
+| chart_id | `quarterly_revenue`、`monthly_orders`、`monthly_conversion` |
+| 图表类型 | `bar`、`line`、`line` |
+
+## 七、状态说明
+
+本稿为**文本草稿**：仅按现有记录整理，未调用装配工具、未生成新 Figure、未渲染，当前生效 Figure 的 digest 仍为 `b8194b22e7d97fbcbc40ab04dcd43b3ae44c42460536736d7a538dd4ae0b1056`。若需将其变为可引用的 Figure，请明确指示"按此草稿装配"，我再提交完整 `assemble_chart_figure` 并按需渲染。

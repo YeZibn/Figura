@@ -1,0 +1,16 @@
+已将 Figure 标题改为 `2025 Regional Sales and Operations (Revised)`，并重新装配、绘制为 PNG（1280×1002）。回看渲染后的图像后，确认标题、布局和面板顺序均符合要求。
+
+**本次改动**
+- 整体 Figure 标题：`Regional Operations Dashboard, 2025` → `2025 Regional Sales and Operations (Revised)`
+
+**保持不变（均已在渲染图中核对）**
+- 布局：两列（`columns: 2`），右下留空
+- 面板顺序与位置：Quarterly Revenue by Region →左上；Monthly Orders (Corrected) →右上；Monthly Conversion Rate →左下
+- 数据与标注：
+  - 柱状图 Q1 34/27/22、Q2 39/32/26、Q3 43/36/31、Q4 50/41/35（North/South/Central）
+  - Orders 82、90、87、95、101、108、**109**、115、123、119、130、138；Jul 在图上略高于 Jun（108），note 中仍显示 `July corrected from the source ledger.`
+  - Conversion 2.4、2.6、2.5、2.8、3.0、3.1、3.0、3.3、3.4、3.2、3.6、3.8
+- 子图标题与轴标签（含 `Monthly Orders (Corrected)`、`Orders (count)`）、子图 source「Figura synthetic operations dataset」
+- 此前撤销的单列布局与面板重排均未出现
+
+说明：本次仅修改了标题文字；图表中的数值与走势来自此前对源图标注文字的读取和台账更正，渲染成功不代表这些数据已经再次核对。

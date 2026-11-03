@@ -1,0 +1,31 @@
+已读取三个面板并生成初始 Figure，并已绘制成 PNG（1280×1002）。
+
+**提取结果**（数值均为图上直接标注的文字，已与 OCR 结果核对一致）
+
+**1. 面板标题：Quarterly Revenue by Region**
+- 图表类型：分组柱状图
+- X 轴：Quarter（Q1–Q4）；Y 轴：Revenue (M USD)，刻度从 0 到 50，间隔为 10
+- 系列与数值：
+
+| 季度 | North | South | Central |
+|---|---|---|---|
+| Q1 | 34 | 27 | 22 |
+| Q2 | 39 | 32 | 26 |
+| Q3 | 43 | 36 | 31 |
+| Q4 | 50 | 41 | 35 |
+
+**2. 面板标题：Monthly Orders**
+- 图表类型：单系列折线图（带数据点标记）
+- X 轴：Month（Jan–Dec）；Y 轴：Orders，刻度从 80 到 140，间隔为 10
+- 数值：Jan 82、Feb 90、Mar 87、Apr 95、May 101、Jun 108、Jul 105、Aug 115、Sep 123、Oct 119、Nov 130、Dec 138
+
+**3. 面板标题：Monthly Conversion Rate**
+- 图表类型：单系列折线图（带数据点标记）
+- X 轴：Month（Jan–Dec）；Y 轴：Conversion (%)，刻度从 2.4 到 3.8，间隔为 0.2
+- 数值：Jan 2.4、Feb 2.6、Mar 2.5、Apr 2.8、May 3.0、Jun 3.1、Jul 3.0、Aug 3.3、Sep 3.4、Oct 3.2、Nov 3.6、Dec 3.8
+
+**已生成的 Figure**
+- 整体标题：Regional Operations Dashboard, 2025；两列布局；按原图从上到下的顺序放置子图（第 1 个面板在左上，第 2 个在右上，第 3 个在左下）
+- 子图 source 均标注为「Figura synthetic operations dataset」
+
+说明：为防止干扰图例，原图中的数值标签未在生成图上重绘；数据以完整 ChartSpec 保存。三张面板的数值均为标注读数，趋势（营收随季度上升、订单与转化率年内走高，7 月与 10 月出现小幅回落）在图上也一致可见。

@@ -1,0 +1,13 @@
+已按你的要求重新装配完整 Figure 并绘制成 PNG（1280×1002）。
+
+**改动（仅 Monthly Orders 面板）**
+- 子图标题：`Monthly Orders` → `Monthly Orders (Corrected)`
+- Y 轴标签：`Orders` → `Orders (count)`
+
+**保持不变**
+- Figure 总标题「Regional Operations Dashboard, 2025」、两列布局、子图从上到下的顺序（左上、右上、左下）
+- Quarterly Revenue by Region：分组柱状图，Q1「North 34 / South 27 / Central 22」、Q2「39 / 32 / 26」、Q3「43 / 36 / 31」、Q4「50 / 41 / 35」，轴为 Quarter 与 Revenue (M USD)
+- Monthly Conversion Rate：Jan–Dec 为 2.4、2.6、2.5、2.8、3.0、3.1、3.0、3.3、3.4、3.2、3.6、3.8，轴为 Month 与 Conversion (%)
+- Monthly Orders 的 12 个数据点（82、90、87、95、101、108、105、115、123、119、130、138）与子图 source「Figura synthetic operations dataset」
+
+回看渲染图可见：新标题与新轴标签正确显示于右上子图，两个折线图数据点位置未变，柱状图数值与系列对应关系延续上一版；右下角为两列布局下第三个子图留出的空白区。

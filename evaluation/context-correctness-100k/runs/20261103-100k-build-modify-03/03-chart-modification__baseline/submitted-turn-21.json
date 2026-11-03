@@ -1,0 +1,6 @@
+{
+  "turn": 21,
+  "text": "列出 12 个月 source 值与最终值的逐月对照，只允许 July 两列不同。对每个差异给出用户依据或说明无差异。",
+  "attachment_sha256": [],
+  "provider_id": "deepseek"
+}

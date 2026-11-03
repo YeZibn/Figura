@@ -1,0 +1,88 @@
+我按字段逐项核对了**初始 Figure**（`call_00_f7ywZBI0cGfkh3E11xwt7757`，digest `d422b433…b7948`）与**当前最新 Figure**（`call_00_kcePLceujkG1CuXKv5LD2306`，digest `715644b7…cf4970`）的完整 ChartSpec，结果如下。
+
+## A. Figure 级字段
+
+| 字段 | 初始 | 当前 | 判定 |
+|---|---|---|---|
+| title | Regional Operations Dashboard, 2025 | 2025 Regional Sales and Operations (Revised) | ✅ 允许修改（已授权） |
+| layout.columns | 2 | 2 | ✅ 不变 |
+| schema_version | 2 | 2 | ✅ 不变 |
+| charts 数量 | 3 | 3 | ✅ 不变 |
+| charts 顺序（chart_id） | revenue → orders → conversion | 同 | ✅ 不变 |
+
+## B. Monthly Orders — 允许修改的字段
+
+| 字段 | 初始 | 当前 | 判定 |
+|---|---|---|---|
+| metadata.title | Monthly Orders | Monthly Orders (Corrected) | ✅ 在允许范围内 |
+| coordinate_system.y_axis.label | Orders | Orders (count) | ✅ 在允许范围内 |
+| metadata.note | （空） | July corrected from the source ledger. | ✅ 在允许范围内（记录修订来源） |
+| July 值 | 105 | 109 | ✅ 在允许范围内（唯一被允许改动的数据点） |
+
+## C. Monthly Orders — 不允许修改的字段（复核）
+
+| 字段 | 初始 | 当前 | 判定 |
+|---|---|---|---|
+| metadata.chart_type | line | line | ✅ 未变 |
+| metadata.source | Figura synthetic operations dataset | 同 | ✅ 未变 |
+| coordinate_system.kind | cartesian | 同 | ✅ 未变 |
+| x_axis.kind、x_axis.label | categorical、无轴名 | 同 | ✅ 未变 |
+| y_axis.kind | numeric | 同 | ✅ 未变 |
+| dataset.series 数量、id、label | 1、orders、Orders | 同 | ✅ 未变 |
+| Jan 值 | 82 | 82 | ✅ 未变 |
+| Feb 值 | 90 | 90 | ✅ 未变 |
+| Mar 值 | 87 | 87 | ✅ 未变 |
+| Apr 值 | 95 | 95 | ✅ 未变 |
+| May 值 | 101 | 101 | ✅ 未变 |
+| Jun 值 | 108 | 108 | ✅ 未变 |
+| Aug 值 | 115 | 115 | ✅ 未变 |
+| Sep 值 | 123 | 123 | ✅ 未变 |
+| Oct 值 | 119 | 119 | ✅ 未变 |
+| Nov 值 | 130 | 130 | ✅ 未变 |
+| Dec 值 | 138 | 138 | ✅ 未变 |
+| 点数、顺序 | 12、Jan→Dec | 同 | ✅ 未变 |
+| measurement_refs | 空 | 空 | ✅ 未变 |
+
+## D. Quarterly Revenue by Region — 全部字段必须不变
+
+| 字段 | 初始 | 当前 | 判定 |
+|---|---|---|---|
+| metadata.title | Quarterly Revenue by Region | 同 | ✅ |
+| metadata.chart_type | bar | 同 | ✅ |
+| metadata.source | Figura synthetic operations dataset | 同 | ✅ |
+| metadata.note | （空） | （空） | ✅ |
+| coordinate_system.kind | cartesian | 同 | ✅ |
+| x_axis.kind、label | categorical、无轴名 | 同 | ✅ |
+| y_axis.kind、label | numeric、Revenue (M USD) | 同 | ✅ |
+| dataset.orientation | vertical | 同 | ✅ |
+| dataset.mode | grouped | 同 | ✅ |
+| categories id→label | q1→Q1 · q2→Q2 · q3→Q3 · q4→Q4 | 同 | ✅ |
+| series north label、values | North、34/39/43/50 | 同 | ✅ |
+| series south label、values | South、27/32/36/41 | 同 | ✅ |
+| series central label、values | Central、22/26/31/35 | 同 | ✅ |
+| measurement_refs | 空 | 空 | ✅ |
+
+## E. Monthly Conversion Rate — 全部字段必须不变
+
+| 字段 | 初始 | 当前 | 判定 |
+|---|---|---|---|
+| metadata.title | Monthly Conversion Rate | 同 | ✅ |
+| metadata.chart_type | line | 同 | ✅ |
+| metadata.source | Figura synthetic operations dataset | 同 | ✅ |
+| metadata.note | （空） | （空） | ✅ |
+| coordinate_system.kind | cartesian | 同 | ✅ |
+| x_axis.kind、label | categorical、无轴名 | 同 | ✅ |
+| y_axis.kind、label | numeric、Conversion (%) | 同 | ✅ |
+| series id、label | conversion、Conversion | 同 | ✅ |
+| Jan–Dec values | 2.4、2.6、2.5、2.8、3.0、3.1、3.0、3.3、3.4、3.2、3.6、3.8 | 逐位相同 | ✅ |
+| 点数、顺序 | 12、Jan→Dec | 同 | ✅ |
+| measurement_refs | 空 | 空 | ✅ |
+
+## 结论
+
+- **通过项**：72 项字段检查全部通过；B 节 4 个允许字段的改动均在授权范围内，C、D、E 节所有“必须不变”的字段零偏差。
+- **发现的偏差**：**无**。没有出现越界改动，例如未擅自改动 Revenue、Conversion 的值或标签，也未改动 Orders 的 source、图表类型、x 轴，以及除 July 外的月份值。
+- **两处需要明确但不算偏差**：
+ 1. Orders 的序列标签仍为 `Orders`，只有 y 轴标签变为 `Orders (count)`；这符合“仅改轴标签”的授权范围，两者不冲突。
+ 2. Figure digest 由 `d422b433…b7948` 变为 `715644b7…cf4970`，差异完全来自 B 节 4 个字段与 Figure 标题，与 D、E 两节无关。
+- 另需说明证据边界：D、E 两节的“值未变”是 ChartSpec 字段级一致，并且与源图柱顶、折线点标注读数相符；源图上的 July 标注仍是 105，当前 Figure 的 109 属于你确认的台账修订，已由该面板 note 留痕，并非读取偏差。

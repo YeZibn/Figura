@@ -1,0 +1,6 @@
+{
+  "turn": 18,
+  "text": "在渲染前核对 Figure 总标题、两列布局、面板顺序、三个子图数据、缺失项、source/note 和修订来源。确认目标外图表没有变化。",
+  "attachment_sha256": [],
+  "provider_id": "deepseek"
+}

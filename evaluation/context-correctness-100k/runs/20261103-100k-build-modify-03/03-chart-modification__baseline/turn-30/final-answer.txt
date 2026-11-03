@@ -1,0 +1,59 @@
+## 一、Quarterly Revenue by Region
+
+| 字段 | 当前值 |
+|---|---|
+| 标题 | Quarterly Revenue by Region |
+| 图表类型 | bar（分组柱状；orientation = vertical，mode = grouped） |
+| X 轴 | categorical / Quarter |
+| Y 轴 | numeric / Revenue (M USD) |
+| source | Figura synthetic operations dataset |
+| note | 空字符串 |
+| 类别（4 个） | Q1、Q2、Q3、Q4（id：q1–q4） |
+
+**全部数值（3 系列 × 4 季度 = 12 个）**
+
+| 系列 | Q1 | Q2 | Q3 | Q4 |
+|---|---|---|---|---|
+| North | 34 | 39 | 43 | 50 |
+| South | 27 | 32 | 36 | 41 |
+| Central | 22 | 26 | 31 | 35 |
+
+## 二、Monthly Conversion Rate
+
+| 字段 | 当前值 |
+|---|---|
+| 标题 | Monthly Conversion Rate |
+| 图表类型 | line |
+| X 轴 | categorical / Month |
+| Y 轴 | numeric / Conversion (%) |
+| source | Figura synthetic operations dataset |
+| note | 空字符串 |
+| 类别（12 个） | Jan、Feb、Mar、Apr、May、Jun、Jul、Aug、Sep、Oct、Nov、Dec |
+
+**全部数值（12 个，单系列，series id = conversion_rate，label = Conversion rate）**
+
+| 月份 | Jan | Feb | Mar | Apr | May | Jun | Jul | Aug | Sep | Oct | Nov | Dec |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Conversion (%) | 2.4 | 2.6 | 2.5 | 2.8 | 3.0 | 3.1 | 3.0 | 3.3 | 3.4 | 3.2 | 3.6 | 3.8 |
+
+## 三、与初始 Figure 的一致性声明
+
+对照基准：初始 Figure（run e2426d3a…，digest e1f33d48…）与当前 Figure（run 28991ef6…，digest 0a0082bc…），逐字段读取结构化内容比对。
+
+| 核对项 | Quarterly Revenue | Monthly Conversion Rate |
+|---|---|---|
+| chart_id | quarterly_revenue，一致 ✅ | monthly_conversion，一致 ✅ |
+| 标题 | 一致 ✅ | 一致 ✅ |
+| 图表类型 | bar，一致 ✅ | line，一致 ✅ |
+| X 轴 kind / label | categorical / Quarter，一致 ✅ | categorical / Month，一致 ✅ |
+| Y 轴 kind / label | numeric / Revenue (M USD)，一致 ✅ | numeric / Conversion (%)，一致 ✅ |
+| source | 一致 ✅ | 一致 ✅ |
+| note | 均为空，一致 ✅ | 均为空，一致 ✅ |
+| 类别及顺序 | Q1–Q4，一致 ✅ | Jan–Dec，一致 ✅ |
+| 系列结构 | North / South / Central 三系列，一致 ✅ | 单系列 Conversion rate，一致 ✅ |
+| 全部数值 | 12 个值逐项相同 ✅ | 12 个值逐项相同 ✅ |
+| 分组/方向（bar） | grouped、vertical，一致 ✅ | 不适用 |
+| measurement_refs | []，一致 ✅ | []，一致 ✅ |
+| schema_version | 2，一致 ✅ | 2，一致 ✅ |
+
+**结论**：这两个子图的标题、图表类型、轴标签、source、note、类别顺序与全部数值，均与初始 Figure 完全一致，未发生任何变化。本会话的全部修改仅涉及 Monthly Orders 子图（title、Y 轴标签、note、July 值）与 Figure 总标题；单列/重排候选已撤销且从未写入。读取基于结构化内容，未经像素测量；数值来源为源图数据标签。

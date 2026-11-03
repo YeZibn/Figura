@@ -1,0 +1,65 @@
+以下比对基于本次会话中两份已提交 Figure 规格的字段级核对：初始版 run `b820262d…`（call `call_00_9F9…`）与当前最终版 run `07a98a5a…`（call `call_00_GLh…`）。
+
+## A. Monthly Orders —— 允许修改的字段
+
+| 字段 | 初始值 | 最终值 | 是否在允许范围 | 结果 |
+|---|---|---|---|---|
+| 子图标题 | Monthly Orders | Monthly Orders (Corrected) | 允许（第 2、8 轮） | ✅ 通过 |
+| y 轴标签 | Orders | Orders (count) | 允许（第 2、8 轮） | ✅ 通过 |
+| note | `""`（空） | July corrected from the source ledger. | 允许（第 5、8 轮） | ✅ 通过 |
+| Jul 值 | 105 | 109 | 允许（第 5、8 轮） | ✅ 通过 |
+| Figure 总标题（Figure 级） | Regional Operations Dashboard, 2025 | 2025 Regional Sales and Operations (Revised) | 允许（第 6、8 轮） | ✅ 通过 |
+
+## B. Monthly Orders —— 必须保持不变的部分
+
+| 字段 | 初始值 | 最终值 | 结果 |
+|---|---|---|---|
+| chart_id | monthly_orders | monthly_orders | ✅ 通过 |
+| chart_type | line | line | ✅ 通过 |
+| x 轴类型 / 标签 | categorical / 无标签 | categorical / 无标签 | ✅ 通过 |
+| x 分类与顺序 | Jan…Dec（12 项） | Jan…Dec（12 项） | ✅ 通过 |
+| 系列 id / label | orders / Orders | orders / Orders | ✅ 通过 |
+| source | Figura synthetic operations dataset | 同左 | ✅ 通过 |
+| Jan–Jun 值 | 82, 90, 87, 95, 101, 108 | 82, 90, 87, 95, 101, 108 | ✅ 通过 |
+| Aug–Dec 值 | 115, 123, 119, 130, 138 | 115, 123, 119, 130, 138 | ✅ 通过 |
+| 点数量 / 顺序 | 12 点，月份顺序 | 12 点，月份顺序 | ✅ 通过 |
+| measurement_refs | 空 | 空 | ✅ 通过 |
+
+## C. Quarterly Revenue by Region —— 全部必须不变
+
+| 字段 | 初始值 | 最终值 | 结果 |
+|---|---|---|---|
+| 标题 | Quarterly Revenue by Region | 同左 | ✅ 通过 |
+| chart_type | bar | bar | ✅ 通过 |
+| 排列 | vertical / grouped | vertical / grouped | ✅ 通过 |
+| x 轴类型 / 标签 | categorical / 无标签 | 同左 | ✅ 通过 |
+| 类别 | Q1、Q2、Q3、Q4（q1–q4） | 同左 | ✅ 通过 |
+| y 轴类型 / 标签 | numeric / Revenue (M USD) | 同左 | ✅ 通过 |
+| 系列 id / label | north/South、south/South、central/Central | 同左 | ✅ 通过 |
+| North 值 | 34, 39, 43, 50 | 34, 39, 43, 50 | ✅ 通过 |
+| South 值 | 27, 32, 36, 41 | 27, 32, 36, 41 | ✅ 通过 |
+| Central 值 | 22, 26, 31, 35 | 22, 26, 31, 35 | ✅ 通过 |
+| source | Figura synthetic operations dataset | 同左 | ✅ 通过 |
+| note | `""` | `""` | ✅ 通过 |
+
+## D. Monthly Conversion Rate —— 全部必须不变
+
+| 字段 | 初始值 | 最终值 | 结果 |
+|---|---|---|---|
+| 标题 | Monthly Conversion Rate | 同左 | ✅ 通过 |
+| chart_type | line | line | ✅ 通过 |
+| x 轴类型 / 标签 | categorical / 无标签 | 同左 | ✅ 通过 |
+| x 分类 | Jan…Dec | 同左 | ✅ 通过 |
+| y 轴类型 / 标签 | numeric / Conversion (%) | 同左 | ✅ 通过 |
+| 系列 id / label | conversion / Conversion rate | 同左 | ✅ 通过 |
+| 12 个值 | 2.4, 2.6, 2.5, 2.8, 3.0, 3.1, 3.0, 3.3, 3.4, 3.2, 3.6, 3.8 | 完全一致 | ✅ 通过 |
+| source / note | Figura synthetic operations dataset / `""` | 同左 | ✅ 通过 |
+
+## E. 偏差结论
+
+**发现越权或未授权偏差：0 项。** 两版之间所有差异恰好落在第 8 轮授权清单内（Figure 总标题、Orders 的标题、Orders 的 y 轴标签、Orders 的 note、July 值），其余字段与数值逐项一致；已撤销的单列布局与转化率置顶重排均未出现（`columns` 仍为 2，顺序仍为营收 → 订单 → 转化率）。
+
+三点非偏差但值得注意的观察：
+1. 订单面板的系列 label 仍为 `Orders`，与新的 y 轴标签 `Orders (count)` 并存——这是「保持不变」的正确结果，但图面可能出现两种写法，属预期内的轻微措辞不一致。
+2. note 只声明「已按台账更正」，未记录被替换的原图值 105；该原值仅存在于历史记录与旧版本中。
+3. note 为元数据，是否在图面上可见尚未经渲染核对；本比对不涉及渲染后的视觉效果，也未重新测量源 PNG。

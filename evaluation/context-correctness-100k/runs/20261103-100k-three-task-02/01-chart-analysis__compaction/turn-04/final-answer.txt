@@ -1,0 +1,29 @@
+## 面板含义与单位
+
+**Returns by Product and Region**（2×2 布局的右下）是 3 行 × 4 列的热力图。
+
+- **行（商品类别）**：Electronics（电子）、Home（家居）、Sports（运动）
+- **列（区域/渠道）**：North、South、Central、Online。前三项是销售区域，**Online 是渠道维度**，与前三个不同类，这一点沿用了原图标签，我没有合并或改动。
+- **单元格数值单位**：右侧色条标题为 **Returned units**（退货件数），色条刻度 3–11，颜色越深代表退货件数越多（浅黄=3，深蓝=11）。单元格内直接印有整数。
+
+## 按商品类别列出各列数值（Returned units）
+
+| 商品类别 \ 列 | North | South | Central | Online | 类别合计 |
+|---|---|---|---|---|---|
+| Electronics | 9 | 7 | 5 | **11** | 32 |
+| Home | 6 | **8** | 4 | 9 | 27 |
+| Sports | **3** | 4 | 6 | 5 | 18 |
+| 列合计 | 18 | 19 | 15 | 25 | 77 |
+
+## 最大与最小单元格
+
+- **最大**：**Electronics × Online = 11**（深蓝，达到色条上限）
+- **最小**：**Sports × North = 3**（浅黄，达到色条下限）
+- 各列、各行内部最高：North 为 Electronics，South 为 Home，Central 为 Sports，Online 为 Electronics；Electronics 是唯一在 Online 最高、在 Central 最低的类别。
+- 合计看：Online 为 25，是四列最多；Sports 为 18，是三类最少。
+
+## 依据与限制
+
+- 9 个单元格数值均与图上文字一致；色条刻度经颜色标定后反推的数值与标注吻合（9.03、7.01、5.02、10.97、6.02、3.01、5.02，误差约 ±0.02）。其中 Home–South（8）、Home–Central（4）、Sports–South（4）、Sports–Central（6）未被几何测量单独切出（相邻格被合并），这些数值取自图上标注并经目视核对。
+- 测量工具报告的 `columns=5 / rows=4` 及空标签来自网格分隔线与标签对齐的检测误差；实际结构为 4 列 3 行（上方表格已按实际结构排列）。
+- 单位仅依据色条标题“Returned units”认定，指退货件数；面板没有额外的货币或占比说明。

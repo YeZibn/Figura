@@ -1,0 +1,28 @@
+核对通过，随后已执行渲染；生成的图与规格一致，未发现需要修正的问题。
+
+## 逐项核对结果（当前 Figure 与初始 Figure 对照）
+
+| 核对项 | 期望 | 实际（当前版本） | 结果 |
+|---|---|---|---|
+| Figure 总标题 | 2025 Regional Sales and Operations (Revised) | 与期望一致 | ✅ |
+| 布局列数 | 两列 | `layout.columns = 2` | ✅ |
+| 面板顺序 | Revenue → Orders(修正) → Conversion | revenue_by_region → monthly_orders → monthly_conversion | ✅ |
+| 子图 1 数据 | North/South/Central × Q1–Q4 = 34/27/22、39/32/26、43/36/31、50/41/35 | 逐值一致 | ✅ |
+| 子图 2 数据 | 82、90、87、95、101、108、109、115、123、119、130、138 | 逐值一致（July = 109） | ✅ |
+| 子图 3 数据 | 2.4、2.6、2.5、2.8、3.0、3.1、3.0、3.3、3.4、3.2、3.6、3.8 | 数值一致（May/Jul 规格写作 3，等值于 3.0） | ✅ |
+| source（三个子图） | Figura synthetic operations dataset | 三者均为该值 | ✅ |
+| 子图 1/3 note | 数值取自柱顶标注 / 数值取自折线点标注 | 未变 | ✅ |
+| 子图 2 note | July corrected from the source ledger.，其余月份保持原来的标注说明 | 规格为 “July corrected from the source ledger. 其余月份数值取自折线点标注（源图 July 为 105）” | ✅ |
+| 修订来源 | 台账核实，唯一改动 July 105→109，源值 105 仍可追溯 | note 同时含修订来源与源图原值说明 | ✅ |
+
+**目标外图表（即本次不应改动的子图）无变化**：Quarterly Revenue（图表数据、标题、轴标签、source、note、12 个柱值）与 Monthly Conversion Rate（12 个点值、标题、轴标签、source、note）在字段和数值上均与初始 Figure 一致；已撤销的“单列 + Conversion 置首”候选未出现。
+
+## 渲染回看（已生成 PNG，1280×1002）
+- 总标题完整显示于顶部，字号与画布宽度适配，无裁切。
+- 两列布局正确：收入柱状图在左上、订单折线图在右上、转化率折线图在第二行左侧，右下留白。
+- 轴标签可见且正确：Quarter / Revenue (M USD)、Month / Orders (count)、Month / Conversion (%)；X 轴月份标签斜排、无重叠。
+- July 点位于 108 与 115 之间、略高于 6 月，符合 109 的设定，曲线在 7 月呈小幅上升。
+- 每个子图下方均显示 source 与 note，订单面板的修订说明与源图 105 括注完整可见。
+- 图例齐全：North/South/Central 三色对应柱分组，订单与转化率各显示系列名。
+
+结论：核对与渲染结果一致，该 Figure 可交付。需说明的是，渲染只证明图像已按规格生成且显示正常，不构成对数据事实的独立验证；数据依据仍为源图标注与用户确认的台账修订。
