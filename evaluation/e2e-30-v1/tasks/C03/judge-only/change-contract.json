@@ -1,0 +1,106 @@
+{
+  "semantic_projection": "忽略内部 ID 和 measurement_refs；保留标题、来源、note、数据、坐标、画布和顺序",
+  "rounds": [
+    {
+      "turn": 2,
+      "authorized_user_request": "在最后追加类别 Q5，对应 East=35、South=29、North=24 万元。Q1—Q4 的所有值和原顺序保留。请实际渲染交付。",
+      "expected_semantic_differences": [
+        {
+          "path": "/charts/0/dataset/categories",
+          "before": [
+            {
+              "label": "Q1"
+            },
+            {
+              "label": "Q2"
+            },
+            {
+              "label": "Q3"
+            },
+            {
+              "label": "Q4"
+            }
+          ],
+          "after": [
+            {
+              "label": "Q1"
+            },
+            {
+              "label": "Q2"
+            },
+            {
+              "label": "Q3"
+            },
+            {
+              "label": "Q4"
+            },
+            {
+              "label": "Q5"
+            }
+          ]
+        },
+        {
+          "path": "/charts/0/dataset/series/0/values",
+          "before": [
+            15,
+            21,
+            18,
+            27
+          ],
+          "after": [
+            15,
+            21,
+            18,
+            27,
+            35
+          ]
+        },
+        {
+          "path": "/charts/0/dataset/series/1/values",
+          "before": [
+            12,
+            17,
+            20,
+            23
+          ],
+          "after": [
+            12,
+            17,
+            20,
+            23,
+            29
+          ]
+        },
+        {
+          "path": "/charts/0/dataset/series/2/values",
+          "before": [
+            10,
+            14,
+            16,
+            19
+          ],
+          "after": [
+            10,
+            14,
+            16,
+            19,
+            24
+          ]
+        }
+      ],
+      "preserve": "所有未被该轮授权改变的语义；按标签匹配，忽略内部 ID"
+    },
+    {
+      "turn": 3,
+      "authorized_user_request": "保留上一轮新增 Q5，增加注释“Q5 为补充统计期”。其他内容保持。请实际渲染交付。",
+      "expected_semantic_differences": [
+        {
+          "path": "/charts/0/metadata/note",
+          "before": "",
+          "after": "Q5 为补充统计期"
+        }
+      ],
+      "preserve": "所有未被该轮授权改变的语义；按标签匹配，忽略内部 ID"
+    }
+  ]
+}

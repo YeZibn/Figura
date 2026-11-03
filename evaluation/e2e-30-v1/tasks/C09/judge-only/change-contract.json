@@ -1,0 +1,74 @@
+{
+  "semantic_projection": "忽略内部 ID 和 measurement_refs；保留标题、来源、note、数据、坐标、画布和顺序",
+  "rounds": [
+    {
+      "turn": 2,
+      "authorized_user_request": "先试一个临时版本：把柱状图改成横向分组，数据和类别顺序保持。请实际渲染交付候选 PNG。",
+      "expected_semantic_differences": [
+        {
+          "path": "/charts/0/coordinate_system/x_axis/kind",
+          "before": "categorical",
+          "after": "numeric"
+        },
+        {
+          "path": "/charts/0/coordinate_system/x_axis/label",
+          "before": "Quarter",
+          "after": "Sales (万元)"
+        },
+        {
+          "path": "/charts/0/coordinate_system/y_axis/kind",
+          "before": "numeric",
+          "after": "categorical"
+        },
+        {
+          "path": "/charts/0/coordinate_system/y_axis/label",
+          "before": "Sales (万元)",
+          "after": "Quarter"
+        },
+        {
+          "path": "/charts/0/dataset/orientation",
+          "before": "vertical",
+          "after": "horizontal"
+        }
+      ],
+      "preserve": "所有未被该轮授权改变的语义；按标签匹配，忽略内部 ID"
+    },
+    {
+      "turn": 3,
+      "authorized_user_request": "撤销上一轮横向方案，恢复原始纵向分组。子图标题最终为“区域季度销售（最终）”。保留原始数据、季度和系列顺序，不沿用横向布局。请实际渲染交付最终 PNG。",
+      "expected_semantic_differences": [
+        {
+          "path": "/charts/0/coordinate_system/x_axis/kind",
+          "before": "numeric",
+          "after": "categorical"
+        },
+        {
+          "path": "/charts/0/coordinate_system/x_axis/label",
+          "before": "Sales (万元)",
+          "after": "Quarter"
+        },
+        {
+          "path": "/charts/0/coordinate_system/y_axis/kind",
+          "before": "categorical",
+          "after": "numeric"
+        },
+        {
+          "path": "/charts/0/coordinate_system/y_axis/label",
+          "before": "Quarter",
+          "after": "Sales (万元)"
+        },
+        {
+          "path": "/charts/0/dataset/orientation",
+          "before": "horizontal",
+          "after": "vertical"
+        },
+        {
+          "path": "/charts/0/metadata/title",
+          "before": "区域季度销售",
+          "after": "区域季度销售（最终）"
+        }
+      ],
+      "preserve": "所有未被该轮授权改变的语义；按标签匹配，忽略内部 ID"
+    }
+  ]
+}

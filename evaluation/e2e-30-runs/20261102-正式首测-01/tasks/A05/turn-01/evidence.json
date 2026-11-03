@@ -1,0 +1,24 @@
+{
+  "turn": 1,
+  "run_id": "62fae4ab278c4c30b7e2d8f812ff4bdc",
+  "session_id": "8222477196e14b61a36276b850f42742",
+  "status": "completed",
+  "terminal_code": null,
+  "wall_seconds": 6.063,
+  "timed_out": false,
+  "final_answer": "final-answer.txt",
+  "final_answer_committed": true,
+  "figures": [],
+  "renders": [],
+  "provider_attempt_count": 2,
+  "internal_retry_count": 0,
+  "usage": {
+    "prompt_tokens": 25731,
+    "completion_tokens": 442,
+    "total_tokens": 26173
+  },
+  "usage_complete": true,
+  "usage_missing_attempt_refs": [],
+  "compaction_operations": [],
+  "delivery_selection": "judge must select from actual final answer and all committed candidates; no automatic best-of selection"
+}

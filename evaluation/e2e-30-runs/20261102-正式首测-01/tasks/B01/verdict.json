@@ -1,0 +1,67 @@
+{
+  "task_id": "B01",
+  "batch_id": "20261102-正式首测-01",
+  "verdict": "pass",
+  "checks": [
+    {
+      "id": "T1-semantic",
+      "critical": true,
+      "status": "pass",
+      "expected": "单张纵向单系列柱状图；Q1—Q4 对应 Store=[16,23,19,31]；标题、轴标签和来源符合要求。",
+      "actual": "已提交 Figure 包含一张纵向柱状图，类别顺序及四个数值逐项完全一致；系列 Store、标题“季度门店销售”、横轴 Quarter、纵轴 Sales (万元)及来源均符合要求。",
+      "evidence": [
+        "figure-01.json#/charts/0/chart_spec",
+        "Run 4163a312862c4f25878f5ab14f841047 / call_00_ZZdCOUUcKGazbNMyqUdy6321：配对提交成功，digest_verified=true"
+      ],
+      "reason": "按类别和系列标签关联后，全部数值误差为零；类型、顺序、单位及明确要求的文字一致。"
+    },
+    {
+      "id": "T1-render",
+      "critical": true,
+      "status": "pass",
+      "expected": "成功渲染与已提交 Figure 匹配的可读取 PNG，必要内容完整且无严重裁切遮挡。",
+      "actual": "实际 PNG 为640×480，显示一张含四根纵向柱子的图表；Store 图例、Q1—Q4、标题、轴标签及来源均可辨认，无严重裁切遮挡。render 与提交 Figure 的引用和摘要一致。",
+      "evidence": [
+        "render-01.png：图表区、左上标题、Store 图例及底部来源",
+        "execution.json#/turns/0/renders/0/result",
+        "render figure_digest=b1e6889b07991d18b8e434f6fd4ae7215af7bb9314ef7b3655407d33d4c33197",
+        "execution.json#/turns/0/renders/0/png_sha256_verified"
+      ],
+      "reason": "已实际查看所附 PNG；图数、类型、数据映射和关键文字正确，渲染关联及图片校验均有成功记录。"
+    },
+    {
+      "id": "T1-delivery",
+      "critical": true,
+      "status": "pass",
+      "expected": "最终回答指向可用产物，且与实际数据和交付状态一致。",
+      "actual": "最终回答明确说明 PNG 已生成并渲染，列出的尺寸、数据、标题、轴标签及来源与唯一成功提交和渲染的产物一致。",
+      "evidence": [
+        "final-answer.txt：首段及数据、标签说明",
+        "execution.json#/turns/0/figures",
+        "execution.json#/turns/0/renders",
+        "render-01.png"
+      ],
+      "reason": "交付语境下只有一个成功 Figure/render 候选，选择无歧义；回答无关键冲突。"
+    }
+  ],
+  "primary_failure": null,
+  "secondary_failures": [],
+  "artifact_refs": [
+    "figure-01.json",
+    "render-01.png",
+    "final-answer.txt",
+    "execution.json"
+  ],
+  "quality_notes": [],
+  "judge": {
+    "model": "gpt-6.1-sol",
+    "prompt_version": "1.0",
+    "context_isolated": true,
+    "actual_png_viewed": true,
+    "limitations": []
+  },
+  "review_notes": [
+    "本次仅依据所提供的 B01 冻结对话、提交证据及实际 PNG 独立裁决；未发现输入、轮次或提交采集异常。",
+    "仅有一轮任务，无覆盖、撤销或后续修改要求。本记录不代表另一次独立复核。"
+  ]
+}

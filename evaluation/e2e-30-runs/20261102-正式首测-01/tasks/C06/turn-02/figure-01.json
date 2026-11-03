@@ -1,0 +1,102 @@
+{
+  "charts": [
+    {
+      "chart_id": "regional_quarterly_sales",
+      "chart_spec": {
+        "coordinate_system": {
+          "kind": "cartesian",
+          "x_axis": {
+            "kind": "categorical",
+            "label": "Quarter"
+          },
+          "y_axis": {
+            "kind": "numeric",
+            "label": "Sales (万元)"
+          }
+        },
+        "dataset": {
+          "series": [
+            {
+              "id": "East",
+              "label": "East",
+              "points": [
+                {
+                  "x": "Q1",
+                  "y": 18
+                },
+                {
+                  "x": "Q2",
+                  "y": 24
+                },
+                {
+                  "x": "Q3",
+                  "y": 21
+                },
+                {
+                  "x": "Q4",
+                  "y": 30
+                }
+              ]
+            },
+            {
+              "id": "South",
+              "label": "South",
+              "points": [
+                {
+                  "x": "Q1",
+                  "y": 15
+                },
+                {
+                  "x": "Q2",
+                  "y": 20
+                },
+                {
+                  "x": "Q3",
+                  "y": 23
+                },
+                {
+                  "x": "Q4",
+                  "y": 26
+                }
+              ]
+            },
+            {
+              "id": "North",
+              "label": "North",
+              "points": [
+                {
+                  "x": "Q1",
+                  "y": 13
+                },
+                {
+                  "x": "Q2",
+                  "y": 17
+                },
+                {
+                  "x": "Q3",
+                  "y": 19
+                },
+                {
+                  "x": "Q4",
+                  "y": 22
+                }
+              ]
+            }
+          ]
+        },
+        "metadata": {
+          "chart_type": "line",
+          "note": "季度按 Q1—Q4 有序排列",
+          "source": "Figura E2E-30 合成数据 v1",
+          "title": "区域季度销售"
+        },
+        "schema_version": 2
+      }
+    }
+  ],
+  "layout": {
+    "columns": 1
+  },
+  "schema_version": 2,
+  "title": "区域经营报告"
+}

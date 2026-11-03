@@ -1,0 +1,164 @@
+[
+  {
+    "Entity": "China",
+    "Code": "CHN",
+    "Year": "2015",
+    "CO₂ emissions per capita": "7.0609546"
+  },
+  {
+    "Entity": "China",
+    "Code": "CHN",
+    "Year": "2016",
+    "CO₂ emissions per capita": "6.9428844"
+  },
+  {
+    "Entity": "China",
+    "Code": "CHN",
+    "Year": "2017",
+    "CO₂ emissions per capita": "7.080384"
+  },
+  {
+    "Entity": "China",
+    "Code": "CHN",
+    "Year": "2018",
+    "CO₂ emissions per capita": "7.2915606"
+  },
+  {
+    "Entity": "China",
+    "Code": "CHN",
+    "Year": "2019",
+    "CO₂ emissions per capita": "7.5260706"
+  },
+  {
+    "Entity": "China",
+    "Code": "CHN",
+    "Year": "2020",
+    "CO₂ emissions per capita": "7.64075"
+  },
+  {
+    "Entity": "China",
+    "Code": "CHN",
+    "Year": "2021",
+    "CO₂ emissions per capita": "7.910899"
+  },
+  {
+    "Entity": "China",
+    "Code": "CHN",
+    "Year": "2022",
+    "CO₂ emissions per capita": "8.217776"
+  },
+  {
+    "Entity": "China",
+    "Code": "CHN",
+    "Year": "2023",
+    "CO₂ emissions per capita": "8.556261"
+  },
+  {
+    "Entity": "France",
+    "Code": "FRA",
+    "Year": "2015",
+    "CO₂ emissions per capita": "5.116293"
+  },
+  {
+    "Entity": "France",
+    "Code": "FRA",
+    "Year": "2016",
+    "CO₂ emissions per capita": "5.1545954"
+  },
+  {
+    "Entity": "France",
+    "Code": "FRA",
+    "Year": "2017",
+    "CO₂ emissions per capita": "5.182955"
+  },
+  {
+    "Entity": "France",
+    "Code": "FRA",
+    "Year": "2018",
+    "CO₂ emissions per capita": "4.93138"
+  },
+  {
+    "Entity": "France",
+    "Code": "FRA",
+    "Year": "2019",
+    "CO₂ emissions per capita": "4.812466"
+  },
+  {
+    "Entity": "France",
+    "Code": "FRA",
+    "Year": "2020",
+    "CO₂ emissions per capita": "4.271517"
+  },
+  {
+    "Entity": "France",
+    "Code": "FRA",
+    "Year": "2021",
+    "CO₂ emissions per capita": "4.649748"
+  },
+  {
+    "Entity": "France",
+    "Code": "FRA",
+    "Year": "2022",
+    "CO₂ emissions per capita": "4.4555726"
+  },
+  {
+    "Entity": "France",
+    "Code": "FRA",
+    "Year": "2023",
+    "CO₂ emissions per capita": "4.067842"
+  },
+  {
+    "Entity": "United States",
+    "Code": "USA",
+    "Year": "2015",
+    "CO₂ emissions per capita": "16.461393"
+  },
+  {
+    "Entity": "United States",
+    "Code": "USA",
+    "Year": "2016",
+    "CO₂ emissions per capita": "15.934658"
+  },
+  {
+    "Entity": "United States",
+    "Code": "USA",
+    "Year": "2017",
+    "CO₂ emissions per capita": "15.639208"
+  },
+  {
+    "Entity": "United States",
+    "Code": "USA",
+    "Year": "2018",
+    "CO₂ emissions per capita": "16.000992"
+  },
+  {
+    "Entity": "United States",
+    "Code": "USA",
+    "Year": "2019",
+    "CO₂ emissions per capita": "15.500492"
+  },
+  {
+    "Entity": "United States",
+    "Code": "USA",
+    "Year": "2020",
+    "CO₂ emissions per capita": "13.8168955"
+  },
+  {
+    "Entity": "United States",
+    "Code": "USA",
+    "Year": "2021",
+    "CO₂ emissions per capita": "14.758024"
+  },
+  {
+    "Entity": "United States",
+    "Code": "USA",
+    "Year": "2022",
+    "CO₂ emissions per capita": "14.802047"
+  },
+  {
+    "Entity": "United States",
+    "Code": "USA",
+    "Year": "2023",
+    "CO₂ emissions per capita": "14.31945"
+  }
+]

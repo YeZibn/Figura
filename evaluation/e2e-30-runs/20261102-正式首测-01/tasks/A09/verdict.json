@@ -1,0 +1,93 @@
+{
+  "task_id": "A09",
+  "batch_id": "20261102-正式首测-01",
+  "verdict": "pass",
+  "checks": [
+    {
+      "id": "panels",
+      "critical": true,
+      "status": "pass",
+      "expected": {
+        "left": "bar / 万元",
+        "right": "line / 单"
+      },
+      "actual": {
+        "left": "柱状图 / 万元",
+        "right": "带数据点的折线图 / 单"
+      },
+      "evidence": [
+        "final-answer.txt：左面板、右面板的图表类型和纵轴说明",
+        "image-01.png：左侧 Sales (10,000 CNY)，右侧 Orders"
+      ],
+      "reason": "左右面板的图表类型和单位均与原图一致。单系列柱状图称为分组柱状图不影响本项语义匹配。"
+    },
+    {
+      "id": "values",
+      "critical": true,
+      "status": "pass",
+      "expected": {
+        "Q1": 18,
+        "Q2": 27,
+        "Jan": 40,
+        "Feb": 35,
+        "Mar": 52
+      },
+      "actual": {
+        "Q1": 18,
+        "Q2": 27,
+        "Jan": 40,
+        "Feb": 35,
+        "Mar": 52
+      },
+      "evidence": [
+        "final-answer.txt：两个面板的“数据”条目",
+        "image-01.png：柱顶及折线点旁的五个数值标签"
+      ],
+      "reason": "按类别标签关联后，五个数值全部精确一致。"
+    },
+    {
+      "id": "changes",
+      "critical": true,
+      "status": "pass",
+      "expected": {
+        "sales_change": 9,
+        "orders_change": 12,
+        "can_add": false
+      },
+      "actual": {
+        "sales_change": 9,
+        "orders_change": 12,
+        "can_add": false
+      },
+      "evidence": [
+        "final-answer.txt：27 − 18 = 9 万元",
+        "final-answer.txt：52 − 40 = 12 单",
+        "final-answer.txt：“两个增量不能直接相加”及量纲解释"
+      ],
+      "reason": "两项减法正确，且明确说明金额与订单数量单位不同，不能直接相加。"
+    }
+  ],
+  "primary_failure": null,
+  "secondary_failures": [],
+  "artifact_refs": [
+    "final-answer.txt",
+    "image-01.png"
+  ],
+  "quality_notes": [
+    "回答将最高标注刻度描述为纵轴范围，表述不够精确；不影响数据、单位和增量判断。",
+    "关于统一变化率的延伸建议并不能直接构成可相加的总变化，但核心结论明确且正确。"
+  ],
+  "judge": {
+    "model": "gpt-6.1-sol",
+    "prompt_version": "1.0",
+    "context_isolated": true,
+    "actual_png_viewed": true,
+    "limitations": [
+      "本题为图片分析任务，无须提交 Figure 或渲染 PNG；已查看附带的实际输入 PNG，并依据已提交的最终回答评分。"
+    ]
+  },
+  "review_notes": [
+    "单轮固定输入与已提交最终回答配对，执行记录为 completed，未见协议异常。",
+    "本记录仅为本次独立裁决，不代表已完成另一个上下文的复核。"
+  ]
+}

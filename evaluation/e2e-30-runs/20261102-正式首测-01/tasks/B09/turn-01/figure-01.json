@@ -1,0 +1,62 @@
+{
+  "schema_version": 2,
+  "title": "地区每日工单",
+  "layout": {
+    "columns": 1
+  },
+  "charts": [
+    {
+      "chart_id": "heatmap_daily_tickets",
+      "chart_spec": {
+        "schema_version": 2,
+        "metadata": {
+          "chart_type": "heatmap",
+          "title": "地区每日工单",
+          "source": "Figura E2E-30 合成数据 v1",
+          "note": "数值原样保留，缺失值保持为空白"
+        },
+        "coordinate_system": {
+          "kind": "matrix"
+        },
+        "dataset": {
+          "x_categories": [
+            {
+              "id": "mon",
+              "label": "Mon"
+            },
+            {
+              "id": "tue",
+              "label": "Tue"
+            },
+            {
+              "id": "wed",
+              "label": "Wed"
+            }
+          ],
+          "y_categories": [
+            {
+              "id": "east",
+              "label": "East"
+            },
+            {
+              "id": "south",
+              "label": "South"
+            }
+          ],
+          "values": [
+            [
+              11,
+              null,
+              18
+            ],
+            [
+              9,
+              15,
+              6
+            ]
+          ]
+        }
+      }
+    }
+  ]
+}

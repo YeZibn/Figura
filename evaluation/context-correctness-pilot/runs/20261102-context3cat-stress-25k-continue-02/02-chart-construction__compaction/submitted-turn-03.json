@@ -1,0 +1,6 @@
+{
+  "turn": 3,
+  "text": "最终总标题使用“季度销售与月度订单”。请先通过 `search_history` 找回季度销售 Q3 的 Target、Actual 数值，以及 7 月 Orders 数值，再用 `read_history` 按返回引用读取原始数据；确认分别为哪个面板和系列后，调用 `assemble_chart_figure` 与 `render_chart_figure` 装配并渲染最终图表。交付 ChartSpec 摘要和 PNG，并说明你检查过面板顺序、类别顺序、单位及原始数值没有变化。若历史记录与当前要求冲突，以本轮最后确认的图表合同为准。",
+  "attachment_sha256": [],
+  "provider_id": "deepseek"
+}

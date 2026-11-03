@@ -1,0 +1,12 @@
+Figura Gateway ready at http://127.0.0.1:62245
+findfont: Failed to find font weight bold, now using 600.
+[INFO] 2026-11-02 16:48:43,254 [RapidOCR] base.py:22: Using engine_name: onnxruntime
+[INFO] 2026-11-02 16:48:43,738 [RapidOCR] download_file.py:60: File exists and is valid: /opt/miniconda3/envs/agent/lib/python3.11/site-packages/rapidocr/models/ch_PP-OCRv4_det_mobile.onnx
+[INFO] 2026-11-02 16:48:43,738 [RapidOCR] main.py:57: Using /opt/miniconda3/envs/agent/lib/python3.11/site-packages/rapidocr/models/ch_PP-OCRv4_det_mobile.onnx
+[INFO] 2026-11-02 16:48:43,789 [RapidOCR] base.py:22: Using engine_name: onnxruntime
+[INFO] 2026-11-02 16:48:43,791 [RapidOCR] download_file.py:60: File exists and is valid: /opt/miniconda3/envs/agent/lib/python3.11/site-packages/rapidocr/models/ch_ppocr_mobile_v2.0_cls_mobile.onnx
+[INFO] 2026-11-02 16:48:43,791 [RapidOCR] main.py:57: Using /opt/miniconda3/envs/agent/lib/python3.11/site-packages/rapidocr/models/ch_ppocr_mobile_v2.0_cls_mobile.onnx
+[INFO] 2026-11-02 16:48:43,822 [RapidOCR] base.py:22: Using engine_name: onnxruntime
+[INFO] 2026-11-02 16:48:43,839 [RapidOCR] download_file.py:60: File exists and is valid: /opt/miniconda3/envs/agent/lib/python3.11/site-packages/rapidocr/models/ch_PP-OCRv4_rec_mobile.onnx
+[INFO] 2026-11-02 16:48:43,839 [RapidOCR] main.py:57: Using /opt/miniconda3/envs/agent/lib/python3.11/site-packages/rapidocr/models/ch_PP-OCRv4_rec_mobile.onnx
+[WARNING] 2026-11-02 16:52:02,060 [RapidOCR] main.py:132: The text detection result is empty

@@ -1,0 +1,65 @@
+{
+  "turn": 1,
+  "run_id": "3919f417464f42a79323205176a4e03d",
+  "session_id": "89b1d3a79c2d402a99b9f0dfeb3dbe28",
+  "status": "completed",
+  "terminal_code": null,
+  "wall_seconds": 8.139,
+  "timed_out": false,
+  "final_answer": "final-answer.txt",
+  "final_answer_committed": true,
+  "figures": [
+    {
+      "call_id": "call_00_Fe7oEOCc2NPTk5cXlLqV8040",
+      "run_id": "3919f417464f42a79323205176a4e03d",
+      "file": "figure-01.json",
+      "result": {
+        "charts": [
+          {
+            "chart_id": "calibrated_sales",
+            "chart_type": "bar",
+            "title": "校准销售"
+          }
+        ],
+        "figure_digest": "59af5d7ced21ec9a01219c04bd136ca87756813ed14559625e1a6364c0eb5d0c",
+        "figure_ref": {
+          "call_id": "call_00_Fe7oEOCc2NPTk5cXlLqV8040",
+          "run_id": "3919f417464f42a79323205176a4e03d"
+        },
+        "title": "校准报告"
+      },
+      "digest_verified": true
+    }
+  ],
+  "renders": [
+    {
+      "call_id": "call_00_KlzPhpLmAa1qZloFZG8d3401",
+      "run_id": "3919f417464f42a79323205176a4e03d",
+      "file": "render-01.png",
+      "result": {
+        "byte_count": 17889,
+        "figure_digest": "59af5d7ced21ec9a01219c04bd136ca87756813ed14559625e1a6364c0eb5d0c",
+        "figure_ref": {
+          "call_id": "call_00_Fe7oEOCc2NPTk5cXlLqV8040",
+          "run_id": "3919f417464f42a79323205176a4e03d"
+        },
+        "height": 522,
+        "image_sha256": "978defd1de56d4058b3cda52de1bae51b3f5ee6d621bbb2a8447eb3719899569",
+        "media_type": "image/png",
+        "width": 640
+      },
+      "png_sha256_verified": true
+    }
+  ],
+  "provider_attempt_count": 3,
+  "internal_retry_count": 0,
+  "usage": {
+    "prompt_tokens": 39490,
+    "completion_tokens": 710,
+    "total_tokens": 40200
+  },
+  "usage_complete": true,
+  "usage_missing_attempt_refs": [],
+  "compaction_operations": [],
+  "delivery_selection": "judge must select from actual final answer and all committed candidates; no automatic best-of selection"
+}

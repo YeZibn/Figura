@@ -1,0 +1,76 @@
+{
+  "semantic_projection": "忽略内部 ID 和 measurement_refs；保留标题、来源、note、数据、坐标、画布和顺序",
+  "rounds": [
+    {
+      "turn": 2,
+      "authorized_user_request": "删除 South 系列，仅保留 East、North，顺序仍为 East、North。不能改动两者的季度值。请实际渲染交付。",
+      "expected_semantic_differences": [
+        {
+          "path": "/charts/0/dataset/series",
+          "before": [
+            {
+              "label": "East",
+              "values": [
+                16,
+                22,
+                19,
+                28
+              ]
+            },
+            {
+              "label": "South",
+              "values": [
+                13,
+                18,
+                21,
+                24
+              ]
+            },
+            {
+              "label": "North",
+              "values": [
+                11,
+                15,
+                17,
+                20
+              ]
+            }
+          ],
+          "after": [
+            {
+              "label": "East",
+              "values": [
+                16,
+                22,
+                19,
+                28
+              ]
+            },
+            {
+              "label": "North",
+              "values": [
+                11,
+                15,
+                17,
+                20
+              ]
+            }
+          ]
+        }
+      ],
+      "preserve": "所有未被该轮授权改变的语义；按标签匹配，忽略内部 ID"
+    },
+    {
+      "turn": 3,
+      "authorized_user_request": "保留删除结果，将子图标题改为“East 与 North 季度销售”。不要把 South 加回来。其余保持。请实际渲染交付。",
+      "expected_semantic_differences": [
+        {
+          "path": "/charts/0/metadata/title",
+          "before": "区域季度销售",
+          "after": "East 与 North 季度销售"
+        }
+      ],
+      "preserve": "所有未被该轮授权改变的语义；按标签匹配，忽略内部 ID"
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+已按您的数据完成装配与渲染，PNG 见上方图像。
+
+**图表内容**
+- 总标题：区域经营报告；子图标题：区域季度销售
+- 类型：纵向分组柱状图（bar，grouped）
+- 类别顺序：Q1 → Q2 → Q3 → Q4
+- 系列顺序：East、South、North
+- 坐标轴：横轴 Quarter，纵轴 Sales (万元)
+- 来源标注：Figura E2E-30 合成数据 v1
+- 数值（单位：万元）：
+  - East：Q1 15、Q2 21、Q3 18、Q4 27
+  - South：Q1 12、Q2 17、Q3 20、Q4 23
+  - North：Q1 10、Q2 14、Q3 16、Q4 19
+
+**交付基线信息**
+- Figure 引用：run `c4d3f9f6f98546d1b97491112c29891f` / `call_00_3cfjhLdNMlXyVGX4BcBc5907`（digest `b995b5ac…64178`）
+- 渲染：640×522 PNG（call `call_00_ET_xTeSjqNvsoJfBD9ZkRnp9286`）
+
+渲染图回看与数据一致：三系列在四个季度依次递增，Q4 三系列均为各自峰值，图例与轴标签完整、无裁切。后续修改将以此为基线，未提及内容保持不变。

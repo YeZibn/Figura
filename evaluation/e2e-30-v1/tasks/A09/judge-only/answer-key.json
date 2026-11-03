@@ -1,0 +1,67 @@
+{
+  "task_id": "A09",
+  "category": "analysis",
+  "status": "not_run",
+  "facts": {
+    "left": {
+      "type": "bar",
+      "unit": "万元",
+      "values": {
+        "Q1": 18,
+        "Q2": 27
+      },
+      "change": 9
+    },
+    "right": {
+      "type": "line",
+      "unit": "单",
+      "values": {
+        "Jan": 40,
+        "Feb": 35,
+        "Mar": 52
+      },
+      "change": 12
+    },
+    "add_changes": false
+  },
+  "checks": [
+    {
+      "id": "panels",
+      "critical": true,
+      "requirement": "左右面板类型与单位分别正确",
+      "expected": {
+        "left": "bar / 万元",
+        "right": "line / 单"
+      }
+    },
+    {
+      "id": "values",
+      "critical": true,
+      "requirement": "五个标注值准确",
+      "expected": {
+        "Q1": 18,
+        "Q2": 27,
+        "Jan": 40,
+        "Feb": 35,
+        "Mar": 52
+      },
+      "numeric_tolerance": {
+        "abs": 0,
+        "rel": 0
+      }
+    },
+    {
+      "id": "changes",
+      "critical": true,
+      "requirement": "增量正确且不跨单位相加",
+      "expected": {
+        "sales_change": 9,
+        "orders_change": 12,
+        "can_add": false
+      }
+    }
+  ],
+  "reference_figures": [],
+  "numeric_policy": "explicit_per_check",
+  "semantic_equivalence": "忽略内部生成的 chart/category/series ID；按标签、顺序和语义匹配。坐标 kind 和数据类型必须合法。空 note、空 figure title 等未要求字段不强制一致。"
+}

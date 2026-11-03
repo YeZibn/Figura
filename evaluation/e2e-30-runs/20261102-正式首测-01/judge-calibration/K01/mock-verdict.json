@@ -1,0 +1,7 @@
+{
+  "task_id": "K01",
+  "content_verdict": "pass",
+  "critical_errors": [],
+  "png_viewed": true,
+  "reason": "附图中 North 蓝色系列 Q1 为14、Q2 为22，纵轴单位为10,000 CNY（万元），差值为8万元；实际输出全部正确。"
+}

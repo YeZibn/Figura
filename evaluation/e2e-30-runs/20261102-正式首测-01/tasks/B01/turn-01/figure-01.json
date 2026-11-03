@@ -1,0 +1,64 @@
+{
+  "schema_version": 2,
+  "layout": {
+    "columns": 1
+  },
+  "charts": [
+    {
+      "chart_id": "quarterly_store_sales",
+      "chart_spec": {
+        "schema_version": 2,
+        "metadata": {
+          "chart_type": "bar",
+          "title": "季度门店销售",
+          "source": "Figura E2E-30 合成数据 v1"
+        },
+        "coordinate_system": {
+          "kind": "cartesian",
+          "x_axis": {
+            "kind": "categorical",
+            "label": "Quarter"
+          },
+          "y_axis": {
+            "kind": "numeric",
+            "label": "Sales (万元)"
+          }
+        },
+        "dataset": {
+          "orientation": "vertical",
+          "mode": "grouped",
+          "categories": [
+            {
+              "id": "q1",
+              "label": "Q1"
+            },
+            {
+              "id": "q2",
+              "label": "Q2"
+            },
+            {
+              "id": "q3",
+              "label": "Q3"
+            },
+            {
+              "id": "q4",
+              "label": "Q4"
+            }
+          ],
+          "series": [
+            {
+              "id": "store",
+              "label": "Store",
+              "values": [
+                16,
+                23,
+                19,
+                31
+              ]
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

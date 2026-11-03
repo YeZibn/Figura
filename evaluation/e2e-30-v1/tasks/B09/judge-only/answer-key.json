@@ -1,0 +1,115 @@
+{
+  "task_id": "B09",
+  "category": "construction",
+  "status": "not_run",
+  "facts": {
+    "expected_final_figure": "reference-turn-01.json",
+    "required": "制作热力图，列为 Mon、Tue、Wed，行为 East、South，按给定行列顺序；null 保持缺失，不补零、不转置矩阵。标题“地区每日工单”。"
+  },
+  "checks": [
+    {
+      "id": "T1-semantic",
+      "critical": true,
+      "requirement": "第 1 轮实际成功交付的 Figure 与参考语义一致；逐值核对 dataset、类型、顺序、轴标签、明确要求的标题和来源",
+      "expected": "reference-turn-01.json",
+      "turn": 1,
+      "numeric_tolerance": {
+        "abs": 1e-09,
+        "rel": 1e-09
+      },
+      "evidence": [
+        "committed_figure",
+        "tool_result"
+      ]
+    },
+    {
+      "id": "T1-render",
+      "critical": true,
+      "requirement": "第 1 轮交付与 Figure 匹配、可打开的真实 PNG；图数和必要内容正确，关键文本无严重裁切遮挡",
+      "expected": "匹配的成功 render 引用和实际 PNG",
+      "turn": 1,
+      "evidence": [
+        "render_metadata",
+        "actual_png"
+      ]
+    },
+    {
+      "id": "T1-delivery",
+      "critical": true,
+      "requirement": "第 1 轮回答清楚指向可用产物且不存在与数据或交付状态冲突的关键陈述",
+      "expected": "实际产物与回答一致",
+      "turn": 1,
+      "evidence": [
+        "final_answer",
+        "artifact_refs"
+      ]
+    }
+  ],
+  "reference_figures": [
+    {
+      "schema_version": 2,
+      "title": "",
+      "layout": {
+        "columns": 1
+      },
+      "charts": [
+        {
+          "chart_id": "chart1",
+          "chart_spec": {
+            "schema_version": 2,
+            "metadata": {
+              "chart_type": "heatmap",
+              "title": "地区每日工单",
+              "source": "Figura E2E-30 合成数据 v1",
+              "note": ""
+            },
+            "coordinate_system": {
+              "kind": "matrix"
+            },
+            "dataset": {
+              "x_categories": [
+                {
+                  "id": "c1",
+                  "label": "Mon"
+                },
+                {
+                  "id": "c2",
+                  "label": "Tue"
+                },
+                {
+                  "id": "c3",
+                  "label": "Wed"
+                }
+              ],
+              "y_categories": [
+                {
+                  "id": "c1",
+                  "label": "East"
+                },
+                {
+                  "id": "c2",
+                  "label": "South"
+                }
+              ],
+              "values": [
+                [
+                  11,
+                  null,
+                  18
+                ],
+                [
+                  9,
+                  15,
+                  6
+                ]
+              ]
+            }
+          },
+          "measurement_refs": []
+        }
+      ]
+    }
+  ],
+  "numeric_policy": "explicit_per_check",
+  "semantic_equivalence": "忽略内部生成的 chart/category/series ID；按标签、顺序和语义匹配。坐标 kind 和数据类型必须合法。空 note、空 figure title 等未要求字段不强制一致。"
+}

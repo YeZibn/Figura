@@ -1,0 +1,93 @@
+{
+  "task_id": "K03",
+  "batch_id": "20261102-正式首测-01",
+  "verdict": "pass",
+  "checks": [
+    {
+      "id": "target",
+      "critical": true,
+      "status": "pass",
+      "expected": "校准销售（确认）",
+      "actual": "第二轮 Figure 标题为“校准销售（确认）”，实际 PNG 中完整显示，包括末尾右括号。",
+      "evidence": [
+        "turn_evidence/1/figures/figure-01.json/charts/0/chart_spec/metadata/title",
+        "image-02.png：左上方子图标题",
+        "第二轮 assemble call_00_5G2iMHRcHkRat7wb5SSH1581 与 render call_00_ET_s0150ojf474Ha8GtLVIe2482"
+      ],
+      "reason": "结构化标题与实际图像均符合要求；最终回答关于右括号被裁掉的自述与实际 PNG 不符，不据此判定渲染失败。"
+    },
+    {
+      "id": "preservation",
+      "critical": true,
+      "status": "pass",
+      "expected": {
+        "quarters": [
+          "Q1",
+          "Q2"
+        ],
+        "series": {
+          "East": [
+            10,
+            20
+          ],
+          "South": [
+            15,
+            25
+          ]
+        },
+        "source": "Figura E2E-30 合成数据 v1"
+      },
+      "actual": {
+        "quarters": [
+          "Q1",
+          "Q2"
+        ],
+        "series": {
+          "East": [
+            10,
+            20
+          ],
+          "South": [
+            15,
+            25
+          ]
+        },
+        "source": "Figura E2E-30 合成数据 v1",
+        "other_preserved": "总标题、轴名与单位、纵向分组柱状图类型、图例和单图布局均保留。"
+      },
+      "evidence": [
+        "turn_evidence/0/figures/figure-01.json",
+        "turn_evidence/1/figures/figure-01.json",
+        "image-01.png：基线完整画布",
+        "image-02.png：修改后完整画布"
+      ],
+      "reason": "按季度和系列标签关联后，四个数值精确一致；两轮 Figure 的语义差异仅为子图标题。两张 PNG 均清楚呈现对应柱高、图例、轴名和来源。"
+    }
+  ],
+  "primary_failure": null,
+  "secondary_failures": [],
+  "artifact_refs": [
+    "turn-01/figure-01.json",
+    "turn-01/render-01.png（附图 image-01.png）",
+    "turn-02/figure-01.json",
+    "turn-02/render-01.png（附图 image-02.png）"
+  ],
+  "quality_notes": [
+    "第二轮回答错误声称标题右括号被裁切，并提出继续处理；实际交付 PNG 的标题完整，此自述错误不影响关键产物通过。"
+  ],
+  "judge": {
+    "model": "gpt-6.1-sol",
+    "prompt_version": "1.0",
+    "context_isolated": true,
+    "actual_png_viewed": true,
+    "limitations": [
+      "依据本次提供的冻结证据和附图裁决，未独立重算文件摘要。",
+      "answer_key 标有 mock_content_only_not_real_execution；本裁决仅覆盖所提供校准证据，不据此宣称完成正式生产执行验证。"
+    ]
+  },
+  "review_notes": [
+    "第一轮满足基线要求；第二轮仅授权修改子图标题，其余要求继续有效。",
+    "两轮复用同一 Session，Run 均终态完成；每轮各有唯一成功提交的 Figure 和配对 render，figure_ref 与 figure_digest 对应，未发现已报告的协议异常。",
+    "本结果为本次独立裁决，不代表另一个上下文已完成复核。"
+  ]
+}

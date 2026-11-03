@@ -1,0 +1,91 @@
+{
+  "schema_version": 2,
+  "title": "2025 年各区域季度销售额（万元）",
+  "layout": {
+    "columns": 1
+  },
+  "charts": [
+    {
+      "chart_id": "regional_quarterly_sales_2025",
+      "chart_spec": {
+        "schema_version": 2,
+        "metadata": {
+          "chart_type": "bar",
+          "source": "Figura 合成样例数据",
+          "note": "数值取自原图柱高按纵轴刻度校准的读数（±1 取整）"
+        },
+        "coordinate_system": {
+          "kind": "cartesian",
+          "x_axis": {
+            "kind": "categorical",
+            "label": "季度"
+          },
+          "y_axis": {
+            "kind": "numeric",
+            "label": "销售额（万元）"
+          }
+        },
+        "dataset": {
+          "orientation": "vertical",
+          "mode": "grouped",
+          "categories": [
+            {
+              "id": "q1",
+              "label": "第一季度"
+            },
+            {
+              "id": "q2",
+              "label": "第二季度"
+            },
+            {
+              "id": "q3",
+              "label": "第三季度"
+            },
+            {
+              "id": "q4",
+              "label": "第四季度"
+            }
+          ],
+          "series": [
+            {
+              "id": "huadong",
+              "label": "华东",
+              "values": [
+                82,
+                96,
+                108,
+                124
+              ]
+            },
+            {
+              "id": "huanan",
+              "label": "华南",
+              "values": [
+                67,
+                79,
+                91,
+                105
+              ]
+            },
+            {
+              "id": "huabei",
+              "label": "华北",
+              "values": [
+                58,
+                72,
+                84,
+                98
+              ]
+            }
+          ]
+        }
+      },
+      "measurement_refs": [
+        {
+          "run_id": "62dc8c89aa7a4a4dbae074a3c88d9bb2",
+          "call_id": "call_00_zOCQaP6invLc9b76x8iD7819"
+        }
+      ]
+    }
+  ]
+}

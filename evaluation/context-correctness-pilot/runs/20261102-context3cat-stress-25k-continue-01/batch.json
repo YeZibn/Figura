@@ -1,0 +1,85 @@
+{
+  "batch_id": "20261102-context3cat-stress-25k-continue-01",
+  "status": "incomplete",
+  "started_at": "2026-11-02T19:16:39.717357+08:00",
+  "git_revision": "a9d155e53a488544b450c42760abfcf4932e66be",
+  "provider_id": "deepseek",
+  "model_id": "deepseek-flash",
+  "thinking_mode": true,
+  "reasoning_effort": "high",
+  "max_completion_tokens": null,
+  "profile_capacity_before_override": 200000,
+  "conditions": {
+    "baseline": 100000000,
+    "compaction": 25000
+  },
+  "compaction_threshold_fraction": 0.8,
+  "turn_timeout_seconds": 1800,
+  "schedule": [
+    {
+      "task_id": "01-chart-analysis",
+      "condition": "compaction"
+    },
+    {
+      "task_id": "01-chart-analysis",
+      "condition": "baseline"
+    },
+    {
+      "task_id": "02-chart-construction",
+      "condition": "baseline"
+    },
+    {
+      "task_id": "02-chart-construction",
+      "condition": "compaction"
+    },
+    {
+      "task_id": "03-chart-modification",
+      "condition": "compaction"
+    },
+    {
+      "task_id": "03-chart-modification",
+      "condition": "baseline"
+    }
+  ],
+  "input_hashes": {
+    "01-chart-analysis": {
+      "conversation_sha256": "7fb9f4be51e66e12f9d94fdbf968873dd2bf163c8defea65d6fbba78cb1b42e2",
+      "answer_key_sha256": "871d332beb925e0e136066c73436dfd76196d9d3e246b0f1d6e2e4cef96a3253",
+      "scorecard_sha256": "cb4bf3868ff59f4e2486c77fc5ca4b084596734e325570e2de5ebfaf3c7a986d",
+      "input_sha256": {
+        "input/bar_line_dashboard.png": "b6b6105d739d1a0399295fd75286f27ac8965644423a0533de814f8aaecb9e00"
+      }
+    },
+    "02-chart-construction": {
+      "conversation_sha256": "6ae4a8939b12a21e318e6c09973ebfb6d7ccde14883e39415566ad3c07ca50ff",
+      "answer_key_sha256": "92a1da73b62e776b43bd694dc3dd16f502e9380e28c8c988f64f0524825fe49d",
+      "scorecard_sha256": "bc6f9e5ff06695e61655310d101ef7a20df9eb444ec6282bd80e896ffcd31019",
+      "input_sha256": {
+        "input/dataset.json": "af5b21aa1e02c3de92a6e929d63caa02bec2ab60446c5b22b1b60abfb7a0b582"
+      }
+    },
+    "03-chart-modification": {
+      "conversation_sha256": "20bb14b2e2b734d6e979492c313c055bcd8b69c4ac571452ea49e5d3410c5ff0",
+      "answer_key_sha256": "3dea7db23517be871846ff747ce1678d6a124c05eb60a2e4fbead7040e5bc133",
+      "scorecard_sha256": "6aaf6c857c0cce999d6c11124aced4156db04df51f1811fb6ef9a1c6e3f6bd9c",
+      "input_sha256": {
+        "input/quarterly-regional-sales.png": "79f04312fcd4430f41f4c53b9d808d2c7e3b094c630d8b0745389ea32eca9e36"
+      }
+    }
+  },
+  "protocol_notes": [
+    "每个任务与条件使用隔离的 Gateway、SQLite 数据目录和 Session。",
+    "图表构建任务的 dataset.json 原文内嵌首轮消息；两组提交内容相同。",
+    "Provider 总 Token 包含 agent_turn 与 context_compaction 的所有物理 attempt。",
+    "每类一个配对样本，结果作固定任务的描述性比较。"
+  ],
+  "completed_at": "2026-11-02T19:46:44.521170+08:00",
+  "error_type": "RuntimeError",
+  "error_message": "Gateway HTTP 500: {\"error\":{\"code\":\"internal_error\",\"message\":\"Figura 本地服务暂时无法处理请求。\"}}",
+  "execution_progress": {
+    "completed_schedule_entries": 0,
+    "partial_schedule_entries": 1,
+    "not_started_schedule_entries": 5
+  },
+  "continuation_note": "图表分析压缩项从头重跑；首轮30分钟上限后中断，未重试其余轮次。失败证据见 partial-report.md。"
+}

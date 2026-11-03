@@ -1,0 +1,168 @@
+{
+  "task_id": "C06",
+  "batch_id": "20261102-正式首测-01",
+  "verdict": "fail",
+  "checks": [
+    {
+      "id": "T1-semantic",
+      "critical": true,
+      "status": "pass",
+      "expected": "单幅纵向分组柱状图；指定标题、轴标签、来源及系列和季度顺序；12 个数值正确。",
+      "actual": "类型、顺序和文字均符合要求。按季度关联核对，East=[18,24,21,30]、South=[15,20,23,26]、North=[13,17,19,22]，全部数值差为0。",
+      "evidence": [
+        "turn_evidence/0/figures/figure-01.json",
+        "turn_evidence/0/tool_overview/0"
+      ],
+      "reason": "成功提交的基线 Figure 与要求一致，内部 ID 差异不影响语义。"
+    },
+    {
+      "id": "T1-render",
+      "critical": true,
+      "status": "pass",
+      "expected": "与已提交 Figure 匹配的可读 PNG，必要内容完整。",
+      "actual": "实际 PNG 为单幅分组柱状图，标题、三系列图例、Q1—Q4、轴标签和来源完整可见；render 与 Figure digest 匹配。",
+      "evidence": [
+        "image-01.png",
+        "execution/turns/0/renders/0",
+        "execution/turns/0/figures/0"
+      ],
+      "reason": "已查看实际图片，无关键裁切、遮挡或数据映射异常。"
+    },
+    {
+      "id": "T1-delivery",
+      "critical": true,
+      "status": "pass",
+      "expected": "回答明确指向成功交付的实际 PNG。",
+      "actual": "回答指向 call_00_eTxWrwQVhaBHxjB8pYhk0959，与本轮唯一成功 render 一致。",
+      "evidence": [
+        "turn_evidence/0/answer",
+        "execution/turns/0/renders/0"
+      ],
+      "reason": "产物选择明确，回答中的数据和交付陈述与证据一致。"
+    },
+    {
+      "id": "T2-semantic",
+      "critical": true,
+      "status": "pass",
+      "expected": "改成三系列折线图，季度为有序类别，全部数值、顺序、单位、标题和来源保留。",
+      "actual": "成功提交 line Figure；类别轴为 categorical，三系列点均按Q1—Q4排列，12个数值差为0，指定文字及系列顺序保留。",
+      "evidence": [
+        "turn_evidence/1/figures/figure-01.json",
+        "turn_evidence/1/tool_overview/1"
+      ],
+      "reason": "目标图表转换及明确要求的字段正确；额外注释的保留问题单列于 preservation。"
+    },
+    {
+      "id": "T2-render",
+      "critical": true,
+      "status": "pass",
+      "expected": "匹配 Figure 的真实折线图 PNG，必要内容正确且可辨认。",
+      "actual": "实际 PNG 显示三条折线、每条四点，季度和图例顺序正确，关键文字完整；digest 与提交 Figure 匹配。",
+      "evidence": [
+        "image-02.png",
+        "execution/turns/1/renders/0",
+        "execution/turns/1/figures/0"
+      ],
+      "reason": "图数、类型、数值走势及必要文字均正确，无严重遮挡。"
+    },
+    {
+      "id": "T2-delivery",
+      "critical": true,
+      "status": "pass",
+      "expected": "回答明确指向成功交付的折线图 PNG，关键陈述与产物一致。",
+      "actual": "回答明确引用 call_00_ah5v6FIPXfTRoFaCThkR0300；所述图表类型、数据、轴和标题均与实际交付一致。",
+      "evidence": [
+        "turn_evidence/1/answer",
+        "execution/turns/1/renders/0"
+      ],
+      "reason": "唯一最终成功候选可定位；此前参数失败后已成功提交，不影响交付成立。"
+    },
+    {
+      "id": "T3-semantic",
+      "critical": true,
+      "status": "pass",
+      "expected": "保留折线图并增加注释“按季度展示趋势”，其余指定语义保持。",
+      "actual": "Figure 保持 line 类型及全部12个数值、系列和类别顺序、轴标签、标题、来源；note 为“按季度展示趋势”。",
+      "evidence": [
+        "turn_evidence/2/figures/figure-01.json",
+        "turn_evidence/2/tool_overview/0"
+      ],
+      "reason": "最终 Figure 与最终参考要求一致，所有数值差为0。"
+    },
+    {
+      "id": "T3-render",
+      "critical": true,
+      "status": "pass",
+      "expected": "与最终 Figure 匹配的可读 PNG，新增注释完整呈现。",
+      "actual": "实际 PNG 显示完整三系列折线图，来源下方可读“按季度展示趋势”；标题、轴标签和图例无严重裁切遮挡。",
+      "evidence": [
+        "image-03.png",
+        "execution/turns/2/renders/0",
+        "execution/turns/2/figures/0"
+      ],
+      "reason": "已查看最终 PNG，render 引用及 digest 均与本轮成功提交匹配。"
+    },
+    {
+      "id": "T3-delivery",
+      "critical": true,
+      "status": "pass",
+      "expected": "回答明确指向最终实际产物且无关键冲突。",
+      "actual": "回答引用 call_00_ET_wpKc6dyyJQMeLGWsvVAr8876，所述注释位置、内容和保留数据与实际图片一致。",
+      "evidence": [
+        "turn_evidence/2/answer",
+        "execution/turns/2/renders/0"
+      ],
+      "reason": "最终交付明确且可用。"
+    },
+    {
+      "id": "preservation",
+      "critical": true,
+      "status": "fail",
+      "expected": "第2轮仅转换图表类型及相应数据表示；第3轮修改注释。其他语义保持。",
+      "actual": "第1轮没有注释，第2轮额外新增 note“季度按 Q1—Q4 有序排列”，且实际渲染到来源下方。第2轮用户未授权增加注释。第3轮则将该 note 改为要求的文字。",
+      "evidence": [
+        "conversation/1/text",
+        "turn_evidence/0/figures/figure-01.json/charts/0/chart_spec/metadata",
+        "turn_evidence/1/figures/figure-01.json/charts/0/chart_spec/metadata/note",
+        "image-02.png：来源下方注释",
+        "turn_evidence/2/figures/figure-01.json/charts/0/chart_spec/metadata/note"
+      ],
+      "reason": "第2轮新增了未授权的可见语义内容，违反“后续未提及的内容均须保留”和只改变授权路径的要求；最终正确不能补成第2轮保留成功。"
+    },
+    {
+      "id": "final_requirements",
+      "critical": true,
+      "status": "pass",
+      "expected": "最终继续使用折线图，显示“按季度展示趋势”，保留指定数据和文字。",
+      "actual": "最终为三系列折线图，新增指定注释；柱状图类型及第2轮额外注释均未残留，全部指定数据和文字正确。",
+      "evidence": [
+        "turn_evidence/2/figures/figure-01.json",
+        "image-03.png"
+      ],
+      "reason": "最新有效要求均在最终交付中生效。"
+    }
+  ],
+  "primary_failure": "non_target_corruption",
+  "secondary_failures": [],
+  "artifact_refs": [
+    "turn-01/figure-01.json",
+    "turn-01/render-01.png",
+    "turn-02/figure-01.json",
+    "turn-02/render-01.png",
+    "turn-03/figure-01.json",
+    "turn-03/render-01.png"
+  ],
+  "quality_notes": [],
+  "judge": {
+    "model": "gpt-6.1-sol",
+    "prompt_version": "1.0",
+    "context_isolated": true,
+    "actual_png_viewed": true,
+    "limitations": []
+  },
+  "review_notes": [
+    "提供的执行记录显示三轮复用同一 Session、顺序完成、无超时或已报告协议异常；每轮均有唯一明确指向的成功提交及匹配渲染。",
+    "空 note 的缺省或空字符串不要求形式一致，但第2轮新增并渲染非空说明属于实际语义变化，按 preservation 的明确限制判定。",
+    "本结论为本次独立裁决，未声称完成另一个独立上下文的复核。"
+  ]
+}

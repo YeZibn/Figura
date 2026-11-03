@@ -1,0 +1,20 @@
+{
+  "task_id": "C06",
+  "initial_verdict": "fail",
+  "independent_review_verdict": "pass",
+  "final_verdict": "pass",
+  "resolved": true,
+  "method": "coordinator applies frozen explicit semantic-equivalence clause; not a third blind review or human review",
+  "rule_source": "evaluation/e2e-30-v1/tasks/C06/judge-only/answer-key.json#/semantic_equivalence",
+  "rule_quote": "空 note、空 figure title 等未要求字段不强制一致。",
+  "reason": "争议仅为第二轮新增真实、冗余的季度顺序说明。冻结答案明确允许未要求空note不强制一致；数据、类型转换、轴、标题、来源和顺序均正确保留。第三轮明确要求的note也已正确替换。不能因将通用保留规则解释为逐字段JSON相等而忽略这项预设等义例外。",
+  "evidence": [
+    "tasks/C06/verdict.json#/checks/preservation",
+    "tasks/C06/review-independent.json#/checks/preservation",
+    "tasks/C06/turn-02/figure-01.json#/charts/0/chart_spec/metadata/note",
+    "tasks/C06/turn-02/render-01.png"
+  ],
+  "actual_png_inspected_by_coordinator": true,
+  "rubric_changed": false,
+  "figura_rerun": false
+}

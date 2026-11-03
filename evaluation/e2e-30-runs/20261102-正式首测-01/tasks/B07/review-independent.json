@@ -1,0 +1,65 @@
+{
+  "task_id": "B07",
+  "batch_id": "20261102-正式首测-01",
+  "verdict": "pass",
+  "checks": [
+    {
+      "id": "T1-semantic",
+      "critical": true,
+      "status": "pass",
+      "expected": "单个气泡图；Products 系列依次保留 (3,12,10)、(6,18,30)、(9,15,60)，size 为大小通道；标题、坐标轴及来源符合要求。",
+      "actual": "已提交 Figure 为 scatter，Products 的三个点及原始 size 值、顺序均精确一致；数值轴标签为 Price (元) 和 Sales (百件)，标题及来源正确。",
+      "evidence": [
+        "figure-01.json#/charts/0/chart_spec",
+        "figure-01.json#/charts/0/chart_spec/dataset/series/0/points",
+        "execution.json#/turns/0/figures/0/result"
+      ],
+      "reason": "逐点关联后的全部数值差为 0；size 保存在点的大小字段，未写入纵轴。内部 ID 差异和补充说明不影响语义。"
+    },
+    {
+      "id": "T1-render",
+      "critical": true,
+      "status": "pass",
+      "expected": "成功渲染与已提交 Figure 匹配的可查看 PNG，必要图形与文字完整。",
+      "actual": "实际 PNG 为 640×480，呈现一个气泡图，三个气泡位于正确坐标且大小递增；标题、图例、轴标签、来源及大小说明清晰，无严重裁切遮挡。",
+      "evidence": [
+        "render-01.png：绘图区、Products 图例及底部来源文字",
+        "execution.json#/turns/0/renders/0",
+        "execution.json#/turns/0/figures/0/result/figure_digest"
+      ],
+      "reason": "已查看所附实际 PNG；render 的 figure_ref 和 figure_digest 与成功提交的 Figure 一致，PNG 校验记录通过。"
+    },
+    {
+      "id": "T1-delivery",
+      "critical": true,
+      "status": "pass",
+      "expected": "回答清楚指向可用产物，与实际数据和交付状态一致。",
+      "actual": "最终回答说明已装配并渲染 640×480 PNG，准确列出三点及大小映射；本轮只有一个成功提交的 Figure 和一个配对 PNG。",
+      "evidence": [
+        "final-answer.txt：开头及图表内容、回看渲染结果段落",
+        "execution.json#/turns/0/figures",
+        "execution.json#/turns/0/renders"
+      ],
+      "reason": "唯一成功候选可按交付语境确定，回答与实际产物不存在关键冲突。"
+    }
+  ],
+  "primary_failure": null,
+  "secondary_failures": [],
+  "artifact_refs": [
+    "figure-01.json",
+    "render-01.png",
+    "final-answer.txt"
+  ],
+  "quality_notes": [],
+  "judge": {
+    "model": "gpt-6.1-sol",
+    "prompt_version": "1.0",
+    "context_isolated": true,
+    "actual_png_viewed": true,
+    "limitations": []
+  },
+  "review_notes": [
+    "所供证据显示固定单轮输入、成功提交和配对渲染，未发现协议异常。",
+    "本次为独立初评，不声称已完成另一个上下文的复核。"
+  ]
+}

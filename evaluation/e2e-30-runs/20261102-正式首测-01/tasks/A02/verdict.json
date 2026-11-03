@@ -1,0 +1,136 @@
+{
+  "task_id": "A02",
+  "batch_id": "20261102-正式首测-01",
+  "verdict": "pass",
+  "checks": [
+    {
+      "id": "structure",
+      "critical": true,
+      "status": "pass",
+      "expected": {
+        "type": "grouped bar",
+        "categories": [
+          "Q1",
+          "Q2",
+          "Q3",
+          "Q4"
+        ],
+        "unit": "万元"
+      },
+      "actual": {
+        "type": "grouped bar",
+        "series": [
+          "North",
+          "South"
+        ],
+        "categories": [
+          "Q1",
+          "Q2",
+          "Q3",
+          "Q4"
+        ],
+        "unit": "10 000 CNY（万元）"
+      },
+      "evidence": [
+        "image-01.png：季度横轴、North/South 图例及纵轴 Sales (10,000 CNY)",
+        "final-answer.txt：首段及季度表"
+      ],
+      "reason": "已查看附件，回答正确识别分组柱状图、两个系列、季度顺序和单位。"
+    },
+    {
+      "id": "values",
+      "critical": true,
+      "status": "pass",
+      "expected": {
+        "North": [
+          14,
+          22,
+          18,
+          30
+        ],
+        "South": [
+          10,
+          16,
+          21,
+          25
+        ]
+      },
+      "actual": {
+        "North": [
+          14,
+          22,
+          18,
+          30
+        ],
+        "South": [
+          10,
+          16,
+          21,
+          25
+        ]
+      },
+      "evidence": [
+        "image-01.png：八根柱的柱顶数值",
+        "final-answer.txt：表格 Q1—Q4 的 North、South 列"
+      ],
+      "reason": "按季度和系列关联后，八个数值全部精确一致，回答注明了万元单位。"
+    },
+    {
+      "id": "difference",
+      "critical": true,
+      "status": "pass",
+      "expected": {
+        "difference": [
+          4,
+          6,
+          -3,
+          5
+        ],
+        "south_higher": [
+          "Q3"
+        ]
+      },
+      "actual": {
+        "difference": [
+          4,
+          6,
+          -3,
+          5
+        ],
+        "south_higher": [
+          "Q3"
+        ]
+      },
+      "evidence": [
+        "final-answer.txt：North − South 列",
+        "final-answer.txt：结论第一、第二项"
+      ],
+      "reason": "逐项相减得到 14−10=4、22−16=6、18−21=−3、30−25=5；仅 Q3 的 South 更高。"
+    }
+  ],
+  "primary_failure": null,
+  "secondary_failures": [],
+  "artifact_refs": [
+    "image-01.png",
+    "evaluation/e2e-30-v1/tasks/A02/agent-input/chart.png",
+    "final-answer.txt",
+    "execution.json#/turns/0"
+  ],
+  "quality_notes": [
+    "回答在精确标注值前使用“≈”和“约”略显多余，但未改变数值或单位含义。"
+  ],
+  "judge": {
+    "model": "gpt-6.1-sol",
+    "prompt_version": "1.0",
+    "context_isolated": true,
+    "actual_png_viewed": true,
+    "limitations": [
+      "本题为读图分析任务，不要求生成 Figure；已查看实际输入 PNG，实际交付为已提交的文本回答。",
+      "执行协议核查限于所提供的冻结证据包。"
+    ]
+  },
+  "review_notes": [
+    "证据显示仅一轮固定输入，回答已提交，运行完成且未超时，未记录协议异常。",
+    "全部关键项通过；本结论仅为本次独立裁决，不代表另一次复核已完成。"
+  ]
+}

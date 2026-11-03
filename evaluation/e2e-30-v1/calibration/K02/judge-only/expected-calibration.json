@@ -1,0 +1,5 @@
+{
+  "content_verdict": "fail",
+  "primary_failure": "semantic_mapping",
+  "reason": "East 与 South 数据互换；schema 和渲染均可合法"
+}

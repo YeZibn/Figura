@@ -1,0 +1,26 @@
+[
+  {
+    "Entity": "China",
+    "Code": "CHN",
+    "Year": "2023",
+    "Life expectancy": "77.9529"
+  },
+  {
+    "Entity": "India",
+    "Code": "IND",
+    "Year": "2023",
+    "Life expectancy": "72.0026"
+  },
+  {
+    "Entity": "Japan",
+    "Code": "JPN",
+    "Year": "2023",
+    "Life expectancy": "84.7123"
+  },
+  {
+    "Entity": "United States",
+    "Code": "USA",
+    "Year": "2023",
+    "Life expectancy": "79.3043"
+  }
+]

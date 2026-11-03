@@ -1,0 +1,145 @@
+{
+  "scope": "synthetic offline measurement regression; not Agent completion or external benchmark accuracy",
+  "python": "3.11.15",
+  "git_revision": "a40a09b4cbdc80cc3f04cb2d30fbb0f21dd9e296",
+  "measurement_source_sha256": "c963fe801c8dc5a28e86240ec3e773a642f96f1eb79732a38bfd565889277467",
+  "manifest_sha256": "b19f541743c4b1e505f0cedc63f32e167e7ef612d04b7a38ef9097d0df904e1a",
+  "contract_version": 3,
+  "cases": [
+    {
+      "case_id": "01_sales_and_market",
+      "chart_type": "bar",
+      "sha256": "729764dce1dcae14412674c02ef6261b13f863ccbbb73fc9f7ab5ecc0c98ed5f",
+      "ocr_mode": "real_rapidocr",
+      "expected_objects": 12,
+      "observed_objects": 12,
+      "matched_objects": 12,
+      "missing_objects": 0,
+      "spurious_objects": 0,
+      "association_errors": [],
+      "geometry_errors": [],
+      "numeric_missing": [],
+      "numeric_errors": [],
+      "provenance_validation": "validated_by_tool",
+      "calibration_support": [
+        {
+          "id": "axis_y_calibration",
+          "kind": "axis",
+          "axis_role": "y",
+          "support_domain": [
+            93.99857996094103,
+            336.9983631367173
+          ],
+          "residual_value": 0.12668765858575273,
+          "parameters": {
+            "intercept": -18.473336450105528,
+            "slope": 0.41055199579689516
+          }
+        }
+      ],
+      "passed": true,
+      "measurement_status": "measured"
+    },
+    {
+      "case_id": "01_sales_and_market",
+      "chart_type": "line",
+      "sha256": "729764dce1dcae14412674c02ef6261b13f863ccbbb73fc9f7ab5ecc0c98ed5f",
+      "ocr_mode": "real_rapidocr",
+      "expected_objects": 12,
+      "observed_objects": 12,
+      "matched_objects": 12,
+      "missing_objects": 0,
+      "spurious_objects": 0,
+      "association_errors": [],
+      "geometry_errors": [],
+      "numeric_missing": [],
+      "numeric_errors": [],
+      "provenance_validation": "validated_by_tool",
+      "calibration_support": [
+        {
+          "id": "axis_y_calibration",
+          "kind": "axis",
+          "axis_role": "y",
+          "support_domain": [
+            72.99855540970763,
+            309.99846390708717
+          ],
+          "residual_value": 0.00955414864507512,
+          "parameters": {
+            "intercept": 9.540660262127384,
+            "slope": 0.03378341135762942
+          }
+        }
+      ],
+      "passed": true,
+      "measurement_status": "measured"
+    },
+    {
+      "case_id": "01_sales_and_market",
+      "chart_type": "scatter",
+      "sha256": "729764dce1dcae14412674c02ef6261b13f863ccbbb73fc9f7ab5ecc0c98ed5f",
+      "ocr_mode": "real_rapidocr",
+      "expected_objects": 9,
+      "observed_objects": 9,
+      "matched_objects": 9,
+      "missing_objects": 0,
+      "spurious_objects": 0,
+      "association_errors": [],
+      "geometry_errors": [],
+      "numeric_missing": [],
+      "numeric_errors": [],
+      "provenance_validation": "validated_by_tool",
+      "calibration_support": [
+        {
+          "id": "axis_x_calibration",
+          "kind": "axis",
+          "axis_role": "x",
+          "support_domain": [
+            26.001016433778258,
+            492.0010156465467
+          ],
+          "residual_value": 0.014173478203356071,
+          "parameters": {
+            "intercept": 8.60045369360733,
+            "slope": 0.05363147967075414
+          }
+        },
+        {
+          "id": "axis_y_calibration",
+          "kind": "axis",
+          "axis_role": "y",
+          "support_domain": [
+            67.99849002511056,
+            325.9984415256967
+          ],
+          "residual_value": 0.02291938017511622,
+          "parameters": {
+            "intercept": 8.38249051041137,
+            "slope": 0.09702108504732139
+          }
+        }
+      ],
+      "passed": true,
+      "measurement_status": "measured"
+    },
+    {
+      "case_id": "01_sales_and_market",
+      "chart_type": "pie",
+      "sha256": "729764dce1dcae14412674c02ef6261b13f863ccbbb73fc9f7ab5ecc0c98ed5f",
+      "ocr_mode": "real_rapidocr",
+      "expected_objects": 5,
+      "observed_objects": 5,
+      "matched_objects": 5,
+      "missing_objects": 0,
+      "spurious_objects": 0,
+      "association_errors": [],
+      "geometry_errors": [],
+      "numeric_missing": [],
+      "numeric_errors": [],
+      "provenance_validation": "validated_by_tool",
+      "calibration_support": [],
+      "passed": true,
+      "measurement_status": "measured"
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "turn": 1,
+  "text": "请读取以下结构化数据，说明其中有几个面板、每个面板的图表类型、类别、系列和单位。先建立数据合同，不绘图；不要合并两个面板的数据，也不要从系列名推测额外数据。\n\n```json\n{\n  \"dataset_id\": \"quarterly-sales-and-monthly-orders\",\n  \"panels\": [\n    {\n      \"title\": \"Quarterly Sales\",\n      \"chart_type\": \"grouped_bar\",\n      \"x_axis\": {\n        \"label\": \"Quarter\",\n        \"categories\": [\"Q1\", \"Q2\", \"Q3\", \"Q4\"]\n      },\n      \"y_axis\": {\n        \"label\": \"Revenue (million USD)\",\n        \"min\": 0,\n        \"max\": 70,\n        \"tick_step\": 10\n      },\n      \"series\": [\n        {\"name\": \"Target\", \"values\": [40, 55, 48, 62]},\n        {\"name\": \"Actual\", \"values\": [36, 51, 45, 59]}\n      ]\n    },\n    {\n      \"title\": \"Monthly Orders\",\n      \"chart_type\": \"line\",\n      \"x_axis\": {\n        \"label\": \"Month\",\n        \"categories\": [\"Jan\", \"Feb\", \"Mar\", \"Apr\", \"May\", \"Jun\", \"Jul\"]\n      },\n      \"y_axis\": {\n        \"label\": \"Number of Orders\",\n        \"min\": 0,\n        \"max\": 60,\n        \"tick_step\": 10\n      },\n      \"series\": [\n        {\"name\": \"Orders\", \"values\": [22, 28, 25, 36, 44, 41, 53]}\n      ]\n    }\n  ]\n}\n```",
+  "attachment_sha256": [],
+  "provider_id": "deepseek",
+  "dataset_sha256": "af5b21aa1e02c3de92a6e929d63caa02bec2ab60446c5b22b1b60abfb7a0b582"
+}

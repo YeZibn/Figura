@@ -1,0 +1,34 @@
+{
+  "semantic_projection": "忽略内部 ID 和 measurement_refs；保留标题、来源、note、数据、坐标、画布和顺序",
+  "rounds": [
+    {
+      "turn": 2,
+      "authorized_user_request": "只把子图标题改为“区域季度销售（内部版）”，其他内容保持。请实际渲染交付。",
+      "expected_semantic_differences": [
+        {
+          "path": "/charts/0/metadata/title",
+          "before": "区域季度销售",
+          "after": "区域季度销售（内部版）"
+        }
+      ],
+      "preserve": "所有未被该轮授权改变的语义；按标签匹配，忽略内部 ID"
+    },
+    {
+      "turn": 3,
+      "authorized_user_request": "最终子图标题改为“区域季度销售（发布版）”，来源改为“季度经营台账（已核对）”。总标题与全部数据保持。请实际渲染交付。",
+      "expected_semantic_differences": [
+        {
+          "path": "/charts/0/metadata/source",
+          "before": "Figura E2E-30 合成数据 v1",
+          "after": "季度经营台账（已核对）"
+        },
+        {
+          "path": "/charts/0/metadata/title",
+          "before": "区域季度销售（内部版）",
+          "after": "区域季度销售（发布版）"
+        }
+      ],
+      "preserve": "所有未被该轮授权改变的语义；按标签匹配，忽略内部 ID"
+    }
+  ]
+}

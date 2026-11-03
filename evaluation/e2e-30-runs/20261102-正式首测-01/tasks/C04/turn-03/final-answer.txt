@@ -1,0 +1,11 @@
+已修改并实际渲染交付（640×522 PNG）。
+
+**本次修改点**
+- 子图标题改为“East 与 North 季度销售”
+- 总标题仍为“区域经营报告”
+- South 未被加回，图例与柱子仍只有 East、North；仍为 Q1→Q4 纵向分组
+- 轴名 Sales (万元) / Quarter、来源“Figura E2E-30 合成数据 v1”以及两个系列的季度值均未改动
+
+**视觉核对**：图例仅 East（蓝）、North（橙）两项；Q4 最高（East 28、North 20），Q1 最低（16、11）；East 在各季度均高于 North；Q3 为 East 19、North 17，柱高与数据相符；标题、轴标签、来源均完整可见，无遮挡或裁切。
+
+当前生效版本：run `c7140b95aae94185bfccac0701d91640`／figure call `call_00_d4LmY7QyzT4n4psLLk7S0886`。

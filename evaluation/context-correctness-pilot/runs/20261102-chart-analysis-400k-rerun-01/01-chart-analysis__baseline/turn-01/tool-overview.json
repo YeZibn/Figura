@@ -1,0 +1,32 @@
+[
+  {
+    "call_id": "call_00_ET_QlNcWYMZr2RviyVxq8GT8581",
+    "tool_name": "load_image",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_54uUTJMBhumgDKOkTwvw9293",
+    "tool_name": "decompose_chart_image",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_DIUO0fMNuSmUhRUXmAGT3732",
+    "tool_name": "measure_chart",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_01_BQjuk4ZnRD9iy10CqpC33910",
+    "tool_name": "measure_chart",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_F0ZiDKyNd2QlGxV6bTh71803",
+    "tool_name": "load_image",
+    "outcome": "succeeded",
+    "error": null
+  }
+]

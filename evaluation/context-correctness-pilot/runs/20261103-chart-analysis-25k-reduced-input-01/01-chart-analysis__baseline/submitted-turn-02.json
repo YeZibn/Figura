@@ -1,0 +1,6 @@
+{
+  "turn": 2,
+  "text": "根据上一轮数据，列出 Q1–Q4 的 Target − Actual 及最大、最小季度；计算 Jan–Jul 净变化和最低、最高月份。简洁列出计算，不作因果解释。",
+  "attachment_sha256": [],
+  "provider_id": "deepseek"
+}

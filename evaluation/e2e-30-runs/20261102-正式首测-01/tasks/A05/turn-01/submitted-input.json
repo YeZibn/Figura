@@ -1,0 +1,7 @@
+{
+  "text": "读取图中 Mon—Fri 的 Orders 数值；明确缺失日及其状态。计算首尾净变化，指出已知点的最大值。不要对缺失日补零或插值。",
+  "attachment_sha256": [
+    "b82590402747d0de5e1fd64f2ea0856c8561213237b5e4840ccf4a4306d89aca"
+  ],
+  "providerId": "deepseek"
+}

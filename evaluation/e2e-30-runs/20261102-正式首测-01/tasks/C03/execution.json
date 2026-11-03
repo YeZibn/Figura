@@ -1,0 +1,206 @@
+{
+  "task_id": "C03",
+  "batch_id": "20261102-正式首测-01",
+  "session_id": "acb488964d6e4318b365aeeb7ecacab2",
+  "execution_status": "completed",
+  "started_at": "2026-11-02T17:00:02.556514+08:00",
+  "turns": [
+    {
+      "turn": 1,
+      "run_id": "c4d3f9f6f98546d1b97491112c29891f",
+      "session_id": "acb488964d6e4318b365aeeb7ecacab2",
+      "status": "completed",
+      "terminal_code": null,
+      "wall_seconds": 8.154,
+      "timed_out": false,
+      "final_answer": "final-answer.txt",
+      "final_answer_committed": true,
+      "figures": [
+        {
+          "call_id": "call_00_3cfjhLdNMlXyVGX4BcBc5907",
+          "run_id": "c4d3f9f6f98546d1b97491112c29891f",
+          "file": "figure-01.json",
+          "result": {
+            "charts": [
+              {
+                "chart_id": "region_quarter_sales",
+                "chart_type": "bar",
+                "title": "区域季度销售"
+              }
+            ],
+            "figure_digest": "b995b5ac58dcb76d00a2561d0afdff4895e18ce6ebdaca652019ae34bd864178",
+            "figure_ref": {
+              "call_id": "call_00_3cfjhLdNMlXyVGX4BcBc5907",
+              "run_id": "c4d3f9f6f98546d1b97491112c29891f"
+            },
+            "title": "区域经营报告"
+          },
+          "digest_verified": true
+        }
+      ],
+      "renders": [
+        {
+          "call_id": "call_00_ET_xTeSjqNvsoJfBD9ZkRnp9286",
+          "run_id": "c4d3f9f6f98546d1b97491112c29891f",
+          "file": "render-01.png",
+          "result": {
+            "byte_count": 20890,
+            "figure_digest": "b995b5ac58dcb76d00a2561d0afdff4895e18ce6ebdaca652019ae34bd864178",
+            "figure_ref": {
+              "call_id": "call_00_3cfjhLdNMlXyVGX4BcBc5907",
+              "run_id": "c4d3f9f6f98546d1b97491112c29891f"
+            },
+            "height": 522,
+            "image_sha256": "fe05bd435f2a5370764fd44c136b48e4f5dede69ce704b0dcdc95c419f78dd59",
+            "media_type": "image/png",
+            "width": 640
+          },
+          "png_sha256_verified": true
+        }
+      ],
+      "provider_attempt_count": 3,
+      "internal_retry_count": 0,
+      "usage": {
+        "prompt_tokens": 40138,
+        "completion_tokens": 1037,
+        "total_tokens": 41175
+      },
+      "usage_complete": true,
+      "usage_missing_attempt_refs": [],
+      "compaction_operations": [],
+      "delivery_selection": "judge must select from actual final answer and all committed candidates; no automatic best-of selection"
+    },
+    {
+      "turn": 2,
+      "run_id": "b1314af0004b4eecaa2bc96cdf26ec14",
+      "session_id": "acb488964d6e4318b365aeeb7ecacab2",
+      "status": "completed",
+      "terminal_code": null,
+      "wall_seconds": 8.36,
+      "timed_out": false,
+      "final_answer": "final-answer.txt",
+      "final_answer_committed": true,
+      "figures": [
+        {
+          "call_id": "call_00_j0T8FqwvzP7hwXdBePMW7902",
+          "run_id": "b1314af0004b4eecaa2bc96cdf26ec14",
+          "file": "figure-01.json",
+          "result": {
+            "charts": [
+              {
+                "chart_id": "region_quarter_sales",
+                "chart_type": "bar",
+                "title": "区域季度销售"
+              }
+            ],
+            "figure_digest": "256812b8c6e793a38a3873ef6f593d7128914949d6551dda50777578ac8d8d44",
+            "figure_ref": {
+              "call_id": "call_00_j0T8FqwvzP7hwXdBePMW7902",
+              "run_id": "b1314af0004b4eecaa2bc96cdf26ec14"
+            },
+            "title": "区域经营报告"
+          },
+          "digest_verified": true
+        }
+      ],
+      "renders": [
+        {
+          "call_id": "call_00_ET_KAEHCBreneLiBCcvGFx81357",
+          "run_id": "b1314af0004b4eecaa2bc96cdf26ec14",
+          "file": "render-01.png",
+          "result": {
+            "byte_count": 22434,
+            "figure_digest": "256812b8c6e793a38a3873ef6f593d7128914949d6551dda50777578ac8d8d44",
+            "figure_ref": {
+              "call_id": "call_00_j0T8FqwvzP7hwXdBePMW7902",
+              "run_id": "b1314af0004b4eecaa2bc96cdf26ec14"
+            },
+            "height": 522,
+            "image_sha256": "7467fe675035407afb6493c7a29d0228e48ee617c69cbc64b738de71f22b5895",
+            "media_type": "image/png",
+            "width": 640
+          },
+          "png_sha256_verified": true
+        }
+      ],
+      "provider_attempt_count": 3,
+      "internal_retry_count": 0,
+      "usage": {
+        "prompt_tokens": 46310,
+        "completion_tokens": 902,
+        "total_tokens": 47212
+      },
+      "usage_complete": true,
+      "usage_missing_attempt_refs": [],
+      "compaction_operations": [],
+      "delivery_selection": "judge must select from actual final answer and all committed candidates; no automatic best-of selection"
+    },
+    {
+      "turn": 3,
+      "run_id": "5dfbb323ea014f799edfaeca2fa42761",
+      "session_id": "acb488964d6e4318b365aeeb7ecacab2",
+      "status": "completed",
+      "terminal_code": null,
+      "wall_seconds": 8.366,
+      "timed_out": false,
+      "final_answer": "final-answer.txt",
+      "final_answer_committed": true,
+      "figures": [
+        {
+          "call_id": "call_00_y0pBPJyiVnF3jKQR6hOp7310",
+          "run_id": "5dfbb323ea014f799edfaeca2fa42761",
+          "file": "figure-01.json",
+          "result": {
+            "charts": [
+              {
+                "chart_id": "region_quarter_sales",
+                "chart_type": "bar",
+                "title": "区域季度销售"
+              }
+            ],
+            "figure_digest": "f515e6eb89e81a57a86aca1dedc6b3901eaa20e35f35d707d9a8b207cb8ee783",
+            "figure_ref": {
+              "call_id": "call_00_y0pBPJyiVnF3jKQR6hOp7310",
+              "run_id": "5dfbb323ea014f799edfaeca2fa42761"
+            },
+            "title": "区域经营报告"
+          },
+          "digest_verified": true
+        }
+      ],
+      "renders": [
+        {
+          "call_id": "call_00_ET_95UnRC4XmaAd2dLrY5Wa1841",
+          "run_id": "5dfbb323ea014f799edfaeca2fa42761",
+          "file": "render-01.png",
+          "result": {
+            "byte_count": 24002,
+            "figure_digest": "f515e6eb89e81a57a86aca1dedc6b3901eaa20e35f35d707d9a8b207cb8ee783",
+            "figure_ref": {
+              "call_id": "call_00_y0pBPJyiVnF3jKQR6hOp7310",
+              "run_id": "5dfbb323ea014f799edfaeca2fa42761"
+            },
+            "height": 522,
+            "image_sha256": "19b91ed5ddec58c6ffb8f317bc78870f191e7768e54f4e030e4af43cbd4faeff",
+            "media_type": "image/png",
+            "width": 640
+          },
+          "png_sha256_verified": true
+        }
+      ],
+      "provider_attempt_count": 3,
+      "internal_retry_count": 0,
+      "usage": {
+        "prompt_tokens": 52005,
+        "completion_tokens": 959,
+        "total_tokens": 52964
+      },
+      "usage_complete": true,
+      "usage_missing_attempt_refs": [],
+      "compaction_operations": [],
+      "delivery_selection": "judge must select from actual final answer and all committed candidates; no automatic best-of selection"
+    }
+  ],
+  "protocol_anomalies": [],
+  "completed_at": "2026-11-02T17:00:27.691643+08:00"
+}

@@ -1,0 +1,120 @@
+{
+  "task_id": "A03",
+  "batch_id": "20261102-正式首测-01",
+  "verdict": "pass",
+  "checks": [
+    {
+      "id": "structure",
+      "critical": true,
+      "status": "pass",
+      "expected": {
+        "type": "stacked bar",
+        "unit": "万元"
+      },
+      "actual": {
+        "type": "stacked bar",
+        "unit": "万元人民币"
+      },
+      "evidence": [
+        "turn_evidence/0/answer：单位段及“堆叠高度”表述",
+        "image-01.png：堆叠柱与纵轴 Revenue (10,000 CNY)"
+      ],
+      "reason": "回答正确理解堆叠关系，并将纵轴单位解释为万元人民币。"
+    },
+    {
+      "id": "parts",
+      "critical": true,
+      "status": "pass",
+      "expected": {
+        "Product": [
+          8,
+          12,
+          10,
+          15
+        ],
+        "Service": [
+          5,
+          7,
+          9,
+          6
+        ]
+      },
+      "actual": {
+        "Product": [
+          8,
+          12,
+          10,
+          15
+        ],
+        "Service": [
+          5,
+          7,
+          9,
+          6
+        ]
+      },
+      "evidence": [
+        "turn_evidence/0/answer：各分项收入表",
+        "image-01.png：Q1—Q4 色块标注及图例"
+      ],
+      "reason": "全部八个分项数值及其季度、系列归属均准确。"
+    },
+    {
+      "id": "totals",
+      "critical": true,
+      "status": "pass",
+      "expected": {
+        "totals": [
+          13,
+          19,
+          19,
+          21
+        ],
+        "max": "Q4"
+      },
+      "actual": {
+        "totals": [
+          13,
+          19,
+          19,
+          21
+        ],
+        "max": "Q4"
+      },
+      "evidence": [
+        "turn_evidence/0/answer：总收入列及最高季度说明"
+      ],
+      "reason": "逐季相加得到13、19、19、21，最高季度为Q4，与回答一致。"
+    },
+    {
+      "id": "share",
+      "critical": true,
+      "status": "pass",
+      "expected": 47.36842105263158,
+      "actual": 47.4,
+      "evidence": [
+        "turn_evidence/0/answer：Q3 中 Service 的占比"
+      ],
+      "reason": "正确计算9÷19，按要求保留一位百分数；误差约0.0316个百分点，在0.1容差内。"
+    }
+  ],
+  "primary_failure": null,
+  "secondary_failures": [],
+  "artifact_refs": [
+    "final-answer.txt",
+    "image-01.png"
+  ],
+  "quality_notes": [],
+  "judge": {
+    "model": "gpt-6.1-sol",
+    "prompt_version": "1.0",
+    "context_isolated": true,
+    "actual_png_viewed": true,
+    "limitations": [
+      "本题为图片分析任务，已查看随附实际输入PNG；用户未要求生成Figure，执行记录亦无输出Figure或render。"
+    ]
+  },
+  "review_notes": [
+    "固定单轮请求与已提交最终回答对应，未发现所提供证据中的协议异常。本次为独立初次裁决，不代表另一次复核。"
+  ]
+}

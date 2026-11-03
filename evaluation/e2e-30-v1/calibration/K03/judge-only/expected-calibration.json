@@ -1,0 +1,5 @@
+{
+  "content_verdict": "fail",
+  "primary_failure": "non_target_corruption",
+  "reason": "目标标题已改，但 South/Q2 从25被擅改为99"
+}

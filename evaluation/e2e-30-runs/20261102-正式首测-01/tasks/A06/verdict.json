@@ -1,0 +1,97 @@
+{
+  "task_id": "A06",
+  "batch_id": "20261102-正式首测-01",
+  "verdict": "pass",
+  "checks": [
+    {
+      "id": "type",
+      "critical": true,
+      "status": "pass",
+      "expected": "donut",
+      "actual": "回答明确识别为环图；附件呈现中央留空的环图。",
+      "evidence": [
+        "final-answer.txt：标题“渠道占比（环图）”",
+        "image-01.png：中央留空区域"
+      ],
+      "reason": "图表类型识别正确。"
+    },
+    {
+      "id": "shares",
+      "critical": true,
+      "status": "pass",
+      "expected": {
+        "Online": 40,
+        "Store": 30,
+        "Partner": 20,
+        "Other": 10
+      },
+      "actual": {
+        "Online": 40,
+        "Store": 30,
+        "Partner": 20,
+        "Other": 10
+      },
+      "evidence": [
+        "final-answer.txt：渠道占比表",
+        "image-01.png：Online、Store、Partner、Other 及对应百分比"
+      ],
+      "reason": "四个渠道与标注百分比逐项准确对应，零容差核对通过。"
+    },
+    {
+      "id": "summary",
+      "critical": true,
+      "status": "pass",
+      "expected": {
+        "max": "Online",
+        "min": "Other",
+        "combined": 60
+      },
+      "actual": {
+        "max": "Online",
+        "min": "Other",
+        "combined": 60
+      },
+      "evidence": [
+        "final-answer.txt：最大渠道、最小渠道及 Online + Partner 合计三条结论"
+      ],
+      "reason": "40 为最大值，10 为最小值，40 + 20 = 60，均正确。"
+    },
+    {
+      "id": "boundary",
+      "critical": true,
+      "status": "pass",
+      "expected": "unknown",
+      "actual": "明确说明没有总人数或绝对数量，未推算各渠道人数。",
+      "evidence": [
+        "final-answer.txt：补充说明最后一条"
+      ],
+      "reason": "遵守数据边界，没有捏造绝对人数。"
+    }
+  ],
+  "primary_failure": null,
+  "secondary_failures": [],
+  "artifact_refs": [
+    "final-answer.txt",
+    "image-01.png",
+    "execution：/turns/0",
+    "turn_evidence：/0/answer"
+  ],
+  "quality_notes": [
+    "工具几何测量限制的说明对本题结论无影响，但属于用户未要求的实现细节。"
+  ],
+  "judge": {
+    "model": "gpt-6.1-sol",
+    "prompt_version": "1.0",
+    "context_isolated": true,
+    "actual_png_viewed": true,
+    "limitations": [
+      "本题为图片分析任务，无须生成 Figure 或渲染产物；已查看所附实际输入 PNG。",
+      "裁决依据提供的冻结证据包，未另行核验底层运行日志。"
+    ]
+  },
+  "review_notes": [
+    "证据记录单轮固定输入、同一 Session、已完成终态及已提交最终回答，无已知协议异常。",
+    "本轮要求交付文字分析，最终回答为唯一交付；figures 和 renders 为空不构成缺交付。",
+    "本次为当前独立上下文的裁决，未声称完成其他独立复核。"
+  ]
+}

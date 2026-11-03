@@ -1,0 +1,73 @@
+[
+  {
+    "attempt_id": "758cb92706b0406aabe5fa5c781330ed",
+    "request_id": "cb38062a0f304a2b84a7ab5c6b58efd7",
+    "status": "response_committed",
+    "response_record_id": "b78614e05c674884b9442a3e4706d868",
+    "failure_code": null,
+    "http_status": 200,
+    "attempt_sequence": 1,
+    "purpose": "agent_turn",
+    "usage": {
+      "completion_tokens": 88,
+      "prompt_tokens": 12436,
+      "total_tokens": 12524
+    }
+  },
+  {
+    "attempt_id": "77a616d66f234e6dbbc815b6c3e119cf",
+    "request_id": "b944266fd59d4ecfbcd3a78cb329500c",
+    "status": "response_committed",
+    "response_record_id": "a71f9c219d554f1fb677f9c9536bfbff",
+    "failure_code": null,
+    "http_status": 200,
+    "attempt_sequence": 1,
+    "purpose": "agent_turn",
+    "usage": {
+      "completion_tokens": 376,
+      "prompt_tokens": 13742,
+      "total_tokens": 14118
+    }
+  },
+  {
+    "attempt_id": "a32620647d004df298a394e3476a0901",
+    "request_id": "ab7f9ce6278b4303adf2ee842b3c5e4f",
+    "status": "response_committed",
+    "response_record_id": "5edbdd2871334b5ca54b69ad3dcb769b",
+    "failure_code": null,
+    "http_status": 200,
+    "attempt_sequence": 1,
+    "purpose": "agent_turn",
+    "usage": {
+      "completion_tokens": 218,
+      "prompt_tokens": 13494,
+      "total_tokens": 13712
+    }
+  },
+  {
+    "attempt_id": "9729d6fd4aa448fcaaab2c26c0bb132e",
+    "request_id": "0ccba9ad6d444591a1b2afcf2784373a",
+    "status": "response_committed",
+    "response_record_id": null,
+    "failure_code": null,
+    "http_status": 200,
+    "attempt_sequence": 1,
+    "purpose": "context_compaction",
+    "usage": {
+      "completion_tokens": 3083,
+      "prompt_tokens": 2886,
+      "total_tokens": 5969
+    }
+  },
+  {
+    "attempt_id": "b9c36cbfc51d40b8802522b7f9e689fe",
+    "request_id": "a226b0b649304939b245100a3816eddd",
+    "status": "cancelled",
+    "response_record_id": null,
+    "failure_code": "connection_error",
+    "http_status": null,
+    "attempt_sequence": 1,
+    "purpose": "agent_turn",
+    "usage": null
+  }
+]

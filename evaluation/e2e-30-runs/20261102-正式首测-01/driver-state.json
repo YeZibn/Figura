@@ -1,0 +1,8 @@
+{
+  "pid": 57627,
+  "gateway_pid": 57629,
+  "port": 62245,
+  "status": "execution_complete_gateway_stopped",
+  "runtime_dir": ".figura/evaluation/e2e30-20261102-正式首测-01",
+  "gateway_port_closed": true
+}

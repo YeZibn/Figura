@@ -1,0 +1,112 @@
+{
+  "task_id": "A07",
+  "batch_id": "20261102-正式首测-01",
+  "verdict": "pass",
+  "checks": [
+    {
+      "id": "axes",
+      "critical": true,
+      "status": "pass",
+      "expected": "2023；线性 x 轴；2021 年不变价国际元（PPP）；y 为出生时预期寿命（年）",
+      "actual": "回答正确说明年份、线性横轴、购买力平价调整的人均 GDP 及其价格基期，并说明纵轴为出生时预期寿命，单位为年。",
+      "evidence": [
+        "final-answer.txt：图表基本信息",
+        "image-01.png：标题、副标题及横纵轴标签"
+      ],
+      "reason": "轴含义、单位、年份和横轴类型均符合原图与答案。"
+    },
+    {
+      "id": "coordinates",
+      "critical": true,
+      "status": "pass",
+      "expected": {
+        "China": {
+          "x": 22687.252,
+          "y": 77.953
+        },
+        "India": {
+          "x": 8870.55,
+          "y": 72.003
+        },
+        "United States": {
+          "x": 74351.67,
+          "y": 79.304
+        }
+      },
+      "actual": {
+        "China": {
+          "x": "22000–23000",
+          "y": 78
+        },
+        "India": {
+          "x": 9000,
+          "y": 72
+        },
+        "United States": {
+          "x": 74000,
+          "y": 79
+        }
+      },
+      "evidence": [
+        "final-answer.txt：六国估读坐标表及三国重点估读段落",
+        "image-01.png：China、India、United States 气泡中心"
+      ],
+      "reason": "三国标签与坐标关联正确。中国横轴估读区间两端距期望值均小于 2000；印度、美国横轴误差分别为 129.45、351.67。纵轴误差分别为 0.047、0.003、0.304 年，均在规定容差内。"
+    },
+    {
+      "id": "extrema",
+      "critical": true,
+      "status": "pass",
+      "expected": {
+        "max": "Germany",
+        "min": "South Africa"
+      },
+      "actual": {
+        "max": "Germany",
+        "min": "South Africa"
+      },
+      "evidence": [
+        "final-answer.txt：六国中的最高与最低",
+        "image-01.png：六个指定国家的纵轴位置"
+      ],
+      "reason": "明确限定在六国中比较，最高为德国，最低为南非。"
+    },
+    {
+      "id": "boundary",
+      "critical": true,
+      "status": "pass",
+      "expected": "只描述关联，不给无依据因果；不混淆气泡面积与纵轴",
+      "actual": "描述正向且趋缓的关联，明确指出不能据此认为 GDP 提高直接导致寿命变化；明确说明气泡面积代表人口，不代表寿命。",
+      "evidence": [
+        "final-answer.txt：图中的关联（描述性）",
+        "final-answer.txt：气泡与颜色",
+        "image-01.png：Circles sized by Population 图例"
+      ],
+      "reason": "相关性与因果性的边界明确，人口气泡面积与寿命纵坐标区分正确。"
+    }
+  ],
+  "primary_failure": null,
+  "secondary_failures": [],
+  "artifact_refs": [
+    "final-answer.txt",
+    "image-01.png",
+    "execution：/turns/0",
+    "Run c68279b8d9c344d2911620ccfbbff1ab"
+  ],
+  "quality_notes": [
+    "“德国……换得了更高的预期寿命”措辞容易暗示因果，但上下文明确否认因果推断，未构成关键错误。"
+  ],
+  "judge": {
+    "model": "gpt-6.1-sol",
+    "prompt_version": "1.0",
+    "context_isolated": true,
+    "actual_png_viewed": true,
+    "limitations": [
+      "本题为图片分析任务，已查看附上的实际输入 PNG；用户未要求生成 Figure，因此无生成图或 render 可验收。"
+    ]
+  },
+  "review_notes": [
+    "执行记录显示单轮完成、最终回答已提交且未超时，未发现已提供证据中的协议异常。",
+    "本次仅完成当前上下文的独立裁决，未声称完成另一次独立复核。"
+  ]
+}

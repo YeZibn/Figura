@@ -1,0 +1,16 @@
+{
+  "task_id": "B07",
+  "title": "气泡三通道映射",
+  "category": "construction",
+  "difficulty": "hard",
+  "source_type": "synthetic",
+  "turns": 1,
+  "status": "materials_prepared_not_run",
+  "agent_allowlist": [
+    "agent-input/conversation.json",
+    "agent-input/conversation.md",
+    "agent-input/dataset.json"
+  ],
+  "judge_only": "judge-only/",
+  "expected_success": "all_critical_checks_pass"
+}

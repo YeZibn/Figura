@@ -1,0 +1,65 @@
+{
+  "turn": 2,
+  "run_id": "171bc4b9925d415eabeeedd5f51223c4",
+  "session_id": "8b7585b6bb6b4f878ef870f9f5e1e4dd",
+  "status": "completed",
+  "terminal_code": null,
+  "wall_seconds": 8.282,
+  "timed_out": false,
+  "final_answer": "final-answer.txt",
+  "final_answer_committed": true,
+  "figures": [
+    {
+      "call_id": "call_00_ET_W3vHOJtLppJtiwmCprRx9224",
+      "run_id": "171bc4b9925d415eabeeedd5f51223c4",
+      "file": "figure-01.json",
+      "result": {
+        "charts": [
+          {
+            "chart_id": "regional_quarterly_sales",
+            "chart_type": "bar",
+            "title": "区域季度销售（内部版）"
+          }
+        ],
+        "figure_digest": "8167f232a49e491f840a68fc2f9d8b557b6a5990ba31d8c61a464dbe94d6723b",
+        "figure_ref": {
+          "call_id": "call_00_ET_W3vHOJtLppJtiwmCprRx9224",
+          "run_id": "171bc4b9925d415eabeeedd5f51223c4"
+        },
+        "title": "区域经营报告"
+      },
+      "digest_verified": true
+    }
+  ],
+  "renders": [
+    {
+      "call_id": "call_00_ET_r3MHCEXp9VD6V3j5Dcu90707",
+      "run_id": "171bc4b9925d415eabeeedd5f51223c4",
+      "file": "render-01.png",
+      "result": {
+        "byte_count": 22139,
+        "figure_digest": "8167f232a49e491f840a68fc2f9d8b557b6a5990ba31d8c61a464dbe94d6723b",
+        "figure_ref": {
+          "call_id": "call_00_ET_W3vHOJtLppJtiwmCprRx9224",
+          "run_id": "171bc4b9925d415eabeeedd5f51223c4"
+        },
+        "height": 522,
+        "image_sha256": "6075efa6388711028e3f98d7784afaed4d209f3ae2091c1a2ec4dc0641d1c96d",
+        "media_type": "image/png",
+        "width": 640
+      },
+      "png_sha256_verified": true
+    }
+  ],
+  "provider_attempt_count": 4,
+  "internal_retry_count": 0,
+  "usage": {
+    "prompt_tokens": 61790,
+    "completion_tokens": 796,
+    "total_tokens": 62586
+  },
+  "usage_complete": true,
+  "usage_missing_attempt_refs": [],
+  "compaction_operations": [],
+  "delivery_selection": "judge must select from actual final answer and all committed candidates; no automatic best-of selection"
+}

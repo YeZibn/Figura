@@ -1,0 +1,113 @@
+{
+  "task_id": "02-chart-construction",
+  "condition": "baseline",
+  "capacity_tokens": 100000000,
+  "provider_id": "deepseek",
+  "batch_id": "20261102-context3cat-standalone-01",
+  "started_at": "2026-11-02T18:23:32.788431+08:00",
+  "session_id": "51d72443869c4702a385d14f53ba0119",
+  "turns": [
+    {
+      "turn": 1,
+      "run_id": "9ed035d39ba64c14bc0a1921068fb78f",
+      "session_id": "51d72443869c4702a385d14f53ba0119",
+      "status": "completed",
+      "terminal_code": null,
+      "final_answer_committed": true,
+      "figures": [],
+      "renders": [],
+      "provider_attempt_count": 1,
+      "usage_by_purpose": {
+        "agent_turn": {
+          "prompt_tokens": 12636,
+          "completion_tokens": 856,
+          "total_tokens": 13492
+        }
+      },
+      "usage_total_including_compaction": {
+        "prompt_tokens": 12636,
+        "completion_tokens": 856,
+        "total_tokens": 13492
+      },
+      "usage_complete": true,
+      "usage_missing_attempts": [],
+      "compaction_operations": [],
+      "wall_seconds": 8.07,
+      "timed_out": false
+    },
+    {
+      "turn": 2,
+      "run_id": "2a8fd9b2594349be9c3309c3c2d2ad96",
+      "session_id": "51d72443869c4702a385d14f53ba0119",
+      "status": "completed",
+      "terminal_code": null,
+      "final_answer_committed": true,
+      "figures": [],
+      "renders": [],
+      "provider_attempt_count": 1,
+      "usage_by_purpose": {
+        "agent_turn": {
+          "prompt_tokens": 13863,
+          "completion_tokens": 1170,
+          "total_tokens": 15033
+        }
+      },
+      "usage_total_including_compaction": {
+        "prompt_tokens": 13863,
+        "completion_tokens": 1170,
+        "total_tokens": 15033
+      },
+      "usage_complete": true,
+      "usage_missing_attempts": [],
+      "compaction_operations": [],
+      "wall_seconds": 8.085,
+      "timed_out": false
+    },
+    {
+      "turn": 3,
+      "run_id": "3dcbbffaf4724906a916e7dd57a6a86e",
+      "session_id": "51d72443869c4702a385d14f53ba0119",
+      "status": "completed",
+      "terminal_code": null,
+      "final_answer_committed": true,
+      "figures": [
+        {
+          "file": "figure-01.json",
+          "figure_digest": "70c3054bc335313b83da16301e9d719422bea9fe9d063cdbc31f13c42047d558",
+          "verified": true
+        }
+      ],
+      "renders": [
+        {
+          "file": "render-01.png",
+          "image_sha256": "58f3f2c1f36eb1b163a8f79bcc202fff512ba5138acee946788ada0e5850acfd",
+          "verified": true
+        }
+      ],
+      "provider_attempt_count": 5,
+      "usage_by_purpose": {
+        "agent_turn": {
+          "prompt_tokens": 90156,
+          "completion_tokens": 2241,
+          "total_tokens": 92397
+        }
+      },
+      "usage_total_including_compaction": {
+        "prompt_tokens": 90156,
+        "completion_tokens": 2241,
+        "total_tokens": 92397
+      },
+      "usage_complete": true,
+      "usage_missing_attempts": [],
+      "compaction_operations": [],
+      "wall_seconds": 16.366,
+      "timed_out": false
+    }
+  ],
+  "execution_status": "completed",
+  "input_adjustments": [
+    "dataset.json 原文内嵌至第 1 轮用户消息；附件入口只接受图片，JSON 内容保持不变。"
+  ],
+  "attachment_sha256": {},
+  "completed_at": "2026-11-02T18:24:06.529720+08:00"
+}

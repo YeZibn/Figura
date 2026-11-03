@@ -1,0 +1,68 @@
+{
+  "task_id": "B03",
+  "batch_id": "20261102-正式首测-01",
+  "verdict": "pass",
+  "checks": [
+    {
+      "id": "T1-semantic",
+      "critical": true,
+      "status": "pass",
+      "expected": "单张纵向堆叠柱状图；季度 Q1—Q4；Product=[8,13,11,17]，Service=[4,6,8,7]；标题、轴标签和来源符合要求。",
+      "actual": "已提交 Figure 的类型、堆叠模式、类别及系列顺序均正确；按标签关联的八个数值全部精确一致，标题、轴标签和来源完整。",
+      "evidence": [
+        "figure-01.json#/charts/0/chart_spec",
+        "assemble_chart_figure call_00_Q5HbGgeAhjjR0ZiuMS219061：succeeded",
+        "execution.json#/turns/0/figures/0/digest_verified"
+      ],
+      "reason": "实际 Figure 与参考语义一致，未发现数据变换、排序或增补。"
+    },
+    {
+      "id": "T1-render",
+      "critical": true,
+      "status": "pass",
+      "expected": "与已提交 Figure 匹配且可查看的真实 PNG，图数和必要内容正确，关键文字无严重裁切遮挡。",
+      "actual": "实际 PNG 可读取，呈现一张纵向堆叠柱状图；Product 在下、Service 在上，四季度总高为 12、19、19、24。标题、图例、轴标签和来源均可辨认，无严重裁切遮挡。render 与 Figure 的引用及 digest 一致。",
+      "evidence": [
+        "render-01.png：完整画布、柱体、图例及页脚",
+        "execution.json#/turns/0/renders/0/result",
+        "execution.json#/turns/0/renders/0/png_sha256_verified",
+        "execution.json#/turns/0/figures/0/result"
+      ],
+      "reason": "已直接查看实际 PNG，渲染内容与提交 Figure 及用户要求相符。"
+    },
+    {
+      "id": "T1-delivery",
+      "critical": true,
+      "status": "pass",
+      "expected": "最终回答清楚指向可用产物，且不存在与数据或交付状态冲突的关键陈述。",
+      "actual": "最终回答明确说明“PNG 见上”，交付语境中只有一个成功提交并渲染的候选；回答列出的系列数值、季度合计及图表文字均与实际产物一致。",
+      "evidence": [
+        "final-answer.txt：首段及图表内容列表",
+        "execution.json#/turns/0/final_answer_committed",
+        "execution.json#/turns/0/figures",
+        "execution.json#/turns/0/renders"
+      ],
+      "reason": "产物选择唯一、交付明确，回答没有关键事实冲突。"
+    }
+  ],
+  "primary_failure": null,
+  "secondary_failures": [],
+  "artifact_refs": [
+    "figure-01.json",
+    "render-01.png",
+    "final-answer.txt",
+    "execution.json"
+  ],
+  "quality_notes": [],
+  "judge": {
+    "model": "gpt-6.1-sol",
+    "prompt_version": "1.0",
+    "context_isolated": true,
+    "actual_png_viewed": true,
+    "limitations": []
+  },
+  "review_notes": [
+    "所提供证据显示固定单轮输入、成功提交及配对渲染，未发现协议异常。",
+    "本结论为当前独立上下文的本次裁决，未声称已完成另一次独立复核。"
+  ]
+}

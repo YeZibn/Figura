@@ -1,0 +1,178 @@
+{
+  "task_id": "C01",
+  "batch_id": "20261102-正式首测-01",
+  "verdict": "pass",
+  "checks": [
+    {
+      "id": "T1-semantic",
+      "critical": true,
+      "status": "pass",
+      "expected": "单幅纵向分组柱状图；指定标题、来源、轴标签、类别及系列顺序；12 个数值与 reference-turn-01.json 一致。",
+      "actual": "总标题、子图标题、来源和轴标签均一致；类别依次 Q1—Q4，系列依次 East、South、North；对应数值分别为 [13,19,16,25]、[10,15,18,21]、[8,12,14,17]，逐值差为 0。",
+      "evidence": [
+        "/turn_evidence/0/figures/figure-01.json",
+        "/turn_evidence/0/evidence/figures/0",
+        "/turn_evidence/0/tool_overview"
+      ],
+      "reason": "成功提交的 Figure 与基线参考语义一致，数值满足指定容差。"
+    },
+    {
+      "id": "T1-render",
+      "critical": true,
+      "status": "pass",
+      "expected": "与第 1 轮 Figure 匹配的真实可读 PNG，图数及关键内容正确。",
+      "actual": "已查看 image-01.png：单幅分组柱状图，12 根柱、图例、轴标签、标题和来源完整可见，无严重裁切遮挡。render 的 figure_ref 与 digest 均匹配该轮提交。",
+      "evidence": [
+        "image-01.png",
+        "/turn_evidence/0/evidence/renders/0",
+        "/turn_evidence/0/evidence/figures/0/result/figure_digest"
+      ],
+      "reason": "PNG 视觉内容与已提交 Figure 一致，且元数据记录 PNG 哈希验证成功。"
+    },
+    {
+      "id": "T1-delivery",
+      "critical": true,
+      "status": "pass",
+      "expected": "回答明确指向可用基线产物，陈述与实际产物一致。",
+      "actual": "回答明确列出 Figure call_00_rL2OkDW2rMGXnWqE7jln4868 和渲染 call_00_ET_Y7bhZqNkMH5y6MHg62qn8268；标题、数据表及交付描述与产物一致。",
+      "evidence": [
+        "/turn_evidence/0/answer",
+        "/turn_evidence/0/evidence/figures/0",
+        "/turn_evidence/0/evidence/renders/0"
+      ],
+      "reason": "明确选择了该轮唯一成功提交和渲染的产物，无交付歧义或关键冲突。"
+    },
+    {
+      "id": "T2-semantic",
+      "critical": true,
+      "status": "pass",
+      "expected": "仅将子图标题改为“区域季度销售（内部版）”，保留其余语义。",
+      "actual": "子图标题正确更新；总标题、来源、图表类型、方向、分组模式、轴标签、类别和系列顺序均保留；12 个数值逐值差为 0。",
+      "evidence": [
+        "/turn_evidence/1/figures/figure-01.json",
+        "/turn_evidence/1/evidence/figures/0",
+        "/turn_evidence/1/tool_overview"
+      ],
+      "reason": "成功提交的 Figure 与 reference-turn-02.json 语义一致。"
+    },
+    {
+      "id": "T2-render",
+      "critical": true,
+      "status": "pass",
+      "expected": "与第 2 轮 Figure 匹配的真实可读 PNG，正确呈现内部版标题。",
+      "actual": "已查看 image-02.png：内部版子图标题正确，单幅图及全部柱、图例、轴标签和原来源完整可见；render 的 figure_ref 与 digest 匹配该轮提交。",
+      "evidence": [
+        "image-02.png",
+        "/turn_evidence/1/evidence/renders/0",
+        "/turn_evidence/1/evidence/figures/0/result/figure_digest"
+      ],
+      "reason": "真实 PNG 正确呈现本轮修改，无严重裁切遮挡，PNG 哈希验证成功。"
+    },
+    {
+      "id": "T2-delivery",
+      "critical": true,
+      "status": "pass",
+      "expected": "回答明确指向第 2 轮可用产物，陈述与实际一致。",
+      "actual": "回答明确列出 Figure call_00_ET_W3vHOJtLppJtiwmCprRx9224 和渲染 call_00_ET_r3MHCEXp9VD6V3j5Dcu90707；修改及保留内容的描述均与产物一致。",
+      "evidence": [
+        "/turn_evidence/1/answer",
+        "/turn_evidence/1/evidence/figures/0",
+        "/turn_evidence/1/evidence/renders/0"
+      ],
+      "reason": "交付指向明确，引用与该轮成功产物配对，无关键冲突。"
+    },
+    {
+      "id": "T3-semantic",
+      "critical": true,
+      "status": "pass",
+      "expected": "子图标题为“区域季度销售（发布版）”，来源为“季度经营台账（已核对）”，其余语义保留。",
+      "actual": "子图标题和来源均正确更新；总标题、类型、方向、分组模式、轴标签、类别及系列顺序保持；12 个数值逐值差为 0。",
+      "evidence": [
+        "/turn_evidence/2/figures/figure-01.json",
+        "/turn_evidence/2/evidence/figures/0",
+        "/turn_evidence/2/tool_overview"
+      ],
+      "reason": "成功提交的 Figure 与 reference-turn-03.json 语义一致。"
+    },
+    {
+      "id": "T3-render",
+      "critical": true,
+      "status": "pass",
+      "expected": "与第 3 轮 Figure 匹配的真实可读 PNG，正确呈现发布版标题和新来源。",
+      "actual": "已查看 image-03.png：发布版子图标题和新来源清晰可读；单幅分组柱状图、图例、坐标和全部柱完整可见；render 的 figure_ref 与 digest 匹配该轮提交。",
+      "evidence": [
+        "image-03.png",
+        "/turn_evidence/2/evidence/renders/0",
+        "/turn_evidence/2/evidence/figures/0/result/figure_digest"
+      ],
+      "reason": "PNG 正确呈现最终修改，无严重裁切遮挡，PNG 哈希验证成功。"
+    },
+    {
+      "id": "T3-delivery",
+      "critical": true,
+      "status": "pass",
+      "expected": "回答明确指向最终可用产物，陈述与实际一致。",
+      "actual": "回答明确列出 Figure call_00_7lHeAiE1xoOA22dZQhZp5326 和渲染 call_00_ET_e61oh0BA7UzinJUy4R4g8939；标题、来源、数据和尺寸描述与实际产物一致。",
+      "evidence": [
+        "/turn_evidence/2/answer",
+        "/turn_evidence/2/evidence/figures/0",
+        "/turn_evidence/2/evidence/renders/0"
+      ],
+      "reason": "最终交付指向明确，与成功提交和渲染记录一致。"
+    },
+    {
+      "id": "preservation",
+      "critical": true,
+      "status": "pass",
+      "expected": "第 2 轮仅改变子图标题；第 3 轮仅改变子图标题及来源；各轮其余语义保留。",
+      "actual": "逐轮比较，授权外的总标题、布局、图数、图表类型、坐标、数据映射、顺序及全部数值均保持。第 2 轮新增空 note 和空 measurement_refs 不构成语义改变。",
+      "evidence": [
+        "/turn_evidence/0/figures/figure-01.json",
+        "/turn_evidence/1/figures/figure-01.json",
+        "/turn_evidence/2/figures/figure-01.json",
+        "image-01.png",
+        "image-02.png",
+        "image-03.png"
+      ],
+      "reason": "各轮修改范围符合授权，未发现非目标内容损坏。"
+    },
+    {
+      "id": "final_requirements",
+      "critical": true,
+      "status": "pass",
+      "expected": "最终发布版标题和新来源生效，总标题与全部数据保持，实际渲染交付。",
+      "actual": "最终 Figure 与 PNG 均显示“区域季度销售（发布版）”和“季度经营台账（已核对）”；总标题及全部数据正确，内部版标题和旧来源未残留于最终图。",
+      "evidence": [
+        "/turn_evidence/2/figures/figure-01.json",
+        "/turn_evidence/2/answer",
+        "image-03.png"
+      ],
+      "reason": "最新有效要求全部生效，被覆盖的文字已替换，最终 PNG 已成功交付。"
+    }
+  ],
+  "primary_failure": null,
+  "secondary_failures": [],
+  "artifact_refs": [
+    "image-01.png",
+    "image-02.png",
+    "image-03.png",
+    "/turn_evidence/0",
+    "/turn_evidence/1",
+    "/turn_evidence/2"
+  ],
+  "quality_notes": [],
+  "judge": {
+    "model": "gpt-6.1-sol",
+    "prompt_version": "1.0",
+    "context_isolated": true,
+    "actual_png_viewed": true,
+    "limitations": [
+      "裁决依据本次提供的冻结证据与三张实际 PNG；未独立重算文件哈希，采用证据包中的验证记录。"
+    ]
+  },
+  "review_notes": [
+    "三轮沿用同一 Session，均已终态完成，无超时；提供的 protocol_anomalies 为空，未发现输入或提交异常。",
+    "每轮最终回答均明确引用该轮唯一成功 Figure/render，未进行候选择优。",
+    "本记录仅为本次独立裁决，不代表已完成另一个上下文的复核。"
+  ]
+}

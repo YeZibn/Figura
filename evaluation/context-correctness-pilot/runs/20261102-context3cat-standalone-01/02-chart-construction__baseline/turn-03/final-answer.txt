@@ -1,0 +1,28 @@
+已完成装配与渲染。图为 1 行 2 列：左季度销售（分组柱，Target/Actual 图例）、右月度订单（单折线 Orders），总标题为“季度销售与月度订单”。
+
+## 数值确认（来自原始记录，run `9ed035d3…`, record `9953df3f…`）
+| 取值 | 面板 | 系列 | 数值 |
+|---|---|---|---|
+| Q3 | 面板 1 Quarterly Sales | Target | **48**（Target 序列 [40,55,**48**,62] 第 3 位） |
+| Q3 | 面板 1 Quarterly Sales | Actual | **45**（Actual 序列 [36,51,**45**,59] 第 3 位） |
+| Jul | 面板 2 Monthly Orders | Orders | **53**（Orders 序列 [22,28,25,36,44,41,**53**] 第 7 位） |
+
+## ChartSpec 摘要
+| 项 | 左侧 `quarterly_sales` | 右侧 `monthly_orders` |
+|---|---|---|
+| 类型 | bar（grouped，vertical） | line |
+| 标题 | Quarterly Sales | Monthly Orders |
+| x 轴 | categorical，标签 “Quarter”：Q1、Q2、Q3、Q4 | categorical，标签 “Month”：Jan、Feb、Mar、Apr、May、Jun、Jul |
+| y 轴 | numeric，标签 “Revenue (million USD)” | numeric，标签 “Number of Orders” |
+| 系列 | Target [40,55,48,62]；Actual [36,51,45,59] | Orders（Jan 22、Feb 28、Mar 25、Apr 36、May 44、Jun 41、Jul 53） |
+| 备注 | 未归一化 | 按原始 7 个点直接连线 |
+| 布局 / 总标题 | columns = 2；“季度销售与月度订单” | 同左 |
+
+## 渲染结果核对
+- **面板顺序**：左为 Quarterly Sales，右为 Monthly Orders，与合同一致。
+- **类别顺序**：Q1→Q4 与 Jan→Jul 均按原顺序排列（未排序、未改写、未翻译）。
+- **单位**：左轴显示 “Revenue (million USD)”，右轴显示 “Number of Orders”，均为原标签；未添加其他单位。
+- **原始数值**：柱高与折线点按传入值呈现，Q3 两柱（48 / 45）与 Jul 折线最高点（53）可见且符合原始数据；未插值、未增加数据点、未添加合计或差额系列，两面板量纲未合并。
+- **一处渲染层面的偏差**：右侧纵轴由渲染器自动定标，实际刻度约从 22 起至 55 左右，未显示合同声明的 0–60、步长 10；装配结构只能记录轴类型与轴名称，无法强制上下限与步长。左侧纵轴从 0 起。该偏差只影响刻度显示，不改变任何数值。
+
+PNG 已随上一步工具结果生成（1280×522）。若你希望右侧纵轴严格从 0 起、最高到 60，需要在支持轴范围设置的渲染配置下重绘；当前图表结构本身已按合同保留原始数据。

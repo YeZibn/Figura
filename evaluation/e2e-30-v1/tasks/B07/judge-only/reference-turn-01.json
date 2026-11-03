@@ -1,0 +1,58 @@
+{
+  "schema_version": 2,
+  "title": "",
+  "layout": {
+    "columns": 1
+  },
+  "charts": [
+    {
+      "chart_id": "chart1",
+      "chart_spec": {
+        "schema_version": 2,
+        "metadata": {
+          "chart_type": "scatter",
+          "title": "产品组合",
+          "source": "Figura E2E-30 合成数据 v1",
+          "note": ""
+        },
+        "coordinate_system": {
+          "kind": "cartesian",
+          "x_axis": {
+            "kind": "numeric",
+            "label": "Price (元)"
+          },
+          "y_axis": {
+            "kind": "numeric",
+            "label": "Sales (百件)"
+          }
+        },
+        "dataset": {
+          "series": [
+            {
+              "id": "s1",
+              "label": "Products",
+              "points": [
+                {
+                  "x": 3,
+                  "y": 12,
+                  "size": 10
+                },
+                {
+                  "x": 6,
+                  "y": 18,
+                  "size": 30
+                },
+                {
+                  "x": 9,
+                  "y": 15,
+                  "size": 60
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "measurement_refs": []
+    }
+  ]
+}

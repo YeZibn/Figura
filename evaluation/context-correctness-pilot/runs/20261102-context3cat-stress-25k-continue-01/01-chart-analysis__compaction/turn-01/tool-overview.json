@@ -1,0 +1,362 @@
+[
+  {
+    "call_id": "call_00_ET_kdV0AhNtW7mLBEBpJErS7400",
+    "tool_name": "load_image",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_5P2ewpTOth74CwQ0oTde2865",
+    "tool_name": "decompose_chart_image",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_MUg9E9rxWE4cXip8bsCA0463",
+    "tool_name": "measure_chart",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_01_PHjjyLpG4hgnN1tQNvDF0914",
+    "tool_name": "measure_chart",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_02_48db2pbn1AYogiA7v2wX7308",
+    "tool_name": "extract_text",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_03_3ABbbqMlFaRIo9b0GoEw6364",
+    "tool_name": "extract_text",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_ypvThywdPEcoqnnsLQs61114",
+    "tool_name": "measure_chart",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_K2CoW9K8odrjSOrZJUth8762",
+    "tool_name": "read_history",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_01_0VamgyUXJoFs6MJOQAWk6447",
+    "tool_name": "read_history",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_GV7r3EPOyXA5sOKt8Qak7646",
+    "tool_name": "read_history",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_01_MVga8GvxtjMuYuJLCCFq5503",
+    "tool_name": "read_history",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_eTQ4jQhVHT8YNzMCvzCo9873",
+    "tool_name": "load_image",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_01_jmVAzCpEY8tRIbpvpsm70810",
+    "tool_name": "read_history",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_WEILYTW3GPjcXPUbgIsM1217",
+    "tool_name": "load_image",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_01_WrRnri6QGqXJpPAlmMpA8988",
+    "tool_name": "read_history",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_9lPMAEb5rSQY27pRnJX48392",
+    "tool_name": "load_image",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_0QyWsUpRLusTVkCJxSF13471",
+    "tool_name": "load_image",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_eepJquMaGdttRskRdzpO8491",
+    "tool_name": "load_image",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_FJLkLfFhEwf2uIVIOu6m8780",
+    "tool_name": "load_image",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_wzwopoYryjD6Z4PwWHqX2467",
+    "tool_name": "load_image",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_BJNHAZbVtmUfaeJztS4z7255",
+    "tool_name": "load_image",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_vNyPrHixfzLhiX6XNYhB2676",
+    "tool_name": "load_image",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_hL3sbTdniNM48vaDDvTs6582",
+    "tool_name": "measure_chart",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_ppethTVffcFBR4JitgPo5314",
+    "tool_name": "load_image",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_I4TmhBgITyAjiNCZbpFd5913",
+    "tool_name": "measure_chart",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_z9WywaHaesGtPg8ExBjn4008",
+    "tool_name": "load_image",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_uHqapqwToBKHEQr5NBm36474",
+    "tool_name": "load_image",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_TPxVWBmcShjSJ2sV8Cbn0872",
+    "tool_name": "load_image",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_U9b0RmCF5oms3G6ThQc28880",
+    "tool_name": "load_image",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_mCVLYVdBHWsDgPza2j049316",
+    "tool_name": "read_resource_image",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_eN0mrXj0GR7Z5ptl3h2G2281",
+    "tool_name": "measure_chart",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_pmRmihvhkWtnEbiThbbe2615",
+    "tool_name": "read_history",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_01_ouynz0fQpSuD2pzkc04d4878",
+    "tool_name": "load_image",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_8Ac09nmQWiLKvd5LbedU8299",
+    "tool_name": "load_image",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_9ouizsEOoSinLenyscgd2898",
+    "tool_name": "load_image",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_2fjynYIomlmRfkvftQHl4005",
+    "tool_name": "load_image",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_p6SkIX4hC3avQsEKDQHc8153",
+    "tool_name": "load_image",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_dJxS3KQ1ufSOD0952JbT1291",
+    "tool_name": "read_resource_image",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_FVaOtAYJkyhnSFCqvYWY6395",
+    "tool_name": "read_resource_image",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_hEJcRUDMCwXnvU5SgYkF9220",
+    "tool_name": "read_resource_image",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_gHqmjV1KQHalGs5SBkG75028",
+    "tool_name": "read_resource_image",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_OBSJ3OJ5dwes0k9E2cBw9593",
+    "tool_name": "read_resource_image",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_LbNLOtpSGEXjPFBJUmeD7858",
+    "tool_name": "read_resource_image",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_AzncTu7gsxv17oNSz7dN1774",
+    "tool_name": "read_resource_image",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_xhzPzPTtvT3vUXQ8aVxF2176",
+    "tool_name": "read_resource_image",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_6I5zmP2FTmX6QwHmIkKu9751",
+    "tool_name": "read_resource_image",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_idDieSjmokVyupbzZ1t82423",
+    "tool_name": "read_resource_image",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_FzepoDtOqplQ1s5AveNH1146",
+    "tool_name": "read_resource_image",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_sBKuiv3bZXbVVRrNCz9R6709",
+    "tool_name": "read_resource_image",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_2mOcuocD6uJtXtfzZ8xs6543",
+    "tool_name": "read_resource_image",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_p2vrzx2IiKOKvMYnQgpx7436",
+    "tool_name": "read_resource_image",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_PoirHKn1VNZS07GwHoHv9068",
+    "tool_name": "read_resource_image",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_WwYT9kZQ8DxIZu0dEHvy9175",
+    "tool_name": "read_resource_image",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_gOiMI83EowsDxzae8WPJ1764",
+    "tool_name": "read_resource_image",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_9Ve5ApRnlUpU8kIpaFQy4609",
+    "tool_name": "load_image",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_uWJfPVbamHImWeHgfBtx8414",
+    "tool_name": "load_image",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_MgsxJJiHU0lWb36tWhOK9759",
+    "tool_name": "load_image",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_BukDS6p6oOA0KOKrYt3U0623",
+    "tool_name": "load_image",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_sq0DVOzjJ0Ap6ccgRfMH3117",
+    "tool_name": "load_image",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_cnUkotTpINKDzTy1ekNT3156",
+    "tool_name": "load_image",
+    "outcome": "succeeded",
+    "error": null
+  }
+]

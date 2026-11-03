@@ -1,0 +1,198 @@
+{
+  "scope": "Controlled model-led direct typed-resource read using a compacted request projection; source facts reused from the preceding isolated pilot; explicit tool-use instruction; not a spontaneous tool-choice estimate.",
+  "source_batch": "20261103-resource-direct-read-04",
+  "started_at": "2026-11-03T03:24:57.069514+00:00",
+  "provider": "deepseek",
+  "model": "deepseek-flash",
+  "cases": [
+    {
+      "id": "typed-ocr",
+      "query": "在 OCR 资源中查找第 137 条 Observation，提取 marker code。",
+      "expected": "CODE-084920",
+      "kind": "ocr",
+      "status": "run",
+      "attempt": {
+        "status": "answered",
+        "answer": "无法确定：该 OCR 历史引用（run_id 80cd65cb19214c2ea4eae4b8a08fbadf / call_id fixture-ocr-7QK491）返回不可用（history_reference_unavailable），第 137 条 Observation 的 marker code 未能读取。",
+        "correct": false,
+        "raw_answer": "{\"answer\":\"无法确定：该 OCR 历史引用（run_id 80cd65cb19214c2ea4eae4b8a08fbadf / call_id fixture-ocr-7QK491）返回不可用（history_reference_unavailable），第 137 条 Observation 的 marker code 未能读取。\"}",
+        "calls": [
+          {
+            "name": "read_history",
+            "arguments": {
+              "reference": {
+                "kind": "ocr",
+                "run_id": "80cd65cb19214c2ea4eae4b8a08fbadf",
+                "call_id": "fixture-ocr-7QK491"
+              },
+              "selector": {
+                "field_path": "/snippets",
+                "start": 136,
+                "end": 137
+              }
+            },
+            "outcome": "failed",
+            "result_contains_expected": false,
+            "error": {
+              "code": "history_reference_unavailable",
+              "message": "请求的历史来源不可用或不在当前授权范围内。",
+              "retryable": false,
+              "field_path": null
+            }
+          }
+        ],
+        "rounds": [
+          {
+            "estimated_input_tokens": 93194,
+            "usage": {
+              "prompt_tokens": 78807,
+              "completion_tokens": 118,
+              "total_tokens": 78925
+            },
+            "finish_reason": "tool_calls"
+          },
+          {
+            "estimated_input_tokens": 93395,
+            "usage": {
+              "prompt_tokens": 78982,
+              "completion_tokens": 72,
+              "total_tokens": 79054
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "seconds": 3.939,
+        "typed_reference_match": true,
+        "read_result_contains_answer": false,
+        "typed_direct_pass": false,
+        "resource_ref_visible": true,
+        "answer_leaked_in_request": false
+      }
+    },
+    {
+      "id": "typed-measurement",
+      "query": "在测量资源中找到第 4 条 warning，并完整复制该 warning。",
+      "expected": "Detailed warning token: WARN-7QK-491.",
+      "kind": "measurement",
+      "status": "run",
+      "attempt": {
+        "status": "answered",
+        "answer": "无法获取：该测量资源（run_id=80cd65cb19214c2ea4eae4b8a08fbadf, call_id=fixture-measure-3XM826）在读取 /warnings 时返回 history_reference_unavailable，提示请求的历史来源不可用或不在当前授权范围内，且 retryable=false。因此第 4 条 warning 的完整文本无法确定，目录概要仅显示了前三条预览。",
+        "correct": false,
+        "raw_answer": "{\"answer\":\"无法获取：该测量资源（run_id=80cd65cb19214c2ea4eae4b8a08fbadf, call_id=fixture-measure-3XM826）在读取 /warnings 时返回 history_reference_unavailable，提示请求的历史来源不可用或不在当前授权范围内，且 retryable=false。因此第 4 条 warning 的完整文本无法确定，目录概要仅显示了前三条预览。\"}",
+        "calls": [
+          {
+            "name": "read_history",
+            "arguments": {
+              "reference": {
+                "kind": "measurement",
+                "run_id": "80cd65cb19214c2ea4eae4b8a08fbadf",
+                "call_id": "fixture-measure-3XM826"
+              },
+              "selector": {
+                "field_path": "/warnings"
+              }
+            },
+            "outcome": "failed",
+            "result_contains_expected": false,
+            "error": {
+              "code": "history_reference_unavailable",
+              "message": "请求的历史来源不可用或不在当前授权范围内。",
+              "retryable": false,
+              "field_path": null
+            }
+          }
+        ],
+        "rounds": [
+          {
+            "estimated_input_tokens": 93193,
+            "usage": {
+              "prompt_tokens": 78808,
+              "completion_tokens": 106,
+              "total_tokens": 78914
+            },
+            "finish_reason": "tool_calls"
+          },
+          {
+            "estimated_input_tokens": 93379,
+            "usage": {
+              "prompt_tokens": 78971,
+              "completion_tokens": 101,
+              "total_tokens": 79072
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "seconds": 3.301,
+        "typed_reference_match": true,
+        "read_result_contains_answer": false,
+        "typed_direct_pass": false,
+        "resource_ref_visible": true,
+        "answer_leaked_in_request": false
+      }
+    },
+    {
+      "id": "typed-chart_figure",
+      "query": "在 Quarterly Revenue Detail 的 Revenue 系列中，Period 08 的数值是多少？",
+      "expected": "817.4",
+      "kind": "chart_figure",
+      "status": "run",
+      "attempt": {
+        "status": "answered",
+        "answer": "817.4",
+        "correct": true,
+        "raw_answer": "{\"answer\":\"817.4\"}",
+        "calls": [
+          {
+            "name": "read_history",
+            "arguments": {
+              "reference": {
+                "kind": "chart_figure",
+                "run_id": "c9b8814256674647bf97456f32ccc812",
+                "call_id": "fixture-figure-9VA204"
+              },
+              "selector": {
+                "field_path": "/figure"
+              }
+            },
+            "outcome": "succeeded",
+            "result_contains_expected": true,
+            "error": null
+          }
+        ],
+        "rounds": [
+          {
+            "estimated_input_tokens": 93196,
+            "usage": {
+              "prompt_tokens": 78811,
+              "completion_tokens": 101,
+              "total_tokens": 78912
+            },
+            "finish_reason": "tool_calls"
+          },
+          {
+            "estimated_input_tokens": 93817,
+            "usage": {
+              "prompt_tokens": 79393,
+              "completion_tokens": 7,
+              "total_tokens": 79400
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "seconds": 2.682,
+        "typed_reference_match": true,
+        "read_result_contains_answer": true,
+        "typed_direct_pass": true,
+        "resource_ref_visible": true,
+        "answer_leaked_in_request": false
+      }
+    }
+  ],
+  "aggregate": {
+    "total": 3,
+    "executed": 3,
+    "typed_direct_passed": 1
+  },
+  "finished_at": "2026-11-03T03:24:57.069574+00:00"
+}

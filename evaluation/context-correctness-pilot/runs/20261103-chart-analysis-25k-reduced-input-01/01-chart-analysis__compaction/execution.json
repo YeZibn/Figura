@@ -1,0 +1,153 @@
+{
+  "task_id": "01-chart-analysis",
+  "condition": "compaction",
+  "capacity_tokens": 25000,
+  "provider_id": "deepseek",
+  "batch_id": "20261103-chart-analysis-25k-reduced-input-01",
+  "started_at": "2026-11-03T10:37:11.818094+08:00",
+  "session_id": "7237d5d29e9241cc9fd7b275139e3700",
+  "turns": [
+    {
+      "turn": 1,
+      "run_id": "635a878d26054cf09d082d95e81fba17",
+      "session_id": "7237d5d29e9241cc9fd7b275139e3700",
+      "status": "completed",
+      "terminal_code": null,
+      "final_answer_committed": true,
+      "figures": [],
+      "renders": [],
+      "provider_attempt_count": 6,
+      "usage_by_purpose": {
+        "agent_turn": {
+          "prompt_tokens": 67922,
+          "completion_tokens": 3126,
+          "total_tokens": 71048
+        },
+        "context_compaction": {
+          "prompt_tokens": 12137,
+          "completion_tokens": 8309,
+          "total_tokens": 20446
+        }
+      },
+      "usage_total_including_compaction": {
+        "prompt_tokens": 80059,
+        "completion_tokens": 11435,
+        "total_tokens": 91494
+      },
+      "usage_complete": true,
+      "usage_missing_attempts": [],
+      "compaction_operations": [
+        {
+          "operation_id": "50e2d9436adf426c94ad64e222231008",
+          "status": "completed",
+          "failure_code": null
+        },
+        {
+          "operation_id": "0fd5be04bd144f21a961381cfcee2366",
+          "status": "completed",
+          "failure_code": null
+        }
+      ],
+      "wall_seconds": 102.347,
+      "timed_out": false
+    },
+    {
+      "turn": 2,
+      "run_id": "716935b0ad0c429faeb8ff8810a56c28",
+      "session_id": "7237d5d29e9241cc9fd7b275139e3700",
+      "status": "completed",
+      "terminal_code": null,
+      "final_answer_committed": true,
+      "figures": [],
+      "renders": [],
+      "provider_attempt_count": 1,
+      "usage_by_purpose": {
+        "agent_turn": {
+          "prompt_tokens": 19610,
+          "completion_tokens": 624,
+          "total_tokens": 20234
+        }
+      },
+      "usage_total_including_compaction": {
+        "prompt_tokens": 19610,
+        "completion_tokens": 624,
+        "total_tokens": 20234
+      },
+      "usage_complete": true,
+      "usage_missing_attempts": [],
+      "compaction_operations": [],
+      "wall_seconds": 6.051,
+      "timed_out": false
+    },
+    {
+      "turn": 3,
+      "run_id": "da0faefbbd7b47789dfd788c5ba65bf6",
+      "session_id": "7237d5d29e9241cc9fd7b275139e3700",
+      "status": "completed",
+      "terminal_code": null,
+      "final_answer_committed": true,
+      "figures": [],
+      "renders": [],
+      "provider_attempt_count": 17,
+      "usage_by_purpose": {
+        "context_compaction": {
+          "prompt_tokens": 54588,
+          "completion_tokens": 66579,
+          "total_tokens": 121167
+        },
+        "agent_turn": {
+          "prompt_tokens": 236887,
+          "completion_tokens": 5960,
+          "total_tokens": 242847
+        }
+      },
+      "usage_total_including_compaction": {
+        "prompt_tokens": 291475,
+        "completion_tokens": 72539,
+        "total_tokens": 364014
+      },
+      "usage_complete": true,
+      "usage_missing_attempts": [],
+      "compaction_operations": [
+        {
+          "operation_id": "70a5a97ea00e4758b6de39001fbf422f",
+          "status": "completed",
+          "failure_code": null
+        },
+        {
+          "operation_id": "ba17469de5824c14a8fb0380dc12bcf9",
+          "status": "completed",
+          "failure_code": null
+        },
+        {
+          "operation_id": "f7ad35a6b5984c49a6f1401035cdc7dd",
+          "status": "completed",
+          "failure_code": null
+        },
+        {
+          "operation_id": "7903ac0557ab435eb847abef4ebc2ec0",
+          "status": "completed",
+          "failure_code": null
+        },
+        {
+          "operation_id": "64d0791fa2a94d6984e31518c288d293",
+          "status": "completed",
+          "failure_code": null
+        },
+        {
+          "operation_id": "eddc94d8791745acbd3fd69838e59fa2",
+          "status": "completed",
+          "failure_code": null
+        }
+      ],
+      "wall_seconds": 389.195,
+      "timed_out": false
+    }
+  ],
+  "execution_status": "completed",
+  "input_adjustments": [],
+  "attachment_sha256": {
+    "input/bar_line_dashboard.png": "b6b6105d739d1a0399295fd75286f27ac8965644423a0533de814f8aaecb9e00"
+  },
+  "completed_at": "2026-11-03T10:45:31.869944+08:00"
+}

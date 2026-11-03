@@ -1,0 +1,69 @@
+{
+  "batch_id": "20261102-正式首测-01",
+  "status": "complete",
+  "dataset_id": "figura-e2e-30-v1",
+  "dataset_version": "1.0.0",
+  "dataset_checksums_sha256": "0705e2e5c9fc7f27ca4addcd86ae95c65523ade4ac5fe4b9f6dc65474ce7b55a",
+  "manifest_sha256": "f5c3d5d19415a6296a27372f429e9b240763ad6d9c3a1593409bf8e376019935",
+  "code": {
+    "commit": "a9d155e53a488544b450c42760abfcf4932e66be",
+    "dirty_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "source_sha256": "1b634c5030755654abe9fbdc2528fcdf1e2076769045b7172a06d1d4e3778541",
+    "prompt_sha256": "e4ef3e7494ff0fced5966714cff88ad683caae693d94f67b594e9a02393bfbe4",
+    "tool_registry_version": "figura-web-v11",
+    "dependency_versions": {
+      "matplotlib": "3.11.1",
+      "numpy": "2.4.4",
+      "requests": "2.33.1",
+      "jsonschema": "4.26.0"
+    }
+  },
+  "execution": {
+    "provider": "deepseek",
+    "model": "deepseek-flash",
+    "sampling_parameters": {
+      "thinking_mode": true,
+      "reasoning_effort": "high",
+      "max_completion_tokens": null
+    },
+    "uncontrolled_parameters": [
+      "Provider 模型服务端更新和随机采样；当前生产接口未固定 seed/temperature"
+    ],
+    "context_capacity_tokens": 200000,
+    "per_turn_timeout_seconds": 600,
+    "calibration_durations_seconds": [
+      6.113,
+      8.145,
+      8.139,
+      12.369
+    ],
+    "timeout_rule": "max(600, ceil(3*max(calibration_single_turn_seconds)/60)*60)",
+    "internal_retry_policy": "production_unchanged",
+    "task_order": "A01-A10,B01-B10,C01-C10",
+    "concurrent_tasks": 1
+  },
+  "judge": {
+    "model": "gpt-6.1-sol",
+    "prompt_version": "1.0",
+    "prompt_sha256": "088d70cda61b1c21afbe1106dc178f3e33f4f15b95d6115fb71668d52eb07818",
+    "calibration_completed": true,
+    "review_sample_seed": 20261102,
+    "review_pass_fraction_per_category": 0.2
+  },
+  "started_at": "2026-11-02T16:48:33.209373+08:00",
+  "completed_at": "2026-11-02T17:17:18.389281+08:00",
+  "notes": [
+    "全部正式输入与评分规则均沿用已准备 v1 文件，完整摘要校验通过。",
+    "正式运行前校准修复了证据包 mock-only 来源标记误混入真实校准包；首次K01判定保留于 initial-mixed-provenance-packet，未改答案或评分规则。",
+    "K02/K03 真实校准任务内容通过与人工错误夹具失败是两套独立证据，不混作主成绩。"
+  ],
+  "harness": {
+    "scripts": {
+      "evaluation/e2e-30-execution/freeze_batch.py": "10d7f7a24fb612d323fd893593b9b6a785db7983f3742e07817cd90222ca233c",
+      "evaluation/e2e-30-execution/judge_batch.py": "a5ef236df1f9500cdebe58cfea29af059063f7a4a2112549b7a523fac73c1d31",
+      "evaluation/e2e-30-execution/run_batch.py": "4bfa5bc0d69af12c56af9209060e7e4c9304f01d4b9fb1c421f34950693c6cd8"
+    },
+    "codex_cli_version": "codex-cli 0.164.0-alpha.11.1",
+    "isolation": "fresh ephemeral read-only Codex invocation per task; images and JSON supplied explicitly"
+  }
+}

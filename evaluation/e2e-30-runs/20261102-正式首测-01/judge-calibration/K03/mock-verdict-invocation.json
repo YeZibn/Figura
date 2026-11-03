@@ -1,0 +1,11 @@
+{
+  "model": "gpt-6.1-sol",
+  "wall_seconds": 12.078,
+  "context": "new ephemeral Codex invocation",
+  "mode": "mock-calibration",
+  "task_id": "K03",
+  "attached_images": [
+    "evaluation/e2e-30-v1/calibration/K03/judge-only/mock-evidence/actual-figure.png",
+    "evaluation/e2e-30-v1/calibration/K03/judge-only/mock-evidence/baseline-figure.png"
+  ]
+}

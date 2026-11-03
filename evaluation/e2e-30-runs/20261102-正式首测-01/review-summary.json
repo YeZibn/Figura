@@ -1,0 +1,9 @@
+{
+  "reviewed": 10,
+  "initial_review_same_task_verdict": 9,
+  "resolved_by_frozen_rule": [
+    "C06"
+  ],
+  "not_a_judge_accuracy_estimate": true,
+  "same_model_independent_contexts": true
+}

@@ -1,0 +1,53 @@
+{
+  "task_id": "K01",
+  "batch_id": "20261102-正式首测-01",
+  "verdict": "pass",
+  "checks": [
+    {
+      "id": "values",
+      "critical": true,
+      "status": "pass",
+      "expected": {
+        "North/Q1": 14,
+        "North/Q2": 22,
+        "unit": "万元",
+        "difference": 8
+      },
+      "actual": {
+        "North/Q1": 14,
+        "North/Q2": 22,
+        "unit": "万元人民币",
+        "difference": 8
+      },
+      "evidence": [
+        "image-01.png：North 蓝色柱 Q1、Q2 的数据标签分别为 14、22；纵轴为 Sales (10,000 CNY)",
+        "turn_evidence/0/answer：表格及单位段落",
+        "execution/turns/0/final_answer_committed"
+      ],
+      "reason": "回答正确关联 North 系列与季度，单位等义，且 22 − 14 = 8。证据显示仅调用 load_image，未见外部检索。"
+    }
+  ],
+  "primary_failure": null,
+  "secondary_failures": [],
+  "artifact_refs": [
+    "image-01.png",
+    "final-answer.txt",
+    "Run 70dfe984b66c419a82aa46219c7d158b"
+  ],
+  "quality_notes": [
+    "增长率及 South 对照超出用户要求，但不影响关键答案。"
+  ],
+  "judge": {
+    "model": "gpt-6.1-sol",
+    "prompt_version": "1.0",
+    "context_isolated": true,
+    "actual_png_viewed": true,
+    "limitations": [
+      "本任务只要求读图并作文字回答，无需提交 Figure 或渲染 PNG；已查看附带的实际输入图片。"
+    ]
+  },
+  "review_notes": [
+    "所提供执行记录未显示协议异常，唯一一轮回答已提交。",
+    "本记录为本次独立裁决，不代表已完成另一次独立复核。"
+  ]
+}

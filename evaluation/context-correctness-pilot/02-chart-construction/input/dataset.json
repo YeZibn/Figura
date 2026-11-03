@@ -1,0 +1,40 @@
+{
+  "dataset_id": "quarterly-sales-and-monthly-orders",
+  "panels": [
+    {
+      "title": "Quarterly Sales",
+      "chart_type": "grouped_bar",
+      "x_axis": {
+        "label": "Quarter",
+        "categories": ["Q1", "Q2", "Q3", "Q4"]
+      },
+      "y_axis": {
+        "label": "Revenue (million USD)",
+        "min": 0,
+        "max": 70,
+        "tick_step": 10
+      },
+      "series": [
+        {"name": "Target", "values": [40, 55, 48, 62]},
+        {"name": "Actual", "values": [36, 51, 45, 59]}
+      ]
+    },
+    {
+      "title": "Monthly Orders",
+      "chart_type": "line",
+      "x_axis": {
+        "label": "Month",
+        "categories": ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul"]
+      },
+      "y_axis": {
+        "label": "Number of Orders",
+        "min": 0,
+        "max": 60,
+        "tick_step": 10
+      },
+      "series": [
+        {"name": "Orders", "values": [22, 28, 25, 36, 44, 41, 53]}
+      ]
+    }
+  ]
+}

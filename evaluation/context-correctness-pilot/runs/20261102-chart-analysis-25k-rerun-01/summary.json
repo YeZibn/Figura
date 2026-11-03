@@ -1,0 +1,52 @@
+{
+  "paired_tasks": {
+    "01-chart-analysis": {
+      "baseline_total_tokens": 231527,
+      "compaction_total_tokens": 46323,
+      "observed_usage_delta_percent": 79.99,
+      "compression_saving_percent": null,
+      "compression_saving_eligible": false,
+      "compaction_triggered": true,
+      "usage_complete": false,
+      "all_turns_completed": false
+    }
+  },
+  "executions": [
+    {
+      "task_id": "01-chart-analysis",
+      "condition": "compaction",
+      "status": "error",
+      "turns": 1,
+      "provider_usage_including_compaction": {
+        "prompt_tokens": 42558,
+        "completion_tokens": 3765,
+        "total_tokens": 46323
+      },
+      "usage_complete": false,
+      "compaction_operations": [
+        {
+          "operation_id": "8835219b4d2b45558b752051292440da",
+          "status": "completed",
+          "failure_code": null
+        }
+      ],
+      "successful_compaction_count": 1,
+      "all_turns_completed": false
+    },
+    {
+      "task_id": "01-chart-analysis",
+      "condition": "baseline",
+      "status": "completed",
+      "turns": 3,
+      "provider_usage_including_compaction": {
+        "prompt_tokens": 223068,
+        "completion_tokens": 8459,
+        "total_tokens": 231527
+      },
+      "usage_complete": true,
+      "compaction_operations": [],
+      "successful_compaction_count": 0,
+      "all_turns_completed": true
+    }
+  ]
+}

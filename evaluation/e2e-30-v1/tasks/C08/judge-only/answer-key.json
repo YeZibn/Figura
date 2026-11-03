@@ -1,0 +1,564 @@
+{
+  "task_id": "C08",
+  "category": "modification",
+  "status": "not_run",
+  "facts": {
+    "base": "reference-turn-01.json",
+    "intermediate": "reference-turn-02.json",
+    "final": "reference-turn-03.json",
+    "active_final_requirements": "保留修订标题，只将左图 North/Q4 改为 38 万元。其他左图内容与整个右图均保持，仍为两列、左销售右订单。请交付完整双图 PNG。",
+    "preservation": "除该轮文字明确要求的字段之外，保持上轮语义。样式、内部 ID、像素位置无需与参考图完全相同。"
+  },
+  "checks": [
+    {
+      "id": "T1-semantic",
+      "critical": true,
+      "requirement": "第 1 轮实际成功交付的 Figure 与参考语义一致；逐值核对 dataset、类型、顺序、轴标签、明确要求的标题和来源",
+      "expected": "reference-turn-01.json",
+      "turn": 1,
+      "numeric_tolerance": {
+        "abs": 1e-09,
+        "rel": 1e-09
+      },
+      "evidence": [
+        "committed_figure",
+        "tool_result"
+      ]
+    },
+    {
+      "id": "T1-render",
+      "critical": true,
+      "requirement": "第 1 轮交付与 Figure 匹配、可打开的真实 PNG；图数和必要内容正确，关键文本无严重裁切遮挡",
+      "expected": "匹配的成功 render 引用和实际 PNG",
+      "turn": 1,
+      "evidence": [
+        "render_metadata",
+        "actual_png"
+      ]
+    },
+    {
+      "id": "T1-delivery",
+      "critical": true,
+      "requirement": "第 1 轮回答清楚指向可用产物且不存在与数据或交付状态冲突的关键陈述",
+      "expected": "实际产物与回答一致",
+      "turn": 1,
+      "evidence": [
+        "final_answer",
+        "artifact_refs"
+      ]
+    },
+    {
+      "id": "T2-semantic",
+      "critical": true,
+      "requirement": "第 2 轮实际成功交付的 Figure 与参考语义一致；逐值核对 dataset、类型、顺序、轴标签、明确要求的标题和来源",
+      "expected": "reference-turn-02.json",
+      "turn": 2,
+      "numeric_tolerance": {
+        "abs": 1e-09,
+        "rel": 1e-09
+      },
+      "evidence": [
+        "committed_figure",
+        "tool_result"
+      ]
+    },
+    {
+      "id": "T2-render",
+      "critical": true,
+      "requirement": "第 2 轮交付与 Figure 匹配、可打开的真实 PNG；图数和必要内容正确，关键文本无严重裁切遮挡",
+      "expected": "匹配的成功 render 引用和实际 PNG",
+      "turn": 2,
+      "evidence": [
+        "render_metadata",
+        "actual_png"
+      ]
+    },
+    {
+      "id": "T2-delivery",
+      "critical": true,
+      "requirement": "第 2 轮回答清楚指向可用产物且不存在与数据或交付状态冲突的关键陈述",
+      "expected": "实际产物与回答一致",
+      "turn": 2,
+      "evidence": [
+        "final_answer",
+        "artifact_refs"
+      ]
+    },
+    {
+      "id": "T3-semantic",
+      "critical": true,
+      "requirement": "第 3 轮实际成功交付的 Figure 与参考语义一致；逐值核对 dataset、类型、顺序、轴标签、明确要求的标题和来源",
+      "expected": "reference-turn-03.json",
+      "turn": 3,
+      "numeric_tolerance": {
+        "abs": 1e-09,
+        "rel": 1e-09
+      },
+      "evidence": [
+        "committed_figure",
+        "tool_result"
+      ]
+    },
+    {
+      "id": "T3-render",
+      "critical": true,
+      "requirement": "第 3 轮交付与 Figure 匹配、可打开的真实 PNG；图数和必要内容正确，关键文本无严重裁切遮挡",
+      "expected": "匹配的成功 render 引用和实际 PNG",
+      "turn": 3,
+      "evidence": [
+        "render_metadata",
+        "actual_png"
+      ]
+    },
+    {
+      "id": "T3-delivery",
+      "critical": true,
+      "requirement": "第 3 轮回答清楚指向可用产物且不存在与数据或交付状态冲突的关键陈述",
+      "expected": "实际产物与回答一致",
+      "turn": 3,
+      "evidence": [
+        "final_answer",
+        "artifact_refs"
+      ]
+    },
+    {
+      "id": "preservation",
+      "critical": true,
+      "requirement": "逐轮对比基线和前一轮：只有明确授权的语义路径可改变，所有未目标内容保持；不能仅看最终一轮",
+      "expected": "参见三份 reference-turn 和每轮固定对话"
+    },
+    {
+      "id": "final_requirements",
+      "critical": true,
+      "requirement": "所有最新有效要求生效，被覆盖或撤销要求不残留",
+      "expected": "保留修订标题，只将左图 North/Q4 改为 38 万元。其他左图内容与整个右图均保持，仍为两列、左销售右订单。请交付完整双图 PNG。"
+    }
+  ],
+  "reference_figures": [
+    {
+      "schema_version": 2,
+      "title": "区域经营报告",
+      "layout": {
+        "columns": 2
+      },
+      "charts": [
+        {
+          "chart_id": "chart1",
+          "chart_spec": {
+            "schema_version": 2,
+            "metadata": {
+              "chart_type": "bar",
+              "title": "区域季度销售",
+              "source": "Figura E2E-30 合成数据 v1",
+              "note": ""
+            },
+            "coordinate_system": {
+              "kind": "cartesian",
+              "x_axis": {
+                "kind": "categorical",
+                "label": "Quarter"
+              },
+              "y_axis": {
+                "kind": "numeric",
+                "label": "Sales (万元)"
+              }
+            },
+            "dataset": {
+              "orientation": "vertical",
+              "mode": "grouped",
+              "categories": [
+                {
+                  "id": "c1",
+                  "label": "Q1"
+                },
+                {
+                  "id": "c2",
+                  "label": "Q2"
+                },
+                {
+                  "id": "c3",
+                  "label": "Q3"
+                },
+                {
+                  "id": "c4",
+                  "label": "Q4"
+                }
+              ],
+              "series": [
+                {
+                  "id": "s1",
+                  "label": "East",
+                  "values": [
+                    20,
+                    26,
+                    23,
+                    32
+                  ]
+                },
+                {
+                  "id": "s2",
+                  "label": "South",
+                  "values": [
+                    17,
+                    22,
+                    25,
+                    28
+                  ]
+                },
+                {
+                  "id": "s3",
+                  "label": "North",
+                  "values": [
+                    15,
+                    19,
+                    21,
+                    24
+                  ]
+                }
+              ]
+            }
+          },
+          "measurement_refs": []
+        },
+        {
+          "chart_id": "chart2",
+          "chart_spec": {
+            "schema_version": 2,
+            "metadata": {
+              "chart_type": "line",
+              "title": "月度订单",
+              "source": "Figura E2E-30 合成数据 v1",
+              "note": ""
+            },
+            "coordinate_system": {
+              "kind": "cartesian",
+              "x_axis": {
+                "kind": "categorical",
+                "label": "Month"
+              },
+              "y_axis": {
+                "kind": "numeric",
+                "label": "Orders (单)"
+              }
+            },
+            "dataset": {
+              "series": [
+                {
+                  "id": "s1",
+                  "label": "Orders",
+                  "points": [
+                    {
+                      "x": "Jan",
+                      "y": 28
+                    },
+                    {
+                      "x": "Feb",
+                      "y": 34
+                    },
+                    {
+                      "x": "Mar",
+                      "y": 31
+                    },
+                    {
+                      "x": "Apr",
+                      "y": 43
+                    },
+                    {
+                      "x": "May",
+                      "y": 49
+                    }
+                  ]
+                }
+              ]
+            }
+          },
+          "measurement_refs": []
+        }
+      ]
+    },
+    {
+      "schema_version": 2,
+      "title": "区域经营报告",
+      "layout": {
+        "columns": 2
+      },
+      "charts": [
+        {
+          "chart_id": "chart1",
+          "chart_spec": {
+            "schema_version": 2,
+            "metadata": {
+              "chart_type": "bar",
+              "title": "区域季度销售（修订）",
+              "source": "Figura E2E-30 合成数据 v1",
+              "note": ""
+            },
+            "coordinate_system": {
+              "kind": "cartesian",
+              "x_axis": {
+                "kind": "categorical",
+                "label": "Quarter"
+              },
+              "y_axis": {
+                "kind": "numeric",
+                "label": "Sales (万元)"
+              }
+            },
+            "dataset": {
+              "orientation": "vertical",
+              "mode": "grouped",
+              "categories": [
+                {
+                  "id": "c1",
+                  "label": "Q1"
+                },
+                {
+                  "id": "c2",
+                  "label": "Q2"
+                },
+                {
+                  "id": "c3",
+                  "label": "Q3"
+                },
+                {
+                  "id": "c4",
+                  "label": "Q4"
+                }
+              ],
+              "series": [
+                {
+                  "id": "s1",
+                  "label": "East",
+                  "values": [
+                    20,
+                    26,
+                    23,
+                    32
+                  ]
+                },
+                {
+                  "id": "s2",
+                  "label": "South",
+                  "values": [
+                    17,
+                    22,
+                    25,
+                    28
+                  ]
+                },
+                {
+                  "id": "s3",
+                  "label": "North",
+                  "values": [
+                    15,
+                    19,
+                    21,
+                    24
+                  ]
+                }
+              ]
+            }
+          },
+          "measurement_refs": []
+        },
+        {
+          "chart_id": "chart2",
+          "chart_spec": {
+            "schema_version": 2,
+            "metadata": {
+              "chart_type": "line",
+              "title": "月度订单",
+              "source": "Figura E2E-30 合成数据 v1",
+              "note": ""
+            },
+            "coordinate_system": {
+              "kind": "cartesian",
+              "x_axis": {
+                "kind": "categorical",
+                "label": "Month"
+              },
+              "y_axis": {
+                "kind": "numeric",
+                "label": "Orders (单)"
+              }
+            },
+            "dataset": {
+              "series": [
+                {
+                  "id": "s1",
+                  "label": "Orders",
+                  "points": [
+                    {
+                      "x": "Jan",
+                      "y": 28
+                    },
+                    {
+                      "x": "Feb",
+                      "y": 34
+                    },
+                    {
+                      "x": "Mar",
+                      "y": 31
+                    },
+                    {
+                      "x": "Apr",
+                      "y": 43
+                    },
+                    {
+                      "x": "May",
+                      "y": 49
+                    }
+                  ]
+                }
+              ]
+            }
+          },
+          "measurement_refs": []
+        }
+      ]
+    },
+    {
+      "schema_version": 2,
+      "title": "区域经营报告",
+      "layout": {
+        "columns": 2
+      },
+      "charts": [
+        {
+          "chart_id": "chart1",
+          "chart_spec": {
+            "schema_version": 2,
+            "metadata": {
+              "chart_type": "bar",
+              "title": "区域季度销售（修订）",
+              "source": "Figura E2E-30 合成数据 v1",
+              "note": ""
+            },
+            "coordinate_system": {
+              "kind": "cartesian",
+              "x_axis": {
+                "kind": "categorical",
+                "label": "Quarter"
+              },
+              "y_axis": {
+                "kind": "numeric",
+                "label": "Sales (万元)"
+              }
+            },
+            "dataset": {
+              "orientation": "vertical",
+              "mode": "grouped",
+              "categories": [
+                {
+                  "id": "c1",
+                  "label": "Q1"
+                },
+                {
+                  "id": "c2",
+                  "label": "Q2"
+                },
+                {
+                  "id": "c3",
+                  "label": "Q3"
+                },
+                {
+                  "id": "c4",
+                  "label": "Q4"
+                }
+              ],
+              "series": [
+                {
+                  "id": "s1",
+                  "label": "East",
+                  "values": [
+                    20,
+                    26,
+                    23,
+                    32
+                  ]
+                },
+                {
+                  "id": "s2",
+                  "label": "South",
+                  "values": [
+                    17,
+                    22,
+                    25,
+                    28
+                  ]
+                },
+                {
+                  "id": "s3",
+                  "label": "North",
+                  "values": [
+                    15,
+                    19,
+                    21,
+                    38
+                  ]
+                }
+              ]
+            }
+          },
+          "measurement_refs": []
+        },
+        {
+          "chart_id": "chart2",
+          "chart_spec": {
+            "schema_version": 2,
+            "metadata": {
+              "chart_type": "line",
+              "title": "月度订单",
+              "source": "Figura E2E-30 合成数据 v1",
+              "note": ""
+            },
+            "coordinate_system": {
+              "kind": "cartesian",
+              "x_axis": {
+                "kind": "categorical",
+                "label": "Month"
+              },
+              "y_axis": {
+                "kind": "numeric",
+                "label": "Orders (单)"
+              }
+            },
+            "dataset": {
+              "series": [
+                {
+                  "id": "s1",
+                  "label": "Orders",
+                  "points": [
+                    {
+                      "x": "Jan",
+                      "y": 28
+                    },
+                    {
+                      "x": "Feb",
+                      "y": 34
+                    },
+                    {
+                      "x": "Mar",
+                      "y": 31
+                    },
+                    {
+                      "x": "Apr",
+                      "y": 43
+                    },
+                    {
+                      "x": "May",
+                      "y": 49
+                    }
+                  ]
+                }
+              ]
+            }
+          },
+          "measurement_refs": []
+        }
+      ]
+    }
+  ],
+  "numeric_policy": "explicit_per_check",
+  "semantic_equivalence": "忽略内部生成的 chart/category/series ID；按标签、顺序和语义匹配。坐标 kind 和数据类型必须合法。空 note、空 figure title 等未要求字段不强制一致。"
+}

@@ -1,0 +1,89 @@
+[
+  {
+    "call_id": "call_00_he7NINQZSD4hPWEC2QU85424",
+    "tool_name": "search_history",
+    "outcome": "failed",
+    "error": {
+      "code": "invalid_result",
+      "field_path": "/matches/3/attachments",
+      "message": "工具返回结果不符合定义。",
+      "retryable": false
+    }
+  },
+  {
+    "call_id": "call_01_aLGZH6eDzwnPxgL2CYEx6579",
+    "tool_name": "search_history",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_NU5xyhzLhaew3LFcFMWV5820",
+    "tool_name": "search_history",
+    "outcome": "failed",
+    "error": {
+      "code": "invalid_result",
+      "field_path": "/matches/4/attachments",
+      "message": "工具返回结果不符合定义。",
+      "retryable": false
+    }
+  },
+  {
+    "call_id": "call_01_VT6FBwe9ucVS1asc1DVq6838",
+    "tool_name": "search_history",
+    "outcome": "failed",
+    "error": {
+      "code": "invalid_result",
+      "field_path": "/matches/0/attachments",
+      "message": "工具返回结果不符合定义。",
+      "retryable": false
+    }
+  },
+  {
+    "call_id": "call_00_fme6pq3E5QyPhbUtmDIp0238",
+    "tool_name": "search_history",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_01_FcQ0KzDve1DcXXa076h27333",
+    "tool_name": "search_history",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_rHVTU0lW0QrDsbSv5dh73905",
+    "tool_name": "read_history",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_01_fG4WoivhJpjw5yp8gGze8180",
+    "tool_name": "read_history",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_geQv7A81sVwbIV1ptCER4113",
+    "tool_name": "read_history",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_01_a6P14H4ebqkYPAtPLz1A0577",
+    "tool_name": "read_resource_image",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_g9K0YAsaMU5CywNrVMpg4027",
+    "tool_name": "load_image",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_0zkEacJtCvAPJBrvFHZF6654",
+    "tool_name": "load_image",
+    "outcome": "succeeded",
+    "error": null
+  }
+]

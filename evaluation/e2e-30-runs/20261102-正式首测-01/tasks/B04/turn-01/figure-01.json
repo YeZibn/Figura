@@ -1,0 +1,87 @@
+{
+  "schema_version": 2,
+  "title": "线上与门店订单",
+  "layout": {
+    "columns": 1
+  },
+  "charts": [
+    {
+      "chart_id": "orders_line",
+      "chart_spec": {
+        "schema_version": 2,
+        "metadata": {
+          "chart_type": "line",
+          "title": "线上与门店订单",
+          "source": "Figura E2E-30 合成数据 v1"
+        },
+        "coordinate_system": {
+          "kind": "cartesian",
+          "x_axis": {
+            "kind": "categorical",
+            "label": "Month"
+          },
+          "y_axis": {
+            "kind": "numeric",
+            "label": "Orders (单)"
+          }
+        },
+        "dataset": {
+          "series": [
+            {
+              "id": "Online",
+              "label": "Online",
+              "points": [
+                {
+                  "x": "Jan",
+                  "y": 22
+                },
+                {
+                  "x": "Feb",
+                  "y": 27
+                },
+                {
+                  "x": "Mar",
+                  "y": 25
+                },
+                {
+                  "x": "Apr",
+                  "y": 35
+                },
+                {
+                  "x": "May",
+                  "y": 41
+                }
+              ]
+            },
+            {
+              "id": "Store",
+              "label": "Store",
+              "points": [
+                {
+                  "x": "Jan",
+                  "y": 18
+                },
+                {
+                  "x": "Feb",
+                  "y": 21
+                },
+                {
+                  "x": "Mar",
+                  "y": 24
+                },
+                {
+                  "x": "Apr",
+                  "y": 26
+                },
+                {
+                  "x": "May",
+                  "y": 29
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

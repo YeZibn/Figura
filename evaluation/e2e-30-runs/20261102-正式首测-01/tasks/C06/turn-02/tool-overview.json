@@ -1,0 +1,25 @@
+[
+  {
+    "call_id": "call_00_VxDECcQIi7bBhrTEvk0q5233",
+    "tool_name": "assemble_chart_figure",
+    "outcome": "failed",
+    "error": {
+      "code": "invalid_arguments",
+      "field_path": "/charts/0/chart_spec/dataset",
+      "message": "工具参数未通过定义校验。",
+      "retryable": true
+    }
+  },
+  {
+    "call_id": "call_00_33tbHxczbrCCv331Xrmx1168",
+    "tool_name": "assemble_chart_figure",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_ah5v6FIPXfTRoFaCThkR0300",
+    "tool_name": "render_chart_figure",
+    "outcome": "succeeded",
+    "error": null
+  }
+]

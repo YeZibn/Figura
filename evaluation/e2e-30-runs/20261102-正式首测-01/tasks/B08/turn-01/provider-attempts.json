@@ -1,0 +1,86 @@
+[
+  {
+    "attempt_id": "f076293ac1fe46eba51ac2f4faf4f906",
+    "request_id": "e5ca157ac8824e888e8c898c82234c77",
+    "status": "response_committed",
+    "response_record_id": "4027d86d2d7d4ab6870829a3770f8b8e",
+    "failure_code": null,
+    "http_status": 200,
+    "attempt_sequence": 1,
+    "usage": {
+      "completion_tokens": 496,
+      "prompt_tokens": 12459,
+      "total_tokens": 12955
+    }
+  },
+  {
+    "attempt_id": "78bf726b32a946eb8cb349c562042415",
+    "request_id": "c07fe6658fd446f388c5c66fef068016",
+    "status": "response_committed",
+    "response_record_id": "8c0442d476eb437bb3214aedc1f793e9",
+    "failure_code": null,
+    "http_status": 200,
+    "attempt_sequence": 1,
+    "usage": {
+      "completion_tokens": 279,
+      "prompt_tokens": 13152,
+      "total_tokens": 13431
+    }
+  },
+  {
+    "attempt_id": "804a9482eef2459387461cb3076bb50c",
+    "request_id": "649c38107d8e47feaa317844b8a80782",
+    "status": "response_committed",
+    "response_record_id": "43cab44e6bb349d0a842ea56bd258829",
+    "failure_code": null,
+    "http_status": 200,
+    "attempt_sequence": 1,
+    "usage": {
+      "completion_tokens": 88,
+      "prompt_tokens": 13720,
+      "total_tokens": 13808
+    }
+  },
+  {
+    "attempt_id": "d45cf2d5e4484e379d2d1229cf09209b",
+    "request_id": "b90249d903c34c0dbb71f64767839715",
+    "status": "response_committed",
+    "response_record_id": "ed5a50df83d04e60a0a4ab9dc94c9dd1",
+    "failure_code": null,
+    "http_status": 200,
+    "attempt_sequence": 1,
+    "usage": {
+      "completion_tokens": 801,
+      "prompt_tokens": 14688,
+      "total_tokens": 15489
+    }
+  },
+  {
+    "attempt_id": "71ce8b8000ba46ecb0ca3e44cf011fc0",
+    "request_id": "fb59c92f9ae440e7a67e728aff280394",
+    "status": "response_committed",
+    "response_record_id": "e641f4f79fc943779f99be5f8ece46f3",
+    "failure_code": null,
+    "http_status": 200,
+    "attempt_sequence": 1,
+    "usage": {
+      "completion_tokens": 90,
+      "prompt_tokens": 15363,
+      "total_tokens": 15453
+    }
+  },
+  {
+    "attempt_id": "19226d07f24441ceb8d3cc5a821b5277",
+    "request_id": "ad3b0eee19d04ab891994a1b6510ef50",
+    "status": "response_committed",
+    "response_record_id": "6a5dc73022894493b423f05e919c15d1",
+    "failure_code": null,
+    "http_status": 200,
+    "attempt_sequence": 1,
+    "usage": {
+      "completion_tokens": 1462,
+      "prompt_tokens": 16298,
+      "total_tokens": 17760
+    }
+  }
+]

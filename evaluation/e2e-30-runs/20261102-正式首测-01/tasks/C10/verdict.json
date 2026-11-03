@@ -1,0 +1,174 @@
+{
+  "task_id": "C10",
+  "batch_id": "20261102-正式首测-01",
+  "verdict": "pass",
+  "checks": [
+    {
+      "id": "T1-semantic",
+      "critical": true,
+      "status": "pass",
+      "expected": "纵向分组柱；Q1—Q4；East、South、North；全部原始数据、标题、轴标签和来源一致。",
+      "actual": "按标签逐值核对12个值完全一致，类型、顺序、标题、轴标签和来源均符合要求。",
+      "evidence": [
+        "/turn_evidence/0/figures/figure-01.json",
+        "assemble call_00_oPH0kavJ8I5ounaPqmAs3429"
+      ],
+      "reason": "数值误差为0；仅内部ID与参考不同，不影响语义。"
+    },
+    {
+      "id": "T1-render",
+      "critical": true,
+      "status": "pass",
+      "expected": "成功提交Figure对应的可读PNG，单张分组柱状图，关键内容完整。",
+      "actual": "已查看Image #1：单张纵向分组柱，图例、季度、标题、单位及来源清晰，无严重裁切遮挡。",
+      "evidence": [
+        "turn-01/render-01.png（Image #1）",
+        "/execution/turns/0/renders/0",
+        "render call_00_ET_7tcFASksoP7u5ayut1yy0540"
+      ],
+      "reason": "render的figure_ref和digest与本轮成功提交匹配，PNG哈希验证通过。"
+    },
+    {
+      "id": "T1-delivery",
+      "critical": true,
+      "status": "pass",
+      "expected": "回答明确指向可用产物，关键陈述与交付一致。",
+      "actual": "回答明确给出本轮Figure和render标识，数据表正确；Q3比较的口误在同段明确纠正为South 27高于East 25。",
+      "evidence": [
+        "/turn_evidence/0/answer",
+        "/execution/turns/0/figures/0",
+        "/execution/turns/0/renders/0"
+      ],
+      "reason": "唯一成功候选与回答引用一致；已明确自纠的比较口误不构成残留的关键数据错误。"
+    },
+    {
+      "id": "T2-semantic",
+      "critical": true,
+      "status": "pass",
+      "expected": "候选标题、纵向堆叠、South/Q3=40，其余语义保留。",
+      "actual": "标题为区域季度销售（候选），mode=stacked，South为[19,24,40,30]；其余11个值及所有规定标签、顺序一致。",
+      "evidence": [
+        "/turn_evidence/1/figures/figure-01.json",
+        "assemble call_00_JoAJVjJOMap2NApskwUV9281"
+      ],
+      "reason": "全部数值与第2轮参考的误差为0，修改正确。"
+    },
+    {
+      "id": "T2-render",
+      "critical": true,
+      "status": "pass",
+      "expected": "匹配本轮Figure的真实PNG，呈现纵向堆叠及必要文字。",
+      "actual": "已查看Image #2：四根堆叠柱，East、South、North自下而上排列，合计58、73、88、90，关键文字完整。",
+      "evidence": [
+        "turn-02/render-01.png（Image #2）",
+        "/execution/turns/1/renders/0",
+        "render call_00_ET_HrJpCMcgEOEKxWOIMwmE0529"
+      ],
+      "reason": "Figure关联和PNG哈希验证通过，视觉呈现与数据一致，无严重遮挡。"
+    },
+    {
+      "id": "T2-delivery",
+      "critical": true,
+      "status": "pass",
+      "expected": "回答清楚指向第2轮产物，陈述与数据和交付状态一致。",
+      "actual": "回答指向本轮唯一成功render，正确说明候选标题、堆叠、South/Q3=40及各季度合计。",
+      "evidence": [
+        "/turn_evidence/1/answer",
+        "/execution/turns/1/renders/0"
+      ],
+      "reason": "已成功交付且无关键冲突陈述。"
+    },
+    {
+      "id": "T3-semantic",
+      "critical": true,
+      "status": "pass",
+      "expected": "确认标题、恢复纵向分组、South/Q3=42，其他数据和顺序保留。",
+      "actual": "标题为区域季度销售（确认），mode=grouped，South为[19,24,42,30]；其余数据、总标题、轴标签、来源和顺序均正确。",
+      "evidence": [
+        "/turn_evidence/2/figures/figure-01.json",
+        "assemble call_00_ttHXY2UZJdLBnmQfAD248997"
+      ],
+      "reason": "逐值匹配第3轮参考，数值误差为0。"
+    },
+    {
+      "id": "T3-render",
+      "critical": true,
+      "status": "pass",
+      "expected": "匹配最终Figure的真实PNG，呈现分组柱及最终有效数据和文字。",
+      "actual": "已查看Image #3：每季度三柱并列，Q3橙色South柱为42，确认标题、图例、轴标签和来源完整清晰。",
+      "evidence": [
+        "turn-03/render-01.png（Image #3）",
+        "/execution/turns/2/renders/0",
+        "render call_00_ET_ahrTLEIX2ac7cEcoGtZG5371"
+      ],
+      "reason": "Figure关联和PNG哈希验证通过，无严重裁切遮挡。"
+    },
+    {
+      "id": "T3-delivery",
+      "critical": true,
+      "status": "pass",
+      "expected": "回答明确指向最终产物并简述最终生效项。",
+      "actual": "回答引用最终成功render，明确说明确认标题、恢复分组、42覆盖40，以及保留项；数据表准确。",
+      "evidence": [
+        "/turn_evidence/2/answer",
+        "/execution/turns/2/renders/0"
+      ],
+      "reason": "最终说明与已提交Figure及实际PNG一致。"
+    },
+    {
+      "id": "preservation",
+      "critical": true,
+      "status": "pass",
+      "expected": "逐轮仅改变授权的子图标题、South/Q3和分组或堆叠模式。",
+      "actual": "第1至2轮仅上述三项改变；第2至3轮仍仅上述三项改变。其余11个值、类别及系列顺序、总标题、单位、来源、单图结构全部保留。",
+      "evidence": [
+        "/turn_evidence/0/figures/figure-01.json",
+        "/turn_evidence/1/figures/figure-01.json",
+        "/turn_evidence/2/figures/figure-01.json"
+      ],
+      "reason": "逐轮语义差异均在授权范围内。"
+    },
+    {
+      "id": "final_requirements",
+      "critical": true,
+      "status": "pass",
+      "expected": "确认标题、South/Q3=42、纵向分组，撤销候选标题、40和堆叠，并保留所有未改项及交付说明。",
+      "actual": "最终Figure、PNG和回答共同满足全部最新要求，未残留被覆盖或撤销项。",
+      "evidence": [
+        "/turn_evidence/2/figures/figure-01.json",
+        "/turn_evidence/2/answer",
+        "turn-03/render-01.png（Image #3）"
+      ],
+      "reason": "最终有效要求全部落实，且已实际渲染交付。"
+    }
+  ],
+  "primary_failure": null,
+  "secondary_failures": [],
+  "artifact_refs": [
+    "turn-01/figure-01.json",
+    "turn-01/render-01.png",
+    "turn-01/final-answer.txt",
+    "turn-02/figure-01.json",
+    "turn-02/render-01.png",
+    "turn-02/final-answer.txt",
+    "turn-03/figure-01.json",
+    "turn-03/render-01.png",
+    "turn-03/final-answer.txt"
+  ],
+  "quality_notes": [
+    "第1轮回答的比较说明存在冗余且易混淆的口误，但同段已明确纠正，数据表及图表正确。"
+  ],
+  "judge": {
+    "model": "gpt-6.1-sol",
+    "prompt_version": "1.0",
+    "context_isolated": true,
+    "actual_png_viewed": true,
+    "limitations": [
+      "提交关联及哈希核验采用所提供的冻结证据记录，未额外读取文件或重算哈希。"
+    ]
+  },
+  "review_notes": [
+    "所提供记录显示三轮在同一Session依次完成，无超时或协议异常；每轮均只有一个成功Figure及配对render，选择无歧义。",
+    "本次裁决已逐轮检查实际附图，未将参考Figure视为实际交付；未进行另一独立上下文的复核。"
+  ]
+}

@@ -1,0 +1,101 @@
+{
+  "task_id": "A10",
+  "batch_id": "20261102-正式首测-01",
+  "verdict": "pass",
+  "checks": [
+    {
+      "id": "structure",
+      "critical": true,
+      "status": "pass",
+      "expected": "line / renewable primary energy share / percent / 2015–2023",
+      "actual": "回答识别为多系列折线图，指标为一次能源中可再生能源占比，单位为百分比，年份为2015—2023。",
+      "evidence": [
+        "turn_evidence/0/answer：图表类型与指标",
+        "image-01.png：标题、副标题及横纵轴"
+      ],
+      "reason": "类型、指标、单位和时间范围均符合要求。"
+    },
+    {
+      "id": "direction",
+      "critical": true,
+      "status": "pass",
+      "expected": {
+        "China": "increase",
+        "United States": "increase",
+        "France": "increase"
+      },
+      "actual": {
+        "China": "increase",
+        "United States": "increase",
+        "France": "increase"
+      },
+      "evidence": [
+        "turn_evidence/0/answer：2015→2023 的变化方向表格",
+        "image-01.png：三条折线的2015及2023端点"
+      ],
+      "reason": "三国首尾总体上升的判断正确。"
+    },
+    {
+      "id": "ranking",
+      "critical": true,
+      "status": "pass",
+      "expected": [
+        "France",
+        "China",
+        "United States"
+      ],
+      "actual": [
+        "France",
+        "China",
+        "United States"
+      ],
+      "evidence": [
+        "turn_evidence/0/answer：2023 年大致高低顺序",
+        "image-01.png：右侧端点及国家标签"
+      ],
+      "reason": "2023年高低顺序与图片及答案一致。"
+    },
+    {
+      "id": "uncertainty",
+      "critical": true,
+      "status": "pass",
+      "expected": "无法从低清图片可靠恢复四位小数",
+      "actual": "明确回答不能可靠报告四位小数，说明像素分辨率、刻度和缺少数值标签的限制，并将所报数值标为目视估计。",
+      "evidence": [
+        "turn_evidence/0/answer：能否可靠报告“精确到小数点后四位”的值"
+      ],
+      "reason": "未将四位小数作为实际读数报告；8.0237%仅为精度要求的示例。"
+    }
+  ],
+  "primary_failure": null,
+  "secondary_failures": [],
+  "artifact_refs": [
+    "image-01.png",
+    "final-answer.txt",
+    "execution/turns/0",
+    "turn_evidence/0/answer",
+    "turn_evidence/0/tool_overview"
+  ],
+  "quality_notes": [
+    "附加走势描述有误：France在2017年约为5.0%，并非4.3%；2018年后也并非持续攀升，2021年有回落。",
+    "“France绝对份额始终领先”与图片不符，多个年份低于其他国家。",
+    "2023年China约7.2%、United States约6.8%；回答所报7.1%和6.5%偏低。冻结检查未要求这些近似数值的具体容差，不据此另增关键失败。",
+    "附加误差区间未得到充分论证；高分辨率原图也不必然支持四位小数，精确值应依赖原始数据。"
+  ],
+  "judge": {
+    "model": "gpt-6.1-sol",
+    "prompt_version": "1.0",
+    "context_isolated": true,
+    "actual_png_viewed": true,
+    "limitations": [
+      "已查看附带的实际输入PNG；本题仅要求文字分析，无需提交Figure或输出PNG。",
+      "协议核对依据所提供的冻结执行记录及工具概览，未独立检查未提供的批次级记录。"
+    ]
+  },
+  "review_notes": [
+    "固定对话仅一轮，无修改或撤销项。已提交的final-answer.txt为本轮交付。",
+    "执行记录显示completed、未超时、最终回答已提交，未记录协议异常；工具概览未显示外部检索。",
+    "四项冻结关键检查均通过。附加内容中的错误单独记录，不扩展冻结关键检查范围。",
+    "本结论仅为本次独立裁决，不代表已完成另一个独立上下文的复核。"
+  ]
+}

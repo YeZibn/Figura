@@ -1,0 +1,23 @@
+{
+  "task_id": "K01",
+  "facts": {
+    "North/Q1": 14,
+    "North/Q2": 22,
+    "unit": "万元",
+    "difference": 8
+  },
+  "checks": [
+    {
+      "id": "values",
+      "critical": true,
+      "requirement": "North 两个值、单位和差值正确",
+      "expected": {
+        "North/Q1": 14,
+        "North/Q2": 22,
+        "unit": "万元",
+        "difference": 8
+      }
+    }
+  ],
+  "fixture_mode": "mock_content_only_not_real_execution"
+}

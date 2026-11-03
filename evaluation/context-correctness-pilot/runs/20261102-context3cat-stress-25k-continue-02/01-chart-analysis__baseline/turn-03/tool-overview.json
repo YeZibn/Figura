@@ -1,0 +1,66 @@
+[
+  {
+    "call_id": "call_00_LSEt5wwJjL4aNH5Pr9Hj8690",
+    "tool_name": "search_history",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_01_BdlZes5Zo4MlVhIXxhtl5540",
+    "tool_name": "search_history",
+    "outcome": "failed",
+    "error": {
+      "code": "invalid_result",
+      "field_path": "/matches/0/attachments",
+      "message": "工具返回结果不符合定义。",
+      "retryable": false
+    }
+  },
+  {
+    "call_id": "call_00_8iUgWMs2GS3yWLjX2HE91397",
+    "tool_name": "search_history",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_01_ffzHrXizrkKgTvr0u3TL1101",
+    "tool_name": "search_history",
+    "outcome": "failed",
+    "error": {
+      "code": "invalid_result",
+      "field_path": "/matches/0/attachments",
+      "message": "工具返回结果不符合定义。",
+      "retryable": false
+    }
+  },
+  {
+    "call_id": "call_00_lSBE2Rx0vLs7olBBLyRr6602",
+    "tool_name": "read_history",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_01_oSic0mccYA0w9YNx3kU81233",
+    "tool_name": "read_history",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_zZORY7WViKSexgvUu9948369",
+    "tool_name": "read_history",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_01_JVXq9vAG8gSlvEAvXdYA3006",
+    "tool_name": "read_history",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_02_tlWdR0memnwqKKyQfDKz2222",
+    "tool_name": "read_history",
+    "outcome": "succeeded",
+    "error": null
+  }
+]

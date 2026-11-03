@@ -1,0 +1,94 @@
+{
+  "batch_id": "20261102-chart-analysis-25k-rerun-01",
+  "status": "execution_complete_with_failures",
+  "started_at": "2026-11-02T20:09:11.385778+08:00",
+  "git_revision": "a9d155e53a488544b450c42760abfcf4932e66be",
+  "provider_id": "deepseek",
+  "model_id": "deepseek-flash",
+  "thinking_mode": true,
+  "reasoning_effort": "high",
+  "max_completion_tokens": null,
+  "profile_capacity_before_override": 200000,
+  "conditions": {
+    "baseline": 100000000,
+    "compaction": 25000
+  },
+  "compaction_threshold_fraction": 0.8,
+  "turn_timeout_seconds": 2700,
+  "schedule_range": {
+    "start_index": 0,
+    "end_index_exclusive": 2
+  },
+  "schedule": [
+    {
+      "task_id": "01-chart-analysis",
+      "condition": "compaction"
+    },
+    {
+      "task_id": "01-chart-analysis",
+      "condition": "baseline"
+    }
+  ],
+  "omitted_schedule_entries": [
+    {
+      "task_id": "02-chart-construction",
+      "condition": "baseline",
+      "index": 2,
+      "reason": "after_selected_range"
+    },
+    {
+      "task_id": "02-chart-construction",
+      "condition": "compaction",
+      "index": 3,
+      "reason": "after_selected_range"
+    },
+    {
+      "task_id": "03-chart-modification",
+      "condition": "compaction",
+      "index": 4,
+      "reason": "after_selected_range"
+    },
+    {
+      "task_id": "03-chart-modification",
+      "condition": "baseline",
+      "index": 5,
+      "reason": "after_selected_range"
+    }
+  ],
+  "input_hashes": {
+    "01-chart-analysis": {
+      "conversation_sha256": "7fb9f4be51e66e12f9d94fdbf968873dd2bf163c8defea65d6fbba78cb1b42e2",
+      "answer_key_sha256": "871d332beb925e0e136066c73436dfd76196d9d3e246b0f1d6e2e4cef96a3253",
+      "scorecard_sha256": "cb4bf3868ff59f4e2486c77fc5ca4b084596734e325570e2de5ebfaf3c7a986d",
+      "input_sha256": {
+        "input/bar_line_dashboard.png": "b6b6105d739d1a0399295fd75286f27ac8965644423a0533de814f8aaecb9e00"
+      }
+    }
+  },
+  "protocol_notes": [
+    "每个任务与条件使用隔离的 Gateway、SQLite 数据目录和 Session。",
+    "图表构建任务的 dataset.json 原文内嵌首轮消息；两组提交内容相同。",
+    "Provider 总 Token 包含 agent_turn 与 context_compaction 的所有物理 attempt。",
+    "每类一个配对样本，结果作固定任务的描述性比较。"
+  ],
+  "completed_at": "2026-11-02T20:22:50.389419+08:00",
+  "execution_failures": [
+    {
+      "task_id": "01-chart-analysis",
+      "condition": "compaction",
+      "type": "RuntimeError",
+      "message": "01-chart-analysis compaction turn 1 ended as interrupted; remaining turns in this session were not submitted"
+    }
+  ],
+  "evaluation_review": {
+    "status": "complete",
+    "judge": "Codex (LLM-as-Judge)",
+    "reviewed_tasks": 1,
+    "results_file": "scorecard-results.md",
+    "scope_note": "100M 基线通过；25k 压缩组首轮中断且 usage 不完整，未形成可评分的完整任务或 Token 配对。"
+  },
+  "operator_stop": {
+    "reason": "Provider stream 约 12 分钟无新事件；通过 Gateway stop 请求结束运行。",
+    "run_status": "interrupted"
+  }
+}

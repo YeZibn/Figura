@@ -1,0 +1,29 @@
+{
+  "semantic_projection": "忽略内部 ID 和 measurement_refs；保留标题、来源、note、数据、坐标、画布和顺序",
+  "rounds": [
+    {
+      "turn": 2,
+      "authorized_user_request": "只修改左图标题为“区域季度销售（修订）”。右图标题、类型、全部点、轴和来源必须完整保留。请交付完整双图 PNG。",
+      "expected_semantic_differences": [
+        {
+          "path": "/charts/0/metadata/title",
+          "before": "区域季度销售",
+          "after": "区域季度销售（修订）"
+        }
+      ],
+      "preserve": "所有未被该轮授权改变的语义；按标签匹配，忽略内部 ID"
+    },
+    {
+      "turn": 3,
+      "authorized_user_request": "保留修订标题，只将左图 North/Q4 改为 38 万元。其他左图内容与整个右图均保持，仍为两列、左销售右订单。请交付完整双图 PNG。",
+      "expected_semantic_differences": [
+        {
+          "path": "/charts/0/dataset/series/2/values/3",
+          "before": 24,
+          "after": 38
+        }
+      ],
+      "preserve": "所有未被该轮授权改变的语义；按标签匹配，忽略内部 ID"
+    }
+  ]
+}

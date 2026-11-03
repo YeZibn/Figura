@@ -1,0 +1,56 @@
+[
+  {
+    "Entity": "Brazil",
+    "Code": "BRA",
+    "Year": "2023",
+    "Life expectancy": "75.848",
+    "GDP per capita": "19079.812",
+    "Population": "211140731",
+    "World region according to OWID": "South America"
+  },
+  {
+    "Entity": "China",
+    "Code": "CHN",
+    "Year": "2023",
+    "Life expectancy": "77.953",
+    "GDP per capita": "22687.252",
+    "Population": "1422584930",
+    "World region according to OWID": "Asia"
+  },
+  {
+    "Entity": "Germany",
+    "Code": "DEU",
+    "Year": "2023",
+    "Life expectancy": "81.378",
+    "GDP per capita": "63140.195",
+    "Population": "84548233",
+    "World region according to OWID": "Europe"
+  },
+  {
+    "Entity": "India",
+    "Code": "IND",
+    "Year": "2023",
+    "Life expectancy": "72.003",
+    "GDP per capita": "8870.55",
+    "Population": "1438069597",
+    "World region according to OWID": "Asia"
+  },
+  {
+    "Entity": "South Africa",
+    "Code": "ZAF",
+    "Year": "2023",
+    "Life expectancy": "66.139",
+    "GDP per capita": "13695.376",
+    "Population": "63212386",
+    "World region according to OWID": "Africa"
+  },
+  {
+    "Entity": "United States",
+    "Code": "USA",
+    "Year": "2023",
+    "Life expectancy": "79.304",
+    "GDP per capita": "74351.67",
+    "Population": "343477330",
+    "World region according to OWID": "North America"
+  }
+]

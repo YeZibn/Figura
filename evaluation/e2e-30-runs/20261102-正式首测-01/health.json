@@ -1,0 +1,25 @@
+{
+  "version": "v1",
+  "status": "ok",
+  "service": "figura",
+  "providers": [
+    {
+      "providerId": "qwen",
+      "modelId": "qwen3.8-flash",
+      "available": true,
+      "reasonCode": null
+    },
+    {
+      "providerId": "deepseek",
+      "modelId": "deepseek-flash",
+      "available": true,
+      "reasonCode": null
+    },
+    {
+      "providerId": "mimo",
+      "modelId": "mimo-v2.6-flash",
+      "available": false,
+      "reasonCode": "configuration_missing"
+    }
+  ]
+}

@@ -1,0 +1,91 @@
+{
+  "task_id": "A08",
+  "category": "analysis",
+  "status": "not_run",
+  "facts": {
+    "columns": [
+      "Mon",
+      "Tue",
+      "Wed"
+    ],
+    "rows": [
+      "East",
+      "South",
+      "North"
+    ],
+    "values": [
+      [
+        11,
+        7,
+        18
+      ],
+      [
+        9,
+        15,
+        6
+      ],
+      [
+        13,
+        4,
+        12
+      ]
+    ],
+    "maximum": {
+      "row": "East",
+      "column": "Wed",
+      "value": 18
+    },
+    "minimum": {
+      "row": "North",
+      "column": "Tue",
+      "value": 4
+    },
+    "south_total": 30
+  },
+  "checks": [
+    {
+      "id": "matrix",
+      "critical": true,
+      "requirement": "九个标注数值与行列准确对应",
+      "expected": [
+        [
+          11,
+          7,
+          18
+        ],
+        [
+          9,
+          15,
+          6
+        ],
+        [
+          13,
+          4,
+          12
+        ]
+      ],
+      "numeric_tolerance": {
+        "abs": 0,
+        "rel": 0
+      }
+    },
+    {
+      "id": "extrema",
+      "critical": true,
+      "requirement": "最大最小定位和值正确",
+      "expected": {
+        "max": "East/Wed=18",
+        "min": "North/Tue=4"
+      }
+    },
+    {
+      "id": "total",
+      "critical": true,
+      "requirement": "South 合计正确",
+      "expected": 30
+    }
+  ],
+  "reference_figures": [],
+  "numeric_policy": "explicit_per_check",
+  "semantic_equivalence": "忽略内部生成的 chart/category/series ID；按标签、顺序和语义匹配。坐标 kind 和数据类型必须合法。空 note、空 figure title 等未要求字段不强制一致。"
+}

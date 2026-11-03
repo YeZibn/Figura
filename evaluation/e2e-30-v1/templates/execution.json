@@ -1,0 +1,22 @@
+{
+  "task_id": null,
+  "batch_id": null,
+  "execution_status": "not_started",
+  "session_id": null,
+  "turns": [],
+  "turn_record_fields": {
+    "turn": null, "run_id": null, "input_sha256": null, "attachment_sha256": [],
+    "status": null, "terminal_code": null, "started_at": null, "completed_at": null,
+    "wall_seconds": null, "stop_requested": false, "final_answer_ref": null,
+    "accepted_figures": [], "renders": [], "selected_delivery_ref": null,
+    "provider_attempt_count": null, "internal_retry_count": null,
+    "compaction_count": null, "usage_complete": false,
+    "usage": {"input_tokens": null, "output_tokens": null, "total_tokens": null},
+    "usage_missing_attempt_refs": [], "errors": []
+  },
+  "protocol_anomalies": [],
+  "invalid_execution_reason": null,
+  "previous_invalid_execution_ref": null,
+  "judge_usage": null,
+  "notes": []
+}

@@ -1,0 +1,59 @@
+{
+  "schema_version": 2,
+  "title": "",
+  "layout": {
+    "columns": 1
+  },
+  "charts": [
+    {
+      "chart_id": "chart1",
+      "chart_spec": {
+        "schema_version": 2,
+        "metadata": {
+          "chart_type": "scatter",
+          "title": "投放与咨询",
+          "source": "Figura E2E-30 合成数据 v1",
+          "note": ""
+        },
+        "coordinate_system": {
+          "kind": "cartesian",
+          "x_axis": {
+            "kind": "numeric",
+            "label": "Spend (千元)"
+          },
+          "y_axis": {
+            "kind": "numeric",
+            "label": "Leads (个)"
+          }
+        },
+        "dataset": {
+          "series": [
+            {
+              "id": "s1",
+              "label": "Campaign",
+              "points": [
+                {
+                  "x": 2,
+                  "y": 8
+                },
+                {
+                  "x": 4,
+                  "y": 15
+                },
+                {
+                  "x": 7,
+                  "y": 12
+                },
+                {
+                  "x": 9,
+                  "y": 24
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "measurement_refs": []
+    }
+  ]
+}

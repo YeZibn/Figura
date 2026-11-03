@@ -1,0 +1,63 @@
+{
+  "schema_version": 2,
+  "title": "",
+  "layout": {
+    "columns": 1
+  },
+  "charts": [
+    {
+      "chart_id": "chart1",
+      "chart_spec": {
+        "schema_version": 2,
+        "metadata": {
+          "chart_type": "line",
+          "title": "缺失订单观测",
+          "source": "Figura E2E-30 合成数据 v1",
+          "note": ""
+        },
+        "coordinate_system": {
+          "kind": "cartesian",
+          "x_axis": {
+            "kind": "categorical",
+            "label": "Month"
+          },
+          "y_axis": {
+            "kind": "numeric",
+            "label": "Orders (单)"
+          }
+        },
+        "dataset": {
+          "series": [
+            {
+              "id": "s1",
+              "label": "Orders",
+              "points": [
+                {
+                  "x": "Jan",
+                  "y": 14
+                },
+                {
+                  "x": "Feb",
+                  "y": 21
+                },
+                {
+                  "x": "Mar",
+                  "y": null
+                },
+                {
+                  "x": "Apr",
+                  "y": 18
+                },
+                {
+                  "x": "May",
+                  "y": 30
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "measurement_refs": []
+    }
+  ]
+}

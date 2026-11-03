@@ -30,8 +30,7 @@ coverage/
 # Local operating-system files
 .DS_Store
 
-# Local ChartAgent runtime data and evaluation artifacts
+# Local runtime data and generated output
 .chartagent/
 .figura/
 /output/
-/evaluation/

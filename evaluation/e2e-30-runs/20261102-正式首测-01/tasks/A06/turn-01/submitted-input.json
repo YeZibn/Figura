@@ -1,0 +1,7 @@
+{
+  "text": "附件环图展示渠道占比。列出每个渠道的百分比、最大和最小渠道，并计算 Online 与 Partner 合计占比。图中未提供总人数，不要推断绝对人数。",
+  "attachment_sha256": [
+    "8ff652920ad7f2e990bfb4d851ee33b7db27b1c7cf477e04149fd4961d9edc1d"
+  ],
+  "providerId": "deepseek"
+}

@@ -1,0 +1,7 @@
+[
+  {
+    "turn": 1,
+    "text": "制作环图，内半径比例 0.5，切片顺序 Online、Store、Partner、Other，保留原始值；标题“渠道贡献”。 所有图表来源填写“Figura E2E-30 合成数据 v1”。请实际装配、渲染并交付可查看的 PNG，不只给代码、方案或 JSON。所有数据完整保留，除明确要求外不变换、不排序、不增加数据。\n\n以下是本任务全部数据（直接作为用户消息，不上传 JSON 文件）：\n```json\n{\n  \"source\": \"Figura E2E-30 合成数据 v1\",\n  \"charts\": [\n    {\n      \"name\": \"渠道贡献\",\n      \"data\": {\n        \"items\": {\n          \"Online\": 45,\n          \"Store\": 30,\n          \"Partner\": 15,\n          \"Other\": 10\n        }\n      }\n    }\n  ]\n}\n```",
+    "attachments": []
+  }
+]

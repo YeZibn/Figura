@@ -1,0 +1,26 @@
+{
+  "turn": 1,
+  "run_id": "67624aeb170b40f0b18881b2c9b38eaa",
+  "session_id": "e263c7063dca43589ee08d83086d29f3",
+  "status": "completed",
+  "terminal_code": null,
+  "final_answer_committed": true,
+  "figures": [],
+  "renders": [],
+  "provider_attempt_count": 1,
+  "usage_by_purpose": {
+    "agent_turn": {
+      "prompt_tokens": 12638,
+      "completion_tokens": 1085,
+      "total_tokens": 13723
+    }
+  },
+  "usage_total_including_compaction": {
+    "prompt_tokens": 12638,
+    "completion_tokens": 1085,
+    "total_tokens": 13723
+  },
+  "usage_complete": true,
+  "usage_missing_attempts": [],
+  "compaction_operations": []
+}

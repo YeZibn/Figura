@@ -1,0 +1,87 @@
+{
+  "charts": [
+    {
+      "chart_id": "regional_quarterly_sales",
+      "chart_spec": {
+        "coordinate_system": {
+          "kind": "cartesian",
+          "x_axis": {
+            "kind": "categorical",
+            "label": "Quarter"
+          },
+          "y_axis": {
+            "kind": "numeric",
+            "label": "Sales (万元)"
+          }
+        },
+        "dataset": {
+          "categories": [
+            {
+              "id": "q1",
+              "label": "Q1"
+            },
+            {
+              "id": "q2",
+              "label": "Q2"
+            },
+            {
+              "id": "q3",
+              "label": "Q3"
+            },
+            {
+              "id": "q4",
+              "label": "Q4"
+            }
+          ],
+          "mode": "grouped",
+          "orientation": "vertical",
+          "series": [
+            {
+              "id": "east",
+              "label": "East",
+              "values": [
+                13,
+                19,
+                16,
+                25
+              ]
+            },
+            {
+              "id": "south",
+              "label": "South",
+              "values": [
+                10,
+                15,
+                18,
+                21
+              ]
+            },
+            {
+              "id": "north",
+              "label": "North",
+              "values": [
+                8,
+                12,
+                14,
+                17
+              ]
+            }
+          ]
+        },
+        "metadata": {
+          "chart_type": "bar",
+          "note": "",
+          "source": "季度经营台账（已核对）",
+          "title": "区域季度销售（发布版）"
+        },
+        "schema_version": 2
+      },
+      "measurement_refs": []
+    }
+  ],
+  "layout": {
+    "columns": 1
+  },
+  "schema_version": 2,
+  "title": "区域经营报告"
+}

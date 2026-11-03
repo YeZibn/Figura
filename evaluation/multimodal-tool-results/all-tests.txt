@@ -1,0 +1,365 @@
+........................................................................ [  5%]
+.................s...................................................... [ 10%]
+........................................................................ [ 15%]
+............FFFFFFF.FFF.......FFFFFF.................................... [ 21%]
+........................................................................ [ 26%]
+........................................................................ [ 31%]
+........................................................................ [ 37%]
+........................................................................ [ 42%]
+........................................................................ [ 47%]
+........................................................................ [ 53%]
+........................................................................ [ 58%]
+........................................................................ [ 63%]
+........................................................................ [ 69%]
+........................................................................ [ 74%]
+........................................................................ [ 79%]
+.............F......................................F................... [ 85%]
+...................F............................FFFF.........FFFFFFF...F [ 90%]
+.F.FFF.................................................................. [ 95%]
+.........................................................                [100%]Running teardown with pytest sessionfinish...
+
+=================================== FAILURES ===================================
+___________ test_dashboard_uses_vlm_regions_and_returns_named_crops ____________
+tests/test_dashboard_decomposition.py:78: in test_dashboard_uses_vlm_regions_and_returns_named_crops
+    assert isinstance(result, ToolResult)
+E   AssertionError: assert False
+E    +  where False = isinstance({'error': 'dashboard image could not be resolved'}, ToolResult)
+__ test_dashboard_crop_frames_preserve_source_coordinates_and_layout_context ___
+tests/test_dashboard_decomposition.py:103: in test_dashboard_crop_frames_preserve_source_coordinates_and_layout_context
+    image_size = result.data["image_size"]
+                 ^^^^^^^^^^^
+E   AttributeError: 'dict' object has no attribute 'data'
+__ test_missing_vlm_regions_returns_one_advisory_region_without_ocr_discovery __
+tests/test_dashboard_decomposition.py:134: in test_missing_vlm_regions_returns_one_advisory_region_without_ocr_discovery
+    assert isinstance(result, ToolResult)
+E   AssertionError: assert False
+E    +  where False = isinstance({'error': 'dashboard image could not be resolved'}, ToolResult)
+______________ test_invalid_and_overlapping_proposals_are_bounded ______________
+tests/test_dashboard_decomposition.py:153: in test_invalid_and_overlapping_proposals_are_bounded
+    assert len(result.data["panels"]) == 2
+               ^^^^^^^^^^^
+E   AttributeError: 'dict' object has no attribute 'data'
+___________ test_duplicate_display_names_receive_distinct_crop_slugs ___________
+tests/test_dashboard_decomposition.py:168: in test_duplicate_display_names_receive_distinct_crop_slugs
+    panels = result.data["panels"]
+             ^^^^^^^^^^^
+E   AttributeError: 'dict' object has no attribute 'data'
+_________ test_invalid_sam_result_keeps_vlm_panel_as_partial_fallback __________
+tests/test_dashboard_decomposition.py:193: in test_invalid_sam_result_keeps_vlm_panel_as_partial_fallback
+    assert isinstance(result, ToolResult)
+E   AssertionError: assert False
+E    +  where False = isinstance({'error': 'dashboard image could not be resolved'}, ToolResult)
+___________ test_explicit_sam_mode_degrades_without_optional_backend ___________
+tests/test_dashboard_decomposition.py:223: in test_explicit_sam_mode_degrades_without_optional_backend
+    assert isinstance(result, ToolResult)
+E   AssertionError: assert False
+E    +  where False = isinstance({'error': 'dashboard image could not be resolved'}, ToolResult)
+__ test_authorized_decomposition_contract_accepts_vlm_regions_and_hides_paths __
+tests/test_dashboard_decomposition.py:240: in test_authorized_decomposition_contract_accepts_vlm_regions_and_hides_paths
+    item = attachments.register(str(COMPLEX_IMAGE))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/chartagent/attachments/registry.py:34: in register
+    path = Path(raw_path).expanduser().resolve(strict=True)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/miniconda3/envs/agent/lib/python3.11/pathlib.py:993: in resolve
+    s = os.path.realpath(self, strict=strict)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen posixpath>:413: in realpath
+    ???
+<frozen posixpath>:457: in _joinrealpath
+    ???
+E   FileNotFoundError: [Errno 2] No such file or directory: '/Users/yezibin/Project/Figura/tests/fixtures/legacy_charts'
+__________ test_managed_crop_references_are_attached_to_panel_records __________
+tests/test_dashboard_decomposition.py:271: in test_managed_crop_references_are_attached_to_panel_records
+    item = attachments.register(str(COMPLEX_IMAGE))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/chartagent/attachments/registry.py:34: in register
+    path = Path(raw_path).expanduser().resolve(strict=True)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/miniconda3/envs/agent/lib/python3.11/pathlib.py:993: in resolve
+    s = os.path.realpath(self, strict=strict)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen posixpath>:413: in realpath
+    ???
+<frozen posixpath>:457: in _joinrealpath
+    ???
+E   FileNotFoundError: [Errno 2] No such file or directory: '/Users/yezibin/Project/Figura/tests/fixtures/legacy_charts'
+__________ test_panel_context_can_be_handed_to_existing_chart_sensor ___________
+tests/test_dashboard_decomposition.py:300: in test_panel_context_can_be_handed_to_existing_chart_sensor
+    chart_panels = [panel for panel in result.data["panels"] if panel["role"] == "chart"]
+                                       ^^^^^^^^^^^
+E   AttributeError: 'dict' object has no attribute 'data'
+_______ test_evaluation_bundle_isolates_runs_and_writes_complete_layout ________
+tests/test_evaluation_bundle.py:38: in test_evaluation_bundle_isolates_runs_and_writes_complete_layout
+    manifest = _manifest()
+               ^^^^^^^^^^^
+tests/test_evaluation_bundle.py:19: in _manifest
+    return load_manifest(MANIFEST, asset_root=ROOT)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/chartagent/evaluation/manifest.py:106: in load_manifest
+    raise DiagnosticManifestError(f"manifest 不存在: {path}")
+E   chartagent.evaluation.manifest.DiagnosticManifestError: manifest 不存在: /Users/yezibin/Project/Figura/tests/fixtures/real_chart_diagnostic_manifest.json
+_____________ test_evaluation_bundle_rejects_reusing_explicit_root _____________
+tests/test_evaluation_bundle.py:70: in test_evaluation_bundle_rejects_reusing_explicit_root
+    manifest = _manifest()
+               ^^^^^^^^^^^
+tests/test_evaluation_bundle.py:19: in _manifest
+    return load_manifest(MANIFEST, asset_root=ROOT)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/chartagent/evaluation/manifest.py:106: in load_manifest
+    raise DiagnosticManifestError(f"manifest 不存在: {path}")
+E   chartagent.evaluation.manifest.DiagnosticManifestError: manifest 不存在: /Users/yezibin/Project/Figura/tests/fixtures/real_chart_diagnostic_manifest.json
+__________ test_evaluation_bundle_records_reports_and_bounded_failure __________
+tests/test_evaluation_bundle.py:89: in test_evaluation_bundle_records_reports_and_bounded_failure
+    manifest = _manifest()
+               ^^^^^^^^^^^
+tests/test_evaluation_bundle.py:19: in _manifest
+    return load_manifest(MANIFEST, asset_root=ROOT)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/chartagent/evaluation/manifest.py:106: in load_manifest
+    raise DiagnosticManifestError(f"manifest 不存在: {path}")
+E   chartagent.evaluation.manifest.DiagnosticManifestError: manifest 不存在: /Users/yezibin/Project/Figura/tests/fixtures/real_chart_diagnostic_manifest.json
+__________ test_evaluation_bundle_marks_all_unsubmitted_cases_blocked __________
+tests/test_evaluation_bundle.py:120: in test_evaluation_bundle_marks_all_unsubmitted_cases_blocked
+    manifest = _manifest()
+               ^^^^^^^^^^^
+tests/test_evaluation_bundle.py:19: in _manifest
+    return load_manifest(MANIFEST, asset_root=ROOT)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/chartagent/evaluation/manifest.py:106: in load_manifest
+    raise DiagnosticManifestError(f"manifest 不存在: {path}")
+E   chartagent.evaluation.manifest.DiagnosticManifestError: manifest 不存在: /Users/yezibin/Project/Figura/tests/fixtures/real_chart_diagnostic_manifest.json
+___________ test_managed_cli_persists_batch_and_partial_case_results ___________
+tests/test_evaluation_cli_bundle.py:87: in test_managed_cli_persists_batch_and_partial_case_results
+    assert result == 1
+E   assert 2 == 1
+----------------------------- Captured stdout call -----------------------------
+{"status": "invalid_manifest", "error": "manifest 不存在: /Users/yezibin/Project/Figura/tests/fixtures/real_chart_diagnostic_manifest.json"}
+_______________ test_external_cli_keeps_legacy_report_only_mode ________________
+tests/test_evaluation_cli_bundle.py:117: in test_external_cli_keeps_legacy_report_only_mode
+    assert result == 0
+E   assert 2 == 0
+----------------------------- Captured stdout call -----------------------------
+{"status": "invalid_manifest", "error": "manifest 不存在: /Users/yezibin/Project/Figura/tests/fixtures/real_chart_diagnostic_manifest.json"}
+____ test_gateway_dashboard_follow_up_reuses_panel_and_measures_local_scope ____
+tests/test_gateway.py:522: in test_gateway_dashboard_follow_up_reuses_panel_and_measures_local_scope
+    uploaded = service.upload_attachment(session_id, "dashboard.png", "image/png", COMPLEX_IMAGE.read_bytes())
+                                                                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/miniconda3/envs/agent/lib/python3.11/pathlib.py:1050: in read_bytes
+    with self.open(mode='rb') as f:
+         ^^^^^^^^^^^^^^^^^^^^
+/opt/miniconda3/envs/agent/lib/python3.11/pathlib.py:1044: in open
+    return io.open(self, mode, buffering, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   FileNotFoundError: [Errno 2] No such file or directory: '/Users/yezibin/Project/Figura/tests/fixtures/legacy_charts/dashboard_text_two_bars_pie.png'
+__________ test_evaluation_public_facade_and_bundle_layout_are_stable __________
+tests/test_gateway_evaluation_compatibility.py:127: in test_evaluation_public_facade_and_bundle_layout_are_stable
+    manifest = load_manifest(MANIFEST, asset_root=ROOT)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/chartagent/evaluation/manifest.py:106: in load_manifest
+    raise DiagnosticManifestError(f"manifest 不存在: {path}")
+E   chartagent.evaluation.manifest.DiagnosticManifestError: manifest 不存在: /Users/yezibin/Project/Figura/tests/fixtures/real_chart_diagnostic_manifest.json
+_______________ test_dashboard_crops_are_measured_independently ________________
+tests/test_measurement_evidence_eval.py:52: in test_dashboard_crops_are_measured_independently
+    for image in decomposition.images
+                 ^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: 'dict' object has no attribute 'images'
+____________ test_decomposition_persists_and_reuses_panel_handoffs _____________
+tests/test_panel_handoff.py:28: in test_decomposition_persists_and_reuses_panel_handoffs
+    item = attachments.register(str(COMPLEX_IMAGE))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/chartagent/attachments/registry.py:34: in register
+    path = Path(raw_path).expanduser().resolve(strict=True)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/miniconda3/envs/agent/lib/python3.11/pathlib.py:993: in resolve
+    s = os.path.realpath(self, strict=strict)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen posixpath>:413: in realpath
+    ???
+<frozen posixpath>:457: in _joinrealpath
+    ???
+E   FileNotFoundError: [Errno 2] No such file or directory: '/Users/yezibin/Project/Figura/tests/fixtures/legacy_charts'
+_____________ test_panel_scoped_ocr_returns_local_and_source_scope _____________
+tests/test_panel_handoff.py:55: in test_panel_scoped_ocr_returns_local_and_source_scope
+    item = attachments.register(str(COMPLEX_IMAGE))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/chartagent/attachments/registry.py:34: in register
+    path = Path(raw_path).expanduser().resolve(strict=True)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/miniconda3/envs/agent/lib/python3.11/pathlib.py:993: in resolve
+    s = os.path.realpath(self, strict=strict)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen posixpath>:413: in realpath
+    ???
+<frozen posixpath>:457: in _joinrealpath
+    ???
+E   FileNotFoundError: [Errno 2] No such file or directory: '/Users/yezibin/Project/Figura/tests/fixtures/legacy_charts'
+______________ test_panel_scoped_bar_measurement_uses_local_image ______________
+tests/test_panel_handoff.py:78: in test_panel_scoped_bar_measurement_uses_local_image
+    item = attachments.register(str(COMPLEX_IMAGE))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/chartagent/attachments/registry.py:34: in register
+    path = Path(raw_path).expanduser().resolve(strict=True)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/miniconda3/envs/agent/lib/python3.11/pathlib.py:993: in resolve
+    s = os.path.realpath(self, strict=strict)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen posixpath>:413: in realpath
+    ???
+<frozen posixpath>:457: in _joinrealpath
+    ???
+E   FileNotFoundError: [Errno 2] No such file or directory: '/Users/yezibin/Project/Figura/tests/fixtures/legacy_charts'
+_______ test_panel_scoped_targeted_measurement_preserves_source_mapping ________
+tests/test_panel_handoff.py:101: in test_panel_scoped_targeted_measurement_preserves_source_mapping
+    item = attachments.register(str(COMPLEX_IMAGE))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/chartagent/attachments/registry.py:34: in register
+    path = Path(raw_path).expanduser().resolve(strict=True)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/miniconda3/envs/agent/lib/python3.11/pathlib.py:993: in resolve
+    s = os.path.realpath(self, strict=strict)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen posixpath>:413: in realpath
+    ???
+<frozen posixpath>:457: in _joinrealpath
+    ???
+E   FileNotFoundError: [Errno 2] No such file or directory: '/Users/yezibin/Project/Figura/tests/fixtures/legacy_charts'
+___ test_real_diagnostic_manifest_validates_relative_assets_and_fingerprints ___
+tests/test_real_chart_diagnostic.py:83: in test_real_diagnostic_manifest_validates_relative_assets_and_fingerprints
+    manifest = load_manifest(MANIFEST, asset_root=ROOT)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/chartagent/evaluation/manifest.py:106: in load_manifest
+    raise DiagnosticManifestError(f"manifest 不存在: {path}")
+E   chartagent.evaluation.manifest.DiagnosticManifestError: manifest 不存在: /Users/yezibin/Project/Figura/tests/fixtures/real_chart_diagnostic_manifest.json
+_ test_real_diagnostic_manifest_rejects_invalid_asset_identity[asset-/private/chart.png-\u7edd\u5bf9\u8def\u5f84] _
+tests/test_real_chart_diagnostic.py:102: in test_real_diagnostic_manifest_rejects_invalid_asset_identity
+    raw = json.loads(MANIFEST.read_text(encoding="utf-8"))
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/miniconda3/envs/agent/lib/python3.11/pathlib.py:1058: in read_text
+    with self.open(mode='r', encoding=encoding, errors=errors) as f:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/miniconda3/envs/agent/lib/python3.11/pathlib.py:1044: in open
+    return io.open(self, mode, buffering, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   FileNotFoundError: [Errno 2] No such file or directory: '/Users/yezibin/Project/Figura/tests/fixtures/real_chart_diagnostic_manifest.json'
+_ test_real_diagnostic_manifest_rejects_invalid_asset_identity[sha256-0000000000000000000000000000000000000000000000000000000000000000-\u6307\u7eb9\u4e0d\u5339\u914d] _
+tests/test_real_chart_diagnostic.py:102: in test_real_diagnostic_manifest_rejects_invalid_asset_identity
+    raw = json.loads(MANIFEST.read_text(encoding="utf-8"))
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/miniconda3/envs/agent/lib/python3.11/pathlib.py:1058: in read_text
+    with self.open(mode='r', encoding=encoding, errors=errors) as f:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/miniconda3/envs/agent/lib/python3.11/pathlib.py:1044: in open
+    return io.open(self, mode, buffering, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   FileNotFoundError: [Errno 2] No such file or directory: '/Users/yezibin/Project/Figura/tests/fixtures/real_chart_diagnostic_manifest.json'
+____________ test_real_diagnostic_manifest_rejects_sensitive_fields ____________
+tests/test_real_chart_diagnostic.py:112: in test_real_diagnostic_manifest_rejects_sensitive_fields
+    raw = json.loads(MANIFEST.read_text(encoding="utf-8"))
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/miniconda3/envs/agent/lib/python3.11/pathlib.py:1058: in read_text
+    with self.open(mode='r', encoding=encoding, errors=errors) as f:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/miniconda3/envs/agent/lib/python3.11/pathlib.py:1044: in open
+    return io.open(self, mode, buffering, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   FileNotFoundError: [Errno 2] No such file or directory: '/Users/yezibin/Project/Figura/tests/fixtures/real_chart_diagnostic_manifest.json'
+_ test_timeline_projects_complete_multi_panel_chain_without_false_repeated_split _
+tests/test_real_chart_diagnostic.py:122: in test_timeline_projects_complete_multi_panel_chain_without_false_repeated_split
+    manifest = load_manifest(MANIFEST, asset_root=ROOT)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/chartagent/evaluation/manifest.py:106: in load_manifest
+    raise DiagnosticManifestError(f"manifest 不存在: {path}")
+E   chartagent.evaluation.manifest.DiagnosticManifestError: manifest 不存在: /Users/yezibin/Project/Figura/tests/fixtures/real_chart_diagnostic_manifest.json
+______ test_timeline_distinguishes_reused_split_and_unscoped_measurement _______
+tests/test_real_chart_diagnostic.py:167: in test_timeline_distinguishes_reused_split_and_unscoped_measurement
+    manifest = load_manifest(MANIFEST, asset_root=ROOT)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/chartagent/evaluation/manifest.py:106: in load_manifest
+    raise DiagnosticManifestError(f"manifest 不存在: {path}")
+E   chartagent.evaluation.manifest.DiagnosticManifestError: manifest 不存在: /Users/yezibin/Project/Figura/tests/fixtures/real_chart_diagnostic_manifest.json
+__________ test_timeline_flags_repeated_split_and_failed_verification __________
+tests/test_real_chart_diagnostic.py:197: in test_timeline_flags_repeated_split_and_failed_verification
+    manifest = load_manifest(MANIFEST, asset_root=ROOT)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/chartagent/evaluation/manifest.py:106: in load_manifest
+    raise DiagnosticManifestError(f"manifest 不存在: {path}")
+E   chartagent.evaluation.manifest.DiagnosticManifestError: manifest 不存在: /Users/yezibin/Project/Figura/tests/fixtures/real_chart_diagnostic_manifest.json
+_____ test_timeline_flags_assembly_omission_after_successful_measurements ______
+tests/test_real_chart_diagnostic.py:250: in test_timeline_flags_assembly_omission_after_successful_measurements
+    manifest = load_manifest(MANIFEST, asset_root=ROOT)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/chartagent/evaluation/manifest.py:106: in load_manifest
+    raise DiagnosticManifestError(f"manifest 不存在: {path}")
+E   chartagent.evaluation.manifest.DiagnosticManifestError: manifest 不存在: /Users/yezibin/Project/Figura/tests/fixtures/real_chart_diagnostic_manifest.json
+_ test_timeline_attributes_provider_failure_to_model_before_assembly_or_render _
+tests/test_real_chart_diagnostic.py:293: in test_timeline_attributes_provider_failure_to_model_before_assembly_or_render
+    manifest = load_manifest(MANIFEST, asset_root=ROOT)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/chartagent/evaluation/manifest.py:106: in load_manifest
+    raise DiagnosticManifestError(f"manifest 不存在: {path}")
+E   chartagent.evaluation.manifest.DiagnosticManifestError: manifest 不存在: /Users/yezibin/Project/Figura/tests/fixtures/real_chart_diagnostic_manifest.json
+____ test_report_is_bounded_and_does_not_reemit_raw_event_secrets_or_paths _____
+tests/test_real_chart_diagnostic.py:361: in test_report_is_bounded_and_does_not_reemit_raw_event_secrets_or_paths
+    manifest = load_manifest(MANIFEST, asset_root=ROOT)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/chartagent/evaluation/manifest.py:106: in load_manifest
+    raise DiagnosticManifestError(f"manifest 不存在: {path}")
+E   chartagent.evaluation.manifest.DiagnosticManifestError: manifest 不存在: /Users/yezibin/Project/Figura/tests/fixtures/real_chart_diagnostic_manifest.json
+____ test_gateway_diagnostic_client_requires_provider_and_never_switches_it ____
+tests/test_real_chart_diagnostic.py:390: in test_gateway_diagnostic_client_requires_provider_and_never_switches_it
+    sample = load_manifest(MANIFEST, asset_root=ROOT).samples[0]
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/chartagent/evaluation/manifest.py:106: in load_manifest
+    raise DiagnosticManifestError(f"manifest 不存在: {path}")
+E   chartagent.evaluation.manifest.DiagnosticManifestError: manifest 不存在: /Users/yezibin/Project/Figura/tests/fixtures/real_chart_diagnostic_manifest.json
+_______ test_gateway_diagnostic_client_uses_gateway_attachment_id_field ________
+tests/test_real_chart_diagnostic.py:411: in test_gateway_diagnostic_client_uses_gateway_attachment_id_field
+    sample = load_manifest(MANIFEST, asset_root=ROOT).samples[0]
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/chartagent/evaluation/manifest.py:106: in load_manifest
+    raise DiagnosticManifestError(f"manifest 不存在: {path}")
+E   chartagent.evaluation.manifest.DiagnosticManifestError: manifest 不存在: /Users/yezibin/Project/Figura/tests/fixtures/real_chart_diagnostic_manifest.json
+Test 
+tests/test_chart_tools.py::test_real_rotated_label_line_chart_uses_true_axes_and
+_anchor_sampling was skipped. Reason: 
+('/Users/yezibin/Project/Figura/tests/test_chart_tools.py', 353, 'Skipped: real 
+chart attachment is not present')
+=========================== short test summary info ============================
+FAILED tests/test_dashboard_decomposition.py::test_dashboard_uses_vlm_regions_and_returns_named_crops
+FAILED tests/test_dashboard_decomposition.py::test_dashboard_crop_frames_preserve_source_coordinates_and_layout_context
+FAILED tests/test_dashboard_decomposition.py::test_missing_vlm_regions_returns_one_advisory_region_without_ocr_discovery
+FAILED tests/test_dashboard_decomposition.py::test_invalid_and_overlapping_proposals_are_bounded
+FAILED tests/test_dashboard_decomposition.py::test_duplicate_display_names_receive_distinct_crop_slugs
+FAILED tests/test_dashboard_decomposition.py::test_invalid_sam_result_keeps_vlm_panel_as_partial_fallback
+FAILED tests/test_dashboard_decomposition.py::test_explicit_sam_mode_degrades_without_optional_backend
+FAILED tests/test_dashboard_decomposition.py::test_authorized_decomposition_contract_accepts_vlm_regions_and_hides_paths
+FAILED tests/test_dashboard_decomposition.py::test_managed_crop_references_are_attached_to_panel_records
+FAILED tests/test_dashboard_decomposition.py::test_panel_context_can_be_handed_to_existing_chart_sensor
+FAILED tests/test_evaluation_bundle.py::test_evaluation_bundle_isolates_runs_and_writes_complete_layout
+FAILED tests/test_evaluation_bundle.py::test_evaluation_bundle_rejects_reusing_explicit_root
+FAILED tests/test_evaluation_bundle.py::test_evaluation_bundle_records_reports_and_bounded_failure
+FAILED tests/test_evaluation_bundle.py::test_evaluation_bundle_marks_all_unsubmitted_cases_blocked
+FAILED tests/test_evaluation_cli_bundle.py::test_managed_cli_persists_batch_and_partial_case_results
+FAILED tests/test_evaluation_cli_bundle.py::test_external_cli_keeps_legacy_report_only_mode
+FAILED tests/test_gateway.py::test_gateway_dashboard_follow_up_reuses_panel_and_measures_local_scope
+FAILED tests/test_gateway_evaluation_compatibility.py::test_evaluation_public_facade_and_bundle_layout_are_stable
+FAILED tests/test_measurement_evidence_eval.py::test_dashboard_crops_are_measured_independently
+FAILED tests/test_panel_handoff.py::test_decomposition_persists_and_reuses_panel_handoffs
+FAILED tests/test_panel_handoff.py::test_panel_scoped_ocr_returns_local_and_source_scope
+FAILED tests/test_panel_handoff.py::test_panel_scoped_bar_measurement_uses_local_image
+FAILED tests/test_panel_handoff.py::test_panel_scoped_targeted_measurement_preserves_source_mapping
+FAILED tests/test_real_chart_diagnostic.py::test_real_diagnostic_manifest_validates_relative_assets_and_fingerprints
+FAILED tests/test_real_chart_diagnostic.py::test_real_diagnostic_manifest_rejects_invalid_asset_identity[asset-/private/chart.png-\u7edd\u5bf9\u8def\u5f84]
+FAILED tests/test_real_chart_diagnostic.py::test_real_diagnostic_manifest_rejects_invalid_asset_identity[sha256-0000000000000000000000000000000000000000000000000000000000000000-\u6307\u7eb9\u4e0d\u5339\u914d]
+FAILED tests/test_real_chart_diagnostic.py::test_real_diagnostic_manifest_rejects_sensitive_fields
+FAILED tests/test_real_chart_diagnostic.py::test_timeline_projects_complete_multi_panel_chain_without_false_repeated_split
+FAILED tests/test_real_chart_diagnostic.py::test_timeline_distinguishes_reused_split_and_unscoped_measurement
+FAILED tests/test_real_chart_diagnostic.py::test_timeline_flags_repeated_split_and_failed_verification
+FAILED tests/test_real_chart_diagnostic.py::test_timeline_flags_assembly_omission_after_successful_measurements
+FAILED tests/test_real_chart_diagnostic.py::test_timeline_attributes_provider_failure_to_model_before_assembly_or_render
+FAILED tests/test_real_chart_diagnostic.py::test_report_is_bounded_and_does_not_reemit_raw_event_secrets_or_paths
+FAILED tests/test_real_chart_diagnostic.py::test_gateway_diagnostic_client_requires_provider_and_never_switches_it
+FAILED tests/test_real_chart_diagnostic.py::test_gateway_diagnostic_client_uses_gateway_attachment_id_field
+35 failed, 1317 passed, 1 skipped in 165.75s (0:02:45)
+ERROR conda.cli.main_run:execute(142): `conda run python -m pytest -q --tb=short` failed. (See above for error)

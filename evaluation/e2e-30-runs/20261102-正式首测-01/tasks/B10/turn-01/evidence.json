@@ -1,0 +1,70 @@
+{
+  "turn": 1,
+  "run_id": "bb9582b2639c46bbad074090ba878a12",
+  "session_id": "03cc342bc46c44188fff25ded09d464e",
+  "status": "completed",
+  "terminal_code": null,
+  "wall_seconds": 10.232,
+  "timed_out": false,
+  "final_answer": "final-answer.txt",
+  "final_answer_committed": true,
+  "figures": [
+    {
+      "call_id": "call_00_8Ydku9G0QmkMXe9lXV2E7880",
+      "run_id": "bb9582b2639c46bbad074090ba878a12",
+      "file": "figure-01.json",
+      "result": {
+        "charts": [
+          {
+            "chart_id": "quarterly_sales",
+            "chart_type": "bar",
+            "title": "季度销售"
+          },
+          {
+            "chart_id": "monthly_orders",
+            "chart_type": "line",
+            "title": "月度订单"
+          }
+        ],
+        "figure_digest": "c5ac2dd9f8dcbbd5195a4d817116a231ad941845f606aa3881f6875ef9f1f58c",
+        "figure_ref": {
+          "call_id": "call_00_8Ydku9G0QmkMXe9lXV2E7880",
+          "run_id": "bb9582b2639c46bbad074090ba878a12"
+        },
+        "title": "销售与订单概览"
+      },
+      "digest_verified": true
+    }
+  ],
+  "renders": [
+    {
+      "call_id": "call_00_ET_kfNE0mKjjZdMnZZkFdhr1054",
+      "run_id": "bb9582b2639c46bbad074090ba878a12",
+      "file": "render-01.png",
+      "result": {
+        "byte_count": 41818,
+        "figure_digest": "c5ac2dd9f8dcbbd5195a4d817116a231ad941845f606aa3881f6875ef9f1f58c",
+        "figure_ref": {
+          "call_id": "call_00_8Ydku9G0QmkMXe9lXV2E7880",
+          "run_id": "bb9582b2639c46bbad074090ba878a12"
+        },
+        "height": 522,
+        "image_sha256": "3b34a66f0cd8b9c8d0f1276247ae5863fd87ec7e0b3402c7f1a36643de3056dd",
+        "media_type": "image/png",
+        "width": 1280
+      },
+      "png_sha256_verified": true
+    }
+  ],
+  "provider_attempt_count": 3,
+  "internal_retry_count": 0,
+  "usage": {
+    "prompt_tokens": 40874,
+    "completion_tokens": 1081,
+    "total_tokens": 41955
+  },
+  "usage_complete": true,
+  "usage_missing_attempt_refs": [],
+  "compaction_operations": [],
+  "delivery_selection": "judge must select from actual final answer and all committed candidates; no automatic best-of selection"
+}

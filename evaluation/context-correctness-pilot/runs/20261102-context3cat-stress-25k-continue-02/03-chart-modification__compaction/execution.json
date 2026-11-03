@@ -1,0 +1,162 @@
+{
+  "task_id": "03-chart-modification",
+  "condition": "compaction",
+  "capacity_tokens": 25000,
+  "provider_id": "deepseek",
+  "batch_id": "20261102-context3cat-stress-25k-continue-02",
+  "started_at": "2026-11-02T19:50:37.435441+08:00",
+  "session_id": "676744199b3a463fabd1fe0106cef115",
+  "turns": [
+    {
+      "turn": 1,
+      "run_id": "62dc8c89aa7a4a4dbae074a3c88d9bb2",
+      "session_id": "676744199b3a463fabd1fe0106cef115",
+      "status": "completed",
+      "terminal_code": null,
+      "final_answer_committed": true,
+      "figures": [
+        {
+          "file": "figure-01.json",
+          "figure_digest": "2912590dadc3ab4f2b8054dc872732d82e3d7fc387c056f744f621a329aea0f6",
+          "verified": true
+        },
+        {
+          "file": "figure-02.json",
+          "figure_digest": "445aa4974723aa4992e4cde321fb9a9bec2af7e7289cb6a8a009e3cfd7641b89",
+          "verified": true
+        }
+      ],
+      "renders": [
+        {
+          "file": "render-01.png",
+          "image_sha256": "6425583e09ff25993a69ddd3449d9070b384a6606b776b687982c2a108f32916",
+          "verified": true
+        },
+        {
+          "file": "render-02.png",
+          "image_sha256": "86e1f2b01227b5b9ff83b9d00ae36fa463c54b95059e72defb2fd4f5377497b0",
+          "verified": true
+        }
+      ],
+      "provider_attempt_count": 8,
+      "usage_by_purpose": {
+        "agent_turn": {
+          "prompt_tokens": 119132,
+          "completion_tokens": 3033,
+          "total_tokens": 122165
+        },
+        "context_compaction": {
+          "prompt_tokens": 8338,
+          "completion_tokens": 3219,
+          "total_tokens": 11557
+        }
+      },
+      "usage_total_including_compaction": {
+        "prompt_tokens": 127470,
+        "completion_tokens": 6252,
+        "total_tokens": 133722
+      },
+      "usage_complete": true,
+      "usage_missing_attempts": [],
+      "compaction_operations": [
+        {
+          "operation_id": "36138fe66d614aa4a38469efe864d6d1",
+          "status": "completed",
+          "failure_code": null
+        }
+      ],
+      "wall_seconds": 38.381,
+      "timed_out": false
+    },
+    {
+      "turn": 2,
+      "run_id": "12d2c051e41346e1a77a8f2f4b1bc5f4",
+      "session_id": "676744199b3a463fabd1fe0106cef115",
+      "status": "completed",
+      "terminal_code": null,
+      "final_answer_committed": true,
+      "figures": [],
+      "renders": [],
+      "provider_attempt_count": 1,
+      "usage_by_purpose": {
+        "agent_turn": {
+          "prompt_tokens": 18890,
+          "completion_tokens": 1974,
+          "total_tokens": 20864
+        }
+      },
+      "usage_total_including_compaction": {
+        "prompt_tokens": 18890,
+        "completion_tokens": 1974,
+        "total_tokens": 20864
+      },
+      "usage_complete": true,
+      "usage_missing_attempts": [],
+      "compaction_operations": [],
+      "wall_seconds": 14.06,
+      "timed_out": false
+    },
+    {
+      "turn": 3,
+      "run_id": "0caaa05494124719a0b21a407aafe8ba",
+      "session_id": "676744199b3a463fabd1fe0106cef115",
+      "status": "completed",
+      "terminal_code": null,
+      "final_answer_committed": true,
+      "figures": [
+        {
+          "file": "figure-01.json",
+          "figure_digest": "107f0844c7e8abf75a53ff5f262e6fbd7ddd7dd03792e93d5c64f7626da3f460",
+          "verified": true
+        }
+      ],
+      "renders": [
+        {
+          "file": "render-01.png",
+          "image_sha256": "d46c606b7007e718531afc334b7534afadbf5d56bee5f88d01cb981fe043de84",
+          "verified": true
+        }
+      ],
+      "provider_attempt_count": 5,
+      "usage_by_purpose": {
+        "context_compaction": {
+          "prompt_tokens": 12754,
+          "completion_tokens": 13951,
+          "total_tokens": 26705
+        },
+        "agent_turn": {
+          "prompt_tokens": 64982,
+          "completion_tokens": 2250,
+          "total_tokens": 67232
+        }
+      },
+      "usage_total_including_compaction": {
+        "prompt_tokens": 77736,
+        "completion_tokens": 16201,
+        "total_tokens": 93937
+      },
+      "usage_complete": true,
+      "usage_missing_attempts": [],
+      "compaction_operations": [
+        {
+          "operation_id": "04134fab91524b128a795b950f49f070",
+          "status": "completed",
+          "failure_code": null
+        },
+        {
+          "operation_id": "2b79a8cd911c4a5eb985468d0e261292",
+          "status": "completed",
+          "failure_code": null
+        }
+      ],
+      "wall_seconds": 80.435,
+      "timed_out": false
+    }
+  ],
+  "execution_status": "completed",
+  "input_adjustments": [],
+  "attachment_sha256": {
+    "input/quarterly-regional-sales.png": "79f04312fcd4430f41f4c53b9d808d2c7e3b094c630d8b0745389ea32eca9e36"
+  },
+  "completed_at": "2026-11-02T19:52:51.597368+08:00"
+}

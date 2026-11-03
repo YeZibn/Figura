@@ -1,0 +1,14 @@
+[
+  {
+    "call_id": "call_00_ET_QjsvH42XE4AkcrTfiK9v2438",
+    "tool_name": "load_image",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_jBAgxcq9IzvqNSB3ptDE2595",
+    "tool_name": "extract_text",
+    "outcome": "succeeded",
+    "error": null
+  }
+]

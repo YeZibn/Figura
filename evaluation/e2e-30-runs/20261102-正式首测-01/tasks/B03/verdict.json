@@ -1,0 +1,69 @@
+{
+  "task_id": "B03",
+  "batch_id": "20261102-正式首测-01",
+  "verdict": "pass",
+  "checks": [
+    {
+      "id": "T1-semantic",
+      "critical": true,
+      "status": "pass",
+      "expected": "单个纵向堆叠柱状图；季度 Q1—Q4；Product=[8,13,11,17]，Service=[4,6,8,7]；标题、轴标签和来源符合要求。",
+      "actual": "已提交 Figure 的类型、方向、堆叠模式、类别与系列顺序均正确；8 个数值逐值精确一致；标题为“季度收入构成”，轴标签为 Quarter 和 Sales (万元)，来源为“Figura E2E-30 合成数据 v1”。",
+      "evidence": [
+        "turn_evidence/0/figures/figure-01.json/charts/0/chart_spec",
+        "execution/turns/0/figures/0/result",
+        "assemble call_00_Q5HbGgeAhjjR0ZiuMS219061：succeeded"
+      ],
+      "reason": "按类别和系列标签关联后，全部数值与要求一致，无数据变换、增补或排序。"
+    },
+    {
+      "id": "T1-render",
+      "critical": true,
+      "status": "pass",
+      "expected": "与成功提交 Figure 匹配的可读取 PNG，图数、堆叠关系、图例和必要文字正确，无严重裁切遮挡。",
+      "actual": "实际 PNG 可读取，呈现一个纵向堆叠柱状图；Product 在下、Service 在上，季度顺序正确，柱总高依次为 12、19、19、24；标题、图例、轴标签和来源清晰完整。render 与提交 Figure 的引用及 digest 一致。",
+      "evidence": [
+        "execution/turns/0/renders/0/result",
+        "execution/turns/0/renders/0/png_sha256_verified",
+        "turn-01/render-01.png（附图 Image #1）",
+        "render call_00_ET_CIZpmia6Pw5FrHkIevPC0126：succeeded"
+      ],
+      "reason": "已查看实际 PNG；视觉内容与 Figure 语义一致，关键文字无严重遮挡或裁切。"
+    },
+    {
+      "id": "T1-delivery",
+      "critical": true,
+      "status": "pass",
+      "expected": "最终回答清楚指向可用产物，且与数据和实际交付状态一致。",
+      "actual": "最终回答以“已生成并渲染完成，PNG 见上”指向交付图片；本轮只有一个成功提交 Figure 和一个配对成功 render。回答所列数值、合计、标题、标签及来源均与实际产物一致。",
+      "evidence": [
+        "turn_evidence/0/answer",
+        "execution/turns/0/final_answer_committed",
+        "execution/turns/0/figures/0",
+        "execution/turns/0/renders/0"
+      ],
+      "reason": "交付候选唯一且关联明确，最终回答不存在关键事实冲突。"
+    }
+  ],
+  "primary_failure": null,
+  "secondary_failures": [],
+  "artifact_refs": [
+    "turn-01/figure-01.json",
+    "turn-01/render-01.png",
+    "turn-01/final-answer.txt"
+  ],
+  "quality_notes": [],
+  "judge": {
+    "model": "gpt-6.1-sol",
+    "prompt_version": "1.0",
+    "context_isolated": true,
+    "actual_png_viewed": true,
+    "limitations": [
+      "依据本次提供的冻结证据包和附带实际 PNG 裁决，未另行读取磁盘文件。"
+    ]
+  },
+  "review_notes": [
+    "提供的执行记录无协议异常，单轮输入及提交关联符合协议。",
+    "本结论为本次独立裁决，未声称完成另一个上下文的复核。"
+  ]
+}

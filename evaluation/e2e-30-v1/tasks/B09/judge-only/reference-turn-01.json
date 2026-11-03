@@ -1,0 +1,63 @@
+{
+  "schema_version": 2,
+  "title": "",
+  "layout": {
+    "columns": 1
+  },
+  "charts": [
+    {
+      "chart_id": "chart1",
+      "chart_spec": {
+        "schema_version": 2,
+        "metadata": {
+          "chart_type": "heatmap",
+          "title": "地区每日工单",
+          "source": "Figura E2E-30 合成数据 v1",
+          "note": ""
+        },
+        "coordinate_system": {
+          "kind": "matrix"
+        },
+        "dataset": {
+          "x_categories": [
+            {
+              "id": "c1",
+              "label": "Mon"
+            },
+            {
+              "id": "c2",
+              "label": "Tue"
+            },
+            {
+              "id": "c3",
+              "label": "Wed"
+            }
+          ],
+          "y_categories": [
+            {
+              "id": "c1",
+              "label": "East"
+            },
+            {
+              "id": "c2",
+              "label": "South"
+            }
+          ],
+          "values": [
+            [
+              11,
+              null,
+              18
+            ],
+            [
+              9,
+              15,
+              6
+            ]
+          ]
+        }
+      },
+      "measurement_refs": []
+    }
+  ]
+}

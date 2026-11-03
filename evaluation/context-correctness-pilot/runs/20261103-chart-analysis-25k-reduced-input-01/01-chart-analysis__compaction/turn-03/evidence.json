@@ -1,0 +1,62 @@
+{
+  "turn": 3,
+  "run_id": "da0faefbbd7b47789dfd788c5ba65bf6",
+  "session_id": "7237d5d29e9241cc9fd7b275139e3700",
+  "status": "completed",
+  "terminal_code": null,
+  "final_answer_committed": true,
+  "figures": [],
+  "renders": [],
+  "provider_attempt_count": 17,
+  "usage_by_purpose": {
+    "context_compaction": {
+      "prompt_tokens": 54588,
+      "completion_tokens": 66579,
+      "total_tokens": 121167
+    },
+    "agent_turn": {
+      "prompt_tokens": 236887,
+      "completion_tokens": 5960,
+      "total_tokens": 242847
+    }
+  },
+  "usage_total_including_compaction": {
+    "prompt_tokens": 291475,
+    "completion_tokens": 72539,
+    "total_tokens": 364014
+  },
+  "usage_complete": true,
+  "usage_missing_attempts": [],
+  "compaction_operations": [
+    {
+      "operation_id": "70a5a97ea00e4758b6de39001fbf422f",
+      "status": "completed",
+      "failure_code": null
+    },
+    {
+      "operation_id": "ba17469de5824c14a8fb0380dc12bcf9",
+      "status": "completed",
+      "failure_code": null
+    },
+    {
+      "operation_id": "f7ad35a6b5984c49a6f1401035cdc7dd",
+      "status": "completed",
+      "failure_code": null
+    },
+    {
+      "operation_id": "7903ac0557ab435eb847abef4ebc2ec0",
+      "status": "completed",
+      "failure_code": null
+    },
+    {
+      "operation_id": "64d0791fa2a94d6984e31518c288d293",
+      "status": "completed",
+      "failure_code": null
+    },
+    {
+      "operation_id": "eddc94d8791745acbd3fd69838e59fa2",
+      "status": "completed",
+      "failure_code": null
+    }
+  ]
+}

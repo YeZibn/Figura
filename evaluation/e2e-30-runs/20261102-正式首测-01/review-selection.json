@@ -1,0 +1,36 @@
+{
+  "seed": 20261102,
+  "pass_sampling": "ceil(20% of pass count) per category, sorted IDs, one seeded generator",
+  "pass_samples": {
+    "A": [
+      "A02",
+      "A10"
+    ],
+    "B": [
+      "B03",
+      "B07"
+    ],
+    "C": [
+      "C01",
+      "C07"
+    ]
+  },
+  "all_fail_and_needs_review": [
+    "B08",
+    "C02",
+    "C03",
+    "C06"
+  ],
+  "selected": [
+    "A02",
+    "A10",
+    "B03",
+    "B07",
+    "B08",
+    "C01",
+    "C02",
+    "C03",
+    "C06",
+    "C07"
+  ]
+}

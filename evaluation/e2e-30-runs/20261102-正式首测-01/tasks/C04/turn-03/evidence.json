@@ -1,0 +1,65 @@
+{
+  "turn": 3,
+  "run_id": "c7140b95aae94185bfccac0701d91640",
+  "session_id": "2d980a41dc654188a586012964db1f03",
+  "status": "completed",
+  "terminal_code": null,
+  "wall_seconds": 8.491,
+  "timed_out": false,
+  "final_answer": "final-answer.txt",
+  "final_answer_committed": true,
+  "figures": [
+    {
+      "call_id": "call_00_d4LmY7QyzT4n4psLLk7S0886",
+      "run_id": "c7140b95aae94185bfccac0701d91640",
+      "file": "figure-01.json",
+      "result": {
+        "charts": [
+          {
+            "chart_id": "regional_quarterly_sales",
+            "chart_type": "bar",
+            "title": "East 与 North 季度销售"
+          }
+        ],
+        "figure_digest": "7dbaef67aed66a97b9a789e9cda83414ce0a78fb1e1a4825abf32f9facc2e1b2",
+        "figure_ref": {
+          "call_id": "call_00_d4LmY7QyzT4n4psLLk7S0886",
+          "run_id": "c7140b95aae94185bfccac0701d91640"
+        },
+        "title": "区域经营报告"
+      },
+      "digest_verified": true
+    }
+  ],
+  "renders": [
+    {
+      "call_id": "call_00_ET_c2F1chlTJe1LmYOKSNiW9408",
+      "run_id": "c7140b95aae94185bfccac0701d91640",
+      "file": "render-01.png",
+      "result": {
+        "byte_count": 20931,
+        "figure_digest": "7dbaef67aed66a97b9a789e9cda83414ce0a78fb1e1a4825abf32f9facc2e1b2",
+        "figure_ref": {
+          "call_id": "call_00_d4LmY7QyzT4n4psLLk7S0886",
+          "run_id": "c7140b95aae94185bfccac0701d91640"
+        },
+        "height": 522,
+        "image_sha256": "4796a7fb752a6303a87475deee38d7b6c071a4895dfe93890247c588cdc4efc4",
+        "media_type": "image/png",
+        "width": 640
+      },
+      "png_sha256_verified": true
+    }
+  ],
+  "provider_attempt_count": 3,
+  "internal_retry_count": 0,
+  "usage": {
+    "prompt_tokens": 51496,
+    "completion_tokens": 843,
+    "total_tokens": 52339
+  },
+  "usage_complete": true,
+  "usage_missing_attempt_refs": [],
+  "compaction_operations": [],
+  "delivery_selection": "judge must select from actual final answer and all committed candidates; no automatic best-of selection"
+}

@@ -1,0 +1,94 @@
+{
+  "task_id": "A07",
+  "category": "analysis",
+  "status": "not_run",
+  "facts": {
+    "year": 2023,
+    "points": {
+      "Brazil": {
+        "x": 19079.812,
+        "y": 75.848
+      },
+      "China": {
+        "x": 22687.252,
+        "y": 77.953
+      },
+      "Germany": {
+        "x": 63140.195,
+        "y": 81.378
+      },
+      "India": {
+        "x": 8870.55,
+        "y": 72.003
+      },
+      "South Africa": {
+        "x": 13695.376,
+        "y": 66.139
+      },
+      "United States": {
+        "x": 74351.67,
+        "y": 79.304
+      }
+    },
+    "unit_x": "international dollars in 2021 prices, PPP-adjusted",
+    "unit_y": "years",
+    "max_life": "Germany",
+    "min_life": "South Africa",
+    "x_scale": "linear"
+  },
+  "checks": [
+    {
+      "id": "axes",
+      "critical": true,
+      "requirement": "2023；x 为按购买力平价调整的人均 GDP；y 为出生时预期寿命（年）；对数/线性判断以实际图为准",
+      "expected": "2023；线性 x 轴；2021 年不变价国际元（PPP）；y 为出生时预期寿命（年）"
+    },
+    {
+      "id": "coordinates",
+      "critical": true,
+      "requirement": "三个指定国家的 x/y 正确关联",
+      "expected": {
+        "China": {
+          "x": 22687.252,
+          "y": 77.953
+        },
+        "India": {
+          "x": 8870.55,
+          "y": 72.003
+        },
+        "United States": {
+          "x": 74351.67,
+          "y": 79.304
+        }
+      },
+      "numeric_tolerance": {
+        "x": {
+          "abs": 2000,
+          "rel": 0.03
+        },
+        "y": {
+          "abs": 1.5,
+          "rel": 0
+        }
+      }
+    },
+    {
+      "id": "extrema",
+      "critical": true,
+      "requirement": "仅在六国中比较寿命极值",
+      "expected": {
+        "max": "Germany",
+        "min": "South Africa"
+      }
+    },
+    {
+      "id": "boundary",
+      "critical": true,
+      "requirement": "只描述关联，不给无依据因果；不混淆气泡面积与纵轴",
+      "expected": "关联边界正确"
+    }
+  ],
+  "reference_figures": [],
+  "numeric_policy": "explicit_per_check",
+  "semantic_equivalence": "忽略内部生成的 chart/category/series ID；按标签、顺序和语义匹配。坐标 kind 和数据类型必须合法。空 note、空 figure title 等未要求字段不强制一致。"
+}

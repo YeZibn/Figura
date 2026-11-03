@@ -1,0 +1,7 @@
+[
+  {
+    "turn": 1,
+    "text": "制作热力图，列为 Mon、Tue、Wed，行为 East、South，按给定行列顺序；null 保持缺失，不补零、不转置矩阵。标题“地区每日工单”。 所有图表来源填写“Figura E2E-30 合成数据 v1”。请实际装配、渲染并交付可查看的 PNG，不只给代码、方案或 JSON。所有数据完整保留，除明确要求外不变换、不排序、不增加数据。\n\n以下是本任务全部数据（直接作为用户消息，不上传 JSON 文件）：\n```json\n{\n  \"source\": \"Figura E2E-30 合成数据 v1\",\n  \"charts\": [\n    {\n      \"name\": \"地区每日工单\",\n      \"data\": {\n        \"columns\": [\n          \"Mon\",\n          \"Tue\",\n          \"Wed\"\n        ],\n        \"rows\": [\n          \"East\",\n          \"South\"\n        ],\n        \"values_by_row\": [\n          [\n            11,\n            null,\n            18\n          ],\n          [\n            9,\n            15,\n            6\n          ]\n        ]\n      }\n    }\n  ]\n}\n```",
+    "attachments": []
+  }
+]

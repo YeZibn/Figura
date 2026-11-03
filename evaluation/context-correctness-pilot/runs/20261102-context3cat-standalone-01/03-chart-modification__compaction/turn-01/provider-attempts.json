@@ -1,0 +1,77 @@
+[
+  {
+    "attempt_id": "55d93efaaab342579947b2d1d2e549a0",
+    "request_id": "3d3d6d7b0a74413cb6ecbc666bcec6e1",
+    "status": "response_committed",
+    "response_record_id": "e617bf2776614eab816c7213bd04ea4f",
+    "failure_code": null,
+    "http_status": 200,
+    "attempt_sequence": 1,
+    "purpose": "agent_turn",
+    "usage": {
+      "completion_tokens": 88,
+      "prompt_tokens": 12417,
+      "total_tokens": 12505
+    }
+  },
+  {
+    "attempt_id": "0bd393aafa1841e7a03c2ba17b1c3ba0",
+    "request_id": "4d66bf2ead3f428a9e6497cd5026c96e",
+    "status": "response_committed",
+    "response_record_id": "2ec11977c8c0425389f32a6f6b36d0a2",
+    "failure_code": null,
+    "http_status": 200,
+    "attempt_sequence": 1,
+    "purpose": "agent_turn",
+    "usage": {
+      "completion_tokens": 211,
+      "prompt_tokens": 13050,
+      "total_tokens": 13261
+    }
+  },
+  {
+    "attempt_id": "093bd50c5bbf4b5faecea9f5e8fe3d9d",
+    "request_id": "d2602e67e1fe40e7a9f60a19881092a7",
+    "status": "response_committed",
+    "response_record_id": "4b467ae91775467a80ab634d95086377",
+    "failure_code": null,
+    "http_status": 200,
+    "attempt_sequence": 1,
+    "purpose": "agent_turn",
+    "usage": {
+      "completion_tokens": 911,
+      "prompt_tokens": 17479,
+      "total_tokens": 18390
+    }
+  },
+  {
+    "attempt_id": "ba42615f14e1485b80c624425b3ea13d",
+    "request_id": "ef6147e264d04fe4ab8f1efde3337681",
+    "status": "response_committed",
+    "response_record_id": "80123788f9bb46f5a7a00afa4695e396",
+    "failure_code": null,
+    "http_status": 200,
+    "attempt_sequence": 1,
+    "purpose": "agent_turn",
+    "usage": {
+      "completion_tokens": 86,
+      "prompt_tokens": 18288,
+      "total_tokens": 18374
+    }
+  },
+  {
+    "attempt_id": "2ea650f5fe0b4eb1bbb21b95994930e9",
+    "request_id": "56f1f0fd44894b0d9dda8bf2686d063a",
+    "status": "response_committed",
+    "response_record_id": "7e8a1393508f48fc85ae56775d89643a",
+    "failure_code": null,
+    "http_status": 200,
+    "attempt_sequence": 1,
+    "purpose": "agent_turn",
+    "usage": {
+      "completion_tokens": 720,
+      "prompt_tokens": 19232,
+      "total_tokens": 19952
+    }
+  }
+]

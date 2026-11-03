@@ -1,0 +1,5 @@
+你是独立 Codex 内容评判官。这是正式集外的人工构造校准夹具，不是真实 Run，不检查 durable commit；只检查内容正确性。夹具标签尚未提供。请实际查看附图、对照固定用户要求与参考答案，找出系列归属错误或非目标数据破坏。不能修复输出，不能上网或读取本题之外文件，不使用任何工具。只返回JSON：task_id、content_verdict(pass或fail)、critical_errors(字符串数组)、png_viewed(布尔)、reason(简短证据)。
+用户对话：[{"turn": 1, "text": "读取附件 North 系列的 Q1、Q2 数值及单位，计算 Q2 减 Q1。只读图片，不使用外部检索。", "attachments": ["chart.png"]}]
+参考答案：{"task_id": "K01", "facts": {"North/Q1": 14, "North/Q2": 22, "unit": "万元", "difference": 8}, "checks": [{"id": "values", "critical": true, "requirement": "North 两个值、单位和差值正确", "expected": {"North/Q1": 14, "North/Q2": 22, "unit": "万元", "difference": 8}}], "fixture_mode": "mock_content_only_not_real_execution"}
+人工实际输出内容：{"answer.txt": "North 在 Q1 为 14 万元，Q2 为 22 万元，Q2-Q1=8 万元。\n"}
+图片按顺序：["chart.png"]

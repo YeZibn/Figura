@@ -1,0 +1,141 @@
+{
+  "task_id": "B04",
+  "category": "construction",
+  "status": "not_run",
+  "facts": {
+    "expected_final_figure": "reference-turn-01.json",
+    "required": "制作多系列折线图，月份保持 Jan、Feb、Mar、Apr、May；系列顺序 Online、Store；标题“线上与门店订单”，横轴 Month，纵轴 Orders (单)。"
+  },
+  "checks": [
+    {
+      "id": "T1-semantic",
+      "critical": true,
+      "requirement": "第 1 轮实际成功交付的 Figure 与参考语义一致；逐值核对 dataset、类型、顺序、轴标签、明确要求的标题和来源",
+      "expected": "reference-turn-01.json",
+      "turn": 1,
+      "numeric_tolerance": {
+        "abs": 1e-09,
+        "rel": 1e-09
+      },
+      "evidence": [
+        "committed_figure",
+        "tool_result"
+      ]
+    },
+    {
+      "id": "T1-render",
+      "critical": true,
+      "requirement": "第 1 轮交付与 Figure 匹配、可打开的真实 PNG；图数和必要内容正确，关键文本无严重裁切遮挡",
+      "expected": "匹配的成功 render 引用和实际 PNG",
+      "turn": 1,
+      "evidence": [
+        "render_metadata",
+        "actual_png"
+      ]
+    },
+    {
+      "id": "T1-delivery",
+      "critical": true,
+      "requirement": "第 1 轮回答清楚指向可用产物且不存在与数据或交付状态冲突的关键陈述",
+      "expected": "实际产物与回答一致",
+      "turn": 1,
+      "evidence": [
+        "final_answer",
+        "artifact_refs"
+      ]
+    }
+  ],
+  "reference_figures": [
+    {
+      "schema_version": 2,
+      "title": "",
+      "layout": {
+        "columns": 1
+      },
+      "charts": [
+        {
+          "chart_id": "chart1",
+          "chart_spec": {
+            "schema_version": 2,
+            "metadata": {
+              "chart_type": "line",
+              "title": "线上与门店订单",
+              "source": "Figura E2E-30 合成数据 v1",
+              "note": ""
+            },
+            "coordinate_system": {
+              "kind": "cartesian",
+              "x_axis": {
+                "kind": "categorical",
+                "label": "Month"
+              },
+              "y_axis": {
+                "kind": "numeric",
+                "label": "Orders (单)"
+              }
+            },
+            "dataset": {
+              "series": [
+                {
+                  "id": "s1",
+                  "label": "Online",
+                  "points": [
+                    {
+                      "x": "Jan",
+                      "y": 22
+                    },
+                    {
+                      "x": "Feb",
+                      "y": 27
+                    },
+                    {
+                      "x": "Mar",
+                      "y": 25
+                    },
+                    {
+                      "x": "Apr",
+                      "y": 35
+                    },
+                    {
+                      "x": "May",
+                      "y": 41
+                    }
+                  ]
+                },
+                {
+                  "id": "s2",
+                  "label": "Store",
+                  "points": [
+                    {
+                      "x": "Jan",
+                      "y": 18
+                    },
+                    {
+                      "x": "Feb",
+                      "y": 21
+                    },
+                    {
+                      "x": "Mar",
+                      "y": 24
+                    },
+                    {
+                      "x": "Apr",
+                      "y": 26
+                    },
+                    {
+                      "x": "May",
+                      "y": 29
+                    }
+                  ]
+                }
+              ]
+            }
+          },
+          "measurement_refs": []
+        }
+      ]
+    }
+  ],
+  "numeric_policy": "explicit_per_check",
+  "semantic_equivalence": "忽略内部生成的 chart/category/series ID；按标签、顺序和语义匹配。坐标 kind 和数据类型必须合法。空 note、空 figure title 等未要求字段不强制一致。"
+}

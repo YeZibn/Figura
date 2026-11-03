@@ -1,0 +1,74 @@
+{
+  "task_id": "B10",
+  "batch_id": "20261102-正式首测-01",
+  "verdict": "pass",
+  "checks": [
+    {
+      "id": "T1-semantic",
+      "critical": true,
+      "status": "pass",
+      "expected": "两列画布，左侧季度销售纵向柱状图，右侧月度订单折线图；数据、顺序、标题、轴标签及来源与固定输入一致。",
+      "actual": "layout.columns=2；图表按季度销售、月度订单排列。Sales 按 Q1、Q2、Q3、Q4 关联为 17、26、21、34；Orders 按 Jan、Feb、Mar、Apr、May 关联为 24、29、27、38、45，逐值差为 0。图表类型、方向、总标题、子图标题、轴标签及两图来源均符合要求。",
+      "evidence": [
+        "figure-01.json#/layout/columns",
+        "figure-01.json#/title",
+        "figure-01.json#/charts/0/chart_spec",
+        "figure-01.json#/charts/1/chart_spec",
+        "assemble call_00_8Ydku9G0QmkMXe9lXV2E7880：succeeded"
+      ],
+      "reason": "实际成功提交的 Figure 与参考语义一致；内部 ID 差异不影响类别和系列关联，全部数值满足容差。"
+    },
+    {
+      "id": "T1-render",
+      "critical": true,
+      "status": "pass",
+      "expected": "成功渲染并交付与已提交 Figure 匹配的可读 PNG，图数和必要内容正确，无关键文字严重裁切遮挡。",
+      "actual": "实际 PNG 可读，尺寸为 1280×522。两图横向并排，左侧四根纵向柱、右侧五点折线；总标题、子图标题、轴标签、类别、图例和两处来源均可辨认，无严重裁切或遮挡。render 的 figure_ref 和 figure_digest 与成功提交结果一致，PNG 校验已通过。",
+      "evidence": [
+        "render-01.png：完整画布、左右绘图区及底部来源",
+        "execution.turns[0].renders[0].result",
+        "execution.turns[0].figures[0].result",
+        "render call_00_ET_kfNE0mKjjZdMnZZkFdhr1054：succeeded",
+        "execution.turns[0].renders[0].png_sha256_verified"
+      ],
+      "reason": "已实际查看附件 PNG，视觉内容与所选 Figure 及配对渲染元数据一致。"
+    },
+    {
+      "id": "T1-delivery",
+      "critical": true,
+      "status": "pass",
+      "expected": "最终回答明确指向可用产物，且与数据及交付状态一致。",
+      "actual": "最终回答明确说明“PNG 见上方（1280×522）”，并正确列出布局、标题、轴标签和全部数据。该轮只有一个成功提交 Figure 及其配对渲染，产物选择唯一，回答无关键冲突。",
+      "evidence": [
+        "final-answer.txt：首段及数据说明",
+        "execution.turns[0].final_answer_committed",
+        "execution.turns[0].figures",
+        "execution.turns[0].renders",
+        "render-01.png"
+      ],
+      "reason": "最终回答清楚指向本轮唯一成功产物，实际 PNG 支持其交付陈述。"
+    }
+  ],
+  "primary_failure": null,
+  "secondary_failures": [],
+  "artifact_refs": [
+    "figure-01.json",
+    "render-01.png",
+    "final-answer.txt",
+    "Run bb9582b2639c46bbad074090ba878a12",
+    "assemble call_00_8Ydku9G0QmkMXe9lXV2E7880",
+    "render call_00_ET_kfNE0mKjjZdMnZZkFdhr1054"
+  ],
+  "quality_notes": [],
+  "judge": {
+    "model": "gpt-6.1-sol",
+    "prompt_version": "1.0",
+    "context_isolated": true,
+    "actual_png_viewed": true,
+    "limitations": []
+  },
+  "review_notes": [
+    "固定对话仅一轮，无覆盖或撤销项；证据记录未显示采集、提交或轮次协议异常。",
+    "本结论为本次独立裁决，未声称完成另一个上下文的复核。"
+  ]
+}

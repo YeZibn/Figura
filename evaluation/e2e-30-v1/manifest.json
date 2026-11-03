@@ -1,0 +1,495 @@
+{
+  "dataset_id": "figura-e2e-30-v1",
+  "version": "1.0.0",
+  "prepared_date": "2026-11-02",
+  "status": "materials_prepared_not_run",
+  "task_count": 30,
+  "category_counts": {
+    "analysis": 10,
+    "construction": 10,
+    "modification": 10
+  },
+  "formal_user_turns": 50,
+  "tasks": [
+    {
+      "task_id": "A01",
+      "title": "真实图：四国预期寿命",
+      "category": "analysis",
+      "difficulty": "medium",
+      "source_type": "published_real",
+      "turns": 1,
+      "status": "materials_prepared_not_run",
+      "agent_allowlist": [
+        "agent-input/conversation.json",
+        "agent-input/conversation.md",
+        "agent-input/chart.png"
+      ],
+      "judge_only": "judge-only/",
+      "expected_success": "all_critical_checks_pass"
+    },
+    {
+      "task_id": "A02",
+      "title": "分组柱：系列关联与差值",
+      "category": "analysis",
+      "difficulty": "medium",
+      "source_type": "synthetic",
+      "turns": 1,
+      "status": "materials_prepared_not_run",
+      "agent_allowlist": [
+        "agent-input/conversation.json",
+        "agent-input/conversation.md",
+        "agent-input/chart.png"
+      ],
+      "judge_only": "judge-only/",
+      "expected_success": "all_critical_checks_pass"
+    },
+    {
+      "task_id": "A03",
+      "title": "堆叠柱：分项和总量",
+      "category": "analysis",
+      "difficulty": "medium",
+      "source_type": "synthetic",
+      "turns": 1,
+      "status": "materials_prepared_not_run",
+      "agent_allowlist": [
+        "agent-input/conversation.json",
+        "agent-input/conversation.md",
+        "agent-input/chart.png"
+      ],
+      "judge_only": "judge-only/",
+      "expected_success": "all_critical_checks_pass"
+    },
+    {
+      "task_id": "A04",
+      "title": "真实图：人均 CO₂ 多系列趋势",
+      "category": "analysis",
+      "difficulty": "hard",
+      "source_type": "published_real",
+      "turns": 1,
+      "status": "materials_prepared_not_run",
+      "agent_allowlist": [
+        "agent-input/conversation.json",
+        "agent-input/conversation.md",
+        "agent-input/chart.png"
+      ],
+      "judge_only": "judge-only/",
+      "expected_success": "all_critical_checks_pass"
+    },
+    {
+      "task_id": "A05",
+      "title": "折线缺失：未知不等于零",
+      "category": "analysis",
+      "difficulty": "medium",
+      "source_type": "synthetic",
+      "turns": 1,
+      "status": "materials_prepared_not_run",
+      "agent_allowlist": [
+        "agent-input/conversation.json",
+        "agent-input/conversation.md",
+        "agent-input/chart.png"
+      ],
+      "judge_only": "judge-only/",
+      "expected_success": "all_critical_checks_pass"
+    },
+    {
+      "task_id": "A06",
+      "title": "环图：占比与标签关联",
+      "category": "analysis",
+      "difficulty": "medium",
+      "source_type": "synthetic",
+      "turns": 1,
+      "status": "materials_prepared_not_run",
+      "agent_allowlist": [
+        "agent-input/conversation.json",
+        "agent-input/conversation.md",
+        "agent-input/chart.png"
+      ],
+      "judge_only": "judge-only/",
+      "expected_success": "all_critical_checks_pass"
+    },
+    {
+      "task_id": "A07",
+      "title": "真实图：GDP 与预期寿命散点",
+      "category": "analysis",
+      "difficulty": "hard",
+      "source_type": "published_real",
+      "turns": 1,
+      "status": "materials_prepared_not_run",
+      "agent_allowlist": [
+        "agent-input/conversation.json",
+        "agent-input/conversation.md",
+        "agent-input/chart.png"
+      ],
+      "judge_only": "judge-only/",
+      "expected_success": "all_critical_checks_pass"
+    },
+    {
+      "task_id": "A08",
+      "title": "热力图：行列和值",
+      "category": "analysis",
+      "difficulty": "medium",
+      "source_type": "synthetic",
+      "turns": 1,
+      "status": "materials_prepared_not_run",
+      "agent_allowlist": [
+        "agent-input/conversation.json",
+        "agent-input/conversation.md",
+        "agent-input/chart.png"
+      ],
+      "judge_only": "judge-only/",
+      "expected_success": "all_critical_checks_pass"
+    },
+    {
+      "task_id": "A09",
+      "title": "双面板：避免单位串用",
+      "category": "analysis",
+      "difficulty": "medium",
+      "source_type": "synthetic",
+      "turns": 1,
+      "status": "materials_prepared_not_run",
+      "agent_allowlist": [
+        "agent-input/conversation.json",
+        "agent-input/conversation.md",
+        "agent-input/chart.png"
+      ],
+      "judge_only": "judge-only/",
+      "expected_success": "all_critical_checks_pass"
+    },
+    {
+      "task_id": "A10",
+      "title": "真实图降清晰度：不伪造精度",
+      "category": "analysis",
+      "difficulty": "hard",
+      "source_type": "published_real_degraded",
+      "turns": 1,
+      "status": "materials_prepared_not_run",
+      "agent_allowlist": [
+        "agent-input/conversation.json",
+        "agent-input/conversation.md",
+        "agent-input/chart.png"
+      ],
+      "judge_only": "judge-only/",
+      "expected_success": "all_critical_checks_pass"
+    },
+    {
+      "task_id": "B01",
+      "title": "单系列柱状图",
+      "category": "construction",
+      "difficulty": "medium",
+      "source_type": "synthetic",
+      "turns": 1,
+      "status": "materials_prepared_not_run",
+      "agent_allowlist": [
+        "agent-input/conversation.json",
+        "agent-input/conversation.md",
+        "agent-input/dataset.json"
+      ],
+      "judge_only": "judge-only/",
+      "expected_success": "all_critical_checks_pass"
+    },
+    {
+      "task_id": "B02",
+      "title": "分组柱状图",
+      "category": "construction",
+      "difficulty": "medium",
+      "source_type": "synthetic",
+      "turns": 1,
+      "status": "materials_prepared_not_run",
+      "agent_allowlist": [
+        "agent-input/conversation.json",
+        "agent-input/conversation.md",
+        "agent-input/dataset.json"
+      ],
+      "judge_only": "judge-only/",
+      "expected_success": "all_critical_checks_pass"
+    },
+    {
+      "task_id": "B03",
+      "title": "堆叠柱状图",
+      "category": "construction",
+      "difficulty": "medium",
+      "source_type": "synthetic",
+      "turns": 1,
+      "status": "materials_prepared_not_run",
+      "agent_allowlist": [
+        "agent-input/conversation.json",
+        "agent-input/conversation.md",
+        "agent-input/dataset.json"
+      ],
+      "judge_only": "judge-only/",
+      "expected_success": "all_critical_checks_pass"
+    },
+    {
+      "task_id": "B04",
+      "title": "多系列折线图",
+      "category": "construction",
+      "difficulty": "medium",
+      "source_type": "synthetic",
+      "turns": 1,
+      "status": "materials_prepared_not_run",
+      "agent_allowlist": [
+        "agent-input/conversation.json",
+        "agent-input/conversation.md",
+        "agent-input/dataset.json"
+      ],
+      "judge_only": "judge-only/",
+      "expected_success": "all_critical_checks_pass"
+    },
+    {
+      "task_id": "B05",
+      "title": "保留缺失点的折线图",
+      "category": "construction",
+      "difficulty": "medium",
+      "source_type": "synthetic",
+      "turns": 1,
+      "status": "materials_prepared_not_run",
+      "agent_allowlist": [
+        "agent-input/conversation.json",
+        "agent-input/conversation.md",
+        "agent-input/dataset.json"
+      ],
+      "judge_only": "judge-only/",
+      "expected_success": "all_critical_checks_pass"
+    },
+    {
+      "task_id": "B06",
+      "title": "散点坐标映射",
+      "category": "construction",
+      "difficulty": "medium",
+      "source_type": "synthetic",
+      "turns": 1,
+      "status": "materials_prepared_not_run",
+      "agent_allowlist": [
+        "agent-input/conversation.json",
+        "agent-input/conversation.md",
+        "agent-input/dataset.json"
+      ],
+      "judge_only": "judge-only/",
+      "expected_success": "all_critical_checks_pass"
+    },
+    {
+      "task_id": "B07",
+      "title": "气泡三通道映射",
+      "category": "construction",
+      "difficulty": "hard",
+      "source_type": "synthetic",
+      "turns": 1,
+      "status": "materials_prepared_not_run",
+      "agent_allowlist": [
+        "agent-input/conversation.json",
+        "agent-input/conversation.md",
+        "agent-input/dataset.json"
+      ],
+      "judge_only": "judge-only/",
+      "expected_success": "all_critical_checks_pass"
+    },
+    {
+      "task_id": "B08",
+      "title": "环图",
+      "category": "construction",
+      "difficulty": "medium",
+      "source_type": "synthetic",
+      "turns": 1,
+      "status": "materials_prepared_not_run",
+      "agent_allowlist": [
+        "agent-input/conversation.json",
+        "agent-input/conversation.md",
+        "agent-input/dataset.json"
+      ],
+      "judge_only": "judge-only/",
+      "expected_success": "all_critical_checks_pass"
+    },
+    {
+      "task_id": "B09",
+      "title": "含缺失单元格的热力图",
+      "category": "construction",
+      "difficulty": "hard",
+      "source_type": "synthetic",
+      "turns": 1,
+      "status": "materials_prepared_not_run",
+      "agent_allowlist": [
+        "agent-input/conversation.json",
+        "agent-input/conversation.md",
+        "agent-input/dataset.json"
+      ],
+      "judge_only": "judge-only/",
+      "expected_success": "all_critical_checks_pass"
+    },
+    {
+      "task_id": "B10",
+      "title": "双图画布",
+      "category": "construction",
+      "difficulty": "hard",
+      "source_type": "synthetic",
+      "turns": 1,
+      "status": "materials_prepared_not_run",
+      "agent_allowlist": [
+        "agent-input/conversation.json",
+        "agent-input/conversation.md",
+        "agent-input/dataset.json"
+      ],
+      "judge_only": "judge-only/",
+      "expected_success": "all_critical_checks_pass"
+    },
+    {
+      "task_id": "C01",
+      "title": "标题与来源修改",
+      "category": "modification",
+      "difficulty": "medium",
+      "source_type": "synthetic",
+      "turns": 3,
+      "status": "materials_prepared_not_run",
+      "agent_allowlist": [
+        "agent-input/conversation.json",
+        "agent-input/conversation.md",
+        "agent-input/dataset.json"
+      ],
+      "judge_only": "judge-only/",
+      "expected_success": "all_critical_checks_pass"
+    },
+    {
+      "task_id": "C02",
+      "title": "指定数据值更正",
+      "category": "modification",
+      "difficulty": "medium",
+      "source_type": "synthetic",
+      "turns": 3,
+      "status": "materials_prepared_not_run",
+      "agent_allowlist": [
+        "agent-input/conversation.json",
+        "agent-input/conversation.md",
+        "agent-input/dataset.json"
+      ],
+      "judge_only": "judge-only/",
+      "expected_success": "all_critical_checks_pass"
+    },
+    {
+      "task_id": "C03",
+      "title": "新增类别且保留旧数据",
+      "category": "modification",
+      "difficulty": "medium",
+      "source_type": "synthetic",
+      "turns": 3,
+      "status": "materials_prepared_not_run",
+      "agent_allowlist": [
+        "agent-input/conversation.json",
+        "agent-input/conversation.md",
+        "agent-input/dataset.json"
+      ],
+      "judge_only": "judge-only/",
+      "expected_success": "all_critical_checks_pass"
+    },
+    {
+      "task_id": "C04",
+      "title": "删除系列且不误删数据",
+      "category": "modification",
+      "difficulty": "medium",
+      "source_type": "synthetic",
+      "turns": 3,
+      "status": "materials_prepared_not_run",
+      "agent_allowlist": [
+        "agent-input/conversation.json",
+        "agent-input/conversation.md",
+        "agent-input/dataset.json"
+      ],
+      "judge_only": "judge-only/",
+      "expected_success": "all_critical_checks_pass"
+    },
+    {
+      "task_id": "C05",
+      "title": "类别重排保持数值关联",
+      "category": "modification",
+      "difficulty": "medium",
+      "source_type": "synthetic",
+      "turns": 3,
+      "status": "materials_prepared_not_run",
+      "agent_allowlist": [
+        "agent-input/conversation.json",
+        "agent-input/conversation.md",
+        "agent-input/dataset.json"
+      ],
+      "judge_only": "judge-only/",
+      "expected_success": "all_critical_checks_pass"
+    },
+    {
+      "task_id": "C06",
+      "title": "柱状图切换折线图",
+      "category": "modification",
+      "difficulty": "medium",
+      "source_type": "synthetic",
+      "turns": 3,
+      "status": "materials_prepared_not_run",
+      "agent_allowlist": [
+        "agent-input/conversation.json",
+        "agent-input/conversation.md",
+        "agent-input/dataset.json"
+      ],
+      "judge_only": "judge-only/",
+      "expected_success": "all_critical_checks_pass"
+    },
+    {
+      "task_id": "C07",
+      "title": "分组切换堆叠",
+      "category": "modification",
+      "difficulty": "medium",
+      "source_type": "synthetic",
+      "turns": 3,
+      "status": "materials_prepared_not_run",
+      "agent_allowlist": [
+        "agent-input/conversation.json",
+        "agent-input/conversation.md",
+        "agent-input/dataset.json"
+      ],
+      "judge_only": "judge-only/",
+      "expected_success": "all_critical_checks_pass"
+    },
+    {
+      "task_id": "C08",
+      "title": "双图局部修改",
+      "category": "modification",
+      "difficulty": "hard",
+      "source_type": "synthetic",
+      "turns": 3,
+      "status": "materials_prepared_not_run",
+      "agent_allowlist": [
+        "agent-input/conversation.json",
+        "agent-input/conversation.md",
+        "agent-input/dataset.json"
+      ],
+      "judge_only": "judge-only/",
+      "expected_success": "all_critical_checks_pass"
+    },
+    {
+      "task_id": "C09",
+      "title": "撤销临时布局方案",
+      "category": "modification",
+      "difficulty": "hard",
+      "source_type": "synthetic",
+      "turns": 3,
+      "status": "materials_prepared_not_run",
+      "agent_allowlist": [
+        "agent-input/conversation.json",
+        "agent-input/conversation.md",
+        "agent-input/dataset.json"
+      ],
+      "judge_only": "judge-only/",
+      "expected_success": "all_critical_checks_pass"
+    },
+    {
+      "task_id": "C10",
+      "title": "多轮覆盖与早期要求保留",
+      "category": "modification",
+      "difficulty": "hard",
+      "source_type": "synthetic",
+      "turns": 3,
+      "status": "materials_prepared_not_run",
+      "agent_allowlist": [
+        "agent-input/conversation.json",
+        "agent-input/conversation.md",
+        "agent-input/dataset.json"
+      ],
+      "judge_only": "judge-only/",
+      "expected_success": "all_critical_checks_pass"
+    }
+  ]
+}

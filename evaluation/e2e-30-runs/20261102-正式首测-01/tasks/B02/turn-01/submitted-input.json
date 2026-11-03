@@ -1,0 +1,5 @@
+{
+  "text": "制作纵向分组柱状图，季度顺序 Q1—Q4，系列顺序 East、South；标题“区域销售比较”，横轴 Quarter，纵轴 Sales (万元)。 所有图表来源填写“Figura E2E-30 合成数据 v1”。请实际装配、渲染并交付可查看的 PNG，不只给代码、方案或 JSON。所有数据完整保留，除明确要求外不变换、不排序、不增加数据。\n\n以下是本任务全部数据（直接作为用户消息，不上传 JSON 文件）：\n```json\n{\n  \"source\": \"Figura E2E-30 合成数据 v1\",\n  \"charts\": [\n    {\n      \"name\": \"区域销售比较\",\n      \"data\": {\n        \"categories\": [\n          \"Q1\",\n          \"Q2\",\n          \"Q3\",\n          \"Q4\"\n        ],\n        \"series\": {\n          \"East\": [\n            12,\n            18,\n            15,\n            24\n          ],\n          \"South\": [\n            9,\n            14,\n            17,\n            20\n          ]\n        }\n      }\n    }\n  ]\n}\n```",
+  "attachment_sha256": [],
+  "providerId": "deepseek"
+}

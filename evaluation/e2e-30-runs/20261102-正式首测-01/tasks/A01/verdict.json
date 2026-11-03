@@ -1,0 +1,91 @@
+{
+  "task_id": "A01",
+  "batch_id": "20261102-正式首测-01",
+  "verdict": "pass",
+  "checks": [
+    {
+      "id": "structure",
+      "critical": true,
+      "status": "pass",
+      "expected": "horizontal bar / 2023 / life expectancy at birth / years",
+      "actual": "横向条形图 / 2023 / 出生时预期寿命 / 年",
+      "evidence": [
+        "final-answer.txt：图表信息",
+        "附件 chart.png：标题、说明文字和横向条形"
+      ],
+      "reason": "图表类型、年份、指标和单位均正确。"
+    },
+    {
+      "id": "values",
+      "critical": true,
+      "status": "pass",
+      "expected": {
+        "China": 77.9529,
+        "India": 72.0026,
+        "Japan": 84.7123,
+        "United States": 79.3043
+      },
+      "actual": {
+        "China": 78.0,
+        "India": 72.0,
+        "Japan": 84.7,
+        "United States": 79.3
+      },
+      "evidence": [
+        "final-answer.txt：四国数值表",
+        "附件 chart.png：四国条末数值标签"
+      ],
+      "reason": "国家与数值关联正确；绝对误差分别为 0.0471、0.0026、0.0123、0.0043，均小于 0.2 年。"
+    },
+    {
+      "id": "extrema",
+      "critical": true,
+      "status": "pass",
+      "expected": {
+        "max": "Japan",
+        "min": "India"
+      },
+      "actual": {
+        "max": "Japan",
+        "min": "India"
+      },
+      "evidence": [
+        "final-answer.txt：最高、最低两项",
+        "附件 chart.png：Japan 和 India 条形及标签"
+      ],
+      "reason": "最高和最低国家均正确。"
+    },
+    {
+      "id": "difference",
+      "critical": true,
+      "status": "pass",
+      "expected": 12.709699999999998,
+      "actual": 12.7,
+      "evidence": [
+        "final-answer.txt：Japan − India = 84.7 − 72.0 = 12.7 年"
+      ],
+      "reason": "相减方向和单位正确，绝对误差 0.0097 年，小于 0.4 年。"
+    }
+  ],
+  "primary_failure": null,
+  "secondary_failures": [],
+  "artifact_refs": [
+    "final-answer.txt",
+    "evaluation/e2e-30-v1/tasks/A01/agent-input/chart.png",
+    "Run b5993b7109334a798c377b8d75e79aa9"
+  ],
+  "quality_notes": [],
+  "judge": {
+    "model": "gpt-6.1-sol",
+    "prompt_version": "1.0",
+    "context_isolated": true,
+    "actual_png_viewed": true,
+    "limitations": [
+      "本题为图片分析任务，已查看所附实际输入 PNG；用户未要求提交 Figure 或渲染 PNG，因此无输出图可验收。协议核对依据所提供的冻结证据包。"
+    ]
+  },
+  "review_notes": [
+    "本次为独立裁决，未执行其他上下文复核。",
+    "证据显示唯一一轮已完成且最终回答已提交，未记录协议异常；工具概览未显示外部检索。全部有效要求均已覆盖，无覆盖或撤销项。"
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "task_id": "A02",
+  "title": "分组柱：系列关联与差值",
+  "category": "analysis",
+  "difficulty": "medium",
+  "source_type": "synthetic",
+  "turns": 1,
+  "status": "materials_prepared_not_run",
+  "agent_allowlist": [
+    "agent-input/conversation.json",
+    "agent-input/conversation.md",
+    "agent-input/chart.png"
+  ],
+  "judge_only": "judge-only/",
+  "expected_success": "all_critical_checks_pass"
+}

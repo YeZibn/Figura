@@ -1,0 +1,63 @@
+{
+  "task_id": "A01",
+  "category": "analysis",
+  "status": "not_run",
+  "facts": {
+    "year": 2023,
+    "unit": "years",
+    "values": {
+      "China": 77.9529,
+      "India": 72.0026,
+      "Japan": 84.7123,
+      "United States": 79.3043
+    },
+    "maximum": "Japan",
+    "minimum": "India",
+    "japan_minus_india": 12.709699999999998
+  },
+  "checks": [
+    {
+      "id": "structure",
+      "critical": true,
+      "requirement": "正确识别横向柱状图、2023 年、出生时预期寿命，单位年",
+      "expected": "horizontal bar / 2023 / life expectancy at birth / years"
+    },
+    {
+      "id": "values",
+      "critical": true,
+      "requirement": "四国数值与国家正确关联",
+      "expected": {
+        "China": 77.9529,
+        "India": 72.0026,
+        "Japan": 84.7123,
+        "United States": 79.3043
+      },
+      "numeric_tolerance": {
+        "abs": 0.2,
+        "rel": 0
+      }
+    },
+    {
+      "id": "extrema",
+      "critical": true,
+      "requirement": "最高与最低国家正确",
+      "expected": {
+        "max": "Japan",
+        "min": "India"
+      }
+    },
+    {
+      "id": "difference",
+      "critical": true,
+      "requirement": "Japan 减 India，单位年",
+      "expected": 12.709699999999998,
+      "numeric_tolerance": {
+        "abs": 0.4,
+        "rel": 0
+      }
+    }
+  ],
+  "reference_figures": [],
+  "numeric_policy": "explicit_per_check",
+  "semantic_equivalence": "忽略内部生成的 chart/category/series ID；按标签、顺序和语义匹配。坐标 kind 和数据类型必须合法。空 note、空 figure title 等未要求字段不强制一致。"
+}

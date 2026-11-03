@@ -1,0 +1,17 @@
+{
+  "publisher": "Our World in Data",
+  "chart_slug": "life-expectancy",
+  "chart_page": "https://ourworldindata.org/grapher/life-expectancy?tab=discrete-bar&time=2023&country=CHN~IND~USA~JPN",
+  "image_url": "https://ourworldindata.org/grapher/life-expectancy.png?tab=discrete-bar&time=2023&country=CHN~IND~USA~JPN",
+  "data_url": "https://ourworldindata.org/grapher/life-expectancy.csv?tab=discrete-bar&time=2023&country=CHN~IND~USA~JPN",
+  "retrieved_date": "2026-11-02",
+  "entities": [
+    "China",
+    "India",
+    "United States",
+    "Japan"
+  ],
+  "data_sources": "见 original.metadata.json 中列级 citation / sources；OWID 图表署名保留在原图",
+  "license_note": "OWID 图表按 CC BY 署名；底层数据来源和适用条件见元数据。仅冻结下载快照，不声称当前最新值。",
+  "transformations": "A10 另生成低清版本；其他任务直接使用官方 PNG 导出。"
+}

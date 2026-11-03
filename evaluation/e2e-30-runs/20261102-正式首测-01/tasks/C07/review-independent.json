@@ -1,0 +1,177 @@
+{
+  "task_id": "C07",
+  "batch_id": "20261102-正式首测-01",
+  "verdict": "pass",
+  "checks": [
+    {
+      "id": "T1-semantic",
+      "critical": true,
+      "status": "pass",
+      "expected": "纵向分组柱状图；指定数据、顺序、标题、轴标签及来源。",
+      "actual": "已提交 Figure 为 vertical/grouped；类别依次 Q1—Q4，系列依次 East、South、North，数值分别为 [19,25,22,31]、[16,21,24,27]、[14,18,20,23]。标题、轴标签及来源均符合要求。",
+      "evidence": [
+        "/turn_evidence/0/figures/figure-01.json",
+        "/execution/turns/0/figures/0",
+        "assemble call_00_97CFM5ITgQQlCf4X0K4k8322"
+      ],
+      "reason": "按类别和系列标签关联后，全部12个数值与参考一致，误差为0；成功提交记录与 Figure 对应。"
+    },
+    {
+      "id": "T1-render",
+      "critical": true,
+      "status": "pass",
+      "expected": "与第1轮 Figure 匹配、可读取且必要内容完整的真实 PNG。",
+      "actual": "Image #1 可读取，呈现一个纵向分组柱状图；图例、类别、轴标签、总标题、子图标题及来源完整，无严重裁切遮挡。",
+      "evidence": [
+        "Image #1（turn-01/render-01.png）",
+        "/execution/turns/0/renders/0"
+      ],
+      "reason": "render 的 figure_ref 和 figure_digest 与本轮提交匹配，PNG 哈希验证通过，实际画面符合 Figure。"
+    },
+    {
+      "id": "T1-delivery",
+      "critical": true,
+      "status": "pass",
+      "expected": "回答清楚指向可用基线产物，且陈述与交付一致。",
+      "actual": "回答明确说明已交付 PNG 作为修改基线；本轮仅有一个成功提交和渲染候选，尺寸为640×522，回答中的图形及标签描述均正确。",
+      "evidence": [
+        "/turn_evidence/0/answer",
+        "/execution/turns/0/figures",
+        "/execution/turns/0/renders"
+      ],
+      "reason": "交付语境下候选唯一，产物选择无歧义，回答无关键冲突。"
+    },
+    {
+      "id": "T2-semantic",
+      "critical": true,
+      "status": "pass",
+      "expected": "改为纵向堆叠柱状图，原始数据、类别及系列顺序和其他内容保持。",
+      "actual": "已提交 Figure 为 vertical/stacked；12个原始数值、类别顺序、系列顺序、两级标题、轴标签及来源均保持。",
+      "evidence": [
+        "/turn_evidence/1/figures/figure-01.json",
+        "/execution/turns/1/figures/0",
+        "assemble call_00_YJlVsCJGqMojPGEbSXzG6722"
+      ],
+      "reason": "逐值误差为0，未换算百分比；各季度总和为49、64、66、81，与原数据一致。"
+    },
+    {
+      "id": "T2-render",
+      "critical": true,
+      "status": "pass",
+      "expected": "与第2轮 Figure 匹配的完整堆叠柱状图 PNG。",
+      "actual": "Image #2 可读取，四根柱按 East、South、North 从下至上堆叠，总高度对应49、64、66、81；标题、图例、轴标签及来源完整。",
+      "evidence": [
+        "Image #2（turn-02/render-01.png）",
+        "/execution/turns/1/renders/0"
+      ],
+      "reason": "render 引用和摘要与本轮 Figure 匹配，PNG 哈希验证通过；画面显示原始数值堆叠，无严重遮挡裁切。"
+    },
+    {
+      "id": "T2-delivery",
+      "critical": true,
+      "status": "pass",
+      "expected": "回答指向本轮可用修改产物，且描述准确。",
+      "actual": "回答以“上方 PNG”指向本轮唯一成功渲染，并正确说明堆叠、保留原始值及各季度合计。",
+      "evidence": [
+        "/turn_evidence/1/answer",
+        "/execution/turns/1/figures",
+        "/execution/turns/1/renders"
+      ],
+      "reason": "产物唯一且已成功提交、渲染，回答与实际数据和画面一致。"
+    },
+    {
+      "id": "T3-semantic",
+      "critical": true,
+      "status": "pass",
+      "expected": "保持纵向堆叠和原始数值，仅将子图标题改为“区域销售构成”，总标题不变。",
+      "actual": "已提交 Figure 保持 vertical/stacked，子图标题为“区域销售构成”，总标题为“区域经营报告”；全部数据、顺序、轴标签及来源保持。",
+      "evidence": [
+        "/turn_evidence/2/figures/figure-01.json",
+        "/execution/turns/2/figures/0",
+        "assemble call_00_lUB6Zb9eRRMiqh60DIp08625"
+      ],
+      "reason": "12个数值逐值误差为0，未归一化、未恢复分组，标题修改准确。"
+    },
+    {
+      "id": "T3-render",
+      "critical": true,
+      "status": "pass",
+      "expected": "与第3轮 Figure 匹配、显示新子图标题且保持堆叠的完整 PNG。",
+      "actual": "Image #3 可读取，显示“区域经营报告”和“区域销售构成”；四根柱继续呈现原始值堆叠，其他关键文字完整。",
+      "evidence": [
+        "Image #3（turn-03/render-01.png）",
+        "/execution/turns/2/renders/0"
+      ],
+      "reason": "render 的 Figure 引用和摘要匹配本轮提交，PNG 哈希验证通过；实际画面无严重裁切遮挡。"
+    },
+    {
+      "id": "T3-delivery",
+      "critical": true,
+      "status": "pass",
+      "expected": "回答清楚指向本轮可用产物，无关键错误陈述。",
+      "actual": "回答以“上方 PNG”指向本轮唯一成功渲染，正确说明标题修改、保持堆叠及原始数值。",
+      "evidence": [
+        "/turn_evidence/2/answer",
+        "/execution/turns/2/figures",
+        "/execution/turns/2/renders"
+      ],
+      "reason": "交付选择无歧义，回答与已提交 Figure 和实际 PNG 一致。"
+    },
+    {
+      "id": "preservation",
+      "critical": true,
+      "status": "pass",
+      "expected": "第2轮仅改变分组模式，第3轮仅改变子图标题；其他语义逐轮保留。",
+      "actual": "第1至2轮仅 dataset.mode 从 grouped 改为 stacked；第2至3轮仅子图标题从“区域季度销售”改为“区域销售构成”。其余要求的语义均保持。",
+      "evidence": [
+        "/turn_evidence/0/figures/figure-01.json",
+        "/turn_evidence/1/figures/figure-01.json",
+        "/turn_evidence/2/figures/figure-01.json",
+        "Image #1、Image #2、Image #3"
+      ],
+      "reason": "逐轮比对数据、系列和类别顺序、方向、轴标签、总标题及来源均未发现非目标改变；新增空 note 不改变语义。"
+    },
+    {
+      "id": "final_requirements",
+      "critical": true,
+      "status": "pass",
+      "expected": "最终保持堆叠及总标题，子图标题为“区域销售构成”，不分组、不归一化，并实际渲染交付。",
+      "actual": "最终 Figure 和 Image #3 均满足全部最新要求，初始分组模式及旧子图标题已被替换。",
+      "evidence": [
+        "/turn_evidence/2/figures/figure-01.json",
+        "/turn_evidence/2/answer",
+        "/execution/turns/2/renders/0",
+        "Image #3"
+      ],
+      "reason": "最终有效要求全部生效，无被覆盖要求残留，且具有成功提交和实际 PNG。"
+    }
+  ],
+  "primary_failure": null,
+  "secondary_failures": [],
+  "artifact_refs": [
+    "turn-01/figure-01.json",
+    "turn-01/render-01.png（Image #1）",
+    "turn-01/final-answer.txt",
+    "turn-02/figure-01.json",
+    "turn-02/render-01.png（Image #2）",
+    "turn-02/final-answer.txt",
+    "turn-03/figure-01.json",
+    "turn-03/render-01.png（Image #3）",
+    "turn-03/final-answer.txt"
+  ],
+  "quality_notes": [],
+  "judge": {
+    "model": "gpt-6.1-sol",
+    "prompt_version": "1.0",
+    "context_isolated": true,
+    "actual_png_viewed": true,
+    "limitations": [
+      "依据所提供的冻结证据及三张实际 PNG 裁决；未独立重新计算文件摘要。"
+    ]
+  },
+  "review_notes": [
+    "三轮沿用同一 Session，均已进入 completed 终态，无超时；所提供记录未显示协议异常。",
+    "各轮均只有一个成功提交及配对渲染候选，未进行择优选择。",
+    "本结论仅为当前独立评判上下文的裁决，不代表已完成另一次独立复核。"
+  ]
+}

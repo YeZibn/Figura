@@ -1,0 +1,45 @@
+{
+  "status": "materials_verified_not_run",
+  "prepared_date": "2026-11-02",
+  "formal_tasks": 30,
+  "categories": {
+    "analysis": 10,
+    "construction": 10,
+    "modification": 10
+  },
+  "fixed_user_turns": 50,
+  "formal_analysis_inputs_opened": 10,
+  "formal_reference_figures_parsed_validated_rendered": 40,
+  "critical_checks": 177,
+  "calibration_tasks": 3,
+  "verdict_schema": "valid; rejects pass with critical fail or unseen PNG",
+  "input_allowlist_check": "passed",
+  "embedded_dataset_consistency": "passed",
+  "formal_agent_runs": 0,
+  "judge_calibration_runs": 0,
+  "provider_network_calls_for_agent": 0,
+  "source_downloads": "OWID public chart/data/metadata requests only",
+  "python": "3.11.15",
+  "limitations": [
+    "真实 Figura/Codex 校准尚未执行；运行模型、预算和批次配置待正式执行前填写。",
+    "参考图为离线 oracle，不是真实 Agent 产物。"
+  ],
+  "visual_review": {
+    "analysis_inputs": 10,
+    "formal_reference_pngs": 40,
+    "method": "查看全部9张联系表，真实来源图与B08校正示意单独查看；校准错误图单独查看",
+    "known_issue": "B08 当前原生环图百分比可能被遮挡；保留诊断图及独立示意，未修改题目或在线代码。"
+  },
+  "source_selected_rows": {
+    "A01": 4,
+    "A04": 27,
+    "A07": 6,
+    "A10": 27
+  },
+  "numeric_answer_crosschecks": "passed",
+  "reference_json_inline_consistency": "passed",
+  "modification_change_contracts": 10,
+  "prepared_text_whitespace_check": "passed",
+  "git_diff_check": "passed",
+  "formal_judge_results": 0
+}

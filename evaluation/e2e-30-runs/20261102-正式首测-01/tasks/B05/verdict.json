@@ -1,0 +1,72 @@
+{
+  "task_id": "B05",
+  "batch_id": "20261102-正式首测-01",
+  "verdict": "pass",
+  "checks": [
+    {
+      "id": "T1-semantic",
+      "critical": true,
+      "status": "pass",
+      "expected": "单张折线图；Orders 按 Jan、Feb、Mar、Apr、May 排列，值为 14、21、null、18、30；保留 Mar 缺口；标题、轴标签和来源符合要求。",
+      "actual": "已提交 Figure 的类型、系列、五个位置及全部数值与参考一致；Mar 保留为 null。标题为“缺失订单观测”，轴标签为 Month 和 Orders (单)，来源完整。",
+      "evidence": [
+        "figure-01.json /charts/0/chart_spec",
+        "figure-01.json /charts/0/chart_spec/dataset/series/0/points",
+        "assemble call_00_62dKzfLobUKwfLFX1tR79347：succeeded"
+      ],
+      "reason": "按系列标签和位置逐值核对一致，数值误差为零；内部 ID 和非必需画布标题差异不影响语义。"
+    },
+    {
+      "id": "T1-render",
+      "critical": true,
+      "status": "pass",
+      "expected": "交付与已提交 Figure 匹配且可读取的真实 PNG，正确显示折线缺口和必要文字。",
+      "actual": "实际 PNG 为 640×522，显示一张折线图；Jan—May 顺序完整，只有 Jan—Feb 和 Apr—May 两段连线，Mar 无点且 Feb—Apr 未连接。标题、轴标签、Orders 图例和来源均可读，无严重裁切遮挡。",
+      "evidence": [
+        "render-01.png：绘图区及底部来源",
+        "render call_00_ET_Qd3tcJbFc1RUFUW2k1HW9858",
+        "execution /turns/0/renders/0/result/figure_ref",
+        "execution /turns/0/renders/0/result/figure_digest",
+        "execution /turns/0/renders/0/png_sha256_verified"
+      ],
+      "reason": "已查看实际 PNG；render 的 Figure 引用及 digest 与唯一成功提交一致，PNG 校验记录通过，视觉呈现符合缺失值要求。"
+    },
+    {
+      "id": "T1-delivery",
+      "critical": true,
+      "status": "pass",
+      "expected": "最终回答清楚指向可用产物，且与实际数据和交付状态一致。",
+      "actual": "最终回答明确列出成功提交的 Figure run/call 引用及 PNG render call 引用，所述五个月数据、Mar 缺口和轴标签均与实际产物一致。",
+      "evidence": [
+        "final-answer.txt：数据表、图像要点及产物段落",
+        "execution /turns/0/final_answer_committed",
+        "execution /turns/0/figures/0",
+        "execution /turns/0/renders/0"
+      ],
+      "reason": "回答指向唯一成功的 Figure/render 配对，不存在候选歧义或关键事实冲突。"
+    }
+  ],
+  "primary_failure": null,
+  "secondary_failures": [],
+  "artifact_refs": [
+    "figure-01.json",
+    "render-01.png",
+    "final-answer.txt",
+    "assemble: call_00_62dKzfLobUKwfLFX1tR79347",
+    "render: call_00_ET_Qd3tcJbFc1RUFUW2k1HW9858"
+  ],
+  "quality_notes": [
+    "画布标题与子图标题重复出现，不影响要求满足或可读性。"
+  ],
+  "judge": {
+    "model": "gpt-6.1-sol",
+    "prompt_version": "1.0",
+    "context_isolated": true,
+    "actual_png_viewed": true,
+    "limitations": []
+  },
+  "review_notes": [
+    "所提供记录中未发现输入、轮次或提交采集异常。",
+    "本结论仅为本次独立裁决，不代表已完成另一次独立复核。"
+  ]
+}

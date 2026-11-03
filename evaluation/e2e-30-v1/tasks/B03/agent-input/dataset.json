@@ -1,0 +1,30 @@
+{
+  "source": "Figura E2E-30 合成数据 v1",
+  "charts": [
+    {
+      "name": "季度收入构成",
+      "data": {
+        "categories": [
+          "Q1",
+          "Q2",
+          "Q3",
+          "Q4"
+        ],
+        "series": {
+          "Product": [
+            8,
+            13,
+            11,
+            17
+          ],
+          "Service": [
+            4,
+            6,
+            8,
+            7
+          ]
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,91 @@
+{
+  "task_id": "A03",
+  "category": "analysis",
+  "status": "not_run",
+  "facts": {
+    "series": {
+      "Product": [
+        8,
+        12,
+        10,
+        15
+      ],
+      "Service": [
+        5,
+        7,
+        9,
+        6
+      ]
+    },
+    "totals": [
+      13,
+      19,
+      19,
+      21
+    ],
+    "max_quarter": "Q4",
+    "q3_service_percent": 47.36842105263158,
+    "unit": "万元"
+  },
+  "checks": [
+    {
+      "id": "structure",
+      "critical": true,
+      "requirement": "识别堆叠柱及单位",
+      "expected": {
+        "type": "stacked bar",
+        "unit": "万元"
+      }
+    },
+    {
+      "id": "parts",
+      "critical": true,
+      "requirement": "正确读取全部标注分项",
+      "expected": {
+        "Product": [
+          8,
+          12,
+          10,
+          15
+        ],
+        "Service": [
+          5,
+          7,
+          9,
+          6
+        ]
+      },
+      "numeric_tolerance": {
+        "abs": 0,
+        "rel": 0
+      }
+    },
+    {
+      "id": "totals",
+      "critical": true,
+      "requirement": "总量与极值正确",
+      "expected": {
+        "totals": [
+          13,
+          19,
+          19,
+          21
+        ],
+        "max": "Q4"
+      }
+    },
+    {
+      "id": "share",
+      "critical": true,
+      "requirement": "Q3 Service / Q3 总量，百分数",
+      "expected": 47.36842105263158,
+      "numeric_tolerance": {
+        "abs": 0.1,
+        "rel": 0
+      }
+    }
+  ],
+  "reference_figures": [],
+  "numeric_policy": "explicit_per_check",
+  "semantic_equivalence": "忽略内部生成的 chart/category/series ID；按标签、顺序和语义匹配。坐标 kind 和数据类型必须合法。空 note、空 figure title 等未要求字段不强制一致。"
+}

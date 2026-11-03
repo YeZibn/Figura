@@ -1,0 +1,101 @@
+{
+  "task_id": "01-chart-analysis",
+  "condition": "baseline",
+  "capacity_tokens": 100000000,
+  "provider_id": "deepseek",
+  "batch_id": "20261102-chart-analysis-400k-rerun-01",
+  "started_at": "2026-11-02T22:17:30.678300+08:00",
+  "session_id": "c660c1163eb944a0962110dd48bc46c0",
+  "turns": [
+    {
+      "turn": 1,
+      "run_id": "42e2cf40da8448e98033e0f0d36bf51a",
+      "session_id": "c660c1163eb944a0962110dd48bc46c0",
+      "status": "completed",
+      "terminal_code": null,
+      "final_answer_committed": true,
+      "figures": [],
+      "renders": [],
+      "provider_attempt_count": 5,
+      "usage_by_purpose": {
+        "agent_turn": {
+          "prompt_tokens": 82661,
+          "completion_tokens": 3217,
+          "total_tokens": 85878
+        }
+      },
+      "usage_total_including_compaction": {
+        "prompt_tokens": 82661,
+        "completion_tokens": 3217,
+        "total_tokens": 85878
+      },
+      "usage_complete": true,
+      "usage_missing_attempts": [],
+      "compaction_operations": [],
+      "wall_seconds": 36.131,
+      "timed_out": false
+    },
+    {
+      "turn": 2,
+      "run_id": "c867949e695845f4b022c15b9190ad4b",
+      "session_id": "c660c1163eb944a0962110dd48bc46c0",
+      "status": "completed",
+      "terminal_code": null,
+      "final_answer_committed": true,
+      "figures": [],
+      "renders": [],
+      "provider_attempt_count": 1,
+      "usage_by_purpose": {
+        "agent_turn": {
+          "prompt_tokens": 22569,
+          "completion_tokens": 831,
+          "total_tokens": 23400
+        }
+      },
+      "usage_total_including_compaction": {
+        "prompt_tokens": 22569,
+        "completion_tokens": 831,
+        "total_tokens": 23400
+      },
+      "usage_complete": true,
+      "usage_missing_attempts": [],
+      "compaction_operations": [],
+      "wall_seconds": 6.047,
+      "timed_out": false
+    },
+    {
+      "turn": 3,
+      "run_id": "f36f5c7b08c144b19a0ff48abc8a9284",
+      "session_id": "c660c1163eb944a0962110dd48bc46c0",
+      "status": "completed",
+      "terminal_code": null,
+      "final_answer_committed": true,
+      "figures": [],
+      "renders": [],
+      "provider_attempt_count": 8,
+      "usage_by_purpose": {
+        "agent_turn": {
+          "prompt_tokens": 212975,
+          "completion_tokens": 3419,
+          "total_tokens": 216394
+        }
+      },
+      "usage_total_including_compaction": {
+        "prompt_tokens": 212975,
+        "completion_tokens": 3419,
+        "total_tokens": 216394
+      },
+      "usage_complete": true,
+      "usage_missing_attempts": [],
+      "compaction_operations": [],
+      "wall_seconds": 36.143,
+      "timed_out": false
+    }
+  ],
+  "execution_status": "completed",
+  "input_adjustments": [],
+  "attachment_sha256": {
+    "input/bar_line_dashboard.png": "b6b6105d739d1a0399295fd75286f27ac8965644423a0533de814f8aaecb9e00"
+  },
+  "completed_at": "2026-11-02T22:18:51.469497+08:00"
+}

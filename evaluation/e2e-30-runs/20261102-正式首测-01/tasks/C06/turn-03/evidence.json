@@ -1,0 +1,65 @@
+{
+  "turn": 3,
+  "run_id": "60910bd3389b41359959d5c09c6fa28a",
+  "session_id": "8a2077595d8e4f119bc7b08868ff050a",
+  "status": "completed",
+  "terminal_code": null,
+  "wall_seconds": 10.457,
+  "timed_out": false,
+  "final_answer": "final-answer.txt",
+  "final_answer_committed": true,
+  "figures": [
+    {
+      "call_id": "call_00_3ouJWH4Fmg7FJy98pqlD8570",
+      "run_id": "60910bd3389b41359959d5c09c6fa28a",
+      "file": "figure-01.json",
+      "result": {
+        "charts": [
+          {
+            "chart_id": "regional_quarterly_sales",
+            "chart_type": "line",
+            "title": "区域季度销售"
+          }
+        ],
+        "figure_digest": "d4cb30236223f2be08c0a079ffcaccc7a84b37e3ed482e6d5612521e0473741a",
+        "figure_ref": {
+          "call_id": "call_00_3ouJWH4Fmg7FJy98pqlD8570",
+          "run_id": "60910bd3389b41359959d5c09c6fa28a"
+        },
+        "title": "区域经营报告"
+      },
+      "digest_verified": true
+    }
+  ],
+  "renders": [
+    {
+      "call_id": "call_00_ET_wpKc6dyyJQMeLGWsvVAr8876",
+      "run_id": "60910bd3389b41359959d5c09c6fa28a",
+      "file": "render-01.png",
+      "result": {
+        "byte_count": 45199,
+        "figure_digest": "d4cb30236223f2be08c0a079ffcaccc7a84b37e3ed482e6d5612521e0473741a",
+        "figure_ref": {
+          "call_id": "call_00_3ouJWH4Fmg7FJy98pqlD8570",
+          "run_id": "60910bd3389b41359959d5c09c6fa28a"
+        },
+        "height": 522,
+        "image_sha256": "4294beea2aa27697d4f2c8480f8d97ddedaa28d591ccc3a9ee6e66af016f46ee",
+        "media_type": "image/png",
+        "width": 640
+      },
+      "png_sha256_verified": true
+    }
+  ],
+  "provider_attempt_count": 3,
+  "internal_retry_count": 0,
+  "usage": {
+    "prompt_tokens": 54557,
+    "completion_tokens": 1325,
+    "total_tokens": 55882
+  },
+  "usage_complete": true,
+  "usage_missing_attempt_refs": [],
+  "compaction_operations": [],
+  "delivery_selection": "judge must select from actual final answer and all committed candidates; no automatic best-of selection"
+}

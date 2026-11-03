@@ -1,0 +1,96 @@
+{
+  "task_id": "A02",
+  "category": "analysis",
+  "status": "not_run",
+  "facts": {
+    "categories": [
+      "Q1",
+      "Q2",
+      "Q3",
+      "Q4"
+    ],
+    "series": {
+      "North": [
+        14,
+        22,
+        18,
+        30
+      ],
+      "South": [
+        10,
+        16,
+        21,
+        25
+      ]
+    },
+    "difference": [
+      4,
+      6,
+      -3,
+      5
+    ],
+    "south_higher": [
+      "Q3"
+    ],
+    "unit": "万元"
+  },
+  "checks": [
+    {
+      "id": "structure",
+      "critical": true,
+      "requirement": "分组柱、两个系列、季度顺序与单位正确",
+      "expected": {
+        "type": "grouped bar",
+        "categories": [
+          "Q1",
+          "Q2",
+          "Q3",
+          "Q4"
+        ],
+        "unit": "万元"
+      }
+    },
+    {
+      "id": "values",
+      "critical": true,
+      "requirement": "八个标注数值与系列关联正确",
+      "expected": {
+        "North": [
+          14,
+          22,
+          18,
+          30
+        ],
+        "South": [
+          10,
+          16,
+          21,
+          25
+        ]
+      },
+      "numeric_tolerance": {
+        "abs": 0,
+        "rel": 0
+      }
+    },
+    {
+      "id": "difference",
+      "critical": true,
+      "requirement": "差值和更高季度正确",
+      "expected": {
+        "difference": [
+          4,
+          6,
+          -3,
+          5
+        ],
+        "south_higher": [
+          "Q3"
+        ]
+      }
+    }
+  ],
+  "reference_figures": [],
+  "numeric_policy": "explicit_per_check",
+  "semantic_equivalence": "忽略内部生成的 chart/category/series ID；按标签、顺序和语义匹配。坐标 kind 和数据类型必须合法。空 note、空 figure title 等未要求字段不强制一致。"
+}

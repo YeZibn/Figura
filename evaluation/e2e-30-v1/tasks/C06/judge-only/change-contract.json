@@ -1,0 +1,153 @@
+{
+  "semantic_projection": "忽略内部 ID 和 measurement_refs；保留标题、来源、note、数据、坐标、画布和顺序",
+  "rounds": [
+    {
+      "turn": 2,
+      "authorized_user_request": "把分组柱状图改成多系列折线图，季度作为有序类别，系列、全部数值、单位、标题和来源保持。请实际渲染交付。",
+      "expected_semantic_differences": [
+        {
+          "path": "/charts/0/dataset/categories",
+          "before": [
+            {
+              "label": "Q1"
+            },
+            {
+              "label": "Q2"
+            },
+            {
+              "label": "Q3"
+            },
+            {
+              "label": "Q4"
+            }
+          ],
+          "after_missing": true
+        },
+        {
+          "path": "/charts/0/dataset/mode",
+          "before": "grouped",
+          "after_missing": true
+        },
+        {
+          "path": "/charts/0/dataset/orientation",
+          "before": "vertical",
+          "after_missing": true
+        },
+        {
+          "path": "/charts/0/dataset/series/0/points",
+          "before_missing": true,
+          "after": [
+            {
+              "x": "Q1",
+              "y": 18
+            },
+            {
+              "x": "Q2",
+              "y": 24
+            },
+            {
+              "x": "Q3",
+              "y": 21
+            },
+            {
+              "x": "Q4",
+              "y": 30
+            }
+          ]
+        },
+        {
+          "path": "/charts/0/dataset/series/0/values",
+          "before": [
+            18,
+            24,
+            21,
+            30
+          ],
+          "after_missing": true
+        },
+        {
+          "path": "/charts/0/dataset/series/1/points",
+          "before_missing": true,
+          "after": [
+            {
+              "x": "Q1",
+              "y": 15
+            },
+            {
+              "x": "Q2",
+              "y": 20
+            },
+            {
+              "x": "Q3",
+              "y": 23
+            },
+            {
+              "x": "Q4",
+              "y": 26
+            }
+          ]
+        },
+        {
+          "path": "/charts/0/dataset/series/1/values",
+          "before": [
+            15,
+            20,
+            23,
+            26
+          ],
+          "after_missing": true
+        },
+        {
+          "path": "/charts/0/dataset/series/2/points",
+          "before_missing": true,
+          "after": [
+            {
+              "x": "Q1",
+              "y": 13
+            },
+            {
+              "x": "Q2",
+              "y": 17
+            },
+            {
+              "x": "Q3",
+              "y": 19
+            },
+            {
+              "x": "Q4",
+              "y": 22
+            }
+          ]
+        },
+        {
+          "path": "/charts/0/dataset/series/2/values",
+          "before": [
+            13,
+            17,
+            19,
+            22
+          ],
+          "after_missing": true
+        },
+        {
+          "path": "/charts/0/metadata/chart_type",
+          "before": "bar",
+          "after": "line"
+        }
+      ],
+      "preserve": "所有未被该轮授权改变的语义；按标签匹配，忽略内部 ID"
+    },
+    {
+      "turn": 3,
+      "authorized_user_request": "继续使用折线图，增加注释“按季度展示趋势”，其他内容保持。请实际渲染交付。",
+      "expected_semantic_differences": [
+        {
+          "path": "/charts/0/metadata/note",
+          "before": "",
+          "after": "按季度展示趋势"
+        }
+      ],
+      "preserve": "所有未被该轮授权改变的语义；按标签匹配，忽略内部 ID"
+    }
+  ]
+}

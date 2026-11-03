@@ -1,0 +1,14 @@
+{
+  "batch_id": null,
+  "status": "not_started",
+  "dataset_id": "figura-e2e-30-v1",
+  "dataset_version": "1.0.0",
+  "dataset_checksums_sha256": null,
+  "manifest_sha256": null,
+  "code": {"commit": null, "dirty_diff_sha256": null, "source_sha256": null, "prompt_sha256": null, "tool_registry_version": null, "dependency_versions": {}},
+  "execution": {"provider": null, "model": null, "sampling_parameters": {}, "uncontrolled_parameters": [], "context_capacity_tokens": null, "per_turn_timeout_seconds": null, "calibration_durations_seconds": [], "timeout_rule": "max(600, ceil(3*max(calibration_single_turn_seconds)/60)*60)", "internal_retry_policy": "production_unchanged", "task_order": "A01-A10,B01-B10,C01-C10", "concurrent_tasks": 1},
+  "judge": {"model": null, "prompt_version": "1.0", "prompt_sha256": null, "calibration_completed": false, "review_sample_seed": 20261102, "review_pass_fraction_per_category": 0.2},
+  "started_at": null,
+  "completed_at": null,
+  "notes": []
+}

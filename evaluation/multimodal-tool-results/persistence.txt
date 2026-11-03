@@ -1,0 +1,82 @@
+ERROR conda.cli.main_run:execute(142): `conda run python -m pytest -q tests/test_figura_history_retrieval.py tests/test_figura_observation_tools.py tests/test_figura_measure_chart_contract.py tests/test_figura_durable_tool_execution.py tests/test_figura_execution_policy.py tests/test_figura_context_compaction.py tests/test_figura_context_ablation.py tests/test_figura_gateway.py --tb=short --maxfail=20` failed. (See above for error)
+...F...F..........................FF.F.....................FF........... [ 30%]
+.....................................................F.................. [ 61%]
+........................................................................ [ 91%]
+...........F........                                                     [100%]Running teardown with pytest sessionfinish...
+
+=================================== FAILURES ===================================
+_________ test_search_reads_committed_tool_result_without_reexecution __________
+tests/test_figura_history_retrieval.py:307: in test_search_reads_committed_tool_result_without_reexecution
+    reference = found["matches"][0]["reference"]
+                ^^^^^^^^^^^^^^^^^^^
+E   IndexError: list index out of range
+____ test_historical_image_tool_supports_panel_annotations_and_chart_render ____
+tests/test_figura_history_retrieval.py:539: in test_historical_image_tool_supports_panel_annotations_and_chart_render
+    assert execution_result.outcome is ToolOutcome.SUCCEEDED
+E   AssertionError: assert <ToolOutcome.FAILED: 'failed'> is <ToolOutcome.SUCCEEDED: 'succeeded'>
+E    +  where <ToolOutcome.FAILED: 'failed'> = ToolExecutionResult(call_id='history-image-call', tool_name='read_resource_image', outcome=<ToolOutcome.FAILED: 'failed'>, error=ToolExecutionError(code='handler_failed', message='工具执行失败。', retryable=False, field_path=None), attachments=()).outcome
+E    +  and   <ToolOutcome.SUCCEEDED: 'succeeded'> = ToolOutcome.SUCCEEDED
+_ test_measure_chart_routes_family_and_applies_shared_scope_and_source_context _
+tests/test_figura_measure_chart_contract.py:168: in test_measure_chart_routes_family_and_applies_shared_scope_and_source_context
+    assert result.outcome is ToolOutcome.SUCCEEDED
+E   AssertionError: assert <ToolOutcome.FAILED: 'failed'> is <ToolOutcome.SUCCEEDED: 'succeeded'>
+E    +  where <ToolOutcome.FAILED: 'failed'> = ToolExecutionResult(call_id='measure-chart-call', tool_name='measure_chart', outcome=<ToolOutcome.FAILED: 'failed'>, e...utionError(code='image_feedback_unavailable', message='观察标注图当前无法准备。', retryable=True, field_path=None), attachments=()).outcome
+E    +  and   <ToolOutcome.SUCCEEDED: 'succeeded'> = ToolOutcome.SUCCEEDED
+____ test_measure_chart_commits_partial_sensor_once_without_automatic_retry ____
+tests/test_figura_measure_chart_contract.py:205: in test_measure_chart_commits_partial_sensor_once_without_automatic_retry
+    assert outcome.outcome is ToolOutcome.SUCCEEDED
+E   AssertionError: assert <ToolOutcome.FAILED: 'failed'> is <ToolOutcome.SUCCEEDED: 'succeeded'>
+E    +  where <ToolOutcome.FAILED: 'failed'> = ToolExecutionResult(call_id='partial-measurement-call', tool_name='measure_chart', outcome=<ToolOutcome.FAILED: 'faile...utionError(code='image_feedback_unavailable', message='观察标注图当前无法准备。', retryable=True, field_path=None), attachments=()).outcome
+E    +  and   <ToolOutcome.SUCCEEDED: 'succeeded'> = ToolOutcome.SUCCEEDED
+_________ test_v6_migration_preserves_events_and_accepts_run_progress __________
+tests/test_figura_durable_tool_execution.py:452: in test_v6_migration_preserves_events_and_accepts_run_progress
+    upgraded_store = FiguraRunStore(tmp_path)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^
+src/figura/runtime/store.py:53: in __init__
+    self._database = SqliteDatabase(data_root, payload_limits=self.payload_limits)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/figura/storage/database.py:34: in __init__
+    self._initialize()
+src/figura/storage/database.py:47: in _initialize
+    initialize_schema(connection)
+src/figura/storage/schema.py:901: in initialize_schema
+    raise RunError(RunErrorCode.UNSUPPORTED_VERSION)
+E   figura.runtime.errors.RunError: Run 数据版本不受支持。
+________ test_v2_migration_failure_rolls_back_new_schema_and_can_retry _________
+tests/test_figura_durable_tool_execution.py:999: in test_v2_migration_failure_rolls_back_new_schema_and_can_retry
+    open_legacy_schema_for_test(tmp_path)
+tests/figura_sources_support.py:76: in open_legacy_schema_for_test
+    upgrade_pre_media_schema(connection, version)
+src/figura/storage/schema.py:1026: in upgrade_pre_media_schema
+    connection.execute(statement)
+E   sqlite3.OperationalError: table run_provider_continuations already exists
+___ test_v1_migration_rolls_back_schema_version_and_added_column_on_failure ____
+tests/test_figura_durable_tool_execution.py:1039: in test_v1_migration_rolls_back_schema_version_and_added_column_on_failure
+    open_legacy_schema_for_test(tmp_path)
+tests/figura_sources_support.py:76: in open_legacy_schema_for_test
+    upgrade_pre_media_schema(connection, version)
+src/figura/storage/schema.py:1020: in upgrade_pre_media_schema
+    connection.execute(statement)
+E   sqlite3.OperationalError: table run_tool_execution_facts already exists
+________ test_multiple_processes_first_open_share_one_atomic_migration _________
+tests/test_figura_execution_policy.py:584: in test_multiple_processes_first_open_share_one_atomic_migration
+    assert results == [(13, [])] * 3
+E   assert [(14, []), (14, []), (14, [])] == [(13, []), (13, []), (13, [])]
+E     
+E     At index 0 diff: (14, []) != (13, [])
+E     Use -v to get more diff
+_________ test_timeline_ocr_detail_and_observation_are_session_scoped __________
+tests/test_figura_gateway.py:818: in test_timeline_ocr_detail_and_observation_are_session_scoped
+    assert detail["observationAvailable"] is True
+E   assert False is True
+=========================== short test summary info ============================
+FAILED tests/test_figura_history_retrieval.py::test_search_reads_committed_tool_result_without_reexecution
+FAILED tests/test_figura_history_retrieval.py::test_historical_image_tool_supports_panel_annotations_and_chart_render
+FAILED tests/test_figura_measure_chart_contract.py::test_measure_chart_routes_family_and_applies_shared_scope_and_source_context
+FAILED tests/test_figura_measure_chart_contract.py::test_measure_chart_commits_partial_sensor_once_without_automatic_retry
+FAILED tests/test_figura_durable_tool_execution.py::test_v6_migration_preserves_events_and_accepts_run_progress
+FAILED tests/test_figura_durable_tool_execution.py::test_v2_migration_failure_rolls_back_new_schema_and_can_retry
+FAILED tests/test_figura_durable_tool_execution.py::test_v1_migration_rolls_back_schema_version_and_added_column_on_failure
+FAILED tests/test_figura_execution_policy.py::test_multiple_processes_first_open_share_one_atomic_migration
+FAILED tests/test_figura_gateway.py::test_timeline_ocr_detail_and_observation_are_session_scoped
+9 failed, 227 passed in 37.41s

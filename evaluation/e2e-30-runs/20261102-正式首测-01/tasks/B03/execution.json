@@ -1,0 +1,76 @@
+{
+  "task_id": "B03",
+  "batch_id": "20261102-正式首测-01",
+  "session_id": "a9d773b3f6174f82892d57ce82905053",
+  "execution_status": "completed",
+  "started_at": "2026-11-02T16:57:41.514915+08:00",
+  "turns": [
+    {
+      "turn": 1,
+      "run_id": "31930e66263c4a8189cb7ffcbfcf5b36",
+      "session_id": "a9d773b3f6174f82892d57ce82905053",
+      "status": "completed",
+      "terminal_code": null,
+      "wall_seconds": 6.118,
+      "timed_out": false,
+      "final_answer": "final-answer.txt",
+      "final_answer_committed": true,
+      "figures": [
+        {
+          "call_id": "call_00_Q5HbGgeAhjjR0ZiuMS219061",
+          "run_id": "31930e66263c4a8189cb7ffcbfcf5b36",
+          "file": "figure-01.json",
+          "result": {
+            "charts": [
+              {
+                "chart_id": "quarterly_revenue",
+                "chart_type": "bar",
+                "title": "季度收入构成"
+              }
+            ],
+            "figure_digest": "fa9d6142cdf714345ce0a1f2f449bb1571c1eb9fe474bc240381f235e4fc8ed6",
+            "figure_ref": {
+              "call_id": "call_00_Q5HbGgeAhjjR0ZiuMS219061",
+              "run_id": "31930e66263c4a8189cb7ffcbfcf5b36"
+            },
+            "title": ""
+          },
+          "digest_verified": true
+        }
+      ],
+      "renders": [
+        {
+          "call_id": "call_00_ET_CIZpmia6Pw5FrHkIevPC0126",
+          "run_id": "31930e66263c4a8189cb7ffcbfcf5b36",
+          "file": "render-01.png",
+          "result": {
+            "byte_count": 16981,
+            "figure_digest": "fa9d6142cdf714345ce0a1f2f449bb1571c1eb9fe474bc240381f235e4fc8ed6",
+            "figure_ref": {
+              "call_id": "call_00_Q5HbGgeAhjjR0ZiuMS219061",
+              "run_id": "31930e66263c4a8189cb7ffcbfcf5b36"
+            },
+            "height": 480,
+            "image_sha256": "c65abef0df153cba0da97484707128d36468b0ade4e86d42ab7eaf7880d7b67b",
+            "media_type": "image/png",
+            "width": 640
+          },
+          "png_sha256_verified": true
+        }
+      ],
+      "provider_attempt_count": 3,
+      "internal_retry_count": 0,
+      "usage": {
+        "prompt_tokens": 39850,
+        "completion_tokens": 736,
+        "total_tokens": 40586
+      },
+      "usage_complete": true,
+      "usage_missing_attempt_refs": [],
+      "compaction_operations": [],
+      "delivery_selection": "judge must select from actual final answer and all committed candidates; no automatic best-of selection"
+    }
+  ],
+  "protocol_anomalies": [],
+  "completed_at": "2026-11-02T16:57:47.692017+08:00"
+}

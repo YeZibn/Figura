@@ -1,0 +1,7 @@
+task_id,condition,provider,model,context_capacity_tokens,run_id,compaction_triggered,successful_compaction_count,input_tokens,output_tokens,total_provider_tokens,critical_checks_passed,critical_checks_total,task_pass,artifact_path,notes
+01-chart-analysis,baseline,,,,,,,,,,,,,,
+01-chart-analysis,compaction,,,,,,,,,,,,,,
+02-chart-construction,baseline,,,,,,,,,,,,,,
+02-chart-construction,compaction,,,,,,,,,,,,,,
+03-chart-modification,baseline,,,,,,,,,,,,,,
+03-chart-modification,compaction,,,,,,,,,,,,,,

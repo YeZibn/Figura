@@ -1,0 +1,77 @@
+{
+  "task_id": "K02",
+  "batch_id": "20261102-正式首测-01",
+  "verdict": "pass",
+  "checks": [
+    {
+      "id": "mapping",
+      "critical": true,
+      "status": "pass",
+      "expected": {
+        "quarters": [
+          "Q1",
+          "Q2"
+        ],
+        "series": {
+          "East": [
+            10,
+            20
+          ],
+          "South": [
+            15,
+            25
+          ]
+        },
+        "source": "Figura E2E-30 合成数据 v1"
+      },
+      "actual": {
+        "quarters": [
+          "Q1",
+          "Q2"
+        ],
+        "series": {
+          "East": [
+            10,
+            20
+          ],
+          "South": [
+            15,
+            25
+          ]
+        },
+        "source": "Figura E2E-30 合成数据 v1"
+      },
+      "evidence": [
+        "turn-01/figure-01.json /charts/0/chart_spec/dataset",
+        "turn-01/figure-01.json /charts/0/chart_spec/metadata/source",
+        "turn-01/render-01.png：图例、Q1/Q2 柱组及底部来源"
+      ],
+      "reason": "按季度及系列标签关联后，四个数值均精确一致。实际 PNG 中 East 蓝柱为 10、20，South 橙柱为 15、25，来源文字正确。"
+    }
+  ],
+  "primary_failure": null,
+  "secondary_failures": [],
+  "artifact_refs": [
+    "turn-01/final-answer.txt",
+    "turn-01/figure-01.json",
+    "turn-01/render-01.png",
+    "assemble call_00_YdemIio1PiuTljlvkGdq1406",
+    "render call_00_ET_Op3Sv7vrW0vgLxE2M3AZ8990"
+  ],
+  "quality_notes": [
+    "实际 PNG 呈现一个纵向分组柱状图，总标题、子图标题、轴名、单位和图例完整，未见严重裁切或遮挡。"
+  ],
+  "judge": {
+    "model": "gpt-6.1-sol",
+    "prompt_version": "1.0",
+    "context_isolated": true,
+    "actual_png_viewed": true,
+    "limitations": [
+      "提交及摘要关联依据所提供的执行证据，未另行读取本地文件。"
+    ]
+  },
+  "review_notes": [
+    "本轮唯一成功提交的 Figure 与 render 配对，figure_digest 一致，证据记录摘要及 PNG 校验通过；最终回答对应此唯一交付。",
+    "固定对话仅一轮，未见输入、轮次或提交协议异常。本记录为本次独立裁决，不代表另一次复核。"
+  ]
+}

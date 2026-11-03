@@ -1,0 +1,9 @@
+{
+  "task_id": "K03",
+  "content_verdict": "fail",
+  "critical_errors": [
+    "非目标数据遭到修改：South 系列 Q2 数值由 25 改为 99，违反其余全部保持的要求。"
+  ],
+  "png_viewed": true,
+  "reason": "实际 PNG 的子图标题已正确改为“校准销售（确认）”，但 South 的 Q2 橙色柱高为 99；基准 PNG 对应值为 25，actual-figure.json 亦记录为 99。"
+}

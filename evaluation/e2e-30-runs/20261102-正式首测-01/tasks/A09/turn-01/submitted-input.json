@@ -1,0 +1,7 @@
+{
+  "text": "分别分析附件左、右两个面板：列出所有数据，说明各自图表类型和单位。左图计算 Q2 相对 Q1 的增量；右图计算 Mar 相对 Jan 的增量。两个增量能否直接相加？说明原因。",
+  "attachment_sha256": [
+    "8c2e669637297fbe3ee815c655b1edc92b15da556ad27b64e80d9be4659a459a"
+  ],
+  "providerId": "deepseek"
+}

@@ -1,0 +1,139 @@
+{
+  "schema_version": 2,
+  "title": "季度销售与月度订单",
+  "layout": {
+    "columns": 2
+  },
+  "charts": [
+    {
+      "chart_id": "quarterly_sales",
+      "chart_spec": {
+        "schema_version": 2,
+        "metadata": {
+          "chart_type": "bar",
+          "title": "Quarterly Sales",
+          "source": "quarterly-sales-and-monthly-orders",
+          "note": "单位：百万美元（Revenue, million USD）"
+        },
+        "coordinate_system": {
+          "kind": "cartesian",
+          "x_axis": {
+            "kind": "categorical",
+            "label": "Quarter"
+          },
+          "y_axis": {
+            "kind": "numeric",
+            "label": "Revenue (million USD)"
+          }
+        },
+        "dataset": {
+          "orientation": "vertical",
+          "mode": "grouped",
+          "categories": [
+            {
+              "id": "q1",
+              "label": "Q1"
+            },
+            {
+              "id": "q2",
+              "label": "Q2"
+            },
+            {
+              "id": "q3",
+              "label": "Q3"
+            },
+            {
+              "id": "q4",
+              "label": "Q4"
+            }
+          ],
+          "series": [
+            {
+              "id": "target",
+              "label": "Target",
+              "values": [
+                40,
+                55,
+                48,
+                62
+              ]
+            },
+            {
+              "id": "actual",
+              "label": "Actual",
+              "values": [
+                36,
+                51,
+                45,
+                59
+              ]
+            }
+          ]
+        }
+      },
+      "measurement_refs": []
+    },
+    {
+      "chart_id": "monthly_orders",
+      "chart_spec": {
+        "schema_version": 2,
+        "metadata": {
+          "chart_type": "line",
+          "title": "Monthly Orders",
+          "source": "quarterly-sales-and-monthly-orders",
+          "note": "单位：订单数（笔，Number of Orders）"
+        },
+        "coordinate_system": {
+          "kind": "cartesian",
+          "x_axis": {
+            "kind": "categorical",
+            "label": "Month"
+          },
+          "y_axis": {
+            "kind": "numeric",
+            "label": "Number of Orders"
+          }
+        },
+        "dataset": {
+          "series": [
+            {
+              "id": "orders",
+              "label": "Orders",
+              "points": [
+                {
+                  "x": "Jan",
+                  "y": 22
+                },
+                {
+                  "x": "Feb",
+                  "y": 28
+                },
+                {
+                  "x": "Mar",
+                  "y": 25
+                },
+                {
+                  "x": "Apr",
+                  "y": 36
+                },
+                {
+                  "x": "May",
+                  "y": 44
+                },
+                {
+                  "x": "Jun",
+                  "y": 41
+                },
+                {
+                  "x": "Jul",
+                  "y": 53
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "measurement_refs": []
+    }
+  ]
+}

@@ -1,0 +1,221 @@
+{
+  "task_id": "C08",
+  "batch_id": "20261102-正式首测-01",
+  "session_id": "3a057cb5580d4b4f85351042ec7f89dd",
+  "execution_status": "completed",
+  "started_at": "2026-11-02T17:02:14.289156+08:00",
+  "turns": [
+    {
+      "turn": 1,
+      "run_id": "3904e63001c8434bbef4d396e058f948",
+      "session_id": "3a057cb5580d4b4f85351042ec7f89dd",
+      "status": "completed",
+      "terminal_code": null,
+      "wall_seconds": 8.254,
+      "timed_out": false,
+      "final_answer": "final-answer.txt",
+      "final_answer_committed": true,
+      "figures": [
+        {
+          "call_id": "call_00_HzNU4qI6fWMjEGU3KGLq0659",
+          "run_id": "3904e63001c8434bbef4d396e058f948",
+          "file": "figure-01.json",
+          "result": {
+            "charts": [
+              {
+                "chart_id": "regional_sales",
+                "chart_type": "bar",
+                "title": "区域季度销售"
+              },
+              {
+                "chart_id": "monthly_orders",
+                "chart_type": "line",
+                "title": "月度订单"
+              }
+            ],
+            "figure_digest": "eea998ad562dda58452cba4a4657a7c0cc86baa3401a8026b94e506ef2d93e93",
+            "figure_ref": {
+              "call_id": "call_00_HzNU4qI6fWMjEGU3KGLq0659",
+              "run_id": "3904e63001c8434bbef4d396e058f948"
+            },
+            "title": "区域经营报告"
+          },
+          "digest_verified": true
+        }
+      ],
+      "renders": [
+        {
+          "call_id": "call_00_ET_S89hM07bL8HGt0CalbpQ1320",
+          "run_id": "3904e63001c8434bbef4d396e058f948",
+          "file": "render-01.png",
+          "result": {
+            "byte_count": 43359,
+            "figure_digest": "eea998ad562dda58452cba4a4657a7c0cc86baa3401a8026b94e506ef2d93e93",
+            "figure_ref": {
+              "call_id": "call_00_HzNU4qI6fWMjEGU3KGLq0659",
+              "run_id": "3904e63001c8434bbef4d396e058f948"
+            },
+            "height": 522,
+            "image_sha256": "9570e9e592ae08096b677db9e563f1a09a298f2b13f4342f7d9824330fd7bbc2",
+            "media_type": "image/png",
+            "width": 1280
+          },
+          "png_sha256_verified": true
+        }
+      ],
+      "provider_attempt_count": 3,
+      "internal_retry_count": 0,
+      "usage": {
+        "prompt_tokens": 41076,
+        "completion_tokens": 1051,
+        "total_tokens": 42127
+      },
+      "usage_complete": true,
+      "usage_missing_attempt_refs": [],
+      "compaction_operations": [],
+      "delivery_selection": "judge must select from actual final answer and all committed candidates; no automatic best-of selection"
+    },
+    {
+      "turn": 2,
+      "run_id": "48256db3654947de81bcba5cd74ca4ea",
+      "session_id": "3a057cb5580d4b4f85351042ec7f89dd",
+      "status": "completed",
+      "terminal_code": null,
+      "wall_seconds": 8.331,
+      "timed_out": false,
+      "final_answer": "final-answer.txt",
+      "final_answer_committed": true,
+      "figures": [
+        {
+          "call_id": "call_00_Rhq6zMLrsNb1MnRsjrlT5569",
+          "run_id": "48256db3654947de81bcba5cd74ca4ea",
+          "file": "figure-01.json",
+          "result": {
+            "charts": [
+              {
+                "chart_id": "regional_sales",
+                "chart_type": "bar",
+                "title": "区域季度销售（修订）"
+              },
+              {
+                "chart_id": "monthly_orders",
+                "chart_type": "line",
+                "title": "月度订单"
+              }
+            ],
+            "figure_digest": "0490e5f607a2986b1b0a7331eafe3a21e989ff037f0d3c6ef0bb55475660e604",
+            "figure_ref": {
+              "call_id": "call_00_Rhq6zMLrsNb1MnRsjrlT5569",
+              "run_id": "48256db3654947de81bcba5cd74ca4ea"
+            },
+            "title": "区域经营报告"
+          },
+          "digest_verified": true
+        }
+      ],
+      "renders": [
+        {
+          "call_id": "call_00_ET_aCDMJ3zB1AbZBQrOGvRH5204",
+          "run_id": "48256db3654947de81bcba5cd74ca4ea",
+          "file": "render-01.png",
+          "result": {
+            "byte_count": 44103,
+            "figure_digest": "0490e5f607a2986b1b0a7331eafe3a21e989ff037f0d3c6ef0bb55475660e604",
+            "figure_ref": {
+              "call_id": "call_00_Rhq6zMLrsNb1MnRsjrlT5569",
+              "run_id": "48256db3654947de81bcba5cd74ca4ea"
+            },
+            "height": 522,
+            "image_sha256": "e632696b8267616a88af1531980e0dd08eb5bd9fdacc7fb3f3173e7af14d89eb",
+            "media_type": "image/png",
+            "width": 1280
+          },
+          "png_sha256_verified": true
+        }
+      ],
+      "provider_attempt_count": 3,
+      "internal_retry_count": 0,
+      "usage": {
+        "prompt_tokens": 47495,
+        "completion_tokens": 920,
+        "total_tokens": 48415
+      },
+      "usage_complete": true,
+      "usage_missing_attempt_refs": [],
+      "compaction_operations": [],
+      "delivery_selection": "judge must select from actual final answer and all committed candidates; no automatic best-of selection"
+    },
+    {
+      "turn": 3,
+      "run_id": "3c0807ea4a8a48b2b3737cd3548a0a91",
+      "session_id": "3a057cb5580d4b4f85351042ec7f89dd",
+      "status": "completed",
+      "terminal_code": null,
+      "wall_seconds": 8.517,
+      "timed_out": false,
+      "final_answer": "final-answer.txt",
+      "final_answer_committed": true,
+      "figures": [
+        {
+          "call_id": "call_00_ecQscZtvd9Tw3TdH6BQM6050",
+          "run_id": "3c0807ea4a8a48b2b3737cd3548a0a91",
+          "file": "figure-01.json",
+          "result": {
+            "charts": [
+              {
+                "chart_id": "regional_sales",
+                "chart_type": "bar",
+                "title": "区域季度销售（修订）"
+              },
+              {
+                "chart_id": "monthly_orders",
+                "chart_type": "line",
+                "title": "月度订单"
+              }
+            ],
+            "figure_digest": "1e753e7afe7b3f9566165acdf3aa3c3c48e9f66bcc2ba79d78670502ac5a7351",
+            "figure_ref": {
+              "call_id": "call_00_ecQscZtvd9Tw3TdH6BQM6050",
+              "run_id": "3c0807ea4a8a48b2b3737cd3548a0a91"
+            },
+            "title": "区域经营报告"
+          },
+          "digest_verified": true
+        }
+      ],
+      "renders": [
+        {
+          "call_id": "call_00_ET_mplhi5qM1yfgfzMbQ3Xm7899",
+          "run_id": "3c0807ea4a8a48b2b3737cd3548a0a91",
+          "file": "render-01.png",
+          "result": {
+            "byte_count": 44646,
+            "figure_digest": "1e753e7afe7b3f9566165acdf3aa3c3c48e9f66bcc2ba79d78670502ac5a7351",
+            "figure_ref": {
+              "call_id": "call_00_ecQscZtvd9Tw3TdH6BQM6050",
+              "run_id": "3c0807ea4a8a48b2b3737cd3548a0a91"
+            },
+            "height": 522,
+            "image_sha256": "8ec4654440617d1c574bdd459cd3b53ba2d081b8af1f9cd42c15078c3fd99d9a",
+            "media_type": "image/png",
+            "width": 1280
+          },
+          "png_sha256_verified": true
+        }
+      ],
+      "provider_attempt_count": 3,
+      "internal_retry_count": 0,
+      "usage": {
+        "prompt_tokens": 53348,
+        "completion_tokens": 925,
+        "total_tokens": 54273
+      },
+      "usage_complete": true,
+      "usage_missing_attempt_refs": [],
+      "compaction_operations": [],
+      "delivery_selection": "judge must select from actual final answer and all committed candidates; no automatic best-of selection"
+    }
+  ],
+  "protocol_anomalies": [],
+  "completed_at": "2026-11-02T17:02:39.856923+08:00"
+}

@@ -1,0 +1,65 @@
+{
+  "turn": 1,
+  "run_id": "f71b647fa7974b97b7a86b1216f77b69",
+  "session_id": "8b7585b6bb6b4f878ef870f9f5e1e4dd",
+  "status": "completed",
+  "terminal_code": null,
+  "wall_seconds": 8.195,
+  "timed_out": false,
+  "final_answer": "final-answer.txt",
+  "final_answer_committed": true,
+  "figures": [
+    {
+      "call_id": "call_00_rL2OkDW2rMGXnWqE7jln4868",
+      "run_id": "f71b647fa7974b97b7a86b1216f77b69",
+      "file": "figure-01.json",
+      "result": {
+        "charts": [
+          {
+            "chart_id": "regional_quarterly_sales",
+            "chart_type": "bar",
+            "title": "区域季度销售"
+          }
+        ],
+        "figure_digest": "fe46ff9280b315393eaf6c0e37887d75bab30be739c68bfb9d60a984ca897ada",
+        "figure_ref": {
+          "call_id": "call_00_rL2OkDW2rMGXnWqE7jln4868",
+          "run_id": "f71b647fa7974b97b7a86b1216f77b69"
+        },
+        "title": "区域经营报告"
+      },
+      "digest_verified": true
+    }
+  ],
+  "renders": [
+    {
+      "call_id": "call_00_ET_Y7bhZqNkMH5y6MHg62qn8268",
+      "run_id": "f71b647fa7974b97b7a86b1216f77b69",
+      "file": "render-01.png",
+      "result": {
+        "byte_count": 20890,
+        "figure_digest": "fe46ff9280b315393eaf6c0e37887d75bab30be739c68bfb9d60a984ca897ada",
+        "figure_ref": {
+          "call_id": "call_00_rL2OkDW2rMGXnWqE7jln4868",
+          "run_id": "f71b647fa7974b97b7a86b1216f77b69"
+        },
+        "height": 522,
+        "image_sha256": "dcc154ce54b5e5e86b08e7388d8f28ce0fe4a7a02a27d91d82ccd015b7fafe43",
+        "media_type": "image/png",
+        "width": 640
+      },
+      "png_sha256_verified": true
+    }
+  ],
+  "provider_attempt_count": 3,
+  "internal_retry_count": 0,
+  "usage": {
+    "prompt_tokens": 40029,
+    "completion_tokens": 848,
+    "total_tokens": 40877
+  },
+  "usage_complete": true,
+  "usage_missing_attempt_refs": [],
+  "compaction_operations": [],
+  "delivery_selection": "judge must select from actual final answer and all committed candidates; no automatic best-of selection"
+}

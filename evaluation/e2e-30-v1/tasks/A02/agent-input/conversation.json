@@ -1,0 +1,9 @@
+[
+  {
+    "turn": 1,
+    "text": "读取附件：列出 Q1—Q4 中 North、South 的全部数值与单位，并逐季度计算 North 减 South；指出哪些季度 South 更高。",
+    "attachments": [
+      "chart.png"
+    ]
+  }
+]

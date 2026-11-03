@@ -1,0 +1,72 @@
+[
+  {
+    "attempt_id": "1f64ddc14b4444b79c7c8998399a5c55",
+    "request_id": "a0790a78b30d4a75bbb8183543a0225d",
+    "status": "response_committed",
+    "response_record_id": "34eefae3f3314549a5690ac07c86aff4",
+    "failure_code": null,
+    "http_status": 200,
+    "attempt_sequence": 1,
+    "usage": {
+      "completion_tokens": 403,
+      "prompt_tokens": 12506,
+      "total_tokens": 12909
+    }
+  },
+  {
+    "attempt_id": "b95fc0778eed4a06a7970ef9295c9889",
+    "request_id": "e80d46335f784c519971f9cc08dad582",
+    "status": "response_committed",
+    "response_record_id": "ec804be54e59444a8546aff6a03fbeb2",
+    "failure_code": null,
+    "http_status": 200,
+    "attempt_sequence": 1,
+    "usage": {
+      "completion_tokens": 94,
+      "prompt_tokens": 13204,
+      "total_tokens": 13298
+    }
+  },
+  {
+    "attempt_id": "360738c9fc984802b46d42ba9d5eec49",
+    "request_id": "3eba3ba74e2741acbd898af9c8be6524",
+    "status": "response_committed",
+    "response_record_id": "08faeea5d9ab46899ad343ea8925f6db",
+    "failure_code": null,
+    "http_status": 200,
+    "attempt_sequence": 1,
+    "usage": {
+      "completion_tokens": 524,
+      "prompt_tokens": 14188,
+      "total_tokens": 14712
+    }
+  },
+  {
+    "attempt_id": "dc2e7dca51dc41b79defb67b5e1b044e",
+    "request_id": "89dd0d05fb6f4c918d429219574435ae",
+    "status": "response_committed",
+    "response_record_id": "cb9e69d69f8144f2a1ad51837219a381",
+    "failure_code": null,
+    "http_status": 200,
+    "attempt_sequence": 1,
+    "usage": {
+      "completion_tokens": 92,
+      "prompt_tokens": 14582,
+      "total_tokens": 14674
+    }
+  },
+  {
+    "attempt_id": "41fee69f6b5c446f9015c2ebf0f05af3",
+    "request_id": "ec0f90d89ccc45e2a7df4faad780c277",
+    "status": "response_committed",
+    "response_record_id": "6890ba7d3e224ffbb3d236427c12e542",
+    "failure_code": null,
+    "http_status": 200,
+    "attempt_sequence": 1,
+    "usage": {
+      "completion_tokens": 140,
+      "prompt_tokens": 15534,
+      "total_tokens": 15674
+    }
+  }
+]

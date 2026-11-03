@@ -1,0 +1,71 @@
+{
+  "task_id": "B04",
+  "batch_id": "20261102-正式首测-01",
+  "verdict": "pass",
+  "checks": [
+    {
+      "id": "T1-semantic",
+      "critical": true,
+      "status": "pass",
+      "expected": "单张多系列折线图；月份 Jan、Feb、Mar、Apr、May；系列 Online、Store；保留全部数值、指定标题、轴标签和来源。",
+      "actual": "figure-02.json 为单张折线图，系列及月份顺序正确。Online 为 [22,27,25,35,41]，Store 为 [18,21,24,26,29]，10 个数值逐项一致；标题、轴标签、坐标类型和来源均符合要求。",
+      "evidence": [
+        "turn_evidence[0].figures/figure-02.json/charts/0/chart_spec",
+        "execution.turns[0].figures[1].result",
+        "assemble call_00_Rmxw2N3CzvdMrGtIZK1Q1587"
+      ],
+      "reason": "按系列标签及月份关联后，数据差值全部为 0；内部 ID 差异不影响语义。"
+    },
+    {
+      "id": "T1-render",
+      "critical": true,
+      "status": "pass",
+      "expected": "成功渲染且与最终 Figure 匹配的可查看 PNG，必要图形与文字完整可读。",
+      "actual": "已查看第二张实际 PNG：640×480，单张双系列折线图，图例顺序、月份、曲线映射、中文标题、Month、Orders (单) 和来源均正确，无严重裁切或遮挡。render-02 的 figure_ref 与 digest 对应 figure-02，证据记录 PNG 哈希验证成功。",
+      "evidence": [
+        "render-02.png（附件 Image #2）",
+        "execution.turns[0].renders[1]",
+        "render call_00_ET_0JIl9Z5NSz97XHBwp1wV2635",
+        "figure_digest: 417908834f662ea7a042d66a172a07d79f61c315e3058c585e3cb515b1189f25"
+      ],
+      "reason": "实际 PNG 可读取，图形和必要文字与成功提交的最终 Figure 一致。"
+    },
+    {
+      "id": "T1-delivery",
+      "critical": true,
+      "status": "pass",
+      "expected": "最终回答明确指向可用产物，无与数据或交付状态冲突的关键陈述。",
+      "actual": "最终回答明确指定“第二版为最终交付图”，并注明 PNG 为 640×480，唯一对应 render-02.png；回答中的数据表与实际 Figure 一致。",
+      "evidence": [
+        "final-answer.txt：首段",
+        "final-answer.txt：数据表",
+        "final-answer.txt：末段“第二版为最终交付图”",
+        "execution.turns[0].final_answer_committed"
+      ],
+      "reason": "依据最终回答选择第二版，未从候选中择优；存在配对成功的装配和渲染交付。"
+    }
+  ],
+  "primary_failure": null,
+  "secondary_failures": [],
+  "artifact_refs": [
+    "figure-02.json",
+    "render-02.png",
+    "final-answer.txt"
+  ],
+  "quality_notes": [
+    "回答中“两人差距”应为“两系列差距”，属于措辞问题，不影响数据与交付。"
+  ],
+  "judge": {
+    "model": "gpt-6.1-sol",
+    "prompt_version": "1.0",
+    "context_isolated": true,
+    "actual_png_viewed": true,
+    "limitations": [
+      "依据本次提供的冻结证据及实际图片裁决，未独立重新计算文件哈希。"
+    ]
+  },
+  "review_notes": [
+    "所给执行记录无协议异常；固定单轮输入、成功提交结果及最终回答相互对应。",
+    "本记录仅为本次独立裁决，不代表已完成后续独立复核。"
+  ]
+}

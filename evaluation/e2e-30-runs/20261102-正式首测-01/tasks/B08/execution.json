@@ -1,0 +1,115 @@
+{
+  "task_id": "B08",
+  "batch_id": "20261102-正式首测-01",
+  "session_id": "ed24cff7d0ee48fc885b69513e9c4d8c",
+  "execution_status": "completed",
+  "started_at": "2026-11-02T16:58:29.018002+08:00",
+  "turns": [
+    {
+      "turn": 1,
+      "run_id": "41ffaa06804347d8bc99a915af1976f3",
+      "session_id": "ed24cff7d0ee48fc885b69513e9c4d8c",
+      "status": "completed",
+      "terminal_code": null,
+      "wall_seconds": 24.604,
+      "timed_out": false,
+      "final_answer": "final-answer.txt",
+      "final_answer_committed": true,
+      "figures": [
+        {
+          "call_id": "call_00_gyAaeigkUFpPpj4yuThe4184",
+          "run_id": "41ffaa06804347d8bc99a915af1976f3",
+          "file": "figure-01.json",
+          "result": {
+            "charts": [
+              {
+                "chart_id": "channel_donut",
+                "chart_type": "pie",
+                "title": "渠道贡献"
+              }
+            ],
+            "figure_digest": "244a285195a7554b0694c39d0b5e9a8d7f1709dcf6e4929fad723b87f8357f28",
+            "figure_ref": {
+              "call_id": "call_00_gyAaeigkUFpPpj4yuThe4184",
+              "run_id": "41ffaa06804347d8bc99a915af1976f3"
+            },
+            "title": "渠道贡献"
+          },
+          "digest_verified": true
+        },
+        {
+          "call_id": "call_00_eIJnmSu8cQH1b2Cc0lyj3750",
+          "run_id": "41ffaa06804347d8bc99a915af1976f3",
+          "file": "figure-02.json",
+          "result": {
+            "charts": [
+              {
+                "chart_id": "channel_donut",
+                "chart_type": "pie",
+                "title": "渠道贡献"
+              }
+            ],
+            "figure_digest": "7677e2512d6eafc098a7ca0290abef6dc170116ebdf1f044b0f21d3ba9b95de9",
+            "figure_ref": {
+              "call_id": "call_00_eIJnmSu8cQH1b2Cc0lyj3750",
+              "run_id": "41ffaa06804347d8bc99a915af1976f3"
+            },
+            "title": ""
+          },
+          "digest_verified": true
+        }
+      ],
+      "renders": [
+        {
+          "call_id": "call_00_ET_6T9GCc6Q65EUJ6Mw2Kiy8837",
+          "run_id": "41ffaa06804347d8bc99a915af1976f3",
+          "file": "render-01.png",
+          "result": {
+            "byte_count": 26061,
+            "figure_digest": "244a285195a7554b0694c39d0b5e9a8d7f1709dcf6e4929fad723b87f8357f28",
+            "figure_ref": {
+              "call_id": "call_00_gyAaeigkUFpPpj4yuThe4184",
+              "run_id": "41ffaa06804347d8bc99a915af1976f3"
+            },
+            "height": 522,
+            "image_sha256": "5f58297cfcaf65db5e73f72626d9d601c1ce8a337ac1df0578bab9fb1ac9d29a",
+            "media_type": "image/png",
+            "width": 640
+          },
+          "png_sha256_verified": true
+        },
+        {
+          "call_id": "call_00_ET_uDBTjwucprKVp0fVUr0y2109",
+          "run_id": "41ffaa06804347d8bc99a915af1976f3",
+          "file": "render-02.png",
+          "result": {
+            "byte_count": 26630,
+            "figure_digest": "7677e2512d6eafc098a7ca0290abef6dc170116ebdf1f044b0f21d3ba9b95de9",
+            "figure_ref": {
+              "call_id": "call_00_eIJnmSu8cQH1b2Cc0lyj3750",
+              "run_id": "41ffaa06804347d8bc99a915af1976f3"
+            },
+            "height": 480,
+            "image_sha256": "8edd601e6433fd0a783be45481bb38a10e322782bea28f96034a40bf85ff2027",
+            "media_type": "image/png",
+            "width": 640
+          },
+          "png_sha256_verified": true
+        }
+      ],
+      "provider_attempt_count": 6,
+      "internal_retry_count": 0,
+      "usage": {
+        "prompt_tokens": 85680,
+        "completion_tokens": 3216,
+        "total_tokens": 88896
+      },
+      "usage_complete": true,
+      "usage_missing_attempt_refs": [],
+      "compaction_operations": [],
+      "delivery_selection": "judge must select from actual final answer and all committed candidates; no automatic best-of selection"
+    }
+  ],
+  "protocol_anomalies": [],
+  "completed_at": "2026-11-02T16:58:53.775440+08:00"
+}

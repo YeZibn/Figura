@@ -1,0 +1,49 @@
+{
+  "semantic_projection": "忽略内部 ID 和 measurement_refs；保留标题、来源、note、数据、坐标、画布和顺序",
+  "rounds": [
+    {
+      "turn": 2,
+      "authorized_user_request": "子图标题暂改为“区域季度销售（候选）”，South/Q3 更正为 40 万元，试用纵向堆叠柱。总标题、单位和来源不变。请实际渲染交付。",
+      "expected_semantic_differences": [
+        {
+          "path": "/charts/0/dataset/mode",
+          "before": "grouped",
+          "after": "stacked"
+        },
+        {
+          "path": "/charts/0/dataset/series/1/values/2",
+          "before": 27,
+          "after": 40
+        },
+        {
+          "path": "/charts/0/metadata/title",
+          "before": "区域季度销售",
+          "after": "区域季度销售（候选）"
+        }
+      ],
+      "preserve": "所有未被该轮授权改变的语义；按标签匹配，忽略内部 ID"
+    },
+    {
+      "turn": 3,
+      "authorized_user_request": "最终确认：子图标题为“区域季度销售（确认）”，South/Q3 最终是 42 万元（覆盖 40）；撤销堆叠，恢复纵向分组。早期总标题、单位、来源及未更改数据和顺序都保留。请实际渲染交付，并简要说明最终生效项。",
+      "expected_semantic_differences": [
+        {
+          "path": "/charts/0/dataset/mode",
+          "before": "stacked",
+          "after": "grouped"
+        },
+        {
+          "path": "/charts/0/dataset/series/1/values/2",
+          "before": 40,
+          "after": 42
+        },
+        {
+          "path": "/charts/0/metadata/title",
+          "before": "区域季度销售（候选）",
+          "after": "区域季度销售（确认）"
+        }
+      ],
+      "preserve": "所有未被该轮授权改变的语义；按标签匹配，忽略内部 ID"
+    }
+  ]
+}

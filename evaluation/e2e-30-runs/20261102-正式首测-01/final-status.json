@@ -1,0 +1,279 @@
+[
+  {
+    "task_id": "A01",
+    "initial": "pass",
+    "selected_for_review": false,
+    "review": null,
+    "check_disagreements": [],
+    "final_verdict": "pass",
+    "requires_adjudication": false
+  },
+  {
+    "task_id": "A02",
+    "initial": "pass",
+    "selected_for_review": true,
+    "review": "pass",
+    "check_disagreements": [],
+    "final_verdict": "pass",
+    "requires_adjudication": false
+  },
+  {
+    "task_id": "A03",
+    "initial": "pass",
+    "selected_for_review": false,
+    "review": null,
+    "check_disagreements": [],
+    "final_verdict": "pass",
+    "requires_adjudication": false
+  },
+  {
+    "task_id": "A04",
+    "initial": "pass",
+    "selected_for_review": false,
+    "review": null,
+    "check_disagreements": [],
+    "final_verdict": "pass",
+    "requires_adjudication": false
+  },
+  {
+    "task_id": "A05",
+    "initial": "pass",
+    "selected_for_review": false,
+    "review": null,
+    "check_disagreements": [],
+    "final_verdict": "pass",
+    "requires_adjudication": false
+  },
+  {
+    "task_id": "A06",
+    "initial": "pass",
+    "selected_for_review": false,
+    "review": null,
+    "check_disagreements": [],
+    "final_verdict": "pass",
+    "requires_adjudication": false
+  },
+  {
+    "task_id": "A07",
+    "initial": "pass",
+    "selected_for_review": false,
+    "review": null,
+    "check_disagreements": [],
+    "final_verdict": "pass",
+    "requires_adjudication": false
+  },
+  {
+    "task_id": "A08",
+    "initial": "pass",
+    "selected_for_review": false,
+    "review": null,
+    "check_disagreements": [],
+    "final_verdict": "pass",
+    "requires_adjudication": false
+  },
+  {
+    "task_id": "A09",
+    "initial": "pass",
+    "selected_for_review": false,
+    "review": null,
+    "check_disagreements": [],
+    "final_verdict": "pass",
+    "requires_adjudication": false
+  },
+  {
+    "task_id": "A10",
+    "initial": "pass",
+    "selected_for_review": true,
+    "review": "pass",
+    "check_disagreements": [],
+    "final_verdict": "pass",
+    "requires_adjudication": false
+  },
+  {
+    "task_id": "B01",
+    "initial": "pass",
+    "selected_for_review": false,
+    "review": null,
+    "check_disagreements": [],
+    "final_verdict": "pass",
+    "requires_adjudication": false
+  },
+  {
+    "task_id": "B02",
+    "initial": "pass",
+    "selected_for_review": false,
+    "review": null,
+    "check_disagreements": [],
+    "final_verdict": "pass",
+    "requires_adjudication": false
+  },
+  {
+    "task_id": "B03",
+    "initial": "pass",
+    "selected_for_review": true,
+    "review": "pass",
+    "check_disagreements": [],
+    "final_verdict": "pass",
+    "requires_adjudication": false
+  },
+  {
+    "task_id": "B04",
+    "initial": "pass",
+    "selected_for_review": false,
+    "review": null,
+    "check_disagreements": [],
+    "final_verdict": "pass",
+    "requires_adjudication": false
+  },
+  {
+    "task_id": "B05",
+    "initial": "pass",
+    "selected_for_review": false,
+    "review": null,
+    "check_disagreements": [],
+    "final_verdict": "pass",
+    "requires_adjudication": false
+  },
+  {
+    "task_id": "B06",
+    "initial": "pass",
+    "selected_for_review": false,
+    "review": null,
+    "check_disagreements": [],
+    "final_verdict": "pass",
+    "requires_adjudication": false
+  },
+  {
+    "task_id": "B07",
+    "initial": "pass",
+    "selected_for_review": true,
+    "review": "pass",
+    "check_disagreements": [],
+    "final_verdict": "pass",
+    "requires_adjudication": false
+  },
+  {
+    "task_id": "B08",
+    "initial": "fail",
+    "selected_for_review": true,
+    "review": "fail",
+    "check_disagreements": [],
+    "final_verdict": "fail",
+    "requires_adjudication": false
+  },
+  {
+    "task_id": "B09",
+    "initial": "pass",
+    "selected_for_review": false,
+    "review": null,
+    "check_disagreements": [],
+    "final_verdict": "pass",
+    "requires_adjudication": false
+  },
+  {
+    "task_id": "B10",
+    "initial": "pass",
+    "selected_for_review": false,
+    "review": null,
+    "check_disagreements": [],
+    "final_verdict": "pass",
+    "requires_adjudication": false
+  },
+  {
+    "task_id": "C01",
+    "initial": "pass",
+    "selected_for_review": true,
+    "review": "pass",
+    "check_disagreements": [],
+    "final_verdict": "pass",
+    "requires_adjudication": false
+  },
+  {
+    "task_id": "C02",
+    "initial": "fail",
+    "selected_for_review": true,
+    "review": "fail",
+    "check_disagreements": [],
+    "final_verdict": "fail",
+    "requires_adjudication": false
+  },
+  {
+    "task_id": "C03",
+    "initial": "fail",
+    "selected_for_review": true,
+    "review": "fail",
+    "check_disagreements": [],
+    "final_verdict": "fail",
+    "requires_adjudication": false
+  },
+  {
+    "task_id": "C04",
+    "initial": "pass",
+    "selected_for_review": false,
+    "review": null,
+    "check_disagreements": [],
+    "final_verdict": "pass",
+    "requires_adjudication": false
+  },
+  {
+    "task_id": "C05",
+    "initial": "pass",
+    "selected_for_review": false,
+    "review": null,
+    "check_disagreements": [],
+    "final_verdict": "pass",
+    "requires_adjudication": false
+  },
+  {
+    "task_id": "C06",
+    "initial": "fail",
+    "selected_for_review": true,
+    "review": "pass",
+    "check_disagreements": [
+      {
+        "id": "preservation",
+        "initial": "fail",
+        "review": "pass"
+      }
+    ],
+    "final_verdict": "pass",
+    "requires_adjudication": false,
+    "adjudication": "adjudications/C06.json"
+  },
+  {
+    "task_id": "C07",
+    "initial": "pass",
+    "selected_for_review": true,
+    "review": "pass",
+    "check_disagreements": [],
+    "final_verdict": "pass",
+    "requires_adjudication": false
+  },
+  {
+    "task_id": "C08",
+    "initial": "pass",
+    "selected_for_review": false,
+    "review": null,
+    "check_disagreements": [],
+    "final_verdict": "pass",
+    "requires_adjudication": false
+  },
+  {
+    "task_id": "C09",
+    "initial": "pass",
+    "selected_for_review": false,
+    "review": null,
+    "check_disagreements": [],
+    "final_verdict": "pass",
+    "requires_adjudication": false
+  },
+  {
+    "task_id": "C10",
+    "initial": "pass",
+    "selected_for_review": false,
+    "review": null,
+    "check_disagreements": [],
+    "final_verdict": "pass",
+    "requires_adjudication": false
+  }
+]

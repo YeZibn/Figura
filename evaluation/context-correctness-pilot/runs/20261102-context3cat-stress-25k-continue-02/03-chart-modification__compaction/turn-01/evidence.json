@@ -1,0 +1,59 @@
+{
+  "turn": 1,
+  "run_id": "62dc8c89aa7a4a4dbae074a3c88d9bb2",
+  "session_id": "676744199b3a463fabd1fe0106cef115",
+  "status": "completed",
+  "terminal_code": null,
+  "final_answer_committed": true,
+  "figures": [
+    {
+      "file": "figure-01.json",
+      "figure_digest": "2912590dadc3ab4f2b8054dc872732d82e3d7fc387c056f744f621a329aea0f6",
+      "verified": true
+    },
+    {
+      "file": "figure-02.json",
+      "figure_digest": "445aa4974723aa4992e4cde321fb9a9bec2af7e7289cb6a8a009e3cfd7641b89",
+      "verified": true
+    }
+  ],
+  "renders": [
+    {
+      "file": "render-01.png",
+      "image_sha256": "6425583e09ff25993a69ddd3449d9070b384a6606b776b687982c2a108f32916",
+      "verified": true
+    },
+    {
+      "file": "render-02.png",
+      "image_sha256": "86e1f2b01227b5b9ff83b9d00ae36fa463c54b95059e72defb2fd4f5377497b0",
+      "verified": true
+    }
+  ],
+  "provider_attempt_count": 8,
+  "usage_by_purpose": {
+    "agent_turn": {
+      "prompt_tokens": 119132,
+      "completion_tokens": 3033,
+      "total_tokens": 122165
+    },
+    "context_compaction": {
+      "prompt_tokens": 8338,
+      "completion_tokens": 3219,
+      "total_tokens": 11557
+    }
+  },
+  "usage_total_including_compaction": {
+    "prompt_tokens": 127470,
+    "completion_tokens": 6252,
+    "total_tokens": 133722
+  },
+  "usage_complete": true,
+  "usage_missing_attempts": [],
+  "compaction_operations": [
+    {
+      "operation_id": "36138fe66d614aa4a38469efe864d6d1",
+      "status": "completed",
+      "failure_code": null
+    }
+  ]
+}

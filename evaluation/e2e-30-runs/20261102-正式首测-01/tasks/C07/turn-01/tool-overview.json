@@ -1,0 +1,14 @@
+[
+  {
+    "call_id": "call_00_97CFM5ITgQQlCf4X0K4k8322",
+    "tool_name": "assemble_chart_figure",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_69SlvXJy7hcbAQbUfE7A6102",
+    "tool_name": "render_chart_figure",
+    "outcome": "succeeded",
+    "error": null
+  }
+]

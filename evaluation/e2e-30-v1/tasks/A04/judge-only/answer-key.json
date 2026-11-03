@@ -1,0 +1,101 @@
+{
+  "task_id": "A04",
+  "category": "analysis",
+  "status": "not_run",
+  "facts": {
+    "points": {
+      "China": {
+        "2015": 7.0609546,
+        "2019": 7.5260706,
+        "2023": 8.556261
+      },
+      "United States": {
+        "2015": 16.461393,
+        "2019": 15.500492,
+        "2023": 14.31945
+      },
+      "France": {
+        "2015": 5.116293,
+        "2019": 4.812466,
+        "2023": 4.067842
+      }
+    },
+    "changes": {
+      "China": 1.4953063999999996,
+      "United States": -2.1419430000000013,
+      "France": -1.048451
+    },
+    "unit": "tonnes CO2 per person",
+    "highest_2023": "United States"
+  },
+  "checks": [
+    {
+      "id": "structure",
+      "critical": true,
+      "requirement": "正确识别三条折线、人均而非总量、吨 CO₂/人",
+      "expected": {
+        "series": [
+          "China",
+          "United States",
+          "France"
+        ],
+        "unit": "tonnes CO2 per person"
+      }
+    },
+    {
+      "id": "points",
+      "critical": true,
+      "requirement": "九个指定年份的估读值正确关联",
+      "expected": {
+        "China": {
+          "2015": 7.0609546,
+          "2019": 7.5260706,
+          "2023": 8.556261
+        },
+        "United States": {
+          "2015": 16.461393,
+          "2019": 15.500492,
+          "2023": 14.31945
+        },
+        "France": {
+          "2015": 5.116293,
+          "2019": 4.812466,
+          "2023": 4.067842
+        }
+      },
+      "numeric_tolerance": {
+        "abs": 0.6,
+        "rel": 0
+      }
+    },
+    {
+      "id": "changes",
+      "critical": true,
+      "requirement": "各国净变化方向和数值正确",
+      "expected": {
+        "China": 1.4953063999999996,
+        "United States": -2.1419430000000013,
+        "France": -1.048451
+      },
+      "numeric_tolerance": {
+        "abs": 1.2,
+        "rel": 0
+      }
+    },
+    {
+      "id": "ranking",
+      "critical": true,
+      "requirement": "2023 年最高者正确",
+      "expected": "United States"
+    },
+    {
+      "id": "estimates",
+      "critical": true,
+      "requirement": "将读图数值标为约数，不声称精确统计值",
+      "expected": "约／approximately"
+    }
+  ],
+  "reference_figures": [],
+  "numeric_policy": "explicit_per_check",
+  "semantic_equivalence": "忽略内部生成的 chart/category/series ID；按标签、顺序和语义匹配。坐标 kind 和数据类型必须合法。空 note、空 figure title 等未要求字段不强制一致。"
+}

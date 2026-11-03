@@ -1,0 +1,7 @@
+已完成修改并重新渲染，PNG 见上方。
+
+- **子图标题**：区域季度销售（内部版）
+- 其余保持原样：总标题“区域经营报告”，类别 Q1–Q4，系列 East、South、North，横轴 Quarter，纵轴 Sales (万元)，来源“Figura E2E-30 合成数据 v1”
+- 数据与柱高、图例、轴刻度均未变（East 13/19/16/25，South 10/15/18/21，North 8/12/14/17）
+
+新基线：Figure `call_00_ET_W3vHOJtLppJtiwmCprRx9224`，渲染 `call_00_ET_r3MHCEXp9VD6V3j5Dcu90707`（640×522）。

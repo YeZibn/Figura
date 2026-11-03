@@ -1,0 +1,31 @@
+{
+  "source": "Figura E2E-30 合成数据 v1",
+  "charts": [
+    {
+      "name": "地区每日工单",
+      "data": {
+        "columns": [
+          "Mon",
+          "Tue",
+          "Wed"
+        ],
+        "rows": [
+          "East",
+          "South"
+        ],
+        "values_by_row": [
+          [
+            11,
+            null,
+            18
+          ],
+          [
+            9,
+            15,
+            6
+          ]
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,48 @@
+{
+  "charts": [
+    {
+      "chart_id": "channel_donut",
+      "chart_spec": {
+        "coordinate_system": {
+          "kind": "none"
+        },
+        "dataset": {
+          "inner_radius_ratio": 0.5,
+          "slices": [
+            {
+              "id": "online",
+              "label": "Online",
+              "value": 45
+            },
+            {
+              "id": "store",
+              "label": "Store",
+              "value": 30
+            },
+            {
+              "id": "partner",
+              "label": "Partner",
+              "value": 15
+            },
+            {
+              "id": "other",
+              "label": "Other",
+              "value": 10
+            }
+          ]
+        },
+        "metadata": {
+          "chart_type": "pie",
+          "source": "Figura E2E-30 合成数据 v1",
+          "title": "渠道贡献"
+        },
+        "schema_version": 2
+      }
+    }
+  ],
+  "layout": {
+    "columns": 1
+  },
+  "schema_version": 2,
+  "title": "渠道贡献"
+}

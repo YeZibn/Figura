@@ -1,0 +1,19 @@
+{
+  "publisher": "Our World in Data",
+  "chart_slug": "life-expectancy-un-vs-gdp-per-capita-wb",
+  "chart_page": "https://ourworldindata.org/grapher/life-expectancy-un-vs-gdp-per-capita-wb?time=2023&country=CHN~IND~USA~BRA~ZAF~DEU&xScale=linear&zoomToSelection=true",
+  "image_url": "https://ourworldindata.org/grapher/life-expectancy-un-vs-gdp-per-capita-wb.png?time=2023&country=CHN~IND~USA~BRA~ZAF~DEU&xScale=linear&zoomToSelection=true",
+  "data_url": "https://ourworldindata.org/grapher/life-expectancy-un-vs-gdp-per-capita-wb.csv?time=2023&country=CHN~IND~USA~BRA~ZAF~DEU&xScale=linear&zoomToSelection=true",
+  "retrieved_date": "2026-11-02",
+  "entities": [
+    "China",
+    "India",
+    "United States",
+    "Brazil",
+    "South Africa",
+    "Germany"
+  ],
+  "data_sources": "见 original.metadata.json 中列级 citation / sources；OWID 图表署名保留在原图",
+  "license_note": "OWID 图表按 CC BY 署名；底层数据来源和适用条件见元数据。仅冻结下载快照，不声称当前最新值。",
+  "transformations": "A10 另生成低清版本；其他任务直接使用官方 PNG 导出。"
+}

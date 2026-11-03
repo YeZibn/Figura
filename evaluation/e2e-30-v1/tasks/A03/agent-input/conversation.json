@@ -1,0 +1,9 @@
+[
+  {
+    "turn": 1,
+    "text": "附件为 Product 与 Service 的季度收入图。列出全部分项值、各季度总收入，指出总收入最高季度，并计算 Q3 中 Service 的占比（保留一位百分数）。单位是什么？",
+    "attachments": [
+      "chart.png"
+    ]
+  }
+]

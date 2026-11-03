@@ -1,0 +1,69 @@
+{
+  "task_id": "B06",
+  "batch_id": "20261102-正式首测-01",
+  "verdict": "pass",
+  "checks": [
+    {
+      "id": "T1-semantic",
+      "critical": true,
+      "status": "pass",
+      "expected": "单系列 Campaign 散点图，依次保留 (2,8)、(4,15)、(7,12)、(9,24)；指定标题、轴标签和来源；无拟合线。",
+      "actual": "已提交 Figure 的类型、系列、四对坐标及顺序均与输入精确一致；数值轴标签、标题和来源正确，无拟合线。",
+      "evidence": [
+        "turn_evidence/0/figures/figure-01.json/charts/0/chart_spec",
+        "execution/turns/0/figures/0/result",
+        "assemble call_00_hs0RdBe1MZRh1K5hlAN34619"
+      ],
+      "reason": "按 Campaign 系列关联后逐值比较，所有坐标差均为 0；其余要求与参考语义一致。"
+    },
+    {
+      "id": "T1-render",
+      "critical": true,
+      "status": "pass",
+      "expected": "成功渲染且与已提交 Figure 匹配的可读 PNG，正确呈现一张散点图及必要文字。",
+      "actual": "实际 PNG 为 640×522，显示四个正确位置的散点、Campaign 图例、指定标题、轴标签和来源；未见拟合线或严重裁切遮挡。render 的 figure_ref 和 digest 与提交结果一致。",
+      "evidence": [
+        "execution/turns/0/renders/0/result",
+        "execution/turns/0/figures/0/result/figure_digest",
+        "render-01.png：绘图区、图例、坐标轴及底部来源"
+      ],
+      "reason": "已查看实际附图；图像内容正确，且元数据记录 PNG 哈希验证通过，渲染与提交关联明确。"
+    },
+    {
+      "id": "T1-delivery",
+      "critical": true,
+      "status": "pass",
+      "expected": "最终回答明确指向可用 PNG，且陈述与实际交付一致。",
+      "actual": "最终回答明确引用唯一成功 render 调用及 Figure digest，并准确列出四对坐标、轴标签和图表要求。",
+      "evidence": [
+        "final-answer.txt：PNG 资源段落及数据点表格",
+        "render call_00_ET_ZB6zSP7zbzNkkqgu3aHa7258",
+        "execution/turns/0/final_answer_committed"
+      ],
+      "reason": "产物选择唯一且引用明确，回答不存在与实际数据或交付状态冲突的关键陈述。"
+    }
+  ],
+  "primary_failure": null,
+  "secondary_failures": [],
+  "artifact_refs": [
+    "figure-01.json",
+    "render-01.png",
+    "final-answer.txt"
+  ],
+  "quality_notes": [
+    "画布标题与子图标题重复，不影响要求满足或内容辨认。"
+  ],
+  "judge": {
+    "model": "gpt-6.1-sol",
+    "prompt_version": "1.0",
+    "context_isolated": true,
+    "actual_png_viewed": true,
+    "limitations": [
+      "提交关联和哈希验证依据所提供的冻结证据记录，未另行读取文件复算。"
+    ]
+  },
+  "review_notes": [
+    "固定对话仅一轮；提供的输入、终态和提交记录未显示协议异常。",
+    "本结果为本次独立裁决，不代表已完成另一上下文的复核。"
+  ]
+}

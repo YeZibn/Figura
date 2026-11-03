@@ -1,0 +1,65 @@
+{
+  "task_id": "A10",
+  "category": "analysis",
+  "status": "not_run",
+  "facts": {
+    "start": {
+      "China": 4.517976,
+      "United States": 4.823133,
+      "France": 4.79632
+    },
+    "end": {
+      "China": 7.230494,
+      "United States": 6.816595,
+      "France": 7.959767
+    },
+    "directions": {
+      "China": "increase",
+      "United States": "increase",
+      "France": "increase"
+    },
+    "ranking_2023": [
+      "France",
+      "China",
+      "United States"
+    ],
+    "exact_four_decimals": "not_recoverable_from_image"
+  },
+  "checks": [
+    {
+      "id": "structure",
+      "critical": true,
+      "requirement": "折线图；可再生能源占一次能源消费的比例；百分数；2015—2023",
+      "expected": "line / renewable primary energy share / percent / 2015–2023"
+    },
+    {
+      "id": "direction",
+      "critical": true,
+      "requirement": "三国首尾变化方向正确",
+      "expected": {
+        "China": "increase",
+        "United States": "increase",
+        "France": "increase"
+      }
+    },
+    {
+      "id": "ranking",
+      "critical": true,
+      "requirement": "2023 高低顺序正确",
+      "expected": [
+        "France",
+        "China",
+        "United States"
+      ]
+    },
+    {
+      "id": "uncertainty",
+      "critical": true,
+      "requirement": "明确无法可靠恢复四位小数，不编造精确值",
+      "expected": "无法从低清图片可靠恢复四位小数"
+    }
+  ],
+  "reference_figures": [],
+  "numeric_policy": "explicit_per_check",
+  "semantic_equivalence": "忽略内部生成的 chart/category/series ID；按标签、顺序和语义匹配。坐标 kind 和数据类型必须合法。空 note、空 figure title 等未要求字段不强制一致。"
+}

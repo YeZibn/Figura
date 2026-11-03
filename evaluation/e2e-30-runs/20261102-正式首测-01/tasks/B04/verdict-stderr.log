@@ -1,0 +1,3 @@
+Reading prompt from stdin...
+2026-11-02T08:59:34.681765Z  WARN codex_rollout::list: state db discrepancy during find_thread_path_by_id_str_in_subdir: falling_back
+2026-11-02T08:59:34.686271Z  WARN codex_rollout::list: state db discrepancy during find_thread_path_by_id_str_in_subdir: falling_back

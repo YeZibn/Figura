@@ -1,0 +1,11 @@
+{
+  "completed_at": "2026-11-02T16:45:16.327006+08:00",
+  "durations": [
+    6.113,
+    8.145,
+    8.139,
+    12.369
+  ],
+  "per_turn_timeout_seconds": 600,
+  "status": "awaiting_judge_calibration"
+}

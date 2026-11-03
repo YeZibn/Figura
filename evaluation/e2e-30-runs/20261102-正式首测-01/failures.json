@@ -1,0 +1,66 @@
+[
+  {
+    "task_id": "B08",
+    "primary_failure": "rendering",
+    "failed_checks": [
+      {
+        "id": "T1-render",
+        "critical": true,
+        "status": "fail",
+        "expected": "与最终Figure匹配的可读取PNG，必要内容正确，关键数值标签无造成歧义或错误的遮挡。",
+        "actual": "render-02.png可读取且与最终Figure关联，但Online扇区的45.0%被中心白色内孔遮挡，画面读作5.0%，造成数值歧义。",
+        "evidence": [
+          "render-02.png（附图Image #2，环图右侧内孔边缘的百分比标签）",
+          "render call_00_ET_uDBTjwucprKVp0fVUr0y2109",
+          "render-02.figure_digest=7677e2512d6eafc098a7ca0290abef6dc170116ebdf1f044b0f21d3ba9b95de9",
+          "visual_reference_note关于百分比遮挡的判分要求"
+        ],
+        "reason": "实际PNG存在关键数值遮挡；图下方的原值说明和正确的结构化数据不能抵消图内错误读数。"
+      }
+    ],
+    "initial_verdict": "tasks/B08/verdict.json",
+    "review_verdict": "tasks/B08/review-independent.json"
+  },
+  {
+    "task_id": "C02",
+    "primary_failure": "baseline_construction",
+    "failed_checks": [
+      {
+        "id": "T1-delivery",
+        "critical": true,
+        "status": "fail",
+        "expected": "回答明确指向可用产物，且不存在与数据冲突的关键陈述。",
+        "actual": "回答明确指向成功产物，但声称“四个季度均为 East > South > North”；实际 Q3 为 South 19 > East 17 > North 15。",
+        "evidence": [
+          "turn_evidence/0/answer：回看保存的渲染图段落",
+          "turn_evidence/0/figures/figure-01.json/charts/0/chart_spec/dataset/series",
+          "image-01.png：Q3 柱组"
+        ],
+        "reason": "对系列高低关系的明确陈述与数据及实际图像冲突，未满足交付回答一致性要求。"
+      }
+    ],
+    "initial_verdict": "tasks/C02/verdict.json",
+    "review_verdict": "tasks/C02/review-independent.json"
+  },
+  {
+    "task_id": "C03",
+    "primary_failure": "delivery",
+    "failed_checks": [
+      {
+        "id": "T1-delivery",
+        "critical": true,
+        "status": "fail",
+        "expected": "回答明确指向可用产物，且不存在与数据冲突的关键陈述。",
+        "actual": "回答明确引用正确 Figure 和 render，但声称“三系列在四个季度依次递增”；East 实际为15、21、18、27，Q2至Q3下降。",
+        "evidence": [
+          "turn_evidence/0/answer：回看结果段落",
+          "turn_evidence/0/figures/figure-01.json#/charts/0/chart_spec/dataset/series/0/values",
+          "image-01.png：East的Q2及Q3柱"
+        ],
+        "reason": "对销售趋势的明确描述与数据及实际图像冲突，不满足交付回答的一致性要求。"
+      }
+    ],
+    "initial_verdict": "tasks/C03/verdict.json",
+    "review_verdict": "tasks/C03/review-independent.json"
+  }
+]

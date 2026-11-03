@@ -1,0 +1,72 @@
+{
+  "task_id": "B08",
+  "batch_id": "20261102-正式首测-01",
+  "verdict": "fail",
+  "checks": [
+    {
+      "id": "T1-semantic",
+      "critical": true,
+      "status": "pass",
+      "expected": "单张环图，内半径比例0.5；Online、Store、Partner、Other依次对应45、30、15、10；标题“渠道贡献”，来源“Figura E2E-30 合成数据 v1”。",
+      "actual": "最终交付的figure-02.json包含全部四个原始值，标签关联、顺序、图表类型、内半径、标题和来源均符合要求。",
+      "evidence": [
+        "figure-02.json#/charts/0/chart_spec",
+        "assemble call_00_eIJnmSu8cQH1b2Cc0lyj3750成功结果",
+        "execution.turns[0].figures[1].digest_verified"
+      ],
+      "reason": "按标签逐值核对，四项数值误差均为0；未发生排序、合并或数据变换。"
+    },
+    {
+      "id": "T1-render",
+      "critical": true,
+      "status": "fail",
+      "expected": "与最终Figure匹配的可读取PNG，必要内容正确，关键数值标签无造成歧义或错误的遮挡。",
+      "actual": "render-02.png可读取且与最终Figure关联，但Online扇区的45.0%被中心白色内孔遮挡，画面读作5.0%，造成数值歧义。",
+      "evidence": [
+        "render-02.png（附图Image #2，环图右侧内孔边缘的百分比标签）",
+        "render call_00_ET_uDBTjwucprKVp0fVUr0y2109",
+        "render-02.figure_digest=7677e2512d6eafc098a7ca0290abef6dc170116ebdf1f044b0f21d3ba9b95de9",
+        "visual_reference_note关于百分比遮挡的判分要求"
+      ],
+      "reason": "实际PNG存在关键数值遮挡；图下方的原值说明和正确的结构化数据不能抵消图内错误读数。"
+    },
+    {
+      "id": "T1-delivery",
+      "critical": true,
+      "status": "pass",
+      "expected": "最终回答清楚指向可用产物，且无与实际数据或交付状态冲突的关键陈述。",
+      "actual": "最终回答明确指向640×480的“渠道贡献”环图，唯一匹配render-02.png，并如实说明Online百分比标签被遮挡。",
+      "evidence": [
+        "final-answer.txt第1段及末段",
+        "execution.turns[0].renders[1]",
+        "figure-02.json",
+        "render-02.png"
+      ],
+      "reason": "依据最终回答中的尺寸可确定交付候选；存在成功装配、配对渲染及实际PNG，回答未隐瞒可见缺陷。"
+    }
+  ],
+  "primary_failure": "rendering",
+  "secondary_failures": [],
+  "artifact_refs": [
+    "figure-02.json",
+    "render-02.png",
+    "final-answer.txt",
+    "assemble call_00_eIJnmSu8cQH1b2Cc0lyj3750",
+    "render call_00_ET_uDBTjwucprKVp0fVUr0y2109"
+  ],
+  "quality_notes": [],
+  "judge": {
+    "model": "gpt-6.1-sol",
+    "prompt_version": "1.0",
+    "context_isolated": true,
+    "actual_png_viewed": true,
+    "limitations": [
+      "依据本次提供的冻结证据包和内嵌实际PNG裁决，未独立重算文件摘要。"
+    ]
+  },
+  "review_notes": [
+    "未发现所提供执行记录中的协议异常；首次装配参数错误已在同轮修正，不单独构成失败。",
+    "最终回答指定640×480产物，因此选择render-02.png，并非从候选中择优。",
+    "本次为当前独立上下文的裁决，未执行额外独立复核。"
+  ]
+}

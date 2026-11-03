@@ -1,0 +1,62 @@
+{
+  "task_id": "A05",
+  "category": "analysis",
+  "status": "not_run",
+  "facts": {
+    "days": [
+      "Mon",
+      "Tue",
+      "Wed",
+      "Thu",
+      "Fri"
+    ],
+    "values": [
+      12,
+      19,
+      null,
+      17,
+      26
+    ],
+    "missing": "Wed",
+    "net_change": 14,
+    "maximum": {
+      "day": "Fri",
+      "value": 26
+    }
+  },
+  "checks": [
+    {
+      "id": "values",
+      "critical": true,
+      "requirement": "四个标注已知值准确",
+      "expected": [
+        "Mon=12",
+        "Tue=19",
+        "Thu=17",
+        "Fri=26"
+      ],
+      "numeric_tolerance": {
+        "abs": 0,
+        "rel": 0
+      }
+    },
+    {
+      "id": "missing",
+      "critical": true,
+      "requirement": "Wed 为缺失/null，不能当作零或推断为 18",
+      "expected": "Wed=null"
+    },
+    {
+      "id": "summary",
+      "critical": true,
+      "requirement": "净变化和已知最大值正确",
+      "expected": {
+        "net_change": 14,
+        "max": "Fri=26"
+      }
+    }
+  ],
+  "reference_figures": [],
+  "numeric_policy": "explicit_per_check",
+  "semantic_equivalence": "忽略内部生成的 chart/category/series ID；按标签、顺序和语义匹配。坐标 kind 和数据类型必须合法。空 note、空 figure title 等未要求字段不强制一致。"
+}

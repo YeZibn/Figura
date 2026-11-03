@@ -1,0 +1,245 @@
+{
+  "task_id": "01-chart-analysis",
+  "condition": "compaction",
+  "capacity_tokens": 25000,
+  "provider_id": "deepseek",
+  "batch_id": "20261102-context3cat-stress-25k-continue-01",
+  "started_at": "2026-11-02T19:16:39.718334+08:00",
+  "session_id": "8483287e151c4ae8a4e6caf107ac446b",
+  "turns": [
+    {
+      "turn": 1,
+      "run_id": "9f7dd1e8b4ed4896b250c770ff772c60",
+      "session_id": "8483287e151c4ae8a4e6caf107ac446b",
+      "status": "interrupted",
+      "terminal_code": "interrupted",
+      "final_answer_committed": false,
+      "figures": [],
+      "renders": [],
+      "provider_attempt_count": 90,
+      "usage_by_purpose": {
+        "agent_turn": {
+          "prompt_tokens": 1305487,
+          "completion_tokens": 25944,
+          "total_tokens": 1331431
+        },
+        "context_compaction": {
+          "prompt_tokens": 412318,
+          "completion_tokens": 354793,
+          "total_tokens": 767111
+        }
+      },
+      "usage_total_including_compaction": {
+        "prompt_tokens": 1717805,
+        "completion_tokens": 380737,
+        "total_tokens": 2098542
+      },
+      "usage_complete": false,
+      "usage_missing_attempts": [
+        "a833573212354e2cbe68292b40faede0"
+      ],
+      "compaction_operations": [
+        {
+          "operation_id": "71111126520d424492d6f7c06aaf2ddf",
+          "status": "completed",
+          "failure_code": null
+        },
+        {
+          "operation_id": "9ca73fa79bba4f3b989f1e71b90226f6",
+          "status": "completed",
+          "failure_code": null
+        },
+        {
+          "operation_id": "02473b02c69441beb7f6d53070b63b14",
+          "status": "completed",
+          "failure_code": null
+        },
+        {
+          "operation_id": "6dfd732e9e724dbcab4443e45bbc49ac",
+          "status": "completed",
+          "failure_code": null
+        },
+        {
+          "operation_id": "531955422ff543ba9f7a6d2d615a758a",
+          "status": "completed",
+          "failure_code": null
+        },
+        {
+          "operation_id": "cf0fb24221a74202b2be9e996ca85e3a",
+          "status": "completed",
+          "failure_code": null
+        },
+        {
+          "operation_id": "a642112a5437402fa91d17fc29547f98",
+          "status": "completed",
+          "failure_code": null
+        },
+        {
+          "operation_id": "d557d7a8376849458f3cf7b469899d21",
+          "status": "completed",
+          "failure_code": null
+        },
+        {
+          "operation_id": "4b610faea10e4d2b928e41b34e1a1f31",
+          "status": "completed",
+          "failure_code": null
+        },
+        {
+          "operation_id": "ef698e86b3f04e23941ea8144ae176d9",
+          "status": "completed",
+          "failure_code": null
+        },
+        {
+          "operation_id": "50eb6aeb3ead418e98c0f7914c9d21d5",
+          "status": "completed",
+          "failure_code": null
+        },
+        {
+          "operation_id": "2712b1bac15d4eb5bcf9a31331e83ab0",
+          "status": "completed",
+          "failure_code": null
+        },
+        {
+          "operation_id": "b4b5dbd592ec493ea221f56a72a53773",
+          "status": "completed",
+          "failure_code": null
+        },
+        {
+          "operation_id": "280872e1d3bb4885b8d6fa1de841e907",
+          "status": "completed",
+          "failure_code": null
+        },
+        {
+          "operation_id": "8cb7eff5d1294b7e9729f6ea65ce79c0",
+          "status": "completed",
+          "failure_code": null
+        },
+        {
+          "operation_id": "eb346ea88873457cbb801a7d9430ba38",
+          "status": "completed",
+          "failure_code": null
+        },
+        {
+          "operation_id": "09c160b4a45944a0968c0d3c391735ca",
+          "status": "completed",
+          "failure_code": null
+        },
+        {
+          "operation_id": "bcf6679d46bb415fa022f69e5b4aa8e2",
+          "status": "completed",
+          "failure_code": null
+        },
+        {
+          "operation_id": "1d1395c8aa8b4ff29b5376dfabf55917",
+          "status": "completed",
+          "failure_code": null
+        },
+        {
+          "operation_id": "04f62d76dc9042a0a7b2d58ff7d11aae",
+          "status": "completed",
+          "failure_code": null
+        },
+        {
+          "operation_id": "663b734ef5e34cefa10bdd7e56ecabdb",
+          "status": "completed",
+          "failure_code": null
+        },
+        {
+          "operation_id": "560f8e610302469390f0c5ce91b0269e",
+          "status": "completed",
+          "failure_code": null
+        },
+        {
+          "operation_id": "489a4f33edfb402f9a745dcbffa7ae31",
+          "status": "completed",
+          "failure_code": null
+        },
+        {
+          "operation_id": "ea127b0caafa4ee08215b420af9e1f00",
+          "status": "completed",
+          "failure_code": null
+        },
+        {
+          "operation_id": "67cd5b9a10c8414089c112ea60d8cd6b",
+          "status": "completed",
+          "failure_code": null
+        },
+        {
+          "operation_id": "7bc4e8c5373848e78265061f66a15f92",
+          "status": "completed",
+          "failure_code": null
+        },
+        {
+          "operation_id": "13923bd186454110b8972ef960824b07",
+          "status": "completed",
+          "failure_code": null
+        },
+        {
+          "operation_id": "53d4c5d8f6d947448f3bcb3b741c43d2",
+          "status": "completed",
+          "failure_code": null
+        },
+        {
+          "operation_id": "482893a63eeb4cd2bf40df115d60ccd2",
+          "status": "completed",
+          "failure_code": null
+        },
+        {
+          "operation_id": "7f570848b31e470eae8878444e9dbde0",
+          "status": "completed",
+          "failure_code": null
+        },
+        {
+          "operation_id": "26144293269b4468aae92cecfcc4c09a",
+          "status": "completed",
+          "failure_code": null
+        },
+        {
+          "operation_id": "954ffbf9b2a94b40a37bcc9460ed362a",
+          "status": "completed",
+          "failure_code": null
+        },
+        {
+          "operation_id": "405105e74f33431d8fc0ad7f9b0f0725",
+          "status": "completed",
+          "failure_code": null
+        },
+        {
+          "operation_id": "7969ec400b0c487da23bcc29417de417",
+          "status": "completed",
+          "failure_code": null
+        },
+        {
+          "operation_id": "06469af8de324ce0923ca7d928f4ea81",
+          "status": "completed",
+          "failure_code": null
+        },
+        {
+          "operation_id": "16d771f01e074d4a8ca46fe615179d82",
+          "status": "completed",
+          "failure_code": null
+        },
+        {
+          "operation_id": "27c8c0e1ca2b42269d960f44cf153d1d",
+          "status": "completed",
+          "failure_code": null
+        },
+        {
+          "operation_id": "5aad6365d4384c72b6b3bb43a67818c2",
+          "status": "preparing",
+          "failure_code": null
+        }
+      ],
+      "wall_seconds": 1803.441,
+      "timed_out": true
+    }
+  ],
+  "execution_status": "error",
+  "input_adjustments": [],
+  "attachment_sha256": {
+    "input/bar_line_dashboard.png": "b6b6105d739d1a0399295fd75286f27ac8965644423a0533de814f8aaecb9e00"
+  },
+  "error_type": "RuntimeError",
+  "error_message": "Gateway HTTP 500: {\"error\":{\"code\":\"internal_error\",\"message\":\"Figura 本地服务暂时无法处理请求。\"}}",
+  "completed_at": "2026-11-02T19:46:44.520694+08:00"
+}

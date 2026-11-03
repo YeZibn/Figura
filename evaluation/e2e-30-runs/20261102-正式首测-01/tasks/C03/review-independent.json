@@ -1,0 +1,175 @@
+{
+  "task_id": "C03",
+  "batch_id": "20261102-正式首测-01",
+  "verdict": "fail",
+  "checks": [
+    {
+      "id": "T1-semantic",
+      "critical": true,
+      "status": "pass",
+      "expected": "单幅纵向分组柱状图；Q1—Q4；East、South、North；全部数值、标题、轴标签和来源符合第1轮要求。",
+      "actual": "按类别和系列标签核对，12个值全部一致；类型、顺序、标题、轴标签和来源均正确。",
+      "evidence": [
+        "turn_evidence/0/figures/figure-01.json",
+        "turn_evidence/0/evidence/figures/0/result"
+      ],
+      "reason": "实际Figure与参考语义一致，内部ID差异不影响判断。"
+    },
+    {
+      "id": "T1-render",
+      "critical": true,
+      "status": "pass",
+      "expected": "与成功提交Figure关联的可读PNG，必要内容完整且无严重裁切遮挡。",
+      "actual": "Image #1显示四组共12根柱，图例、标题、轴标签和来源完整；render的figure_ref及digest与提交结果匹配。",
+      "evidence": [
+        "image-01.png",
+        "turn_evidence/0/evidence/renders/0",
+        "turn_evidence/0/evidence/figures/0"
+      ],
+      "reason": "实际PNG可读，柱高与数据对应，无严重裁切遮挡。"
+    },
+    {
+      "id": "T1-delivery",
+      "critical": true,
+      "status": "fail",
+      "expected": "回答明确指向可用产物，且不存在与数据冲突的关键陈述。",
+      "actual": "回答正确指向本轮Figure和PNG，但声称“三系列在四个季度依次递增”；East实际为15、21、18、27，Q2至Q3下降。",
+      "evidence": [
+        "turn_evidence/0/answer：末段“渲染图回看与数据一致”",
+        "turn_evidence/0/figures/figure-01.json/charts/0/chart_spec/dataset/series/0/values",
+        "image-01.png：East的Q2和Q3柱"
+      ],
+      "reason": "交付引用有效，但对数据趋势的明确陈述与实际数据及PNG冲突。"
+    },
+    {
+      "id": "T2-semantic",
+      "critical": true,
+      "status": "pass",
+      "expected": "末尾追加Q5，East=35、South=29、North=24，其余语义保留。",
+      "actual": "类别为Q1—Q5；三个系列分别为15/21/18/27/35、12/17/20/23/29、10/14/16/19/24；其他字段保持。",
+      "evidence": [
+        "turn_evidence/1/figures/figure-01.json",
+        "turn_evidence/1/evidence/figures/0/result"
+      ],
+      "reason": "按标签逐值核对，15个值及所有要求字段一致。"
+    },
+    {
+      "id": "T2-render",
+      "critical": true,
+      "status": "pass",
+      "expected": "与第2轮Figure匹配的真实PNG，完整呈现追加类别。",
+      "actual": "Image #2显示Q1—Q5及15根柱，新增Q5三柱对应35、29、24；关键文字完整，render引用和digest匹配。",
+      "evidence": [
+        "image-02.png",
+        "turn_evidence/1/evidence/renders/0",
+        "turn_evidence/1/evidence/figures/0"
+      ],
+      "reason": "PNG可读，新增类别及原有内容呈现正确。"
+    },
+    {
+      "id": "T2-delivery",
+      "critical": true,
+      "status": "pass",
+      "expected": "回答清楚指向第2轮可用产物且关键陈述与实际一致。",
+      "actual": "回答明确列出本轮Figure及render调用引用，新增值、保留内容与实际产物一致。",
+      "evidence": [
+        "turn_evidence/1/answer",
+        "turn_evidence/1/evidence"
+      ],
+      "reason": "回答选择了本轮唯一成功候选，没有影响验收的数据或交付状态冲突。"
+    },
+    {
+      "id": "T3-semantic",
+      "critical": true,
+      "status": "pass",
+      "expected": "保留Q5及全部原有语义，增加注释“Q5 为补充统计期”。",
+      "actual": "第3轮保留全部15个数值及类别、系列顺序，metadata.note准确增加要求文字，其他语义保持。",
+      "evidence": [
+        "turn_evidence/2/figures/figure-01.json",
+        "turn_evidence/2/evidence/figures/0/result"
+      ],
+      "reason": "实际Figure与最终参考语义一致。"
+    },
+    {
+      "id": "T3-render",
+      "critical": true,
+      "status": "pass",
+      "expected": "匹配第3轮Figure的真实PNG，新增注释可见且其他必要内容完整。",
+      "actual": "Image #3完整显示五组柱及全部关键标签，来源下方可读“Q5 为补充统计期”；render引用和digest匹配。",
+      "evidence": [
+        "image-03.png",
+        "turn_evidence/2/evidence/renders/0",
+        "turn_evidence/2/evidence/figures/0"
+      ],
+      "reason": "PNG可读，注释实际生效，无严重裁切遮挡。"
+    },
+    {
+      "id": "T3-delivery",
+      "critical": true,
+      "status": "pass",
+      "expected": "回答清楚指向第3轮可用产物且关键陈述与实际一致。",
+      "actual": "回答准确引用第3轮Figure和render，所述注释位置、数据及保留内容均与实际PNG和Figure一致。",
+      "evidence": [
+        "turn_evidence/2/answer",
+        "turn_evidence/2/evidence",
+        "image-03.png"
+      ],
+      "reason": "交付明确且无关键事实冲突。"
+    },
+    {
+      "id": "preservation",
+      "critical": true,
+      "status": "pass",
+      "expected": "第2轮仅追加Q5及对应值，第3轮仅增加注释；未目标语义逐轮保留。",
+      "actual": "第1至第2轮仅新增末尾类别及35/29/24；第2至第3轮仅新增note。原12个值、标题、来源、类型、方向、分组方式和轴标签均未改变。",
+      "evidence": [
+        "turn_evidence/0/figures/figure-01.json",
+        "turn_evidence/1/figures/figure-01.json",
+        "turn_evidence/2/figures/figure-01.json"
+      ],
+      "reason": "逐轮比较的语义差异均在授权范围内。"
+    },
+    {
+      "id": "final_requirements",
+      "critical": true,
+      "status": "pass",
+      "expected": "最终保留Q5，增加指定注释，其他内容保持并实际渲染交付。",
+      "actual": "最终Figure和PNG同时保留Q5及全部数据，显示指定注释，并有成功提交、匹配render及明确交付引用。",
+      "evidence": [
+        "turn_evidence/2/figures/figure-01.json",
+        "turn_evidence/2/evidence",
+        "turn_evidence/2/answer",
+        "image-03.png"
+      ],
+      "reason": "最新有效要求全部落实到最终产物。"
+    }
+  ],
+  "primary_failure": "delivery",
+  "secondary_failures": [],
+  "artifact_refs": [
+    "turn-01/figure-01.json",
+    "turn-01/render-01.png（image-01.png）",
+    "turn-02/figure-01.json",
+    "turn-02/render-01.png（image-02.png）",
+    "turn-03/figure-01.json",
+    "turn-03/render-01.png（image-03.png）"
+  ],
+  "quality_notes": [
+    "三轮图表本身均正确；最终来源和注释字号较小，但仍可辨认。"
+  ],
+  "judge": {
+    "model": "gpt-6.1-sol",
+    "prompt_version": "1.0",
+    "context_isolated": true,
+    "actual_png_viewed": true,
+    "limitations": [
+      "依据提供的冻结证据及三张实际PNG裁决；未独立重算文件摘要。"
+    ]
+  },
+  "review_notes": [
+    "证据显示三轮复用同一Session，均完成且无超时，未发现协议异常。",
+    "每轮回答明确引用该轮唯一成功提交及其配对render，产物选择无歧义。",
+    "基线Figure构建正确；失败归因仅为第1轮回答中的错误趋势陈述，后续正确产物不抵消该项失败。",
+    "本记录仅为本次独立裁决，不代表已完成另一次独立复核。"
+  ]
+}

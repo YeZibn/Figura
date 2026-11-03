@@ -1,0 +1,5 @@
+{
+  "text": "删除 South 系列，仅保留 East、North，顺序仍为 East、North。不能改动两者的季度值。请实际渲染交付。",
+  "attachment_sha256": [],
+  "providerId": "deepseek"
+}

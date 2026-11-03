@@ -1,0 +1,29 @@
+[
+  {
+    "provider": "qwen",
+    "model": "qwen3.8-flash",
+    "status": "failed",
+    "error_type": "PermissionDeniedError",
+    "http_status": 403
+  },
+  {
+    "provider": "deepseek",
+    "model": "deepseek-flash",
+    "status": "responded",
+    "answer": "{\"call_0\": {\"color\": \"red\", \"shape\": \"circle\"}, \"call_1\": {\"color\": \"blue\", \"shape\": \"square\"}}",
+    "usage": {
+      "prompt_tokens": 717,
+      "completion_tokens": 35,
+      "total_tokens": 752,
+      "prompt_tokens_details": {
+        "cached_tokens": 0
+      },
+      "prompt_cache_hit_tokens": 0,
+      "prompt_cache_miss_tokens": 717
+    }
+  },
+  {
+    "provider": "mimo",
+    "status": "unconfigured"
+  }
+]

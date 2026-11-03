@@ -1,0 +1,10 @@
+{
+  "model": "gpt-6.1-sol",
+  "wall_seconds": 32.178,
+  "context": "new ephemeral Codex invocation",
+  "mode": "formal",
+  "task_id": "B05",
+  "attached_images": [
+    "evaluation/e2e-30-runs/20261102-正式首测-01/tasks/B05/turn-01/render-01.png"
+  ]
+}

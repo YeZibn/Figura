@@ -1,0 +1,65 @@
+{
+  "turn": 1,
+  "run_id": "ba3b28ba97f3484f8bb4e73063f4605e",
+  "session_id": "c198fc4f79cf410793f35886864d275e",
+  "status": "completed",
+  "terminal_code": null,
+  "wall_seconds": 8.145,
+  "timed_out": false,
+  "final_answer": "final-answer.txt",
+  "final_answer_committed": true,
+  "figures": [
+    {
+      "call_id": "call_00_YdemIio1PiuTljlvkGdq1406",
+      "run_id": "ba3b28ba97f3484f8bb4e73063f4605e",
+      "file": "figure-01.json",
+      "result": {
+        "charts": [
+          {
+            "chart_id": "calibration_sales",
+            "chart_type": "bar",
+            "title": "校准销售"
+          }
+        ],
+        "figure_digest": "400fd5884e7f642be94c2371e4134385207961684862ce11d8bccfddfa3ba10d",
+        "figure_ref": {
+          "call_id": "call_00_YdemIio1PiuTljlvkGdq1406",
+          "run_id": "ba3b28ba97f3484f8bb4e73063f4605e"
+        },
+        "title": "校准报告"
+      },
+      "digest_verified": true
+    }
+  ],
+  "renders": [
+    {
+      "call_id": "call_00_ET_Op3Sv7vrW0vgLxE2M3AZ8990",
+      "run_id": "ba3b28ba97f3484f8bb4e73063f4605e",
+      "file": "render-01.png",
+      "result": {
+        "byte_count": 17889,
+        "figure_digest": "400fd5884e7f642be94c2371e4134385207961684862ce11d8bccfddfa3ba10d",
+        "figure_ref": {
+          "call_id": "call_00_YdemIio1PiuTljlvkGdq1406",
+          "run_id": "ba3b28ba97f3484f8bb4e73063f4605e"
+        },
+        "height": 522,
+        "image_sha256": "978defd1de56d4058b3cda52de1bae51b3f5ee6d621bbb2a8447eb3719899569",
+        "media_type": "image/png",
+        "width": 640
+      },
+      "png_sha256_verified": true
+    }
+  ],
+  "provider_attempt_count": 3,
+  "internal_retry_count": 0,
+  "usage": {
+    "prompt_tokens": 39522,
+    "completion_tokens": 797,
+    "total_tokens": 40319
+  },
+  "usage_complete": true,
+  "usage_missing_attempt_refs": [],
+  "compaction_operations": [],
+  "delivery_selection": "judge must select from actual final answer and all committed candidates; no automatic best-of selection"
+}

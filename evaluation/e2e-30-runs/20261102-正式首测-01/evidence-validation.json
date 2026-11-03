@@ -1,0 +1,15 @@
+{
+  "status": "passed",
+  "formal_tasks": 30,
+  "independent_sessions": 30,
+  "formal_runs": 50,
+  "distinct_runs": 50,
+  "figures_verified": 43,
+  "pngs_verified": 43,
+  "initial_judgements_validated": 30,
+  "reviews_validated": 10,
+  "frozen_input_and_rubric_checksums": "unchanged",
+  "submitted_and_durable_user_inputs": "exact_match",
+  "frozen_harness_scripts": "unchanged",
+  "no_agent_reexecution_for_judge": true
+}

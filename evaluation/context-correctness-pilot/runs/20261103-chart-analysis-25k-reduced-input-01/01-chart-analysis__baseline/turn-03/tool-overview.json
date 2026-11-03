@@ -1,0 +1,48 @@
+[
+  {
+    "call_id": "call_00_GEGXCbkbiwbF9ZW8TDb69836",
+    "tool_name": "search_history",
+    "outcome": "failed",
+    "error": {
+      "code": "invalid_result",
+      "field_path": "/matches/3/attachments",
+      "message": "工具返回结果不符合定义。",
+      "retryable": false
+    }
+  },
+  {
+    "call_id": "call_01_XpSGnDkouJp3zEy4nKXZ9213",
+    "tool_name": "search_history",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_F5iFI7WtTxEXsw8Q0fGz3694",
+    "tool_name": "search_history",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_01_GovXuTqMe1ugbJH8wHjE8335",
+    "tool_name": "read_history",
+    "outcome": "failed",
+    "error": {
+      "code": "history_reference_unavailable",
+      "field_path": null,
+      "message": "请求的历史来源不可用或不在当前授权范围内。",
+      "retryable": false
+    }
+  },
+  {
+    "call_id": "call_00_bXLmsSmbzDgn630u4PAG5780",
+    "tool_name": "read_history",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_01_EZhRoY1BCncll87UHiY91886",
+    "tool_name": "read_history",
+    "outcome": "succeeded",
+    "error": null
+  }
+]

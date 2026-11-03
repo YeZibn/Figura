@@ -1,0 +1,142 @@
+{
+  "task_id": "A04",
+  "batch_id": "20261102-正式首测-01",
+  "verdict": "pass",
+  "checks": [
+    {
+      "id": "structure",
+      "critical": true,
+      "status": "pass",
+      "expected": {
+        "series": [
+          "China",
+          "United States",
+          "France"
+        ],
+        "unit": "tonnes CO2 per person"
+      },
+      "actual": {
+        "series": [
+          "China",
+          "United States",
+          "France"
+        ],
+        "unit": "t CO₂/人·年",
+        "explicitly_per_capita": true
+      },
+      "evidence": [
+        "final-answer.txt：首段及国家数值表",
+        "image-01.png：标题、三条折线及右侧国家标签"
+      ],
+      "reason": "正确识别三个国家，并明确说明是人均排放而非总排放，单位保留吨 CO₂/人。"
+    },
+    {
+      "id": "points",
+      "critical": true,
+      "status": "pass",
+      "expected": {
+        "China": {
+          "2015": 7.0609546,
+          "2019": 7.5260706,
+          "2023": 8.556261
+        },
+        "United States": {
+          "2015": 16.461393,
+          "2019": 15.500492,
+          "2023": 14.31945
+        },
+        "France": {
+          "2015": 5.116293,
+          "2019": 4.812466,
+          "2023": 4.067842
+        }
+      },
+      "actual": {
+        "China": {
+          "2015": 7.0,
+          "2019": 7.5,
+          "2023": 8.6
+        },
+        "United States": {
+          "2015": 16.4,
+          "2019": 15.5,
+          "2023": 14.3
+        },
+        "France": {
+          "2015": 5.1,
+          "2019": 4.8,
+          "2023": 4.1
+        }
+      },
+      "evidence": [
+        "final-answer.txt：国家数值表"
+      ],
+      "reason": "九个值的国家和年份关联正确；最大绝对误差为 0.061393，全部满足 0.6 的绝对容差。"
+    },
+    {
+      "id": "changes",
+      "critical": true,
+      "status": "pass",
+      "expected": {
+        "China": 1.4953063999999996,
+        "United States": -2.1419430000000013,
+        "France": -1.048451
+      },
+      "actual": {
+        "China": 1.6,
+        "United States": -2.1,
+        "France": -1.0
+      },
+      "evidence": [
+        "final-answer.txt：国家数值表“2015→2023 净变化”列"
+      ],
+      "reason": "净变化与所报端点相减一致，三国方向正确；绝对误差分别约为 0.104694、0.041943、0.048451，均满足 1.2 的容差。"
+    },
+    {
+      "id": "ranking",
+      "critical": true,
+      "status": "pass",
+      "expected": "United States",
+      "actual": "United States",
+      "evidence": [
+        "final-answer.txt：“2023 年最高者：美国，约 14.3 t CO₂/人”"
+      ],
+      "reason": "正确指出美国为 2023 年人均排放最高者。"
+    },
+    {
+      "id": "estimates",
+      "critical": true,
+      "status": "pass",
+      "expected": "约／approximately",
+      "actual": "首段明确为估读约数，表格各数值及净变化均标注“约”。",
+      "evidence": [
+        "final-answer.txt：首段、国家数值表及末段"
+      ],
+      "reason": "没有将读图结果声称为精确统计值。"
+    }
+  ],
+  "primary_failure": null,
+  "secondary_failures": [],
+  "artifact_refs": [
+    "final-answer.txt",
+    "image-01.png"
+  ],
+  "quality_notes": [
+    "补充描述称中国“持续上升”，但同时注明 2016 年微降，措辞不够准确；不影响指定年份、净变化和排名的正确性。"
+  ],
+  "judge": {
+    "model": "gpt-6.1-sol",
+    "prompt_version": "1.0",
+    "context_isolated": true,
+    "actual_png_viewed": true,
+    "limitations": [
+      "本题为读图分析任务，无须提交 Figure 或渲染 PNG；已查看所附实际输入 PNG。",
+      "执行协议核对限于提供的冻结证据，未独立核验批次级运行记录。"
+    ]
+  },
+  "review_notes": [
+    "证据记录显示单轮执行完成、最终回答已提交、未超时且无已记录协议异常。",
+    "本轮要求的交付是文字分析，选择已提交的 final-answer.txt 验收；figures 和 renders 为空不构成缺交付。",
+    "本次为独立初次裁决，未声称完成另一次独立复核。"
+  ]
+}

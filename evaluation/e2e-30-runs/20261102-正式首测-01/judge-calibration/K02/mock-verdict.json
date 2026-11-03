@@ -1,0 +1,9 @@
+{
+  "task_id": "K02",
+  "content_verdict": "fail",
+  "critical_errors": [
+    "East 与 South 的数据归属被互换：实际 East=[15,25]、South=[10,20]，要求 East=[10,20]、South=[15,25]。"
+  ],
+  "png_viewed": true,
+  "reason": "附图中蓝色 East 在 Q1/Q2 为15/25，橙色 South 为10/20，与实际 JSON 一致，但均与要求的系列归属相反。"
+}

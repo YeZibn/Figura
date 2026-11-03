@@ -1,0 +1,98 @@
+{
+  "task_id": "A10",
+  "batch_id": "20261102-正式首测-01",
+  "verdict": "pass",
+  "checks": [
+    {
+      "id": "structure",
+      "critical": true,
+      "status": "pass",
+      "expected": "折线图；可再生能源占一次能源的比例；百分数；2015—2023",
+      "actual": "回答识别为多系列折线图，指标为一次能源中可再生能源占比，单位为百分比，年份为2015—2023。",
+      "evidence": [
+        "turn_evidence/0/answer：图表类型与指标",
+        "image-01.png：标题、副标题及横纵轴"
+      ],
+      "reason": "类型、指标、单位及年份均符合要求，能源供应份额的表述与图内副标题一致。"
+    },
+    {
+      "id": "direction",
+      "critical": true,
+      "status": "pass",
+      "expected": {
+        "China": "increase",
+        "United States": "increase",
+        "France": "increase"
+      },
+      "actual": {
+        "China": "increase",
+        "United States": "increase",
+        "France": "increase"
+      },
+      "evidence": [
+        "turn_evidence/0/answer：2015→2023 的变化方向表格",
+        "image-01.png：三国2015与2023端点"
+      ],
+      "reason": "回答明确指出三国首尾总体均上升，与冻结答案及图片一致。"
+    },
+    {
+      "id": "ranking",
+      "critical": true,
+      "status": "pass",
+      "expected": [
+        "France",
+        "China",
+        "United States"
+      ],
+      "actual": [
+        "France",
+        "China",
+        "United States"
+      ],
+      "evidence": [
+        "turn_evidence/0/answer：2023 年大致高低顺序",
+        "image-01.png：右侧2023年端点及国家标签"
+      ],
+      "reason": "回答给出的2023年顺序为France > China > United States，正确。"
+    },
+    {
+      "id": "uncertainty",
+      "critical": true,
+      "status": "pass",
+      "expected": "无法从低清图片可靠恢复四位小数",
+      "actual": "明确回答不能可靠报告四位小数，并解释像素分辨率、刻度与缺少数值标签的限制；所报数据均标注为近似值。",
+      "evidence": [
+        "turn_evidence/0/answer：能否可靠报告“精确到小数点后四位”的值"
+      ],
+      "reason": "没有将任何四位小数作为实际读数；8.0237%仅作为所需精度的举例。"
+    }
+  ],
+  "primary_failure": null,
+  "secondary_failures": [],
+  "artifact_refs": [
+    "image-01.png",
+    "final-answer.txt",
+    "execution：turns/0",
+    "turn_evidence/0/answer"
+  ],
+  "quality_notes": [
+    "附加的过程描述存在误读：France在2017年约为5.0%，并非约4.3%；France也并非始终领先。",
+    "2023年China约7.1%、United States约6.5%的估读偏低；冻结答案分别约为7.23%、6.82%。这些附加估读不改变本题要求的方向与排序。",
+    "回答较冗长，附加的增幅比较及误差范围超出完成固定任务所需。"
+  ],
+  "judge": {
+    "model": "gpt-6.1-sol",
+    "prompt_version": "1.0",
+    "context_isolated": true,
+    "actual_png_viewed": true,
+    "limitations": [
+      "本题为图片阅读任务，无须提交Figure或渲染PNG；已查看所附实际输入图片，交付依据为已提交的最终回答。",
+      "执行协议核对限于提供的执行记录与工具概览，未独立检查完整工具参数。"
+    ]
+  },
+  "review_notes": [
+    "所提供记录显示固定单轮输入已完成、最终回答已提交、未超时且无已报告协议异常。",
+    "四项冻结critical checks均通过；附加描述中的错误另记于quality_notes。",
+    "本结果仅为本次独立裁决，未声称完成另一上下文的复核。"
+  ]
+}

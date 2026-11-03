@@ -1,0 +1,104 @@
+{
+  "semantic_projection": "忽略内部 ID 和 measurement_refs；保留标题、来源、note、数据、坐标、画布和顺序",
+  "rounds": [
+    {
+      "turn": 2,
+      "authorized_user_request": "类别按 Q4、Q1、Q2、Q3 重排，三个系列的数值必须跟随原季度移动；不要按数值大小另排序。请实际渲染交付。",
+      "expected_semantic_differences": [
+        {
+          "path": "/charts/0/dataset/categories/0/label",
+          "before": "Q1",
+          "after": "Q4"
+        },
+        {
+          "path": "/charts/0/dataset/categories/1/label",
+          "before": "Q2",
+          "after": "Q1"
+        },
+        {
+          "path": "/charts/0/dataset/categories/2/label",
+          "before": "Q3",
+          "after": "Q2"
+        },
+        {
+          "path": "/charts/0/dataset/categories/3/label",
+          "before": "Q4",
+          "after": "Q3"
+        },
+        {
+          "path": "/charts/0/dataset/series/0/values/0",
+          "before": 17,
+          "after": 29
+        },
+        {
+          "path": "/charts/0/dataset/series/0/values/1",
+          "before": 23,
+          "after": 17
+        },
+        {
+          "path": "/charts/0/dataset/series/0/values/2",
+          "before": 20,
+          "after": 23
+        },
+        {
+          "path": "/charts/0/dataset/series/0/values/3",
+          "before": 29,
+          "after": 20
+        },
+        {
+          "path": "/charts/0/dataset/series/1/values/0",
+          "before": 14,
+          "after": 25
+        },
+        {
+          "path": "/charts/0/dataset/series/1/values/1",
+          "before": 19,
+          "after": 14
+        },
+        {
+          "path": "/charts/0/dataset/series/1/values/2",
+          "before": 22,
+          "after": 19
+        },
+        {
+          "path": "/charts/0/dataset/series/1/values/3",
+          "before": 25,
+          "after": 22
+        },
+        {
+          "path": "/charts/0/dataset/series/2/values/0",
+          "before": 12,
+          "after": 21
+        },
+        {
+          "path": "/charts/0/dataset/series/2/values/1",
+          "before": 16,
+          "after": 12
+        },
+        {
+          "path": "/charts/0/dataset/series/2/values/2",
+          "before": 18,
+          "after": 16
+        },
+        {
+          "path": "/charts/0/dataset/series/2/values/3",
+          "before": 21,
+          "after": 18
+        }
+      ],
+      "preserve": "所有未被该轮授权改变的语义；按标签匹配，忽略内部 ID"
+    },
+    {
+      "turn": 3,
+      "authorized_user_request": "保留上一轮顺序，把子图标题改为“季度销售（Q4 优先）”，系列顺序和全部关联保持。请实际渲染交付。",
+      "expected_semantic_differences": [
+        {
+          "path": "/charts/0/metadata/title",
+          "before": "区域季度销售",
+          "after": "季度销售（Q4 优先）"
+        }
+      ],
+      "preserve": "所有未被该轮授权改变的语义；按标签匹配，忽略内部 ID"
+    }
+  ]
+}

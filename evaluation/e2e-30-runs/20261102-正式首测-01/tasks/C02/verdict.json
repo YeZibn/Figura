@@ -1,0 +1,178 @@
+{
+  "task_id": "C02",
+  "batch_id": "20261102-正式首测-01",
+  "verdict": "fail",
+  "checks": [
+    {
+      "id": "T1-semantic",
+      "critical": true,
+      "status": "pass",
+      "expected": "基线纵向分组柱状图；12 个数值、类别和系列顺序、标题、轴名及来源符合 reference-turn-01.json。",
+      "actual": "全部数值精确一致；图表类型、顺序、标题、轴名及来源符合要求。",
+      "evidence": [
+        "turn_evidence/0/figures/figure-01.json",
+        "Run fbbce0ebde684c138d6467bd36213e03 / call_00_3rQViOiGRwY40dlQn6pO0761"
+      ],
+      "reason": "按类别和系列标签关联后，12 个数值均与基线相等。"
+    },
+    {
+      "id": "T1-render",
+      "critical": true,
+      "status": "pass",
+      "expected": "成功渲染与基线 Figure 匹配的可读 PNG，必要内容完整。",
+      "actual": "Image #1 为单幅纵向分组柱状图，标题、图例、轴名、来源均可见，无严重裁切遮挡。",
+      "evidence": [
+        "execution/turns/0/renders/0/result",
+        "image-01.png"
+      ],
+      "reason": "render 的 figure_ref、digest 与提交结果一致；实际 PNG 呈现符合基线。"
+    },
+    {
+      "id": "T1-delivery",
+      "critical": true,
+      "status": "fail",
+      "expected": "回答明确指向可用产物，且不存在与数据冲突的关键陈述。",
+      "actual": "回答明确指向成功产物，但声称“四个季度均为 East > South > North”；实际 Q3 为 South 19 > East 17 > North 15。",
+      "evidence": [
+        "turn_evidence/0/answer：回看保存的渲染图段落",
+        "turn_evidence/0/figures/figure-01.json/charts/0/chart_spec/dataset/series",
+        "image-01.png：Q3 柱组"
+      ],
+      "reason": "对系列高低关系的明确陈述与数据及实际图像冲突，未满足交付回答一致性要求。"
+    },
+    {
+      "id": "T2-semantic",
+      "critical": true,
+      "status": "pass",
+      "expected": "仅将 East/Q2 从 20 更正为 28，其余保持。",
+      "actual": "East=[14,28,17,26]；South、North 及所有要求的语义字段保持基线。",
+      "evidence": [
+        "turn_evidence/1/figures/figure-01.json",
+        "Run e409cd7ab42f4a9985565d069d0faeb5 / call_00_HjpibzJlac1T0VW1ikIy2439"
+      ],
+      "reason": "12 个数值及图表语义均与第 2 轮参考一致。"
+    },
+    {
+      "id": "T2-render",
+      "critical": true,
+      "status": "pass",
+      "expected": "与第 2 轮 Figure 匹配的可读 PNG，必要内容完整。",
+      "actual": "Image #2 中 East/Q2 为 28 对应的最高柱，其余柱组和文字完整。",
+      "evidence": [
+        "execution/turns/1/renders/0/result",
+        "image-02.png"
+      ],
+      "reason": "render 与提交 Figure 的引用及 digest 一致，实际图像映射正确，无严重遮挡裁切。"
+    },
+    {
+      "id": "T2-delivery",
+      "critical": true,
+      "status": "pass",
+      "expected": "回答明确指向本轮可用产物，关键陈述与产物一致。",
+      "actual": "回答指向 digest 1e96ff03… 的新渲染，数值表与 East/Q2=28 的说明正确。",
+      "evidence": [
+        "turn_evidence/1/answer",
+        "execution/turns/1/figures/0/result",
+        "execution/turns/1/renders/0/result"
+      ],
+      "reason": "本轮只有一个成功候选，回答引用明确且无关键数据冲突。"
+    },
+    {
+      "id": "T3-semantic",
+      "critical": true,
+      "status": "pass",
+      "expected": "East/Q2 覆盖为 31，其余保持基线。",
+      "actual": "East=[14,31,17,26]；其余 8 个系列数值、标题、顺序、轴名、来源及图表类型均正确。",
+      "evidence": [
+        "turn_evidence/2/figures/figure-01.json",
+        "Run 69780d107e244f778d38be28fc3a4d3b / call_00_7DxlI70a5MkoKSFYQ96v4914"
+      ],
+      "reason": "全部数值和要求字段与第 3 轮参考一致。"
+    },
+    {
+      "id": "T3-render",
+      "critical": true,
+      "status": "pass",
+      "expected": "与最终 Figure 匹配的可读 PNG，必要内容完整。",
+      "actual": "Image #3 的 East/Q2 柱略高于 30，其余柱组正确；标题、图例、轴名和来源可辨。",
+      "evidence": [
+        "execution/turns/2/renders/0/result",
+        "image-03.png"
+      ],
+      "reason": "render 引用及 digest 与最终提交一致，实际 PNG 无严重裁切遮挡。"
+    },
+    {
+      "id": "T3-delivery",
+      "critical": true,
+      "status": "pass",
+      "expected": "回答明确指向最终可用产物，关键陈述一致。",
+      "actual": "回答指向 digest 18d141e8…，明确 31 覆盖 28，数值表和 Q3 排序例外说明正确。",
+      "evidence": [
+        "turn_evidence/2/answer",
+        "execution/turns/2/figures/0/result",
+        "execution/turns/2/renders/0/result"
+      ],
+      "reason": "唯一成功候选与回答明确关联，最终说明符合实际产物。"
+    },
+    {
+      "id": "preservation",
+      "critical": true,
+      "status": "pass",
+      "expected": "每轮仅允许 East/Q2 的授权修改，其余语义保持。",
+      "actual": "逐轮 Figure 的唯一语义变化为 East/Q2：20→28→31；其他数值和要求字段保持。",
+      "evidence": [
+        "turn_evidence/0/figures/figure-01.json",
+        "turn_evidence/1/figures/figure-01.json",
+        "turn_evidence/2/figures/figure-01.json",
+        "image-01.png",
+        "image-02.png",
+        "image-03.png"
+      ],
+      "reason": "逐轮比较未发现非目标内容被修改；自动轴范围变化符合数据变化。"
+    },
+    {
+      "id": "final_requirements",
+      "critical": true,
+      "status": "pass",
+      "expected": "最终 East/Q2=31，覆盖 28，其余保持基线并实际渲染交付。",
+      "actual": "最终提交、回答和 PNG 均采用 31，其余要求保持，成功完成新渲染。",
+      "evidence": [
+        "turn_evidence/2/figures/figure-01.json/charts/0/chart_spec/dataset/series/0/values/1",
+        "turn_evidence/2/answer",
+        "image-03.png"
+      ],
+      "reason": "最新要求全部生效，28 未残留于最终数据。"
+    }
+  ],
+  "primary_failure": "baseline_construction",
+  "secondary_failures": [
+    "第 1 轮回答对 Q3 系列排序作出与数据冲突的关键陈述，导致 T1-delivery 失败。"
+  ],
+  "artifact_refs": [
+    "turn-01/figure-01.json",
+    "turn-01/render-01.png",
+    "turn-01/final-answer.txt",
+    "turn-02/figure-01.json",
+    "turn-02/render-01.png",
+    "turn-02/final-answer.txt",
+    "turn-03/figure-01.json",
+    "turn-03/render-01.png",
+    "turn-03/final-answer.txt"
+  ],
+  "quality_notes": [],
+  "judge": {
+    "model": "gpt-6.1-sol",
+    "prompt_version": "1.0",
+    "context_isolated": true,
+    "actual_png_viewed": true,
+    "limitations": [
+      "依据本次提供的冻结证据包及三张实际 PNG 裁决，未另行核查批次冻结记录。"
+    ]
+  },
+  "review_notes": [
+    "所提供执行记录未显示协议异常：三轮同 Session 顺序完成，每轮均有唯一成功提交及匹配渲染。",
+    "基线 Figure 和 PNG 正确，但基线交付回答未通过关键一致性检查；按 C 类协议归为 baseline_construction。",
+    "后两轮均有实际证据，已分别验收；最终正确不能抵消第 1 轮失败。",
+    "本记录仅为本次独立裁决，不代表另一个上下文的复核。"
+  ]
+}

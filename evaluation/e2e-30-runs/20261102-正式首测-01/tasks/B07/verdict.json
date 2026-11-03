@@ -1,0 +1,65 @@
+{
+  "task_id": "B07",
+  "batch_id": "20261102-正式首测-01",
+  "verdict": "pass",
+  "checks": [
+    {
+      "id": "T1-semantic",
+      "critical": true,
+      "status": "pass",
+      "expected": "单张气泡图；Products 三点依次为 (3,12,10)、(6,18,30)、(9,15,60)；标题、轴单位和来源符合要求。",
+      "actual": "已提交 Figure 使用 scatter 类型及 size 通道；三个点的顺序和全部数值精确一致。标题为“产品组合”，横轴为 Price (元)，纵轴为 Sales (百件)，来源正确。",
+      "evidence": [
+        "figure-01.json#/charts/0/chart_spec",
+        "execution.turns[0].figures[0].result",
+        "assemble call_00_diBTI9TVhexx5lUAyhzp9451"
+      ],
+      "reason": "按 Products 标签关联后逐值比较，数据、类型、顺序、轴标签、标题和来源均符合冻结要求。"
+    },
+    {
+      "id": "T1-render",
+      "critical": true,
+      "status": "pass",
+      "expected": "与成功提交 Figure 匹配且可读取的 PNG，正确显示气泡大小、坐标和必要文字。",
+      "actual": "实际 PNG 为 640×480，显示一张气泡图，三点位置正确且大小依次递增；标题、Products 图例、轴标签、来源和库存大小说明均可辨认，无严重裁切遮挡。render 与 Figure 的引用及 digest 一致。",
+      "evidence": [
+        "render-01.png",
+        "execution.turns[0].renders[0].result",
+        "execution.turns[0].renders[0].png_sha256_verified"
+      ],
+      "reason": "已查看附带的实际 PNG，视觉内容符合要求，配对元数据确认其来自本轮提交的 Figure。"
+    },
+    {
+      "id": "T1-delivery",
+      "critical": true,
+      "status": "pass",
+      "expected": "最终回答清楚指向可用产物，且与实际数据和交付状态一致。",
+      "actual": "最终回答明确说明已装配并渲染 640×480 PNG，列出的三个数据点和图中文字与唯一成功提交及渲染产物一致。",
+      "evidence": [
+        "final-answer.txt",
+        "turn_evidence[0].answer",
+        "execution.turns[0].figures",
+        "execution.turns[0].renders"
+      ],
+      "reason": "交付语境中仅有一个成功 Figure/render 候选，可唯一定位；回答没有与实际产物冲突的关键陈述。"
+    }
+  ],
+  "primary_failure": null,
+  "secondary_failures": [],
+  "artifact_refs": [
+    "figure-01.json",
+    "render-01.png",
+    "final-answer.txt"
+  ],
+  "quality_notes": [],
+  "judge": {
+    "model": "gpt-6.1-sol",
+    "prompt_version": "1.0",
+    "context_isolated": true,
+    "actual_png_viewed": true,
+    "limitations": []
+  },
+  "review_notes": [
+    "本次依据所提供的冻结对话、实际提交证据和附带 PNG 独立裁决；未发现协议异常，未使用参考 PNG。"
+  ]
+}

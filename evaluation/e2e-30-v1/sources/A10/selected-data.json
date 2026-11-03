@@ -1,0 +1,164 @@
+[
+  {
+    "Entity": "China",
+    "Code": "CHN",
+    "Year": "2015",
+    "Renewables": "4.517976"
+  },
+  {
+    "Entity": "China",
+    "Code": "CHN",
+    "Year": "2016",
+    "Renewables": "4.9647493"
+  },
+  {
+    "Entity": "China",
+    "Code": "CHN",
+    "Year": "2017",
+    "Renewables": "5.2487397"
+  },
+  {
+    "Entity": "China",
+    "Code": "CHN",
+    "Year": "2018",
+    "Renewables": "5.5482345"
+  },
+  {
+    "Entity": "China",
+    "Code": "CHN",
+    "Year": "2019",
+    "Renewables": "5.9269977"
+  },
+  {
+    "Entity": "China",
+    "Code": "CHN",
+    "Year": "2020",
+    "Renewables": "6.2515435"
+  },
+  {
+    "Entity": "China",
+    "Code": "CHN",
+    "Year": "2021",
+    "Renewables": "6.6206503"
+  },
+  {
+    "Entity": "China",
+    "Code": "CHN",
+    "Year": "2022",
+    "Renewables": "7.081981"
+  },
+  {
+    "Entity": "China",
+    "Code": "CHN",
+    "Year": "2023",
+    "Renewables": "7.230494"
+  },
+  {
+    "Entity": "France",
+    "Code": "FRA",
+    "Year": "2015",
+    "Renewables": "4.79632"
+  },
+  {
+    "Entity": "France",
+    "Code": "FRA",
+    "Year": "2016",
+    "Renewables": "5.2184243"
+  },
+  {
+    "Entity": "France",
+    "Code": "FRA",
+    "Year": "2017",
+    "Renewables": "5.0147758"
+  },
+  {
+    "Entity": "France",
+    "Code": "FRA",
+    "Year": "2018",
+    "Renewables": "5.7681518"
+  },
+  {
+    "Entity": "France",
+    "Code": "FRA",
+    "Year": "2019",
+    "Renewables": "5.9309764"
+  },
+  {
+    "Entity": "France",
+    "Code": "FRA",
+    "Year": "2020",
+    "Renewables": "6.84056"
+  },
+  {
+    "Entity": "France",
+    "Code": "FRA",
+    "Year": "2021",
+    "Renewables": "6.408777"
+  },
+  {
+    "Entity": "France",
+    "Code": "FRA",
+    "Year": "2022",
+    "Renewables": "7.095991"
+  },
+  {
+    "Entity": "France",
+    "Code": "FRA",
+    "Year": "2023",
+    "Renewables": "7.959767"
+  },
+  {
+    "Entity": "United States",
+    "Code": "USA",
+    "Year": "2015",
+    "Renewables": "4.823133"
+  },
+  {
+    "Entity": "United States",
+    "Code": "USA",
+    "Year": "2016",
+    "Renewables": "5.2328286"
+  },
+  {
+    "Entity": "United States",
+    "Code": "USA",
+    "Year": "2017",
+    "Renewables": "5.5735393"
+  },
+  {
+    "Entity": "United States",
+    "Code": "USA",
+    "Year": "2018",
+    "Renewables": "5.4515843"
+  },
+  {
+    "Entity": "United States",
+    "Code": "USA",
+    "Year": "2019",
+    "Renewables": "5.5976667"
+  },
+  {
+    "Entity": "United States",
+    "Code": "USA",
+    "Year": "2020",
+    "Renewables": "6.166477"
+  },
+  {
+    "Entity": "United States",
+    "Code": "USA",
+    "Year": "2021",
+    "Renewables": "6.164481"
+  },
+  {
+    "Entity": "United States",
+    "Code": "USA",
+    "Year": "2022",
+    "Renewables": "6.5167165"
+  },
+  {
+    "Entity": "United States",
+    "Code": "USA",
+    "Year": "2023",
+    "Renewables": "6.816595"
+  }
+]

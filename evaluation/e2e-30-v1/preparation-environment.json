@@ -1,0 +1,10 @@
+{
+  "date": "2026-11-02",
+  "python": "3.11.15",
+  "matplotlib": "3.11.1",
+  "git_commit_at_preparation": "a9d155e53a488544b450c42760abfcf4932e66be",
+  "chart_source_sha256": "4e8b2534c694b8c6bec264c423733336de11874c1a1a17756b4c839e5199a61a",
+  "reference_generation": "当前 Charts v2 parser/validator/renderer；B08 增加独立视觉示意，原生渲染诊断单存。",
+  "analysis_generation": "6 张独立 Matplotlib 合成图，数据冻结在 judge-only；4 张 OWID 官方导出，保留源文件与筛选底表。",
+  "reproduction_policy": "正式实验使用冻结文件及 SHA-256；不重新生成图片后沿用旧版本。所有 ChartFigure JSON 可经相同源码版本 parser/renderer 复现原生诊断，B08 示意不做像素基准。"
+}

@@ -1,0 +1,59 @@
+{
+  "task_id": "A06",
+  "category": "analysis",
+  "status": "not_run",
+  "facts": {
+    "percent": {
+      "Online": 40,
+      "Store": 30,
+      "Partner": 20,
+      "Other": 10
+    },
+    "max": "Online",
+    "min": "Other",
+    "combined": 60,
+    "absolute_count": "unknown"
+  },
+  "checks": [
+    {
+      "id": "type",
+      "critical": true,
+      "requirement": "正确识别环图",
+      "expected": "donut"
+    },
+    {
+      "id": "shares",
+      "critical": true,
+      "requirement": "四个标签与标注百分比准确关联",
+      "expected": {
+        "Online": 40,
+        "Store": 30,
+        "Partner": 20,
+        "Other": 10
+      },
+      "numeric_tolerance": {
+        "abs": 0,
+        "rel": 0
+      }
+    },
+    {
+      "id": "summary",
+      "critical": true,
+      "requirement": "极值和合计正确",
+      "expected": {
+        "max": "Online",
+        "min": "Other",
+        "combined": 60
+      }
+    },
+    {
+      "id": "boundary",
+      "critical": true,
+      "requirement": "不捏造绝对人数",
+      "expected": "unknown"
+    }
+  ],
+  "reference_figures": [],
+  "numeric_policy": "explicit_per_check",
+  "semantic_equivalence": "忽略内部生成的 chart/category/series ID；按标签、顺序和语义匹配。坐标 kind 和数据类型必须合法。空 note、空 figure title 等未要求字段不强制一致。"
+}

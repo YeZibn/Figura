@@ -1,0 +1,117 @@
+{
+  "schema_version": 2,
+  "title": "销售与订单概览",
+  "layout": {
+    "columns": 2
+  },
+  "charts": [
+    {
+      "chart_id": "quarterly_sales",
+      "chart_spec": {
+        "schema_version": 2,
+        "metadata": {
+          "chart_type": "bar",
+          "title": "季度销售",
+          "source": "Figura E2E-30 合成数据 v1"
+        },
+        "coordinate_system": {
+          "kind": "cartesian",
+          "x_axis": {
+            "kind": "categorical",
+            "label": "Quarter"
+          },
+          "y_axis": {
+            "kind": "numeric",
+            "label": "Sales (万元)"
+          }
+        },
+        "dataset": {
+          "orientation": "vertical",
+          "mode": "grouped",
+          "categories": [
+            {
+              "id": "Q1",
+              "label": "Q1"
+            },
+            {
+              "id": "Q2",
+              "label": "Q2"
+            },
+            {
+              "id": "Q3",
+              "label": "Q3"
+            },
+            {
+              "id": "Q4",
+              "label": "Q4"
+            }
+          ],
+          "series": [
+            {
+              "id": "sales",
+              "label": "Sales",
+              "values": [
+                17,
+                26,
+                21,
+                34
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "chart_id": "monthly_orders",
+      "chart_spec": {
+        "schema_version": 2,
+        "metadata": {
+          "chart_type": "line",
+          "title": "月度订单",
+          "source": "Figura E2E-30 合成数据 v1"
+        },
+        "coordinate_system": {
+          "kind": "cartesian",
+          "x_axis": {
+            "kind": "categorical",
+            "label": "Month"
+          },
+          "y_axis": {
+            "kind": "numeric",
+            "label": "Orders (单)"
+          }
+        },
+        "dataset": {
+          "series": [
+            {
+              "id": "orders",
+              "label": "Orders",
+              "points": [
+                {
+                  "x": "Jan",
+                  "y": 24
+                },
+                {
+                  "x": "Feb",
+                  "y": 29
+                },
+                {
+                  "x": "Mar",
+                  "y": 27
+                },
+                {
+                  "x": "Apr",
+                  "y": 38
+                },
+                {
+                  "x": "May",
+                  "y": 45
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

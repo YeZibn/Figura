@@ -1,0 +1,24 @@
+{
+  "source": "Figura E2E-30 合成数据 v1",
+  "charts": [
+    {
+      "name": "季度门店销售",
+      "data": {
+        "categories": [
+          "Q1",
+          "Q2",
+          "Q3",
+          "Q4"
+        ],
+        "series": {
+          "Store": [
+            16,
+            23,
+            19,
+            31
+          ]
+        }
+      }
+    }
+  ]
+}

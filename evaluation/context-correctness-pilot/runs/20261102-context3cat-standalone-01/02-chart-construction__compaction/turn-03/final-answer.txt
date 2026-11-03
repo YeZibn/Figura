@@ -1,0 +1,38 @@
+已按“先检索，再读取原文，最后装配并渲染”的顺序完成。
+
+## 一、检索与原文核对结果
+
+用 `search_history` 检索 `Target Actual Q3` 和 `Orders Jul`，命中原始输入消息记录（run `2bad245ddd104cb794b0184a7f029d70`，record `493bee22cf4749d68b15f4caca0a9f4d`），再用 `read_history` 读取该消息全文 JSON 核对：
+
+| 目标项 | 所在面板 | 类别位置 | 系列 | 原始值 |
+|---|---|---|---|---|
+| Q3 Target | 面板 1 `Quarterly Sales` | `categories` 第 3 项（Q1,Q2,**Q3**,Q4） | `Target` | **48** |
+| Q3 Actual | 面板 1 `Quarterly Sales` | 同上 | `Actual` | **45** |
+| 7 月 Orders | 面板 2 `Monthly Orders` | `categories` 第 7 项（Jan…Jun,**Jul**） | `Orders` | **53** |
+
+对照完整序列可确认取值没有错位：Target `[40,55,48,62]`、Actual `[36,51,45,59]`、Orders `[22,28,25,36,44,41,53]`，与 4 个季度、7 个月份类别长度一一对应。
+
+## 二、ChartSpec 摘要
+
+整体标题：**季度销售与月度订单**；布局：1 行 2 列（列数 2）。
+
+| chart_id | 类型 | 标题 | 横轴 | 纵轴（单位） | 类别顺序 | 系列与数值 |
+|---|---|---|---|---|---|---|
+| `quarterly_sales` | bar（vertical / grouped） | Quarterly Sales | Quarter（categorical） | Revenue (million USD)（numeric） | Q1→Q2→Q3→Q4 | Target: 40, 55, **48**, 62；Actual: 36, 51, **45**, 59 |
+| `monthly_orders` | line | Monthly Orders | Month（categorical） | Number of Orders（numeric） | Jan→Feb→Mar→Apr→May→Jun→Jul | Orders: 22, 28, 25, 36, 44, 41, **53** |
+
+（Figure digest：`0a37743d8af7eb3e3685f9ff7417c2eef0491c8bb2e9ac41abc1e61cfbd4b8d9`；未使用图像测量，数值全部来自原始结构化输入，因此未附 measurement_refs。）
+
+## 三、PNG 与复核结论
+
+渲染已成功，1280×522 PNG 见上方图像（资源 call `call_00_ET_DGmx2EdaKiuTKYCrJq9p8815`）。
+
+**已检查项：**
+
+- **面板顺序**：左“Quarterly Sales”柱状图、右“Monthly Orders”折线图，与最终合同的一行两列方位一致，未互换。
+- **类别顺序**：左图从左到右 Q1→Q4；右图从左到右 Jan→Jul，首末类别未被裁掉，名称未被改写。
+- **单位**：左轴为 `Revenue (million USD)`（百万美元），右轴为 `Number of Orders`（订单数），两面板各自标注、互不串用；未做归一化或百分比换算。
+- **原始数值未变**：柱高与取点位置对应 40/55/48/62 与 36/51/45/59、七个订单点 22…53；图中 Q3 为 48 与 45，7 月点为 53，与原文一致；无插值、无新增数据点、无派生系列，两面板数据未合并。
+- **图例**：左图仅 Target / Actual 两项，与合同一致。
+
+**需说明的一处呈现差异（不影响数据）**：本 ChartSpec 的坐标结构只承载轴名称与类别，不包含纵轴最小值、最大值和刻度步长的字段，因此渲染采用自动刻度——左轴刻度为 0–60（Q4 柱高 62 超出最高刻度标注一格），右轴刻度为 25–50。合同中的“纵轴 0–70 / 0–60、步长 10”属于给定轴设置，无法通过当前规格字段强制落到图上；所有数值本身未做任何改动。如需严格外观一致，可告知是否接受这一自动刻度呈现。

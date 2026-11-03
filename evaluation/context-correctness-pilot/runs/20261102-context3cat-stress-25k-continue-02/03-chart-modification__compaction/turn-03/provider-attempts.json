@@ -1,0 +1,77 @@
+[
+  {
+    "attempt_id": "b11a7bac63c447769b61d366e54c4c85",
+    "request_id": "65ebc9c3c9b7477da3582673f4ee7e5d",
+    "status": "response_committed",
+    "response_record_id": null,
+    "failure_code": null,
+    "http_status": 200,
+    "attempt_sequence": 1,
+    "purpose": "context_compaction",
+    "usage": {
+      "completion_tokens": 7083,
+      "prompt_tokens": 5969,
+      "total_tokens": 13052
+    }
+  },
+  {
+    "attempt_id": "e794dbabadff4c8b9f6e467dadad3ebc",
+    "request_id": "a6b488bce15a4eabbf9baa97739ef605",
+    "status": "response_committed",
+    "response_record_id": "db7ef00c7f604fe68bb968c683664a50",
+    "failure_code": null,
+    "http_status": 200,
+    "attempt_sequence": 1,
+    "purpose": "agent_turn",
+    "usage": {
+      "completion_tokens": 1042,
+      "prompt_tokens": 20877,
+      "total_tokens": 21919
+    }
+  },
+  {
+    "attempt_id": "dd4986f021704a91a445c988c6671bb9",
+    "request_id": "03006f2c6f3d43a598c25d562fa9d0aa",
+    "status": "response_committed",
+    "response_record_id": null,
+    "failure_code": null,
+    "http_status": 200,
+    "attempt_sequence": 1,
+    "purpose": "context_compaction",
+    "usage": {
+      "completion_tokens": 6868,
+      "prompt_tokens": 6785,
+      "total_tokens": 13653
+    }
+  },
+  {
+    "attempt_id": "b2824405b70341c883a492fb73c332ff",
+    "request_id": "ee62a29fe5bd4f7a84c2c69161d8ad25",
+    "status": "response_committed",
+    "response_record_id": "759e6f699cc74a5b986606dc53109e85",
+    "failure_code": null,
+    "http_status": 200,
+    "attempt_sequence": 1,
+    "purpose": "agent_turn",
+    "usage": {
+      "completion_tokens": 88,
+      "prompt_tokens": 21572,
+      "total_tokens": 21660
+    }
+  },
+  {
+    "attempt_id": "6339bdb8d96040b4878b407f7ec739e7",
+    "request_id": "45000e4460ba44f687ac3ccdb85b0f5d",
+    "status": "response_committed",
+    "response_record_id": "04155accb0a94ba79505576265ce3cde",
+    "failure_code": null,
+    "http_status": 200,
+    "attempt_sequence": 1,
+    "purpose": "agent_turn",
+    "usage": {
+      "completion_tokens": 1120,
+      "prompt_tokens": 22533,
+      "total_tokens": 23653
+    }
+  }
+]

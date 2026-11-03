@@ -1,0 +1,177 @@
+{
+  "scope": "Controlled model-led direct typed-resource read using a compacted request projection; source facts reused from the preceding isolated pilot; explicit tool-use instruction; not a spontaneous tool-choice estimate.",
+  "source_batch": "20261103-resource-direct-read-04",
+  "started_at": "2026-11-03T03:24:11.760969+00:00",
+  "provider": "deepseek",
+  "model": "deepseek-flash",
+  "cases": [
+    {
+      "id": "typed-ocr",
+      "query": "ocr resource exact value",
+      "expected": "CODE-084920",
+      "kind": "ocr",
+      "status": "run",
+      "attempt": {
+        "status": "answered",
+        "answer": "OCR 资源存在且可用，未截断，共 400 条候选文本（全部 confidence 0.93，坐标体系为 attachment_px，源图 500×500）。完整类型化引用：{\"kind\":\"ocr\",\"run_id\":\"80cd65cb19214c2ea4eae4b8a08fbadf\",\"call_id\":\"fixture-ocr-7QK491\"}。文本从 “Observation 001: marker CODE-007919” 起按序号递增，例如 002 为 CODE-015838、003 为 CODE-023757、…、400 为 CODE-167651；每条均为 “Observation NNN: marker CODE-XXXXXX” 形式，编码按 7919 递增并循环归零。这些只是 OCR 候选文字，不是已核对的业务数据。",
+        "correct": false,
+        "raw_answer": "{\"answer\":\"OCR 资源存在且可用，未截断，共 400 条候选文本（全部 confidence 0.93，坐标体系为 attachment_px，源图 500×500）。完整类型化引用：{\\\"kind\\\":\\\"ocr\\\",\\\"run_id\\\":\\\"80cd65cb19214c2ea4eae4b8a08fbadf\\\",\\\"call_id\\\":\\\"fixture-ocr-7QK491\\\"}。文本从 “Observation 001: marker CODE-007919” 起按序号递增，例如 002 为 CODE-015838、003 为 CODE-023757、…、400 为 CODE-167651；每条均为 “Observation NNN: marker CODE-XXXXXX” 形式，编码按 7919 递增并循环归零。这些只是 OCR 候选文字，不是已核对的业务数据。\"}",
+        "calls": [
+          {
+            "name": "read_history",
+            "arguments": {
+              "reference": {
+                "kind": "ocr",
+                "run_id": "80cd65cb19214c2ea4eae4b8a08fbadf",
+                "call_id": "fixture-ocr-7QK491"
+              }
+            },
+            "outcome": "succeeded",
+            "result_contains_expected": true,
+            "error": null
+          }
+        ],
+        "rounds": [
+          {
+            "estimated_input_tokens": 93174,
+            "usage": {
+              "prompt_tokens": 78788,
+              "completion_tokens": 83,
+              "total_tokens": 78871
+            },
+            "finish_reason": "tool_calls"
+          },
+          {
+            "estimated_input_tokens": 109516,
+            "usage": {
+              "prompt_tokens": 95100,
+              "completion_tokens": 188,
+              "total_tokens": 95288
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "seconds": 4.996,
+        "typed_reference_match": true,
+        "read_result_contains_answer": true,
+        "typed_direct_pass": false,
+        "resource_ref_visible": true,
+        "answer_leaked_in_request": false
+      }
+    },
+    {
+      "id": "typed-measurement",
+      "query": "measurement resource exact value",
+      "expected": "Detailed warning token: WARN-7QK-491.",
+      "kind": "measurement",
+      "status": "run",
+      "attempt": {
+        "status": "answered",
+        "answer": "该测量调用（measure_chart，chart_type=bar，source fc281f6d9898424580361090f26266d8，20×20 px）结果为 status=no_evidence：检测到 0 个柱、0 个系列，置信度全为 0，无坐标轴刻度/校准，observations.bars 与 series 均为空，因此不存在可提取的确切数值（exact value）；仅保留 5 条警告（含 WARN-7QK-491、WARN-3XM-826）。",
+        "correct": false,
+        "raw_answer": "{\"answer\":\"该测量调用（measure_chart，chart_type=bar，source fc281f6d9898424580361090f26266d8，20×20 px）结果为 status=no_evidence：检测到 0 个柱、0 个系列，置信度全为 0，无坐标轴刻度/校准，observations.bars 与 series 均为空，因此不存在可提取的确切数值（exact value）；仅保留 5 条警告（含 WARN-7QK-491、WARN-3XM-826）。\"}",
+        "calls": [
+          {
+            "name": "read_history",
+            "arguments": {
+              "reference": {
+                "kind": "measurement",
+                "run_id": "80cd65cb19214c2ea4eae4b8a08fbadf",
+                "call_id": "fixture-measure-3XM826"
+              }
+            },
+            "outcome": "succeeded",
+            "result_contains_expected": true,
+            "error": null
+          }
+        ],
+        "rounds": [
+          {
+            "estimated_input_tokens": 93174,
+            "usage": {
+              "prompt_tokens": 78790,
+              "completion_tokens": 83,
+              "total_tokens": 78873
+            },
+            "finish_reason": "tool_calls"
+          },
+          {
+            "estimated_input_tokens": 93757,
+            "usage": {
+              "prompt_tokens": 79350,
+              "completion_tokens": 123,
+              "total_tokens": 79473
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "seconds": 3.534,
+        "typed_reference_match": true,
+        "read_result_contains_answer": true,
+        "typed_direct_pass": false,
+        "resource_ref_visible": true,
+        "answer_leaked_in_request": false
+      }
+    },
+    {
+      "id": "typed-chart_figure",
+      "query": "chart_figure resource exact value",
+      "expected": "817.4",
+      "kind": "chart_figure",
+      "status": "run",
+      "attempt": {
+        "status": "answered",
+        "answer": "{\"kind\":\"chart_figure\",\"run_id\":\"c9b8814256674647bf97456f32ccc812\",\"call_id\":\"fixture-figure-9VA204\",\"title\":\"Quarterly Revenue Detail\",\"digest\":\"181012b27e7690d233543c9efbf478320e8317aafd4b4b59d6dd2d10fcfccb48\",\"layout\":{\"columns\":1},\"charts\":[{\"chart_id\":\"sales\",\"chart_spec\":{\"schema_version\":2,\"metadata\":{\"chart_type\":\"bar\",\"title\":\"Regional Revenue Series\",\"source\":null,\"note\":\"\"},\"coordinate_system\":{\"kind\":\"cartesian\",\"x_axis\":{\"kind\":\"categorical\"},\"y_axis\":{\"kind\":\"numeric\"}},\"dataset\":{\"orientation\":\"vertical\",\"mode\":\"grouped\",\"categories\":[{\"id\":\"period-01\",\"label\":\"Period 01\"},{\"id\":\"period-02\",\"label\":\"Period 02\"},{\"id\":\"period-03\",\"label\":\"Period 03\"},{\"id\":\"period-04\",\"label\":\"Period 04\"},{\"id\":\"period-05\",\"label\":\"Period 05\"},{\"id\":\"period-06\",\"label\":\"Period 06\"},{\"id\":\"period-07\",\"label\":\"Period 07\"},{\"id\":\"period-08\",\"label\":\"Period 08\"},{\"id\":\"period-09\",\"label\":\"Period 09\"},{\"id\":\"period-10\",\"label\":\"Period 10\"},{\"id\":\"period-11\",\"label\":\"Period 11\"},{\"id\":\"period-12\",\"label\":\"Period 12\"}],\"series\":[{\"id\":\"revenue\",\"label\":\"Revenue\",\"values\":[117.3,134.6,151.9,169.2,186.5,203.8,221.1,817.4,255.7,273.0,290.3,129.6]}]}},\"measurement_refs\":[{\"run_id\":\"80cd65cb19214c2ea4eae4b8a08fbadf\",\"call_id\":\"fixture-measure-3XM826\"}]}]}",
+        "correct": false,
+        "raw_answer": "{\"answer\":\"{\\\"kind\\\":\\\"chart_figure\\\",\\\"run_id\\\":\\\"c9b8814256674647bf97456f32ccc812\\\",\\\"call_id\\\":\\\"fixture-figure-9VA204\\\",\\\"title\\\":\\\"Quarterly Revenue Detail\\\",\\\"digest\\\":\\\"181012b27e7690d233543c9efbf478320e8317aafd4b4b59d6dd2d10fcfccb48\\\",\\\"layout\\\":{\\\"columns\\\":1},\\\"charts\\\":[{\\\"chart_id\\\":\\\"sales\\\",\\\"chart_spec\\\":{\\\"schema_version\\\":2,\\\"metadata\\\":{\\\"chart_type\\\":\\\"bar\\\",\\\"title\\\":\\\"Regional Revenue Series\\\",\\\"source\\\":null,\\\"note\\\":\\\"\\\"},\\\"coordinate_system\\\":{\\\"kind\\\":\\\"cartesian\\\",\\\"x_axis\\\":{\\\"kind\\\":\\\"categorical\\\"},\\\"y_axis\\\":{\\\"kind\\\":\\\"numeric\\\"}},\\\"dataset\\\":{\\\"orientation\\\":\\\"vertical\\\",\\\"mode\\\":\\\"grouped\\\",\\\"categories\\\":[{\\\"id\\\":\\\"period-01\\\",\\\"label\\\":\\\"Period 01\\\"},{\\\"id\\\":\\\"period-02\\\",\\\"label\\\":\\\"Period 02\\\"},{\\\"id\\\":\\\"period-03\\\",\\\"label\\\":\\\"Period 03\\\"},{\\\"id\\\":\\\"period-04\\\",\\\"label\\\":\\\"Period 04\\\"},{\\\"id\\\":\\\"period-05\\\",\\\"label\\\":\\\"Period 05\\\"},{\\\"id\\\":\\\"period-06\\\",\\\"label\\\":\\\"Period 06\\\"},{\\\"id\\\":\\\"period-07\\\",\\\"label\\\":\\\"Period 07\\\"},{\\\"id\\\":\\\"period-08\\\",\\\"label\\\":\\\"Period 08\\\"},{\\\"id\\\":\\\"period-09\\\",\\\"label\\\":\\\"Period 09\\\"},{\\\"id\\\":\\\"period-10\\\",\\\"label\\\":\\\"Period 10\\\"},{\\\"id\\\":\\\"period-11\\\",\\\"label\\\":\\\"Period 11\\\"},{\\\"id\\\":\\\"period-12\\\",\\\"label\\\":\\\"Period 12\\\"}],\\\"series\\\":[{\\\"id\\\":\\\"revenue\\\",\\\"label\\\":\\\"Revenue\\\",\\\"values\\\":[117.3,134.6,151.9,169.2,186.5,203.8,221.1,817.4,255.7,273.0,290.3,129.6]}]}},\\\"measurement_refs\\\":[{\\\"run_id\\\":\\\"80cd65cb19214c2ea4eae4b8a08fbadf\\\",\\\"call_id\\\":\\\"fixture-measure-3XM826\\\"}]}]}\"}",
+        "calls": [
+          {
+            "name": "read_history",
+            "arguments": {
+              "reference": {
+                "kind": "chart_figure",
+                "run_id": "c9b8814256674647bf97456f32ccc812",
+                "call_id": "fixture-figure-9VA204"
+              }
+            },
+            "outcome": "succeeded",
+            "result_contains_expected": true,
+            "error": null
+          }
+        ],
+        "rounds": [
+          {
+            "estimated_input_tokens": 93178,
+            "usage": {
+              "prompt_tokens": 78792,
+              "completion_tokens": 79,
+              "total_tokens": 78871
+            },
+            "finish_reason": "tool_calls"
+          },
+          {
+            "estimated_input_tokens": 93828,
+            "usage": {
+              "prompt_tokens": 79403,
+              "completion_tokens": 566,
+              "total_tokens": 79969
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "seconds": 4.807,
+        "typed_reference_match": true,
+        "read_result_contains_answer": true,
+        "typed_direct_pass": false,
+        "resource_ref_visible": true,
+        "answer_leaked_in_request": false
+      }
+    }
+  ],
+  "aggregate": {
+    "total": 3,
+    "executed": 3,
+    "typed_direct_passed": 0
+  },
+  "finished_at": "2026-11-03T03:24:11.761019+00:00"
+}

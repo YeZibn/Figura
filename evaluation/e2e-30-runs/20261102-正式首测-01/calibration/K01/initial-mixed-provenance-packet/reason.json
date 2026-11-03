@@ -1,0 +1,3 @@
+{
+  "reason": "mock-only metadata in reference answer was mistakenly included in real-calibration packet; normalize reference marker, preserve first judge record; no answer/rubric changes"
+}

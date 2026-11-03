@@ -1,0 +1,35 @@
+{
+  "task_id": "A08",
+  "batch_id": "20261102-正式首测-01",
+  "session_id": "8ed7227f92c44744b225211b3a08ec30",
+  "execution_status": "completed",
+  "started_at": "2026-11-02T16:54:46.025903+08:00",
+  "turns": [
+    {
+      "turn": 1,
+      "run_id": "064ab11f52054318b3b094fd27572635",
+      "session_id": "8ed7227f92c44744b225211b3a08ec30",
+      "status": "completed",
+      "terminal_code": null,
+      "wall_seconds": 31.451,
+      "timed_out": false,
+      "final_answer": "final-answer.txt",
+      "final_answer_committed": true,
+      "figures": [],
+      "renders": [],
+      "provider_attempt_count": 4,
+      "internal_retry_count": 0,
+      "usage": {
+        "prompt_tokens": 61610,
+        "completion_tokens": 2164,
+        "total_tokens": 63774
+      },
+      "usage_complete": true,
+      "usage_missing_attempt_refs": [],
+      "compaction_operations": [],
+      "delivery_selection": "judge must select from actual final answer and all committed candidates; no automatic best-of selection"
+    }
+  ],
+  "protocol_anomalies": [],
+  "completed_at": "2026-11-02T16:55:17.495963+08:00"
+}

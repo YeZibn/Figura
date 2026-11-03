@@ -1,0 +1,115 @@
+{
+  "task_id": "B04",
+  "batch_id": "20261102-正式首测-01",
+  "session_id": "dce954326a3f40329f0b8d4e1ee4c37d",
+  "execution_status": "completed",
+  "started_at": "2026-11-02T16:57:47.697141+08:00",
+  "turns": [
+    {
+      "turn": 1,
+      "run_id": "6ef16e4ad24d48e581dd7a4c21fa80cb",
+      "session_id": "dce954326a3f40329f0b8d4e1ee4c37d",
+      "status": "completed",
+      "terminal_code": null,
+      "wall_seconds": 14.417,
+      "timed_out": false,
+      "final_answer": "final-answer.txt",
+      "final_answer_committed": true,
+      "figures": [
+        {
+          "call_id": "call_00_yXiG9cHQMKGLgCGmFEB50419",
+          "run_id": "6ef16e4ad24d48e581dd7a4c21fa80cb",
+          "file": "figure-01.json",
+          "result": {
+            "charts": [
+              {
+                "chart_id": "orders_line",
+                "chart_type": "line",
+                "title": "线上与门店订单"
+              }
+            ],
+            "figure_digest": "ab7e4ded44321eaabb4fd0b399536fba9c667c5d10fdbff90786ec4d60f180ef",
+            "figure_ref": {
+              "call_id": "call_00_yXiG9cHQMKGLgCGmFEB50419",
+              "run_id": "6ef16e4ad24d48e581dd7a4c21fa80cb"
+            },
+            "title": "线上与门店订单"
+          },
+          "digest_verified": true
+        },
+        {
+          "call_id": "call_00_Rmxw2N3CzvdMrGtIZK1Q1587",
+          "run_id": "6ef16e4ad24d48e581dd7a4c21fa80cb",
+          "file": "figure-02.json",
+          "result": {
+            "charts": [
+              {
+                "chart_id": "orders_line",
+                "chart_type": "line",
+                "title": "线上与门店订单"
+              }
+            ],
+            "figure_digest": "417908834f662ea7a042d66a172a07d79f61c315e3058c585e3cb515b1189f25",
+            "figure_ref": {
+              "call_id": "call_00_Rmxw2N3CzvdMrGtIZK1Q1587",
+              "run_id": "6ef16e4ad24d48e581dd7a4c21fa80cb"
+            },
+            "title": ""
+          },
+          "digest_verified": true
+        }
+      ],
+      "renders": [
+        {
+          "call_id": "call_00_ET_TruOTYIxGyyVPfAmDv7v7226",
+          "run_id": "6ef16e4ad24d48e581dd7a4c21fa80cb",
+          "file": "render-01.png",
+          "result": {
+            "byte_count": 33934,
+            "figure_digest": "ab7e4ded44321eaabb4fd0b399536fba9c667c5d10fdbff90786ec4d60f180ef",
+            "figure_ref": {
+              "call_id": "call_00_yXiG9cHQMKGLgCGmFEB50419",
+              "run_id": "6ef16e4ad24d48e581dd7a4c21fa80cb"
+            },
+            "height": 522,
+            "image_sha256": "0b14a5bedcc44a374d029ed76193b789f0158546fca83a00bf5f5fb197027f5f",
+            "media_type": "image/png",
+            "width": 640
+          },
+          "png_sha256_verified": true
+        },
+        {
+          "call_id": "call_00_ET_0JIl9Z5NSz97XHBwp1wV2635",
+          "run_id": "6ef16e4ad24d48e581dd7a4c21fa80cb",
+          "file": "render-02.png",
+          "result": {
+            "byte_count": 30897,
+            "figure_digest": "417908834f662ea7a042d66a172a07d79f61c315e3058c585e3cb515b1189f25",
+            "figure_ref": {
+              "call_id": "call_00_Rmxw2N3CzvdMrGtIZK1Q1587",
+              "run_id": "6ef16e4ad24d48e581dd7a4c21fa80cb"
+            },
+            "height": 480,
+            "image_sha256": "b30d4d43f3ccf1d7a2b42eb594dcb05f8e277c55ad6fb1ea66b337f699a3c7c6",
+            "media_type": "image/png",
+            "width": 640
+          },
+          "png_sha256_verified": true
+        }
+      ],
+      "provider_attempt_count": 5,
+      "internal_retry_count": 0,
+      "usage": {
+        "prompt_tokens": 71170,
+        "completion_tokens": 1629,
+        "total_tokens": 72799
+      },
+      "usage_complete": true,
+      "usage_missing_attempt_refs": [],
+      "compaction_operations": [],
+      "delivery_selection": "judge must select from actual final answer and all committed candidates; no automatic best-of selection"
+    }
+  ],
+  "protocol_anomalies": [],
+  "completed_at": "2026-11-02T16:58:02.289020+08:00"
+}

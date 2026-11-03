@@ -1,0 +1,65 @@
+{
+  "turn": 1,
+  "run_id": "e9e0ae07006e48f593fc25785dd7d4d8",
+  "session_id": "7f6d2db97a7e41fba5cf8a71bdb94187",
+  "status": "completed",
+  "terminal_code": null,
+  "wall_seconds": 8.157,
+  "timed_out": false,
+  "final_answer": "final-answer.txt",
+  "final_answer_committed": true,
+  "figures": [
+    {
+      "call_id": "call_00_diBTI9TVhexx5lUAyhzp9451",
+      "run_id": "e9e0ae07006e48f593fc25785dd7d4d8",
+      "file": "figure-01.json",
+      "result": {
+        "charts": [
+          {
+            "chart_id": "products_bubble",
+            "chart_type": "scatter",
+            "title": "产品组合"
+          }
+        ],
+        "figure_digest": "c52f400abb91740329a589de243b0acb1365e9deaf55eff21d7c6d06f80074af",
+        "figure_ref": {
+          "call_id": "call_00_diBTI9TVhexx5lUAyhzp9451",
+          "run_id": "e9e0ae07006e48f593fc25785dd7d4d8"
+        },
+        "title": ""
+      },
+      "digest_verified": true
+    }
+  ],
+  "renders": [
+    {
+      "call_id": "call_00_ET_gc8KkhXP3inZIbiKBgeq2456",
+      "run_id": "e9e0ae07006e48f593fc25785dd7d4d8",
+      "file": "render-01.png",
+      "result": {
+        "byte_count": 19817,
+        "figure_digest": "c52f400abb91740329a589de243b0acb1365e9deaf55eff21d7c6d06f80074af",
+        "figure_ref": {
+          "call_id": "call_00_diBTI9TVhexx5lUAyhzp9451",
+          "run_id": "e9e0ae07006e48f593fc25785dd7d4d8"
+        },
+        "height": 480,
+        "image_sha256": "bc5ad690ffc1b29ae5f1581ff6725fbda342f5a26567212816af355c1daacef8",
+        "media_type": "image/png",
+        "width": 640
+      },
+      "png_sha256_verified": true
+    }
+  ],
+  "provider_attempt_count": 3,
+  "internal_retry_count": 0,
+  "usage": {
+    "prompt_tokens": 39934,
+    "completion_tokens": 889,
+    "total_tokens": 40823
+  },
+  "usage_complete": true,
+  "usage_missing_attempt_refs": [],
+  "compaction_operations": [],
+  "delivery_selection": "judge must select from actual final answer and all committed candidates; no automatic best-of selection"
+}

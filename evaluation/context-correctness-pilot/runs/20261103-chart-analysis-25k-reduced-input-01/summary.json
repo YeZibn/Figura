@@ -1,0 +1,87 @@
+{
+  "paired_tasks": {
+    "01-chart-analysis": {
+      "baseline_total_tokens": 253977,
+      "compaction_total_tokens": 475742,
+      "observed_usage_delta_percent": -87.32,
+      "compression_saving_percent": -87.32,
+      "compression_saving_eligible": true,
+      "compaction_triggered": true,
+      "usage_complete": true,
+      "all_turns_completed": true
+    }
+  },
+  "executions": [
+    {
+      "task_id": "01-chart-analysis",
+      "condition": "compaction",
+      "status": "completed",
+      "turns": 3,
+      "provider_usage_including_compaction": {
+        "prompt_tokens": 391144,
+        "completion_tokens": 84598,
+        "total_tokens": 475742
+      },
+      "usage_complete": true,
+      "compaction_operations": [
+        {
+          "operation_id": "50e2d9436adf426c94ad64e222231008",
+          "status": "completed",
+          "failure_code": null
+        },
+        {
+          "operation_id": "0fd5be04bd144f21a961381cfcee2366",
+          "status": "completed",
+          "failure_code": null
+        },
+        {
+          "operation_id": "70a5a97ea00e4758b6de39001fbf422f",
+          "status": "completed",
+          "failure_code": null
+        },
+        {
+          "operation_id": "ba17469de5824c14a8fb0380dc12bcf9",
+          "status": "completed",
+          "failure_code": null
+        },
+        {
+          "operation_id": "f7ad35a6b5984c49a6f1401035cdc7dd",
+          "status": "completed",
+          "failure_code": null
+        },
+        {
+          "operation_id": "7903ac0557ab435eb847abef4ebc2ec0",
+          "status": "completed",
+          "failure_code": null
+        },
+        {
+          "operation_id": "64d0791fa2a94d6984e31518c288d293",
+          "status": "completed",
+          "failure_code": null
+        },
+        {
+          "operation_id": "eddc94d8791745acbd3fd69838e59fa2",
+          "status": "completed",
+          "failure_code": null
+        }
+      ],
+      "successful_compaction_count": 8,
+      "all_turns_completed": true
+    },
+    {
+      "task_id": "01-chart-analysis",
+      "condition": "baseline",
+      "status": "completed",
+      "turns": 3,
+      "provider_usage_including_compaction": {
+        "prompt_tokens": 245096,
+        "completion_tokens": 8881,
+        "total_tokens": 253977
+      },
+      "usage_complete": true,
+      "compaction_operations": [],
+      "successful_compaction_count": 0,
+      "all_turns_completed": true
+    }
+  ]
+}

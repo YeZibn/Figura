@@ -1,0 +1,9 @@
+[
+  {
+    "turn": 1,
+    "text": "请读取附件图中的 China、India、United States、Japan：给出图表类型、年份、指标与单位，列出四国数值（保留一位小数即可），指出最高和最低，并计算 Japan 与 India 的差值。不要使用外部检索；这是图片读图任务。",
+    "attachments": [
+      "chart.png"
+    ]
+  }
+]

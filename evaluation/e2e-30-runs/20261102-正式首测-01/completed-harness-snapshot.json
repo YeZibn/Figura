@@ -1,0 +1,13 @@
+{
+  "scripts": {
+    "evaluation/e2e-30-execution/finalize_report.py": "2f14c92cd2609cb5cb191c20b5a75bb30578180ffb827f08d2bd8ba3ed6486b4",
+    "evaluation/e2e-30-execution/freeze_batch.py": "10d7f7a24fb612d323fd893593b9b6a785db7983f3742e07817cd90222ca233c",
+    "evaluation/e2e-30-execution/judge_batch.py": "a5ef236df1f9500cdebe58cfea29af059063f7a4a2112549b7a523fac73c1d31",
+    "evaluation/e2e-30-execution/judge_worker.py": "9885ecf9699e446b5a5b08403af0b9de8abc88aecfe7d105418ea31b9753add9",
+    "evaluation/e2e-30-execution/review_batch.py": "1ea903562b3ceb085c2255326a7b4bc2bcefd929bc29d0b3f8c48373eeab8342",
+    "evaluation/e2e-30-execution/run_batch.py": "4bfa5bc0d69af12c56af9209060e7e4c9304f01d4b9fb1c421f34950693c6cd8",
+    "evaluation/e2e-30-execution/summarize.py": "e904868416971c0c957735000e5e9c9654946d6ba9525ab304cc17ce0fd83252",
+    "evaluation/e2e-30-execution/validate_evidence.py": "e94ab326257b4842e95581b02a0d41b103b3b94f37045058e52d43c77a4805b4"
+  },
+  "note": "执行与判分脚本的冻结摘要仍见batch-at-start；其后添加的调度/汇总/校验脚本仅消费已有证据。"
+}

@@ -1,0 +1,10 @@
+{
+  "model": "gpt-6.1-sol",
+  "wall_seconds": 21.917,
+  "context": "new ephemeral Codex invocation",
+  "mode": "real-calibration",
+  "task_id": "K02",
+  "attached_images": [
+    "evaluation/e2e-30-runs/20261102-正式首测-01/calibration/K02/turn-01/render-01.png"
+  ]
+}

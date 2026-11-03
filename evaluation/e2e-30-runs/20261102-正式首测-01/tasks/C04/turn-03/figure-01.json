@@ -1,0 +1,75 @@
+{
+  "charts": [
+    {
+      "chart_id": "regional_quarterly_sales",
+      "chart_spec": {
+        "coordinate_system": {
+          "kind": "cartesian",
+          "x_axis": {
+            "kind": "categorical",
+            "label": "Quarter"
+          },
+          "y_axis": {
+            "kind": "numeric",
+            "label": "Sales (万元)"
+          }
+        },
+        "dataset": {
+          "categories": [
+            {
+              "id": "Q1",
+              "label": "Q1"
+            },
+            {
+              "id": "Q2",
+              "label": "Q2"
+            },
+            {
+              "id": "Q3",
+              "label": "Q3"
+            },
+            {
+              "id": "Q4",
+              "label": "Q4"
+            }
+          ],
+          "mode": "grouped",
+          "orientation": "vertical",
+          "series": [
+            {
+              "id": "East",
+              "label": "East",
+              "values": [
+                16,
+                22,
+                19,
+                28
+              ]
+            },
+            {
+              "id": "North",
+              "label": "North",
+              "values": [
+                11,
+                15,
+                17,
+                20
+              ]
+            }
+          ]
+        },
+        "metadata": {
+          "chart_type": "bar",
+          "source": "Figura E2E-30 合成数据 v1",
+          "title": "East 与 North 季度销售"
+        },
+        "schema_version": 2
+      }
+    }
+  ],
+  "layout": {
+    "columns": 1
+  },
+  "schema_version": 2,
+  "title": "区域经营报告"
+}

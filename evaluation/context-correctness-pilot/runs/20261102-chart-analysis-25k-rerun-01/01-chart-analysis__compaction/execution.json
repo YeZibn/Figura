@@ -1,0 +1,60 @@
+{
+  "task_id": "01-chart-analysis",
+  "condition": "compaction",
+  "capacity_tokens": 25000,
+  "provider_id": "deepseek",
+  "batch_id": "20261102-chart-analysis-25k-rerun-01",
+  "started_at": "2026-11-02T20:09:11.386318+08:00",
+  "session_id": "2748e1c39abf49de9433bec03eaadea0",
+  "turns": [
+    {
+      "turn": 1,
+      "run_id": "434737e24cb0486ca6fa58ab5b2eae2c",
+      "session_id": "2748e1c39abf49de9433bec03eaadea0",
+      "status": "interrupted",
+      "terminal_code": "interrupted",
+      "final_answer_committed": false,
+      "figures": [],
+      "renders": [],
+      "provider_attempt_count": 5,
+      "usage_by_purpose": {
+        "agent_turn": {
+          "prompt_tokens": 39672,
+          "completion_tokens": 682,
+          "total_tokens": 40354
+        },
+        "context_compaction": {
+          "prompt_tokens": 2886,
+          "completion_tokens": 3083,
+          "total_tokens": 5969
+        }
+      },
+      "usage_total_including_compaction": {
+        "prompt_tokens": 42558,
+        "completion_tokens": 3765,
+        "total_tokens": 46323
+      },
+      "usage_complete": false,
+      "usage_missing_attempts": [
+        "b9c36cbfc51d40b8802522b7f9e689fe"
+      ],
+      "compaction_operations": [
+        {
+          "operation_id": "8835219b4d2b45558b752051292440da",
+          "status": "completed",
+          "failure_code": null
+        }
+      ],
+      "wall_seconds": 430.066,
+      "timed_out": false
+    }
+  ],
+  "execution_status": "error",
+  "input_adjustments": [],
+  "attachment_sha256": {
+    "input/bar_line_dashboard.png": "b6b6105d739d1a0399295fd75286f27ac8965644423a0533de814f8aaecb9e00"
+  },
+  "error_type": "RuntimeError",
+  "error_message": "01-chart-analysis compaction turn 1 ended as interrupted; remaining turns in this session were not submitted",
+  "completed_at": "2026-11-02T20:21:33.410857+08:00"
+}

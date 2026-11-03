@@ -1,0 +1,123 @@
+{
+  "paired_tasks": {
+    "02-chart-construction": {
+      "baseline_total_tokens": 123236,
+      "compaction_total_tokens": 133444,
+      "observed_usage_delta_percent": -8.28,
+      "compression_saving_percent": -8.28,
+      "compression_saving_eligible": true,
+      "compaction_triggered": true,
+      "usage_complete": true,
+      "all_turns_completed": true
+    },
+    "03-chart-modification": {
+      "baseline_total_tokens": 352364,
+      "compaction_total_tokens": 248523,
+      "observed_usage_delta_percent": 29.47,
+      "compression_saving_percent": 29.47,
+      "compression_saving_eligible": true,
+      "compaction_triggered": true,
+      "usage_complete": true,
+      "all_turns_completed": true
+    }
+  },
+  "executions": [
+    {
+      "task_id": "01-chart-analysis",
+      "condition": "baseline",
+      "status": "completed",
+      "turns": 3,
+      "provider_usage_including_compaction": {
+        "prompt_tokens": 238154,
+        "completion_tokens": 9272,
+        "total_tokens": 247426
+      },
+      "usage_complete": true,
+      "compaction_operations": [],
+      "successful_compaction_count": 0,
+      "all_turns_completed": true
+    },
+    {
+      "task_id": "02-chart-construction",
+      "condition": "baseline",
+      "status": "completed",
+      "turns": 3,
+      "provider_usage_including_compaction": {
+        "prompt_tokens": 118177,
+        "completion_tokens": 5059,
+        "total_tokens": 123236
+      },
+      "usage_complete": true,
+      "compaction_operations": [],
+      "successful_compaction_count": 0,
+      "all_turns_completed": true
+    },
+    {
+      "task_id": "02-chart-construction",
+      "condition": "compaction",
+      "status": "completed",
+      "turns": 3,
+      "provider_usage_including_compaction": {
+        "prompt_tokens": 125203,
+        "completion_tokens": 8241,
+        "total_tokens": 133444
+      },
+      "usage_complete": true,
+      "compaction_operations": [
+        {
+          "operation_id": "731ce04e5dd047eab9ced0ff935ae66d",
+          "status": "completed",
+          "failure_code": null
+        }
+      ],
+      "successful_compaction_count": 1,
+      "all_turns_completed": true
+    },
+    {
+      "task_id": "03-chart-modification",
+      "condition": "compaction",
+      "status": "completed",
+      "turns": 3,
+      "provider_usage_including_compaction": {
+        "prompt_tokens": 224096,
+        "completion_tokens": 24427,
+        "total_tokens": 248523
+      },
+      "usage_complete": true,
+      "compaction_operations": [
+        {
+          "operation_id": "36138fe66d614aa4a38469efe864d6d1",
+          "status": "completed",
+          "failure_code": null
+        },
+        {
+          "operation_id": "04134fab91524b128a795b950f49f070",
+          "status": "completed",
+          "failure_code": null
+        },
+        {
+          "operation_id": "2b79a8cd911c4a5eb985468d0e261292",
+          "status": "completed",
+          "failure_code": null
+        }
+      ],
+      "successful_compaction_count": 3,
+      "all_turns_completed": true
+    },
+    {
+      "task_id": "03-chart-modification",
+      "condition": "baseline",
+      "status": "completed",
+      "turns": 3,
+      "provider_usage_including_compaction": {
+        "prompt_tokens": 342448,
+        "completion_tokens": 9916,
+        "total_tokens": 352364
+      },
+      "usage_complete": true,
+      "compaction_operations": [],
+      "successful_compaction_count": 0,
+      "all_turns_completed": true
+    }
+  ]
+}

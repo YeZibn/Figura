@@ -1,0 +1,5 @@
+{
+  "text": "按下列数据制作纵向分组柱状图，子图标题“校准销售”，总标题“校准报告”，横轴 Quarter、纵轴 Sales (万元)，来源按数据填写。实际装配并渲染 PNG。数据：\n{\"quarters\": [\"Q1\", \"Q2\"], \"series\": {\"East\": [10, 20], \"South\": [15, 25]}, \"source\": \"Figura E2E-30 合成数据 v1\"}",
+  "attachment_sha256": [],
+  "providerId": "deepseek"
+}

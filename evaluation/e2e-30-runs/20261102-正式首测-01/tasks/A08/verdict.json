@@ -1,0 +1,103 @@
+{
+  "task_id": "A08",
+  "batch_id": "20261102-正式首测-01",
+  "verdict": "pass",
+  "checks": [
+    {
+      "id": "matrix",
+      "critical": true,
+      "status": "pass",
+      "expected": [
+        [
+          11,
+          7,
+          18
+        ],
+        [
+          9,
+          15,
+          6
+        ],
+        [
+          13,
+          4,
+          12
+        ]
+      ],
+      "actual": [
+        [
+          11,
+          7,
+          18
+        ],
+        [
+          9,
+          15,
+          6
+        ],
+        [
+          13,
+          4,
+          12
+        ]
+      ],
+      "evidence": [
+        "final-answer.txt：九个单元格的 Tickets 数值表",
+        "evaluation/e2e-30-v1/tasks/A08/agent-input/chart.png：全部九个单元格及行列标签"
+      ],
+      "reason": "按地区和日期关联后，九个整数均与原图及答案完全一致。"
+    },
+    {
+      "id": "extrema",
+      "critical": true,
+      "status": "pass",
+      "expected": {
+        "max": "East/Wed=18",
+        "min": "North/Tue=4"
+      },
+      "actual": {
+        "max": "East/Wed=18",
+        "min": "North/Tue=4"
+      },
+      "evidence": [
+        "final-answer.txt：最大单元格与最小单元格两项",
+        "evaluation/e2e-30-v1/tasks/A08/agent-input/chart.png：East/Wed 与 North/Tue 单元格"
+      ],
+      "reason": "最大值、最小值及各自地区和日期均正确。"
+    },
+    {
+      "id": "total",
+      "critical": true,
+      "status": "pass",
+      "expected": 30,
+      "actual": 30,
+      "evidence": [
+        "final-answer.txt：South 行的合计：9 + 15 + 6 = 30 张"
+      ],
+      "reason": "South 行数值为 9、15、6，确定性求和为 30。"
+    }
+  ],
+  "primary_failure": null,
+  "secondary_failures": [],
+  "artifact_refs": [
+    "final-answer.txt",
+    "evaluation/e2e-30-v1/tasks/A08/agent-input/chart.png",
+    "execution：turns/0，run_id=064ab11f52054318b3b094fd27572635"
+  ],
+  "quality_notes": [],
+  "judge": {
+    "model": "gpt-6.1-sol",
+    "prompt_version": "1.0",
+    "context_isolated": true,
+    "actual_png_viewed": true,
+    "limitations": [
+      "已查看随证据附上的实际输入 PNG。本题仅要求文字分析，无须提交 Figure 或渲染 PNG。",
+      "执行协议核验依据所提供的冻结证据包，未另行访问执行日志。"
+    ]
+  },
+  "review_notes": [
+    "单轮固定任务要求全部九格数值、极值定位和 South 合计，无覆盖或撤销项。",
+    "证据记录运行完成、最终回答已提交且无协议异常；唯一文字交付可明确定位。",
+    "本次为独立初次裁决，未声称完成另一次独立复核。"
+  ]
+}

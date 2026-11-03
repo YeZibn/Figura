@@ -1,0 +1,7 @@
+[
+  {
+    "turn": 1,
+    "text": "制作气泡图，系列 Products。x=Price (元)，y=Sales (百件)，size 表示库存数量，必须作为气泡大小通道保留原始 size 值。标题“产品组合”，不要把 size 写入纵轴。 所有图表来源填写“Figura E2E-30 合成数据 v1”。请实际装配、渲染并交付可查看的 PNG，不只给代码、方案或 JSON。所有数据完整保留，除明确要求外不变换、不排序、不增加数据。\n\n以下是本任务全部数据（直接作为用户消息，不上传 JSON 文件）：\n```json\n{\n  \"source\": \"Figura E2E-30 合成数据 v1\",\n  \"charts\": [\n    {\n      \"name\": \"产品组合\",\n      \"data\": {\n        \"series\": {\n          \"Products\": [\n            {\n              \"x\": 3,\n              \"y\": 12,\n              \"size\": 10\n            },\n            {\n              \"x\": 6,\n              \"y\": 18,\n              \"size\": 30\n            },\n            {\n              \"x\": 9,\n              \"y\": 15,\n              \"size\": 60\n            }\n          ]\n        }\n      }\n    }\n  ]\n}\n```",
+    "attachments": []
+  }
+]

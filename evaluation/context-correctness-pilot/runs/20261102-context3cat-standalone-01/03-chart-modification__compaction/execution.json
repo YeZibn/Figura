@@ -1,0 +1,113 @@
+{
+  "task_id": "03-chart-modification",
+  "condition": "compaction",
+  "capacity_tokens": 50000,
+  "provider_id": "deepseek",
+  "batch_id": "20261102-context3cat-standalone-01",
+  "started_at": "2026-11-02T18:24:42.410390+08:00",
+  "session_id": "1226b43ed5ef490b9afc5eddc339c49e",
+  "turns": [
+    {
+      "turn": 1,
+      "run_id": "d89b0a79445240178d19cad153907c85",
+      "session_id": "1226b43ed5ef490b9afc5eddc339c49e",
+      "status": "completed",
+      "terminal_code": null,
+      "final_answer_committed": true,
+      "figures": [
+        {
+          "file": "figure-01.json",
+          "figure_digest": "11799684478a5a21254ac9cd067f23f4f5e57a7bef3e6198a11950730a70c8f2",
+          "verified": true
+        }
+      ],
+      "renders": [
+        {
+          "file": "render-01.png",
+          "image_sha256": "f6c55f7516a9cb50c2309b09fc7e2ebac96eb2c2c6d3977cc2671af91ea53e9b",
+          "verified": true
+        }
+      ],
+      "provider_attempt_count": 5,
+      "usage_by_purpose": {
+        "agent_turn": {
+          "prompt_tokens": 80466,
+          "completion_tokens": 2016,
+          "total_tokens": 82482
+        }
+      },
+      "usage_total_including_compaction": {
+        "prompt_tokens": 80466,
+        "completion_tokens": 2016,
+        "total_tokens": 82482
+      },
+      "usage_complete": true,
+      "usage_missing_attempts": [],
+      "compaction_operations": [],
+      "wall_seconds": 18.956,
+      "timed_out": false
+    },
+    {
+      "turn": 2,
+      "run_id": "00a7e76ca2284b9690e5f469a2327c47",
+      "session_id": "1226b43ed5ef490b9afc5eddc339c49e",
+      "status": "completed",
+      "terminal_code": null,
+      "final_answer_committed": true,
+      "figures": [],
+      "renders": [],
+      "provider_attempt_count": 1,
+      "usage_by_purpose": {
+        "agent_turn": {
+          "prompt_tokens": 19792,
+          "completion_tokens": 1480,
+          "total_tokens": 21272
+        }
+      },
+      "usage_total_including_compaction": {
+        "prompt_tokens": 19792,
+        "completion_tokens": 1480,
+        "total_tokens": 21272
+      },
+      "usage_complete": true,
+      "usage_missing_attempts": [],
+      "compaction_operations": [],
+      "wall_seconds": 10.641,
+      "timed_out": false
+    },
+    {
+      "turn": 3,
+      "run_id": "e8b2d53ee7234c5ea9e0634688c7599c",
+      "session_id": "1226b43ed5ef490b9afc5eddc339c49e",
+      "status": "failed",
+      "terminal_code": "execution_failed",
+      "final_answer_committed": false,
+      "figures": [],
+      "renders": [],
+      "provider_attempt_count": 1,
+      "usage_by_purpose": {
+        "agent_turn": {
+          "prompt_tokens": 21629,
+          "completion_tokens": 754,
+          "total_tokens": 22383
+        }
+      },
+      "usage_total_including_compaction": {
+        "prompt_tokens": 21629,
+        "completion_tokens": 754,
+        "total_tokens": 22383
+      },
+      "usage_complete": true,
+      "usage_missing_attempts": [],
+      "compaction_operations": [],
+      "wall_seconds": 6.393,
+      "timed_out": false
+    }
+  ],
+  "execution_status": "completed",
+  "input_adjustments": [],
+  "attachment_sha256": {
+    "input/quarterly-regional-sales.png": "79f04312fcd4430f41f4c53b9d808d2c7e3b094c630d8b0745389ea32eca9e36"
+  },
+  "completed_at": "2026-11-02T18:25:19.682853+08:00"
+}
