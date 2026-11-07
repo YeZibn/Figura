@@ -19,6 +19,9 @@ _OPTIONS = {
     "connect_timeout_seconds", "write_timeout_seconds",
 }
 _MANIFEST = {"prompt_digest", "registry_version", "registry_digest", "adapter_contract_version", "images"}
+_CONTEXT_MANIFEST = _MANIFEST | {
+    "context_policy_version", "directory_projection_version", "directory_budget_tokens"
+}
 _IMAGE = {"source_ref", "observation_kind", "media_type", "byte_count", "sha256"}
 _REQUEST_FIELDS = {item.name for item in fields(ProviderRequestRecord)}
 
@@ -96,7 +99,8 @@ def validate_provider_request(request: ProviderRequestRecord) -> None:
             raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
     manifest = request.asset_manifest
     if (
-        not isinstance(manifest, Mapping) or set(manifest) != _MANIFEST
+        not isinstance(manifest, Mapping)
+        or (set(manifest) != _MANIFEST and set(manifest) != _CONTEXT_MANIFEST)
         or not _digest(manifest["prompt_digest"]) or not _digest(manifest["registry_digest"])
         or not isinstance(manifest["registry_version"], str) or not manifest["registry_version"]
         or type(manifest["adapter_contract_version"]) is not int
@@ -104,6 +108,20 @@ def validate_provider_request(request: ProviderRequestRecord) -> None:
         or not isinstance(manifest["images"], (tuple, list))
     ):
         raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
+    if set(manifest) == _CONTEXT_MANIFEST:
+        policy_version = manifest["context_policy_version"]
+        directory_version = manifest["directory_projection_version"]
+        directory_budget = manifest["directory_budget_tokens"]
+        if (
+            type(policy_version) is not int or policy_version not in {1, 2}
+            or type(directory_version) is not int
+            or directory_version != (0 if policy_version == 1 else (2 if directory_budget is not None else 1))
+            or (
+                directory_budget is not None
+                and (type(directory_budget) is not int or directory_budget < 0 or policy_version != 2)
+            )
+        ):
+            raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
     if request.prompt_digest != manifest["prompt_digest"] or request.tool_registry_digest != manifest["registry_digest"]:
         raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
     for image in manifest["images"]:

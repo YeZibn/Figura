@@ -16,6 +16,7 @@ from figura.providers import (
 from figura.shared.payloads import encode_json
 from figura.providers.errors import ProviderCallError, ProviderFailure, ProviderFailureCode
 from figura.providers.token_estimation import ContextEstimate
+from figura.agent.context_accounting import RequestContextAccounting
 from figura.agent.context_compaction import (
     calculate_context_history_budgets,
     eligible_compaction_runs,
@@ -88,6 +89,7 @@ def _history_with_target(coordinator, *, target_provider=ProviderId.QWEN):
 def _set_capacity_and_estimates(monkeypatch, values, *, capacity=100):
     import figura.providers.config as config
     import figura.providers.client as provider_client
+    import figura.agent.executor as agent_executor
 
     original_profile = config._profile_from_env
     monkeypatch.setattr(
@@ -106,6 +108,29 @@ def _set_capacity_and_estimates(monkeypatch, values, *, capacity=100):
         return ContextEstimate(count, selected_capacity)
 
     monkeypatch.setattr(provider_client, "estimate_input", estimate)
+
+    def accounting(_request, _projection, prepared_estimate):
+        if prepared_estimate is None:
+            return RequestContextAccounting(
+                None, None, None, None, None, None, None, 0, 0,
+                None, None, "estimate_unavailable",
+            )
+        return RequestContextAccounting(
+            prepared_estimate.input_tokens,
+            30,
+            10,
+            5,
+            25,
+            5,
+            10,
+            0,
+            0,
+            prepared_estimate.context_window_tokens,
+            "test-estimator-v1",
+            "history_reducible",
+        )
+
+    monkeypatch.setattr(agent_executor, "account_request_context", accounting)
 
 
 def _summary_response(
@@ -165,7 +190,7 @@ def _operation_attempt_count(coordinator, operation):
 
 @pytest.mark.parametrize(
     "capacity,estimates,post_estimate",
-    [(100, [81, 75, 45], 45), (200, [161, 150, 90], 90)],
+    [(100, [81, 82, 75, 45], 45), (200, [161, 162, 150, 90], 90)],
 )
 def test_threshold_compacts_oldest_closed_run_and_reestimates_request(
     tmp_path, monkeypatch, capacity, estimates, post_estimate
@@ -188,18 +213,19 @@ def test_threshold_compacts_oldest_closed_run_and_reestimates_request(
     )
     checkpoint = coordinator.read_session_context_checkpoint(session.session_id)
     summary_request, ordinary_request = factory.client.requests
+    assert len(factory.client.requests) == 2
     assert summary_request.tools == ()
     assert len(summary_request.messages) == 1
     assert operation.status == "completed" and _operation_attempt_count(coordinator, operation) == 1
     assert checkpoint is not None and checkpoint.covered_run_id == first.run_id
-    assert checkpoint.summary_contract_version == 2
+    assert checkpoint.summary_contract_version == 3
     assert checkpoint.summary["facts"][0]["text"] == "已确认需要对比销售趋势和地区差异"
-    assert operation.selection_plan == {
-        "context_capacity_tokens": capacity,
-        "raw_history_budget_tokens": capacity // 10,
-        "summary_budget_tokens": capacity // 10,
-        "coverage_version": 1,
-    }
+    assert operation.selection_plan["selection_plan_version"] == 2
+    assert operation.selection_plan["context_capacity_tokens"] == capacity
+    assert operation.selection_plan["summary_budget_tokens"] <= capacity // 10
+    assert operation.selection_plan["coverage_version"] == 2
+    assert operation.selection_plan["input_projection_version"] == 2
+    assert operation.selection_plan["directory_projection_version"] == 2
     assert _agent_request(state).context_projection == "checkpoint"
     assert _agent_request(state).context_checkpoint_revision == checkpoint.revision
     assert _agent_request(state).context_estimate == ContextEstimate(
@@ -208,7 +234,6 @@ def test_threshold_compacts_oldest_closed_run_and_reestimates_request(
     assert any("自动摘要" in instruction.content for instruction in ordinary_request.instructions)
     historical_inputs = json.loads(ordinary_request.messages[0].content)
     assert [entry["text"] for entry in historical_inputs["entries"]] == [
-        "第一轮：分析销售趋势",
         "第二轮：补充地区对比",
     ]
     raw_process_text = json.dumps(
@@ -273,9 +298,84 @@ def test_context_history_budgets_follow_selected_capacity(capacity, expected):
     assert budget.context_capacity_tokens == capacity
 
 
+def test_accounting_aware_budget_reserves_protected_raw_and_mandatory_directory_once():
+    accounting = RequestContextAccounting(
+        full_input_tokens=800,
+        history_input_tokens=300,
+        current_input_tokens=100,
+        summary_tokens=40,
+        raw_history_tokens=120,
+        resource_directory_tokens=180,
+        policy_tools_state_tokens=200,
+        selected_image_count=1,
+        image_tokens=1024,
+        context_capacity_tokens=1000,
+        estimator_version="test-v1",
+        pressure_reason="history_reducible",
+    )
+
+    budgets = calculate_context_history_budgets(
+        1000,
+        accounting=accounting,
+        mandatory_directory_tokens=50,
+        protected_raw_tokens=30,
+    )
+
+    # P=800; B+M consumes 200 policy + 100 current + 30 protected + 50
+    # mandatory = 380, leaving A=420. U=70, S=100, optional directory=250.
+    assert budgets == type(budgets)(
+        context_capacity_tokens=1000,
+        raw_history_tokens=100,
+        summary_tokens=100,
+        protected_raw_tokens=30,
+        mandatory_directory_tokens=50,
+        directory_tokens=300,
+        accounting_version=2,
+    )
+
+
 @pytest.mark.parametrize("capacity", [None, 0, -1, True, 1.5, "200000"])
 def test_context_history_budgets_reject_missing_or_invalid_capacity(capacity):
     assert calculate_context_history_budgets(capacity) is None
+
+
+def test_frozen_selection_plan_v1_remains_exact_while_v2_requires_all_new_fields():
+    from figura.agent.executor import _validated_compaction_plan
+
+    legacy = {
+        "context_capacity_tokens": 200_000,
+        "raw_history_budget_tokens": 20_000,
+        "summary_budget_tokens": 20_000,
+        "coverage_version": 1,
+    }
+    assert _validated_compaction_plan(legacy) == {
+        **legacy,
+        "summary_contract_version": 2,
+        "reconciliation": False,
+    }
+    assert _validated_compaction_plan({**legacy, "raw_history_budget_tokens": 1}) is None
+
+    current = {
+        "selection_plan_version": 2,
+        "context_capacity_tokens": 200_000,
+        "raw_history_budget_tokens": 25_000,
+        "summary_budget_tokens": 20_000,
+        "protected_raw_tokens": 5_000,
+        "mandatory_directory_tokens": 700,
+        "directory_budget_tokens": 12_000,
+        "accounting_basis": {
+            "policy_tools_state_tokens": 20_000,
+            "current_input_tokens": 5_000,
+        },
+        "coverage_version": 2,
+        "input_projection_version": 2,
+        "directory_projection_version": 2,
+        "accounting_version": 1,
+        "summary_contract_version": 3,
+        "reconciliation": True,
+    }
+    assert _validated_compaction_plan(current) == current
+    assert _validated_compaction_plan({**current, "future_field": 1}) is None
 
 
 def _complete_two_interaction_run(coordinator, store, session_id, *, key="two-interactions"):
@@ -349,8 +449,9 @@ def test_selector_can_split_one_run_only_between_complete_interactions(tmp_path)
     assert selected.covered_run_id == run.run_id
     assert selected.covered_record_sequence < state.checkpoint.last_committed_record_sequence
     assert selected.covered_tool_sequence > 0
-    assert len(estimates) == 4
-    assert all("historical_run_context" in text for text in estimates[1::2])
+    assert len(estimates) == 5
+    assert '"text":"先执行早期交互，再完成最终结论。"' in estimates[1]
+    assert all("historical_run_context" in text for text in estimates[2::2])
 
 
 def test_selector_preserves_single_oversized_newest_interaction_whole(tmp_path):
@@ -590,7 +691,7 @@ def test_agent_compacts_active_prefix_and_reuses_checkpoint_in_same_run(tmp_path
         coordinator, store, session.session_id, run=initial
     )
     source_state = coordinator.read_run_state(session.session_id, run.run_id)
-    _set_capacity_and_estimates(monkeypatch, [90, 75, 45, 50])
+    _set_capacity_and_estimates(monkeypatch, [90, 85, 75, 50])
     factory = _FakeFactory([
         _summary_response(source_state, "较早的观察已纳入活动 Run 摘要。"),
         _response(
@@ -662,7 +763,8 @@ def test_agent_compacts_active_prefix_and_reuses_checkpoint_in_same_run(tmp_path
     summary_instruction = next(
         item.content for item in projected.instructions if "旧历史的自动摘要" in item.content
     )
-    assert "分析图表数据" in projected_text
+    assert "分析图表数据" not in projected_text
+    assert run.input_record_id in summary_instruction
     assert "活动 Run 较早交互" not in projected_text
     assert "活动 Run 近期交互" in projected_text
     assert '"status":"completed"' in summary_instruction
@@ -675,7 +777,7 @@ def test_active_run_incremental_compaction_adds_only_new_process_after_checkpoin
     run = _active_two_interaction_run(
         coordinator, store, session.session_id, run=initial
     )
-    _set_capacity_and_estimates(monkeypatch, [90, 75, 45, 90, 75, 45])
+    _set_capacity_and_estimates(monkeypatch, [90, 85, 75, 90, 85, 90, 80, 45])
     factory = _FakeFactory([
         _summary_response(
             coordinator.read_run_state(session.session_id, run.run_id),
@@ -803,7 +905,7 @@ def test_active_run_checkpoint_survives_later_failure_and_refreshes_terminal_pro
         coordinator, store, session.session_id, run=initial
     )
     active_state = coordinator.read_run_state(session.session_id, run.run_id)
-    _set_capacity_and_estimates(monkeypatch, [90, 75, 45])
+    _set_capacity_and_estimates(monkeypatch, [90, 85, 75])
     factory = _FakeFactory([
         _summary_response(active_state, "早期观察已压缩。"),
         _response(content="Run 尚有后续工作。"),
@@ -878,7 +980,7 @@ def test_agent_compacts_early_interaction_of_latest_run_and_keeps_its_recent_suf
         coordinator, session.session_id, key="partial-latest-target", text="继续上一轮。"
     )
     latest_state = coordinator.read_run_state(session.session_id, latest.run_id)
-    _set_capacity_and_estimates(monkeypatch, [81, 75, 45])
+    _set_capacity_and_estimates(monkeypatch, [81, 85, 75])
     factory = _FakeFactory([
         _summary_response(latest_state, "早期工具观察已经纳入摘要。"),
         _response(content="基于保留的近期交互继续完成。"),
@@ -900,14 +1002,12 @@ def test_agent_compacts_early_interaction_of_latest_run_and_keeps_its_recent_suf
     assert "较早交互" in json.dumps(summary_payload["source_runs"], ensure_ascii=False)
     assert "分析完成" not in json.dumps(summary_payload["source_runs"], ensure_ascii=False)
     ordinary_request_messages = factory.client.requests[1].messages
-    historical_inputs = json.loads(ordinary_request_messages[0].content)
-    assert historical_inputs["entries"][0]["text"] == "先执行早期交互，再完成最终结论。"
-    run_locator = json.loads(ordinary_request_messages[1].content)
+    run_locator = json.loads(ordinary_request_messages[0].content)
     assert run_locator == {
         "figura_context_type": "historical_run_context",
         "run_id": latest.run_id,
         "run_ordinal": latest.ordinal,
-        "input_ref": historical_inputs["entries"][0]["source_ref"],
+        "input_ref": summary_payload["source_runs"][0]["input"]["reference"],
     }
     ordinary_messages = json.dumps(
         [message.content for message in ordinary_request_messages],
@@ -925,7 +1025,7 @@ def test_incremental_compaction_reads_only_newly_covered_slice_of_same_run(
     session = coordinator.create_session()
     latest = _complete_two_interaction_run(coordinator, store, session.session_id)
     latest_state = coordinator.read_run_state(session.session_id, latest.run_id)
-    _set_capacity_and_estimates(monkeypatch, [81, 75, 45])
+    _set_capacity_and_estimates(monkeypatch, [81, 85, 75])
     first_factory = _FakeFactory([
         _summary_response(latest_state, "早期工具观察已经纳入摘要。"),
         _response(content="近期交互已处理。"),
@@ -944,7 +1044,7 @@ def test_incremental_compaction_reads_only_newly_covered_slice_of_same_run(
     assert first_checkpoint.covered_run_ordinal == latest.ordinal
     assert first_checkpoint.covered_record_sequence < latest_state.checkpoint.last_committed_record_sequence
 
-    _set_capacity_and_estimates(monkeypatch, [81, 75, 45])
+    _set_capacity_and_estimates(monkeypatch, [81, 85, 75])
     second_factory = _FakeFactory([
         _summary_response(latest_state, "后续交互也已纳入摘要。"),
         _response(content="继续完成。"),
@@ -1274,7 +1374,7 @@ def test_invalid_summary_falls_back_to_full_history_and_pins_fallback(tmp_path, 
 def test_summary_request_over_capacity_falls_back_without_provider_dispatch(tmp_path, monkeypatch):
     store, coordinator, _unused_session, _unused_run = _app(tmp_path)
     session, first, _second, target = _history_with_target(coordinator)
-    _set_capacity_and_estimates(monkeypatch, [90, 101, 90])
+    _set_capacity_and_estimates(monkeypatch, [90, 90, 101, 90])
     factory = _FakeFactory([_response(content="容量安全回退后回答")])
 
     state = _agent(store, coordinator, _registry(), factory).execute_slice(
@@ -1386,7 +1486,7 @@ def test_interrupted_summary_reuses_saved_request_identity_after_restart(tmp_pat
     if changed_asset:
         from figura.agent.prompting import loader
         original = loader._load_asset
-        monkeypatch.setattr(loader, "_load_asset", lambda asset: original(asset) + "\n新增摘要指导" if asset == "compaction.md" else original(asset))
+        monkeypatch.setattr(loader, "_load_asset", lambda asset: original(asset) + "\n新增摘要指导" if asset == "compaction-v3.md" else original(asset))
     restarted_factory = _FakeFactory(
         ([] if changed_asset else [_summary_response(first_state)]) + [_response(content="完成")]
     )
@@ -1484,8 +1584,8 @@ def _break_compaction_asset(monkeypatch):
     original = loader._load_asset
 
     def load(asset):
-        if asset == "compaction.md":
-            raise loader.PromptAssetError("compaction.md unavailable")
+        if asset == "compaction-v3.md":
+            raise loader.PromptAssetError("compaction-v3.md unavailable")
         return original(asset)
 
     monkeypatch.setattr(loader, "_load_asset", load)
@@ -1521,9 +1621,9 @@ def test_compaction_asset_change_updates_request_prompt_digest(tmp_path, monkeyp
         summary_budget_tokens=20_000,
     )
     assert "previous_summary_contract_version" not in json.loads(before.messages[0].content)
-    assert before.asset_contract["registry_version"] == "context-compaction-v2"
+    assert before.asset_contract["registry_version"] == "context-compaction-v3"
     original = loader._load_asset
-    monkeypatch.setattr(loader, "_load_asset", lambda asset: original(asset) + "\n新增摘要指导")
+    monkeypatch.setattr(loader, "_load_asset", lambda asset: original(asset) + "\n新增摘要指导" if asset == "compaction-v3.md" else original(asset))
     after, new_refs = builder.build_summary_request(
         current, sources, None,
         context_capacity_tokens=200_000,
@@ -1760,6 +1860,136 @@ def test_incremental_summary_request_keeps_prior_summary_and_new_source_identity
     assert MessageSourceRef(second.run_id, second.input_record_id) in allowed_refs
 
 
+def test_context_summary_prompt_keeps_storage_version_private_from_model(tmp_path):
+    from figura.agent.prompting.execution import build_context_summary_instruction
+
+    _store, coordinator, session, first, *_rest = _app(tmp_path)
+    state = coordinator.read_run_state(session.session_id, first.run_id)
+    reference = MessageSourceRef(first.run_id, first.input_record_id)
+    legacy = SessionContextCheckpoint(
+        session_id=session.session_id,
+        revision=1,
+        covered_run_id=first.run_id,
+        covered_run_ordinal=first.ordinal,
+        covered_record_sequence=state.checkpoint.last_committed_record_sequence,
+        covered_tool_sequence=state.checkpoint.last_committed_tool_sequence,
+        summary_contract_version=2,
+        summary={"items": [], "run_outcomes": []},
+        source_refs=(reference,),
+    )
+
+    legacy_payload = json.loads(
+        build_context_summary_instruction(legacy).content.split("\n", 1)[1]
+    )
+    current_payload = json.loads(
+        build_context_summary_instruction(
+            replace(legacy, summary_contract_version=3)
+        ).content.split("\n", 1)[1]
+    )
+
+    assert legacy_payload["summary_contract_version"] == 2
+    assert "summary_contract_version" not in current_payload
+
+
+@pytest.mark.parametrize("summary_valid", [True, False])
+def test_legacy_checkpoint_reconciles_covered_user_inputs_before_omitting_them(
+    tmp_path, monkeypatch, summary_valid
+):
+    import figura.agent.executor as agent_executor
+    import figura.agent.request as request_module
+
+    monkeypatch.setattr(
+        request_module,
+        "estimate_json_tokens",
+        lambda value: len(json.dumps(value, ensure_ascii=False, sort_keys=True).encode("utf-8")),
+    )
+    monkeypatch.setattr(agent_executor, "estimate_protected_raw_history_tokens", lambda *_args: 0)
+    store, coordinator, _unused_session, _unused_run = _app(tmp_path)
+    session, first, second, target = _history_with_target(coordinator)
+    first_state = coordinator.read_run_state(session.session_id, first.run_id)
+    second_state = coordinator.read_run_state(session.session_id, second.run_id)
+    old_input_ref = MessageSourceRef(first.run_id, first.input_record_id)
+    previous = SessionContextCheckpoint(
+        session_id=session.session_id,
+        revision=1,
+        covered_run_id=first.run_id,
+        covered_run_ordinal=first.ordinal,
+        covered_record_sequence=first_state.checkpoint.last_committed_record_sequence,
+        covered_tool_sequence=first_state.checkpoint.last_committed_tool_sequence,
+        summary_contract_version=2,
+        summary={
+            "items": [{"text": "旧摘要", "source_refs": [old_input_ref.to_dict()]}],
+            "run_outcomes": [],
+        },
+        source_refs=(old_input_ref,),
+    )
+    coordinator.replace_session_context_checkpoint(previous, expected_revision=0)
+    _set_capacity_and_estimates(
+        monkeypatch, [161_000, 162_000, 70_000, 45_000], capacity=200_000
+    )
+    if summary_valid:
+        fact = {"text": "保留第一轮用户要求", "source_refs": [old_input_ref.to_dict()]}
+        summary_response = _response(
+            content=json.dumps(_summary_v2(fact), ensure_ascii=False)
+        )
+    else:
+        summary_response = _response(content="not a summary")
+    factory = _FakeFactory([summary_response, _response(content="完成兼容恢复")])
+
+    result = _agent(store, coordinator, _registry(), factory).execute_slice(
+        session.session_id, target.run_id
+    )
+    assert len(factory.client.requests) == 2, {
+        "status": result.run.status.value,
+        "terminal_code": result.run.terminal_code,
+        "attempts": [(item.status.value, item.failure_code) for item in result.provider_attempts],
+        "prepared": len(factory.client.prepared_requests),
+        "records": [(item.record_kind.value, item.record_sequence) for item in result.records],
+    }
+    summary_payload = json.loads(factory.client.requests[0].messages[0].content)
+    assert [item["run_id"] for item in summary_payload["source_runs"]] == [first.run_id]
+    assert summary_payload["source_runs"][0]["input"]["text"] == "第一轮：分析销售趋势"
+    assert summary_payload["source_runs"][0]["messages"] == []
+    agent_request = factory.client.requests[1]
+    historical_payload = json.loads(agent_request.messages[0].content)
+    historical_texts = [entry["text"] for entry in historical_payload["entries"]]
+    current_native_inputs = [
+        message.content for message in agent_request.messages
+        if message.role.value == "user"
+        and isinstance(message.content, str)
+        and "继续完成结论" in message.content
+    ]
+    assert len(current_native_inputs) == 1
+    assert "继续完成结论" not in historical_texts
+
+    operation = coordinator.read_context_compaction_operation(
+        _agent_request(result).context_checkpoint_operation_id
+    )
+    assert operation.selection_plan["reconciliation"] is True
+    checkpoint = coordinator.read_session_context_checkpoint(session.session_id)
+    if summary_valid:
+        assert operation.status == "completed"
+        assert checkpoint is not None and checkpoint.summary_contract_version == 3
+        assert checkpoint.covered_run_id == first.run_id
+        assert checkpoint.covered_record_sequence == previous.covered_record_sequence
+        assert old_input_ref in checkpoint.source_refs
+        assert historical_texts == ["第二轮：补充地区对比"]
+    else:
+        assert operation.status == "fallback"
+        assert checkpoint is not None
+        assert checkpoint.revision == previous.revision
+        assert checkpoint.summary_contract_version == previous.summary_contract_version
+        assert checkpoint.covered_run_id == previous.covered_run_id
+        assert checkpoint.covered_record_sequence == previous.covered_record_sequence
+        assert checkpoint.source_refs == previous.source_refs
+        assert encode_json(checkpoint.summary) == encode_json(previous.summary)
+        assert historical_texts == [
+            "第一轮：分析销售趋势",
+            "第二轮：补充地区对比",
+        ]
+    assert second_state.run.status is RunStatus.COMPLETED
+
+
 def test_transient_summary_failure_retries_the_same_internal_provider_request(tmp_path, monkeypatch):
     import figura.runtime.persistence.providers as provider_persistence
 
@@ -1928,6 +2158,43 @@ def test_ordinary_provider_retry_reuses_compaction_checkpoint_without_new_summar
         )
         assert _operation_attempt_count(restarted_coordinator, operation) == 1
 
+
+def test_legacy_ordinary_retry_rebuilds_manifest_without_new_context_policy_fields(
+    tmp_path, monkeypatch
+):
+    from figura.agent.request import AgentRequestBuilder
+    from tests.test_figura_execution_policy import _temporary
+
+    monkeypatch.setattr(
+        "figura.runtime.persistence.providers.retry_deadline",
+        lambda *_: "2000-01-01T00:00:00Z",
+    )
+    store, coordinator, session, run = _app(tmp_path)
+    original_build = AgentRequestBuilder.build_with_projection
+
+    def legacy_policy_builder(self, *args, **kwargs):
+        kwargs["context_policy_version"] = 1
+        kwargs.pop("directory_budget_tokens", None)
+        return original_build(self, *args, **kwargs)
+
+    monkeypatch.setattr(AgentRequestBuilder, "build_with_projection", legacy_policy_builder)
+    factory = _FakeFactory([_temporary(), _response(content="legacy retry completed")])
+    agent = _agent(store, coordinator, _registry(), factory)
+    waiting = agent.execute_slice(session.session_id, run.run_id)
+    frozen_request = _agent_request(waiting)
+    assert waiting.checkpoint.next_action.action_kind is ActionKind.PROVIDER_RETRY
+    assert not {
+        "context_policy_version", "directory_projection_version", "directory_budget_tokens"
+    } & set(frozen_request.asset_manifest)
+
+    monkeypatch.setattr(AgentRequestBuilder, "build_with_projection", original_build)
+    completed = agent.execute(session.session_id, run.run_id)
+
+    assert completed.run.status is RunStatus.COMPLETED
+    assert completed.provider_requests == (frozen_request,)
+    assert len(factory.client.requests) == 2
+    assert factory.client.requests[0] == factory.client.requests[1]
+
 def test_prompt_resource_directory_is_compact_while_server_catalog_stays_complete(tmp_path):
     from tests.test_figura_agent_executor import _execution_inventory
 
@@ -1975,6 +2242,91 @@ def test_prompt_resource_directory_is_compact_while_server_catalog_stays_complet
         for resource in prompt_catalog["resources"]
     )
     assert builder._execution_state.build(target_state, prior) == full_catalog
+
+
+def test_resource_budget_without_checkpoint_keeps_current_attachment_and_drops_optional_panel(
+    tmp_path, monkeypatch
+):
+    from tests.test_figura_agent_request import _commit_tool_calls
+    from figura.agent.request import mandatory_resource_directory_tokens
+    from figura.shared.resource_refs import ImageResourceRef
+
+    # Keep this selection test deterministic even when the optional offline
+    # tokenizer cache is unavailable in a test environment.
+    import figura.agent.request as request_module
+    monkeypatch.setattr(
+        request_module,
+        "estimate_json_tokens",
+        lambda value: len(json.dumps(value, ensure_ascii=False, sort_keys=True).encode("utf-8")),
+    )
+    store, coordinator, session, run, attachments, _image_bytes, _image_path = _app_with_image(
+        tmp_path
+    )
+    registry, builder = _image_runtime(store, coordinator, attachments)
+    attachment_id = attachments.list(session.session_id)[0].attachment_id
+    _commit_tool_calls(
+        store,
+        coordinator,
+        session,
+        run,
+        registry,
+        [ProviderToolCall(
+            "decompose-current-panel",
+            "decompose_chart_image",
+            json.dumps({
+                "attachment_id": attachment_id,
+                "panels": [{
+                    "name": "可选局部 Panel",
+                    "points": [
+                        {"x": 0, "y": 0}, {"x": 1000, "y": 0},
+                        {"x": 1000, "y": 1000}, {"x": 0, "y": 1000},
+                    ],
+                }],
+            }),
+        )],
+    )
+    target_state = coordinator.read_run_state(session.session_id, run.run_id)
+    full_catalog = builder._execution_state.build(target_state, ())
+    attachment_ref = ImageResourceRef("attachment", attachment_id)
+    panel_refs = {
+        resource.ref for resource in full_catalog.resources
+        if isinstance(resource.ref, ImageResourceRef) and resource.ref.kind == "panel"
+    }
+    assert len(panel_refs) == 1
+
+    mandatory_budget = mandatory_resource_directory_tokens(
+        full_catalog, target_state, (), None
+    )
+    assert mandatory_budget is not None
+    request, projection = builder.build_with_projection(
+        target_state,
+        registry,
+        (),
+        directory_budget_tokens=mandatory_budget,
+    )
+    repeated_request, repeated_projection = builder.build_with_projection(
+        target_state,
+        registry,
+        (),
+        directory_budget_tokens=mandatory_budget,
+    )
+    inventory = json.loads(request.instructions[-1].content.split("\n", 1)[1])
+    projected_refs = {entry["ref"].get("id") for entry in inventory["resources"]}
+
+    assert request == repeated_request
+    assert projection.resource_entries == repeated_projection.resource_entries
+    assert attachment_ref.id in projected_refs
+    assert not any(ref.id in projected_refs for ref in panel_refs)
+    assert "未列出不表示资源不存在" in request.instructions[-1].content
+    assert builder._execution_state.build(target_state, ()) == full_catalog
+
+    overshoot_request = builder.build(
+        target_state, registry, (), directory_budget_tokens=0
+    )
+    overshoot_inventory = json.loads(overshoot_request.instructions[-1].content.split("\n", 1)[1])
+    overshoot_refs = {entry["ref"].get("id") for entry in overshoot_inventory["resources"]}
+    assert overshoot_refs == {attachment_ref.id}
+    assert any(resource.ref in panel_refs for resource in builder._execution_state.build(target_state, ()).resources)
 
 
 def test_pending_visual_batch_is_raw_and_summary_sources_only_include_descriptors(tmp_path):

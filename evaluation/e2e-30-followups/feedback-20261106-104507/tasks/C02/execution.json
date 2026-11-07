@@ -1,0 +1,33 @@
+{
+  "task_id": "C02",
+  "batch_id": "feedback-20261106-104507",
+  "session_id": "8f673be528c549b5b1de20f578af99da",
+  "execution_status": "completed",
+  "parent_turn_count": 3,
+  "turns": [
+    {
+      "turn": 4,
+      "run_id": "1cc512ebc5da4415974b9054db3f0669",
+      "session_id": "8f673be528c549b5b1de20f578af99da",
+      "status": "completed",
+      "terminal_code": null,
+      "wall_seconds": 8.384,
+      "timed_out": false,
+      "final_answer": "final-answer.txt",
+      "final_answer_committed": true,
+      "figures": [],
+      "renders": [],
+      "provider_attempt_count": 2,
+      "internal_retry_count": 0,
+      "usage": {
+        "prompt_tokens": 38447,
+        "completion_tokens": 1125,
+        "total_tokens": 39572
+      },
+      "usage_complete": true,
+      "usage_missing_attempt_refs": [],
+      "compaction_operations": [],
+      "delivery_selection": "judge must select from actual final answer and all committed candidates; no automatic best-of selection"
+    }
+  ]
+}

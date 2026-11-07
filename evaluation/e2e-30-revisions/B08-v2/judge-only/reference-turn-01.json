@@ -1,0 +1,50 @@
+{
+  "schema_version": 2,
+  "title": "",
+  "layout": {
+    "columns": 1
+  },
+  "charts": [
+    {
+      "chart_id": "chart1",
+      "chart_spec": {
+        "schema_version": 2,
+        "metadata": {
+          "chart_type": "pie",
+          "title": "渠道贡献",
+          "source": "Figura E2E-30 合成数据 v1",
+          "note": ""
+        },
+        "coordinate_system": {
+          "kind": "none"
+        },
+        "dataset": {
+          "slices": [
+            {
+              "id": "p0",
+              "label": "Online",
+              "value": 45
+            },
+            {
+              "id": "p1",
+              "label": "Store",
+              "value": 30
+            },
+            {
+              "id": "p2",
+              "label": "Partner",
+              "value": 15
+            },
+            {
+              "id": "p3",
+              "label": "Other",
+              "value": 10
+            }
+          ],
+          "inner_radius_ratio": 0.35
+        }
+      },
+      "measurement_refs": []
+    }
+  ]
+}

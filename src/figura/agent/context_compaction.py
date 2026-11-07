@@ -16,9 +16,11 @@ from figura.providers import (
     ProviderResponse,
 )
 from figura.providers.token_estimation import estimate_text_tokens
+from figura.providers.token_estimation import IMAGE_TOKENS
 from figura.runtime.models import ActionKind, ProviderAttemptStatus, RunStatus
 from figura.runtime.records import (
     ContextCompactionOperation,
+    RunInput,
     RunState,
     SessionContextCheckpoint,
     ToolCallFact,
@@ -62,6 +64,10 @@ class ContextHistoryBudgets:
     context_capacity_tokens: int
     raw_history_tokens: int
     summary_tokens: int
+    protected_raw_tokens: int = 0
+    mandatory_directory_tokens: int = 0
+    directory_tokens: int | None = None
+    accounting_version: int = 1
 
 
 @dataclass(frozen=True)
@@ -85,16 +91,104 @@ class _InteractionUnit:
 
 def calculate_context_history_budgets(
     context_capacity_tokens: object,
+    *,
+    accounting=None,
+    mandatory_directory_tokens: int = 0,
+    protected_raw_tokens: int = 0,
 ) -> ContextHistoryBudgets | None:
-    """Allocate approximate ten-percent history budgets from a valid capacity."""
+    """Allocate legacy or accounting-aware soft targets from a valid capacity."""
     if type(context_capacity_tokens) is not int or context_capacity_tokens <= 0:
         return None
-    allocation = context_capacity_tokens // 10
+    if (
+        type(mandatory_directory_tokens) is not int or mandatory_directory_tokens < 0
+        or type(protected_raw_tokens) is not int or protected_raw_tokens < 0
+    ):
+        return None
+    preferred = context_capacity_tokens // 10
+    if accounting is None:
+        allocation = preferred
+        return ContextHistoryBudgets(
+            context_capacity_tokens,
+            allocation,
+            allocation,
+        )
+    policy_tokens = getattr(accounting, "policy_tools_state_tokens", None)
+    current_tokens = getattr(accounting, "current_input_tokens", None)
+    if (
+        type(policy_tokens) is not int or policy_tokens < 0
+        or type(current_tokens) is not int or current_tokens < 0
+    ):
+        return None
+    target = (context_capacity_tokens * 8) // 10
+    necessary = policy_tokens + current_tokens + mandatory_directory_tokens + protected_raw_tokens
+    available = max(0, target - necessary)
+    optional_raw = min(max(0, preferred - protected_raw_tokens), available // 2)
+    summary = min(preferred, available // 2)
+    optional_directory = max(0, available - optional_raw - summary)
     return ContextHistoryBudgets(
         context_capacity_tokens,
-        allocation,
-        allocation,
+        protected_raw_tokens + optional_raw,
+        summary,
+        protected_raw_tokens,
+        mandatory_directory_tokens,
+        mandatory_directory_tokens + optional_directory,
+        2,
     )
+
+
+def estimate_protected_raw_history_tokens(
+    prior_run_states: tuple[RunState, ...],
+    active_run_state: RunState | None,
+    previous_checkpoint: SessionContextCheckpoint | None,
+    *,
+    estimate_tokens: Callable[[str], int | None] = estimate_text_tokens,
+) -> int | None:
+    """Estimate raw history that is protected by barriers or visual feedback."""
+    checkpoint_ordinal = previous_checkpoint.covered_run_ordinal if previous_checkpoint else 0
+    eligible = eligible_compaction_runs(prior_run_states, checkpoint_ordinal)
+    eligible_ids = {state.run.run_id for state in eligible}
+    protected = 0
+    for state in prior_run_states:
+        if state.run.ordinal <= checkpoint_ordinal or state.run.run_id in eligible_ids:
+            continue
+        amount = _estimate_protected_run(state, estimate_tokens)
+        if amount is None:
+            return None
+        protected += amount
+    active_eligible = _active_run_is_eligible(
+        prior_run_states, active_run_state, previous_checkpoint, eligible
+    )
+    if active_run_state is not None and not active_eligible:
+        amount = _estimate_active_process(active_run_state, estimate_tokens)
+        if amount is None:
+            return None
+        protected += amount
+
+    if active_run_state is not None:
+        pending = pending_visual_results(active_run_state)
+        if pending:
+            units = _interaction_units(
+                active_run_state,
+                estimate_tokens,
+                committed_prefix=True,
+                include_input_locator=False,
+            )
+            for unit in units:
+                matching_messages = [
+                    message for message in unit.messages
+                    if isinstance(message, ToolMessage)
+                    and (message.run_id, message.source_tool_sequence) in pending
+                ]
+                if not matching_messages:
+                    continue
+                if active_eligible:
+                    protected += unit.estimated_tokens
+                protected += sum(
+                    len(message.attachments) * IMAGE_TOKENS
+                    for message in matching_messages
+                )
+                break
+    return protected
 
 
 def eligible_compaction_runs(
@@ -134,7 +228,14 @@ def select_compaction_coverage(
     eligible = eligible_compaction_runs(prior_run_states, checkpoint_ordinal)
     candidate_units: list[_InteractionUnit] = []
     for state in eligible:
-        units = _interaction_units(state, estimate_tokens)
+        units = _interaction_units(
+            state,
+            estimate_tokens,
+            include_input_body=(
+                previous_checkpoint is None
+                or state.run.ordinal > previous_checkpoint.covered_run_ordinal
+            ),
+        )
         if state.records and not units:
             return None
         for unit in units:
@@ -228,11 +329,29 @@ def selection_for_coverage(
     """Rebuild an already-persisted selection without consulting current budgets."""
     if not isinstance(operation, ContextCompactionOperation):
         return None
+    if operation.selection_plan.get("reconciliation") is True:
+        return legacy_input_reconciliation_selection(
+            prior_run_states, active_run_state, previous_checkpoint
+        )
     checkpoint_ordinal = previous_checkpoint.covered_run_ordinal if previous_checkpoint else 0
     eligible = eligible_compaction_runs(prior_run_states, checkpoint_ordinal)
     candidate_units: list[_InteractionUnit] = []
+    input_aware = operation.selection_plan.get("selection_plan_version") == 2
     for state in eligible:
-        for unit in _interaction_units(state, lambda _text: 0):
+        for unit in _interaction_units(
+            state,
+            lambda _text: 0,
+            # A frozen v1 operation selected coverage before user-input bodies
+            # were budgeted. Rebuild that exact selection; v2 freezes the new
+            # input-aware coverage rule.
+            include_input_body=(
+                input_aware
+                and (
+                    previous_checkpoint is None
+                    or state.run.ordinal > previous_checkpoint.covered_run_ordinal
+                )
+            ),
+        ):
             if _unit_is_after_checkpoint(unit, previous_checkpoint):
                 candidate_units.append(unit)
     active_is_eligible = _active_run_is_eligible(
@@ -291,6 +410,7 @@ def _interaction_units(
     *,
     committed_prefix: bool = False,
     include_input_locator: bool = True,
+    include_input_body: bool = False,
 ) -> tuple[_InteractionUnit, ...]:
     incomplete_batches = []
     messages = _project_run_messages(
@@ -370,6 +490,32 @@ def _interaction_units(
         ))
         if type(token_count) is not int or token_count < 0:
             return ()
+        if include_input_body and index == 0:
+            input_record = next(
+                (record for record in state.records
+                 if record.record_id == state.run.input_record_id),
+                None,
+            )
+            input_value = getattr(input_record, "payload", None)
+            if input_record is None or not isinstance(input_value, RunInput):
+                return ()
+            input_tokens = estimate_tokens(json.dumps(
+                {
+                    "reference": {
+                        "kind": "message",
+                        "run_id": state.run.run_id,
+                        "record_id": input_record.record_id,
+                    },
+                    "text": input_value.text,
+                    "attachment_ids": list(input_value.attachment_ids),
+                },
+                ensure_ascii=False,
+                allow_nan=False,
+                separators=(",", ":"),
+            ))
+            if type(input_tokens) is not int or input_tokens < 0:
+                return ()
+            token_count += input_tokens
         input_locator_tokens = 0
         if include_input_locator and any(
             isinstance(item, (AssistantMessage, ToolMessage)) for item in messages
@@ -388,6 +534,53 @@ def _interaction_units(
             input_locator_tokens,
         ))
     return tuple(units)
+
+
+def legacy_input_reconciliation_selection(
+    prior_run_states: tuple[RunState, ...],
+    active_run_state: RunState | None,
+    checkpoint: SessionContextCheckpoint | None,
+) -> CompactionSelection | None:
+    """Select a legacy checkpoint's covered inputs without changing its cursor."""
+    if (
+        checkpoint is None
+        or checkpoint.summary_contract_version >= 3
+        or not isinstance(prior_run_states, tuple)
+    ):
+        return None
+    states = (*prior_run_states, *((active_run_state,) if active_run_state is not None else ()))
+    covered = tuple(
+        state for state in states
+        if state.run.ordinal <= checkpoint.covered_run_ordinal
+    )
+    if (
+        not covered
+        or covered[-1].run.run_id != checkpoint.covered_run_id
+        or covered[-1].run.ordinal != checkpoint.covered_run_ordinal
+        or any(state.run.status not in {
+            RunStatus.COMPLETED, RunStatus.RUNNING, RunStatus.FAILED, RunStatus.INTERRUPTED
+        } for state in covered)
+        or any(
+            state.run.status is RunStatus.RUNNING and state is not active_run_state
+            for state in covered
+        )
+    ):
+        return None
+    if active_run_state is not None and checkpoint.covered_run_id == active_run_state.run.run_id:
+        if (
+            checkpoint.covered_record_sequence
+            > active_run_state.checkpoint.last_committed_record_sequence
+            or checkpoint.covered_tool_sequence
+            > active_run_state.checkpoint.last_committed_tool_sequence
+        ):
+            return None
+    return CompactionSelection(
+        selected_run_states=covered,
+        covered_run_id=checkpoint.covered_run_id,
+        covered_run_ordinal=checkpoint.covered_run_ordinal,
+        covered_record_sequence=checkpoint.covered_record_sequence,
+        covered_tool_sequence=checkpoint.covered_tool_sequence,
+    )
 
 
 def _active_run_is_eligible(

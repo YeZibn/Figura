@@ -1,0 +1,57 @@
+{
+  "batch_id": "B08-v2-20261106-114126",
+  "task_id": "B08-v2",
+  "status": "complete_assistant_reviewed",
+  "source_snapshot_batch": "feedback-20261106-104507",
+  "source_manifest_sha256": "ffeb67b7f21dea2d3eee0e483ffad12660ff68910d60b6129715049f87ec1d6b",
+  "materials": "evaluation/e2e-30-revisions/B08-v2",
+  "material_checksums_sha256": "f47d20cf0b304fe35d4136a89c76b592d9a14a35203aaa69249eef8efd4653f3",
+  "fresh_session": true,
+  "feedback_turns": 0,
+  "attempts": 1,
+  "provider": "deepseek",
+  "model": "deepseek-flash",
+  "per_turn_timeout_seconds": 600,
+  "original_27_of_30_unchanged": true,
+  "acceptance_frozen_before_run": [
+    {
+      "id": "T1-semantic",
+      "critical": true,
+      "requirement": "第 1 轮实际成功交付的 Figure 与参考语义一致；逐值核对 dataset、类型、顺序、轴标签、明确要求的标题和来源",
+      "expected": "reference-turn-01.json",
+      "turn": 1,
+      "numeric_tolerance": {
+        "abs": 1e-09,
+        "rel": 1e-09
+      },
+      "evidence": [
+        "committed_figure",
+        "tool_result"
+      ]
+    },
+    {
+      "id": "T1-render",
+      "critical": true,
+      "requirement": "第 1 轮交付与 Figure 匹配、可打开的真实 PNG；图数和必要内容正确，关键文本无严重裁切遮挡",
+      "expected": "匹配的成功 render 引用和实际 PNG",
+      "turn": 1,
+      "evidence": [
+        "render_metadata",
+        "actual_png"
+      ]
+    },
+    {
+      "id": "T1-delivery",
+      "critical": true,
+      "requirement": "第 1 轮回答清楚指向可用产物且不存在与数据或交付状态冲突的关键陈述",
+      "expected": "实际产物与回答一致",
+      "turn": 1,
+      "evidence": [
+        "final_answer",
+        "artifact_refs"
+      ]
+    }
+  ],
+  "review": "current assistant evidence and PNG review, not independent Judge",
+  "finished_at": "2026-11-06T11:41:43.428473"
+}

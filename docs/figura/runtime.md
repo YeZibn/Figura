@@ -88,7 +88,7 @@ Sources 的附件与 Panel 元数据由 [`SourcesRepository`](../../src/figura/s
 
 ### Session 摘要检查点与压缩操作
 
-Agent 仅在选定 Provider 容量 `C` 有效、准备后的普通请求估算达到约 80% 时启动压缩；它分别用 `floor(C/10)` 作为 raw-process 选择预算与摘要近似长度目标，把符合条件的先前 completed Run 过程和当前 Run 已提交完整交互组成一条时间序列，在完整交互边界选择覆盖范围。活动 Run 仅在 `checkpoint.next_action` 为 `MODEL` 或 `PROVIDER_RETRY` 且不存在已启动 Provider attempt 时参与；当前输入始终保留为原生用户消息，未提交记录、未完成工具批次和未解决动作留在 raw projection。raw-process 估算含保留过程和每个先前 Run 的输入定位消息，不含另行发送的完整历史用户输入正文。摘要目标会随冻结容量渲染进本次摘要 Markdown 指令，作为软目标而非输出长度限制。普通请求仍完整携带所有先前 Run 的用户输入、附件 ID 和来源引用，实际 prepare 估算包含该区块。覆盖截止点可位于最新已完成 Run 中间，也可位于当前目标 Run 的冻结提交前缀内；operation 冻结目标 Run 的 record/tool base、精确覆盖游标与选择计划，恢复时不按新增事实或变化后的 Provider 配置扩大范围。摘要调用也使用共享的 `ProviderRequestRecord` 与 `ProviderAttempt`：请求合同记录 purpose=context_compaction 并关联 operation，物理发送及重试由 ProviderRepository 统一持久化。派发前 Provider prepare 必须提供有效输入估算，且输入估算加最大 completion tokens 不超过 operation 冻结的容量；不满足时不发送摘要请求，operation 进入 fallback。临时 Provider 失败按既有 retry policy 重发同一摘要请求，最多四次；永久失败、响应不合约、source reference 未授权或达到次数后置为 fallback。
+Agent 仅在选定 Provider 容量 `C` 有效、准备后的普通请求估算达到约 80% 时启动压缩；此阈值使用完整输入统计，history 统计只作为历史压力分项。它以 `P=floor(0.8*C)` 与初始历史偏好 `G=floor(C/10)`，再结合必要输入、强制目录和受保护过程计算冻结的 raw、summary、directory 软目标。符合条件的先前 completed Run 过程与当前 Run 已提交完整交互组成一条时间序列，在完整交互边界选择覆盖范围。活动 Run 仅在 `checkpoint.next_action` 为 `MODEL` 或 `PROVIDER_RETRY` 且不存在已启动 Provider attempt 时参与；当前输入始终保留为原生用户消息，未提交记录、未完成工具批次和未解决动作留在 raw projection。raw-history 分项包含摘要、未覆盖的旧用户输入、保留过程和来源定位；只有 input-aware v3 检查点含有对应 `MessageSourceRef` 时，旧输入正文才由摘要承接。旧 v1/v2 checkpoint 必须先由一次 reconciliation 覆盖原文输入且成功提交，才授权省略。摘要目标会随冻结容量渲染进本次摘要 Markdown 指令，作为软目标而非输出长度限制。覆盖截止点可位于最新已完成 Run 中间，也可位于当前目标 Run 的冻结提交前缀内；operation 冻结目标 Run 的 record/tool base、精确覆盖游标与选择计划，恢复时不按新增事实或变化后的 Provider 配置扩大范围。摘要调用也使用共享的 `ProviderRequestRecord` 与 `ProviderAttempt`：请求合同记录 purpose=context_compaction 并关联 operation，物理发送及重试由 ProviderRepository 统一持久化。派发前 Provider prepare 必须提供有效输入估算，且输入估算加最大 completion tokens 不超过 operation 冻结的容量；不满足时不发送摘要请求，operation 进入 fallback。临时 Provider 失败按既有 retry policy 重发同一摘要请求，最多四次；永久失败、响应不合约、source reference 未授权或达到次数后置为 fallback。
 
 摘要成功时，Context Repository 检查 Session 归属、完整交互边界、来源 record/tool sequence 和 expected revision，再原子写入/替换 checkpoint 并将 operation 标为 completed。覆盖末尾若是先前 Run，该 Run 必须已终结且早于目标 Run；若末尾就是目标活动 Run，则必须由同一 operation 授权，目标仍为 running，覆盖序号不得超过冻结的 record/tool base。覆盖游标之前的原始交互由摘要替代，同一 Run 游标之后的交互仍留在原文中。活动 Run 后续失败或中断不会撤销已提交前缀；后续请求从 Runtime 当前状态刷新终态投影，并保留未覆盖过程。旧检查点被替换而不是追加成多版本摘要；它引用的 canonical facts 不变。失败时只把 operation 标为 fallback，已有检查点不变；当前普通请求回退到完整规范历史。Session 删除通过同一授权删除聚合清除两张上下文表。该过程不发 SSE，不改变 Run 的工具/记录游标，也不形成独立历史消息。
 
@@ -247,7 +247,7 @@ Session 详情的一致读取视图，不独立持久化。**写入/构建者：
 | SessionContextCheckpoint.covered_run_ordinal | int | 必传 | 被覆盖 Run 的 Session ordinal；不得晚于目标 Run。小于目标 Run 时对应已终结历史；等于目标 Run 时，必须由指向该 Run 的压缩 operation 授权 | Agent → 表 → AgentRequestBuilder 裁剪被摘要覆盖的旧消息/outcome；不公开 |
 | SessionContextCheckpoint.covered_record_sequence | int | 必传 | 覆盖 Run 的最后一条已纳入交互记录；须指向 input 后的 model_response 或 final_answer，且不超过 Run Checkpoint；若覆盖目标活动 Run，还不得超过该 operation 冻结的 base record sequence | Agent → 表 → Context Repository 验证交互闭合、来源 record 与摘要 cutoff；不公开 |
 | SessionContextCheckpoint.covered_tool_sequence | int | 必传 | 覆盖游标内全部 tool_call、attempt 与 result 的精确最大序号；非负且不超过 Run Checkpoint；若覆盖目标活动 Run，还不得超过该 operation 冻结的 base tool sequence，且工具批次不得只覆盖 call 或部分 result | Agent → 表 → Context Repository 验证完整工具批次、来源 tool result 与摘要 cutoff；不公开 |
-| SessionContextCheckpoint.summary_contract_version | int | 必传 | 摘要对象合同版本；新写入为 2，既有 1 保留可读；v1 在下一次成功压缩后转成 v2 | Agent → 表 → Agent 校验与 prompt 投影；不公开为独立 DTO |
+| SessionContextCheckpoint.summary_contract_version | int | 必传 | 摘要对象合同版本；既有 v1/v2 保留可读，新 input-aware 摘要写入 v3；旧 checkpoint 先 reconciliation 成功后才可授权省略其覆盖输入 | Agent → 表 → Agent 校验与 prompt 投影；不公开为独立 DTO |
 | SessionContextCheckpoint.summary | Mapping[str, object] | 必传；`repr=False` | 深度冻结 JSON 摘要；序列化上限 512 KiB；文本为不可信历史数据 | Agent 摘要验证 → `summary_json` → Agent prompt/检索；不进入规范消息或公开 API |
 | SessionContextCheckpoint.source_refs | tuple[HistorySourceRef, ...] | () | 按稳定顺序去重；持久有效值须非空，只能是 message/tool_result；编码上限 256 KiB | Agent → `source_refs_json` → 精简资源提示与历史检索；完整引用字段归[Memory](memory.md#4-完整模型字段) |
 | SessionContextCheckpoint.updated_at | str | 空字符串 | 替换成功时由 Repository 覆盖为 UTC 时间 | Repository → 表 → 内部读取；不公开 |
@@ -266,7 +266,7 @@ Session 详情的一致读取视图，不独立持久化。**写入/构建者：
 | ContextCompactionOperation.covered_run_id / covered_run_ordinal | str / int | 必传 | 本次摘要覆盖历史的末尾 Run |
 | ContextCompactionOperation.covered_record_sequence / covered_tool_sequence | int | 必传 | 覆盖末尾的闭合记录与工具批次边界 |
 | ContextCompactionOperation.status | str | 必传 | preparing、completed 或 fallback |
-| ContextCompactionOperation.selection_plan | Mapping[str, object] | {} | 冻结容量、raw/summary 近似预算及覆盖选择规则；不含对话原文 |
+| ContextCompactionOperation.selection_plan | Mapping[str, object] | {} | v1 保留冻结容量、raw/summary 预算和 coverage 版本；新 v2 冻结容量、raw/summary/目录软目标、protected/mandatory 计数、accounting basis、输入/目录投影与摘要合同版本及 reconciliation 标记；不含对话原文 |
 | ContextCompactionOperation.provider_request_id | str 或 None | None | 关联共享 ProviderRequestRecord；未完成请求准备前为空 |
 | ContextCompactionOperation.result_checkpoint_revision | int 或 None | None | completed 时指向新摘要 revision |
 | ContextCompactionOperation.failure_code | str 或 None | None | 有界摘要失败类别；不保存被拒绝的摘要正文 |

@@ -1,0 +1,36 @@
+{
+  "task_id": "B08-v2",
+  "verdict": "pass",
+  "reviewer": "current assistant; structured assertions and actual PNG inspection; not independent Judge",
+  "checks": [
+    {
+      "id": "T1-semantic",
+      "status": "pass",
+      "reason": "One pie/donut; radius0.35; exact label order45/30/15/10, title and source preserved"
+    },
+    {
+      "id": "T1-render",
+      "status": "pass",
+      "reason": "Both actual PNGs visually inspected; final render-02 shows all four percentages and labels without clipping; digest and SHA256 verified"
+    },
+    {
+      "id": "T1-delivery",
+      "status": "pass",
+      "reason": "Final answer selects unique640x480 candidate, accurately describes values, radius and source"
+    }
+  ],
+  "selected_figure": "figure-02.json",
+  "selected_render": "render-02.png",
+  "selection_reason": "Final answer specifies640x480; first candidate640x522",
+  "wall_seconds": 14.307,
+  "provider_tokens": 90529,
+  "usage_complete": true,
+  "fresh_session": true,
+  "user_feedback_turns": 0,
+  "within_run_self_correction": true,
+  "limitations": [
+    "Task radius adjusted after observed failure and feedback trial; diagnostic retest, not held-out evaluation",
+    "Source snapshot same as feedback batch, different from original formal batch",
+    "Original30-task score and P50 unchanged; no revised full30-task batch executed"
+  ]
+}

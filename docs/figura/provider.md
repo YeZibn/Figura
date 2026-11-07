@@ -132,7 +132,7 @@ ProviderClient 私有的冻结调用封套，`repr=False` 且禁止序列化；�
 | `_PreparedProviderCall.descriptor.options.write_timeout_seconds` | 有限正 `int`/`float` | 请求发送阶段超时；响应阶段没有总时限 | ProviderClient.prepare → descriptor → Runtime 重建；不公开 |
 | `_PreparedProviderCall.descriptor.asset_manifest` | `Mapping[str, object]`；必传 | Agent 提供的 asset contract 加 Provider adapter 版本及有序图片指纹 | Agent/ProviderClient.prepare → 私有 descriptor → Runtime 比较；不公开 |
 | `_PreparedProviderCall.descriptor.asset_manifest.prompt_digest` | SHA-256 `str`；必传 | 实际指令投影摘要 | Agent `asset_contract` 或 Provider 默认投影 → descriptor → Runtime 比较；不公开 |
-| `_PreparedProviderCall.descriptor.asset_manifest.registry_version` | 非空 `str`；必传 | 当前工具合同版本；摘要请求无工具时使用 `context-compaction-v2` | Agent `asset_contract` 或 Provider 默认值 → descriptor → Runtime 比较；不公开 |
+| `_PreparedProviderCall.descriptor.asset_manifest.registry_version` | 非空 `str`；必传 | 当前工具合同版本；摘要请求无工具时按冻结合同使用 `context-compaction-v2` 或 `context-compaction-v3` | Agent `asset_contract` 或 Provider 默认值 → descriptor → Runtime 比较；不公开 |
 | `_PreparedProviderCall.descriptor.asset_manifest.registry_digest` | SHA-256 `str`；必传 | 工具声明投影摘要；摘要请求工具集合为空 | Agent `asset_contract` 或 Provider 默认投影 → descriptor → Runtime 比较；不公开 |
 | `_PreparedProviderCall.descriptor.asset_manifest.adapter_contract_version` | `int`；当前为 `1` | Provider prepare/wire 适配合同版本 | ProviderClient.prepare → descriptor → Runtime 比较；不公开 |
 | `_PreparedProviderCall.descriptor.asset_manifest.images` | 有序图片指纹数组；必传，可空 | 仅保存每个图像块的引用与摘要，不保存图像字节；摘要请求为空数组 | ProviderClient.prepare → descriptor → Runtime 比较；不公开 |
@@ -144,7 +144,7 @@ ProviderClient 私有的冻结调用封套，`repr=False` 且禁止序列化；�
 
 ### 本地上下文估算
 
-本地上下文估算使用实际 prepared payload 的 messages/tools 投影，统一采用 `tiktoken/o200k_base`；图片每次出现近似为 1,024 tokens，不分词 URL/base64。编码缓存初始化失败只禁用估算。该值不参与请求指纹、准入、输出预算或 Provider usage 校准。Agent 在 estimate 有值、context capacity 是正整数且比例达到约 80% 时，才可能发起一条额外摘要请求；此阈值策略由 [Agent](agent.md#上下文压缩与请求投影)拥有。容量缺失或估算失败时不自动压缩。摘要请求与普通 Run 请求使用同一 Provider `prepare/dispatch`、`ProviderRequestRecord` 和 `ProviderAttempt` 合同：摘要请求以 `purpose=context_compaction` 关联 `ContextCompactionOperation`，每个逻辑摘要请求有独立请求记录和最多四次物理发送；operation 只保存请求 ID、冻结的压缩范围与生命周期，不重复维护 attempt 次数或重试身份。恢复沿用冻结的请求 options 与 payload binding。详见 [Runtime](runtime.md#contextcompactionoperation) 与 [Agent](agent.md#上下文压缩与请求投影)。
+本地上下文估算使用实际 prepared payload 的 messages/tools 投影，统一采用 `tiktoken/o200k_base`；图片每次出现近似为 1,024 tokens，不分词 URL/base64。编码缓存初始化失败只禁用估算。持久 `ContextEstimate` 仍只有实际输入估算、可选容量和估算器版本三字段；这些值不参与请求指纹、准入、输出预算或 Provider usage 校准。Agent 在调用期从请求 builder 的归属投影建立 `RequestContextAccounting`，分别解释完整输入与历史估算；工具 Schema、当前输入、历史/摘要、资源目录和图片计数不写入 Provider 记录、公开 API 或 UI。80% 阈值只用完整 prepared estimate 作分母，history 统计仅用于预算决策和内部计数诊断，分项独立编码可能重叠。Agent 在完整 estimate 有值、context capacity 是正整数且比例达到约 80% 时，才可能发起一条额外摘要请求；此阈值和软预算策略由 [Agent](agent.md#上下文压缩与请求投影)拥有。容量缺失或估算失败时不自动压缩。摘要请求与普通 Run 请求使用同一 Provider `prepare/dispatch`、`ProviderRequestRecord` 和 `ProviderAttempt` 合同：摘要请求以 `purpose=context_compaction` 关联 `ContextCompactionOperation`，每个逻辑摘要请求有独立请求记录和最多四次物理发送；operation 只保存请求 ID、冻结的压缩范围与生命周期，不重复维护 attempt 次数或重试身份。恢复沿用冻结的请求 options 与 payload binding。详见 [Runtime](runtime.md#contextcompactionoperation) 与 [Agent](agent.md#上下文压缩与请求投影)。
 
 ### ContextEstimate
 

@@ -12,11 +12,26 @@ from types import MappingProxyType
 from figura.shared.payloads import encode_json
 
 from figura.agent.context_compaction import CompactionSelection
+from figura.agent.context_accounting import RequestContextProjection
+from figura.agent.context_accounting import estimate_json_tokens
 from figura.agent.execution_images import RunExecutionImageReader
 from figura.agent.execution_state import RunExecutionStateService
+from figura.agent.repeated_observations import project_repeated_observations
+from figura.agent.task_reflection import project_task_reflection
 from figura.shared.resource_refs import ImageResourceRef, ToolResourceRef
-from figura.agent.execution_resources import (PanelContent, RunExecutionState)
-from figura.agent.prompting.execution import build_context_summary_instruction, build_execution_instruction
+from figura.agent.execution_resources import (
+    ChartFigureContent,
+    ChartRenderContent,
+    MeasurementContent,
+    OcrContent,
+    PanelContent,
+    RunExecutionState,
+)
+from figura.agent.prompting.execution import (
+    build_context_summary_instruction,
+    build_execution_instruction,
+    project_execution_resources,
+)
 from figura.agent.prompting.loader import PromptAssetError, build_compaction_instruction
 from figura.agent.prompting.loader import build_static_instruction
 from figura.agent.prompting.observations import pending_visual_results, tool_message_content
@@ -66,6 +81,17 @@ class AgentRequestBuilder:
     def __setattr__(self, name: str, value: object) -> None:
         raise AttributeError("AgentRequestBuilder is immutable")
 
+    def mandatory_directory_tokens(
+        self,
+        state: RunState,
+        prior_run_states: tuple[RunState, ...],
+        context_checkpoint: SessionContextCheckpoint | None,
+    ) -> int | None:
+        resources = self._execution_state.build(state, prior_run_states)
+        return mandatory_resource_directory_tokens(
+            resources, state, prior_run_states, context_checkpoint
+        )
+
     def build(
         self,
         state: RunState,
@@ -73,8 +99,40 @@ class AgentRequestBuilder:
         prior_run_states: tuple[RunState, ...] = (),
         *,
         context_checkpoint: SessionContextCheckpoint | None = None,
+        directory_budget_tokens: int | None = None,
+        context_policy_version: int = 2,
     ) -> ProviderRequest:
+        request, _projection = self.build_with_projection(
+            state,
+            registry,
+            prior_run_states,
+            context_checkpoint=context_checkpoint,
+            directory_budget_tokens=directory_budget_tokens,
+            context_policy_version=context_policy_version,
+        )
+        return request
+
+    def build_with_projection(
+        self,
+        state: RunState,
+        registry: ToolRegistry,
+        prior_run_states: tuple[RunState, ...] = (),
+        *,
+        context_checkpoint: SessionContextCheckpoint | None = None,
+        directory_budget_tokens: int | None = None,
+        context_policy_version: int = 2,
+    ) -> tuple[ProviderRequest, RequestContextProjection]:
         if not isinstance(state, RunState) or not isinstance(registry, ToolRegistry):
+            raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
+        if (
+            type(context_policy_version) is not int
+            or context_policy_version not in {1, 2}
+            or (
+                directory_budget_tokens is not None
+                and (type(directory_budget_tokens) is not int or directory_budget_tokens < 0)
+            )
+            or (context_policy_version == 1 and directory_budget_tokens is not None)
+        ):
             raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
         if (
             state.run.status is not RunStatus.RUNNING
@@ -110,10 +168,21 @@ class AgentRequestBuilder:
                     if _run_outcome_is_after_checkpoint(item, prior_run_states, context_checkpoint)
                 ),
             )
-        historical_inputs = _historical_input_entries(prior_run_states)
+        historical_contexts = _historical_input_entries(prior_run_states)
+        historical_inputs = _historical_input_entries(
+            prior_run_states,
+            context_checkpoint,
+            input_aware=(context_policy_version == 2),
+        )
         full_execution_state = self._execution_state.build(state, prior_run_states)
         execution_state = _prompt_resource_projection(
-            full_execution_state, state, prior_run_states, context_checkpoint
+            full_execution_state,
+            state,
+            prior_run_states,
+            context_checkpoint,
+            directory_budget_tokens=(
+                directory_budget_tokens if context_policy_version == 2 else None
+            ),
         )
         current_messages = project_run_messages(state)
         if (
@@ -126,21 +195,30 @@ class AgentRequestBuilder:
                 if isinstance(message, UserMessage)
                 or _message_is_after_checkpoint(message, all_states, context_checkpoint)
             )
-        messages = self._provider_messages(
+        messages, message_owners = self._provider_messages(
             (*history.messages, *current_messages),
             selected_provider=provider_id,
             continuations=_continuations_by_response((*prior_run_states, state)),
             registry=registry,
             historical_inputs=historical_inputs,
+            historical_contexts=historical_contexts,
             selected_images=pending_visual_results(state),
             session_id=state.run.session_id,
             full_execution_state=full_execution_state,
+            current_input_record_id=state.run.input_record_id,
         )
         if historical_inputs:
             messages = (
                 _historical_user_inputs_message(historical_inputs),
                 *messages,
             )
+            message_owners = ("history", *message_owners)
+        current_input_indices = tuple(
+            index for index, owner in enumerate(message_owners)
+            if owner == "current_input"
+        )
+        if len(current_input_indices) != 1:
+            raise RunError(RunErrorCode.INTEGRITY_ERROR)
         try:
             tools = project_provider_tools(registry)
         except (TypeError, ValueError):
@@ -157,18 +235,33 @@ class AgentRequestBuilder:
             build_static_instruction(),
             build_tool_instruction(registry),
             *((build_context_summary_instruction(prompt_checkpoint),) if prompt_checkpoint else ()),
-            build_execution_instruction(execution_state, history.run_outcomes),
+            build_execution_instruction(
+                execution_state,
+                history.run_outcomes,
+                project_repeated_observations(state),
+                project_task_reflection(state),
+                directory_may_be_partial=directory_budget_tokens is not None,
+            ),
         )
         registry_projection = [{"name": d.name, "description": d.description,
             "parameters": d.parameters_schema, "result": d.result_schema,
             "replay_effect": d.replay_effect.value, "produces_images": d.produces_images} for d in registry]
-        asset_contract = MappingProxyType({
+        asset_contract_values = {
             "requires_tool_result_images": any(d.produces_images for d in registry),
             "prompt_digest": hashlib.sha256(encode_json([
                 {"role": i.role.value, "content": i.content} for i in instructions] + [load_image_feedback()[1]]).encode()).hexdigest(),
             "registry_version": registry.version,
             "registry_digest": hashlib.sha256(encode_json(registry_projection).encode()).hexdigest(),
-        })
+        }
+        if context_policy_version == 2:
+            asset_contract_values.update({
+                "context_policy_version": 2,
+                "directory_projection_version": (
+                    2 if directory_budget_tokens is not None else 1
+                ),
+                "directory_budget_tokens": directory_budget_tokens,
+            })
+        asset_contract = MappingProxyType(asset_contract_values)
         request = ProviderRequest(
             provider_id=provider_id,
             model_id=state.run.model,
@@ -179,7 +272,18 @@ class AgentRequestBuilder:
             tools=tools,
             asset_contract=asset_contract,
         )
-        return request
+        summary_instruction_index = 2 if prompt_checkpoint is not None else None
+        projection = RequestContextProjection(
+            history_message_indices=tuple(
+                index for index, owner in enumerate(message_owners)
+                if owner == "history"
+            ),
+            current_input_message_index=current_input_indices[0],
+            summary_instruction_index=summary_instruction_index,
+            execution_instruction_index=len(instructions) - 1,
+            resource_entries=project_execution_resources(execution_state),
+        )
+        return request, projection
 
     def build_summary_request(
         self,
@@ -190,6 +294,8 @@ class AgentRequestBuilder:
         coverage: CompactionSelection | None = None,
         context_capacity_tokens: int,
         summary_budget_tokens: int,
+        summary_contract_version: int = 3,
+        reconcile_inputs_only: bool = False,
     ) -> tuple[ProviderRequest, tuple[HistorySourceRef, ...]]:
         """Build a tool-free request over a stable, complete source slice."""
         if (
@@ -200,7 +306,12 @@ class AgentRequestBuilder:
             or type(context_capacity_tokens) is not int
             or context_capacity_tokens <= 0
             or type(summary_budget_tokens) is not int
-            or summary_budget_tokens != context_capacity_tokens // 10
+            or summary_budget_tokens <= 0
+            or summary_budget_tokens > context_capacity_tokens // 10
+            or type(summary_contract_version) is not int
+            or summary_contract_version not in {2, 3}
+            or type(reconcile_inputs_only) is not bool
+            or (reconcile_inputs_only and summary_contract_version != 3)
         ):
             raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
         if previous_checkpoint is not None and (
@@ -223,7 +334,27 @@ class AgentRequestBuilder:
             is_active_source = source_state.run.run_id == state.run.run_id
             if source_state.run.session_id != state.run.session_id:
                 raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
-            if source_state.run.status is RunStatus.RUNNING:
+            if reconcile_inputs_only:
+                input_record = next(
+                    (item for item in source_state.records
+                     if item.record_id == source_state.run.input_record_id),
+                    None,
+                )
+                if (
+                    input_record is None
+                    or input_record.record_kind is not RecordKind.INPUT
+                    or not isinstance(input_record.payload, RunInput)
+                ):
+                    raise RunError(RunErrorCode.INTEGRITY_ERROR)
+                source_input_message = UserMessage(
+                    source_state.run.run_id,
+                    source_state.run.ordinal,
+                    input_record.record_id,
+                    input_record.payload.text,
+                    input_record.payload.attachment_ids,
+                )
+                run_messages = (source_input_message,)
+            elif source_state.run.status is RunStatus.RUNNING:
                 if (
                     not is_active_source
                     or coverage is None
@@ -254,14 +385,14 @@ class AgentRequestBuilder:
                 raise RunError(RunErrorCode.INTEGRITY_ERROR)
             refs.append(input_ref)
             projected_messages: list[dict[str, object]] = []
-            source_messages = tuple(
+            source_messages = () if reconcile_inputs_only else tuple(
                 message for message in run_messages
                 if _message_is_within_compaction_slice(
                     message, source_state, previous_checkpoint, coverage
                 )
                 and not isinstance(message, UserMessage)
             )
-            if not source_messages:
+            if not source_messages and summary_contract_version == 2:
                 continue
             for message in source_messages:
                 if isinstance(message, UserMessage):
@@ -328,6 +459,7 @@ class AgentRequestBuilder:
             instructions = (build_compaction_instruction(
                 context_capacity_tokens=context_capacity_tokens,
                 summary_budget_tokens=summary_budget_tokens,
+                summary_contract_version=summary_contract_version,
             ),)
         except PromptAssetError:
             raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD) from None
@@ -337,7 +469,7 @@ class AgentRequestBuilder:
         ]
         asset_contract = MappingProxyType({
             "prompt_digest": hashlib.sha256(encode_json(instruction_projection).encode()).hexdigest(),
-            "registry_version": "context-compaction-v2",
+            "registry_version": f"context-compaction-v{summary_contract_version}",
             "registry_digest": hashlib.sha256(encode_json(tools).encode()).hexdigest(),
         })
         request = ProviderRequest(
@@ -369,11 +501,21 @@ class AgentRequestBuilder:
         continuations: dict[tuple[str, str], ProviderContinuation],
         registry: ToolRegistry,
         historical_inputs: dict[str, dict[str, object]],
+        historical_contexts: dict[str, dict[str, object]] | None = None,
         selected_images=frozenset(),
         session_id=None,
         full_execution_state=None,
-    ) -> tuple[ProviderMessage, ...]:
+        current_input_record_id: str = "",
+    ) -> tuple[tuple[ProviderMessage, ...], tuple[str, ...]]:
+        if historical_contexts is None:
+            historical_contexts = historical_inputs
         projected: list[ProviderMessage] = []
+        owners: list[str] = []
+
+        def append(item: ProviderMessage, owner: str = "history") -> None:
+            projected.append(item)
+            owners.append(owner)
+
         resolved_calls_by_response: dict[tuple[str, str], set[str]] = {}
         call_names = {}
         for index, message in enumerate(messages):
@@ -390,18 +532,19 @@ class AgentRequestBuilder:
         last_historical_run_id: str | None = None
         for message in messages:
             if isinstance(message, UserMessage):
-                if message.run_id in historical_inputs:
+                if message.run_id in historical_contexts:
                     continue
-                projected.append(
+                append(
                     ProviderMessage(
                         MessageRole.USER,
                         _user_text(message.text, message.attachment_ids),
-                    )
+                    ),
+                    "current_input" if message.source_record_id == current_input_record_id else "history",
                 )
             elif isinstance(message, AssistantMessage):
-                historical_input = historical_inputs.get(message.run_id)
-                if historical_input is not None and last_historical_run_id != message.run_id:
-                    projected.append(_historical_run_context_message(historical_input))
+                historical_context = historical_contexts.get(message.run_id)
+                if historical_context is not None and last_historical_run_id != message.run_id:
+                    append(_historical_run_context_message(historical_context))
                     last_historical_run_id = message.run_id
                 paired_calls = resolved_calls_by_response.get(
                     (message.run_id, message.source_record_id), set()
@@ -416,7 +559,7 @@ class AgentRequestBuilder:
                 )
                 if continuation is not None and continuation.provider_id is not selected_provider:
                     continuation = None
-                projected.append(
+                append(
                     ProviderMessage(
                         role=MessageRole.ASSISTANT,
                         content=message.content,
@@ -432,11 +575,11 @@ class AgentRequestBuilder:
                     )
                 )
             elif isinstance(message, ToolMessage):
-                historical_input = historical_inputs.get(message.run_id)
-                if historical_input is not None and last_historical_run_id != message.run_id:
-                    projected.append(_historical_run_context_message(historical_input))
+                historical_context = historical_contexts.get(message.run_id)
+                if historical_context is not None and last_historical_run_id != message.run_id:
+                    append(_historical_run_context_message(historical_context))
                     last_historical_run_id = message.run_id
-                projected.append(
+                append(
                     ProviderMessage(
                         role=MessageRole.TOOL,
                         content=tool_message_content(message, tool_name=call_names[(message.run_id, message.tool_call_id)],
@@ -447,11 +590,14 @@ class AgentRequestBuilder:
                 )
             else:
                 raise RunError(RunErrorCode.INTEGRITY_ERROR)
-        return tuple(projected)
+        return tuple(projected), tuple(owners)
 
 
 def _historical_input_entries(
     prior_run_states: tuple[RunState, ...],
+    checkpoint: SessionContextCheckpoint | None = None,
+    *,
+    input_aware: bool = False,
 ) -> dict[str, dict[str, object]]:
     entries: dict[str, dict[str, object]] = {}
     for state in prior_run_states:
@@ -476,6 +622,14 @@ def _historical_input_entries(
         ):
             raise RunError(RunErrorCode.INTEGRITY_ERROR)
         reference = MessageSourceRef(state.run.run_id, input_record.record_id)
+        if (
+            input_aware
+            and checkpoint is not None
+            and checkpoint.summary_contract_version >= 3
+            and state.run.ordinal <= checkpoint.covered_run_ordinal
+            and reference in checkpoint.source_refs
+        ):
+            continue
         entries[state.run.run_id] = {
             "run_id": state.run.run_id,
             "run_ordinal": state.run.ordinal,
@@ -575,6 +729,44 @@ def _prompt_resource_projection(
     current: RunState,
     prior: tuple[RunState, ...],
     checkpoint: SessionContextCheckpoint | None,
+    *,
+    directory_budget_tokens: int | None = None,
+) -> RunExecutionState:
+    if directory_budget_tokens is None:
+        return _reference_filtered_resource_projection(state, current, prior, checkpoint)
+    if type(directory_budget_tokens) is not int or directory_budget_tokens < 0:
+        raise RunError(RunErrorCode.UNSUPPORTED_PAYLOAD)
+
+    mandatory_refs = _mandatory_resource_refs(state, current, prior, checkpoint)
+    mandatory = tuple(item for item in state.resources if item.ref in mandatory_refs)
+    optional = _recent_optional_resources(
+        tuple(item for item in state.resources if item.ref not in mandatory_refs),
+        current,
+        prior,
+    )
+    selected = list(mandatory)
+    for resource in optional:
+        candidate = RunExecutionState(state.run_id, tuple((*selected, resource)))
+        candidate_tokens = estimate_json_tokens({
+            "resources": project_execution_resources(candidate),
+        })
+        if candidate_tokens is None:
+            return _reference_filtered_resource_projection(state, current, prior, checkpoint)
+        if candidate_tokens <= directory_budget_tokens:
+            selected.append(resource)
+    selected_refs = {item.ref for item in selected}
+    # Keep the source catalogue's canonical order after selection.
+    return RunExecutionState(
+        state.run_id,
+        tuple(item for item in state.resources if item.ref in selected_refs),
+    )
+
+
+def _reference_filtered_resource_projection(
+    state: RunExecutionState,
+    current: RunState,
+    prior: tuple[RunState, ...],
+    checkpoint: SessionContextCheckpoint | None,
 ) -> RunExecutionState:
     if checkpoint is None:
         return state
@@ -660,6 +852,179 @@ def _prompt_resource_projection(
         if include:
             resources.append(resource)
     return RunExecutionState(state.run_id, tuple(resources))
+
+
+def _mandatory_resource_refs(
+    resource_state: RunExecutionState,
+    current: RunState,
+    prior: tuple[RunState, ...],
+    checkpoint: SessionContextCheckpoint | None,
+) -> set[object]:
+    states = (*prior, current)
+    mandatory: set[object] = {
+        ImageResourceRef("attachment", attachment_id)
+        for attachment_id in _run_input_attachment_ids(current)
+    }
+    resources_by_ref = {resource.ref: resource for resource in resource_state.resources}
+
+    pending_visual = pending_visual_results(current)
+    for run_state in states:
+        record_sequences = {
+            record.record_id: record.record_sequence for record in run_state.records
+        }
+        for fact in run_state.tool_facts:
+            if fact.fact_kind is not ToolFactKind.TOOL_CALL or not isinstance(
+                fact.payload, ToolCallFact
+            ):
+                continue
+            call = fact.payload
+            response_sequence = record_sequences.get(call.response_record_id)
+            if response_sequence is None:
+                raise RunError(RunErrorCode.INTEGRITY_ERROR)
+            is_raw = checkpoint is None or run_state.run.ordinal > checkpoint.covered_run_ordinal or (
+                run_state.run.ordinal == checkpoint.covered_run_ordinal
+                and response_sequence > checkpoint.covered_record_sequence
+            )
+            is_latest_visual = (run_state.run.run_id, fact.tool_sequence) in pending_visual
+            if not is_raw and not is_latest_visual:
+                continue
+            _add_declared_resource_refs(
+                _parse_tool_arguments(call.arguments_json), mandatory
+            )
+            if is_latest_visual:
+                _add_call_resource_ref(call, mandatory)
+
+    # Expand only direct, durable provenance once; never infer references from
+    # user-visible names or arbitrary result text.
+    for ref in tuple(mandatory):
+        resource = resources_by_ref.get(ref)
+        if resource is None:
+            continue
+        content = resource.content
+        if isinstance(content, PanelContent):
+            mandatory.add(ImageResourceRef("attachment", content.source_attachment_id))
+        elif isinstance(content, (OcrContent, MeasurementContent)):
+            if content.source_ref is not None:
+                mandatory.add(content.source_ref)
+        elif isinstance(content, ChartRenderContent):
+            if content.figure_ref is not None:
+                mandatory.add(content.figure_ref)
+        elif isinstance(content, ChartFigureContent) and content.result is not None:
+            for chart in content.result.figure.charts:
+                for measurement_ref in chart.measurement_refs:
+                    mandatory.add(ToolResourceRef(
+                        "measurement", measurement_ref.run_id, measurement_ref.call_id
+                    ))
+    return mandatory
+
+
+def mandatory_resource_directory_tokens(
+    resource_state: RunExecutionState,
+    current: RunState,
+    prior: tuple[RunState, ...],
+    checkpoint: SessionContextCheckpoint | None,
+) -> int | None:
+    if not isinstance(resource_state, RunExecutionState):
+        return None
+    mandatory_refs = _mandatory_resource_refs(resource_state, current, prior, checkpoint)
+    mandatory = tuple(
+        item for item in resource_state.resources if item.ref in mandatory_refs
+    )
+    try:
+        state = RunExecutionState(resource_state.run_id, mandatory)
+    except (TypeError, ValueError):
+        return None
+    return estimate_json_tokens({"resources": project_execution_resources(state)})
+
+
+def _add_call_resource_ref(call: ToolCallFact, refs: set[object]) -> None:
+    kind = {
+        "extract_text": "ocr",
+        "measure_chart": "measurement",
+        "assemble_chart_figure": "chart_figure",
+        "render_chart_figure": "chart_render",
+    }.get(call.tool_name)
+    if kind is not None:
+        refs.add(ToolResourceRef(kind, call.run_id, call.call_id))
+
+
+def _parse_tool_arguments(arguments_json: str) -> dict[str, object]:
+    try:
+        value = json.loads(arguments_json)
+    except (TypeError, ValueError):
+        raise RunError(RunErrorCode.INTEGRITY_ERROR) from None
+    if not isinstance(value, dict):
+        raise RunError(RunErrorCode.INTEGRITY_ERROR)
+    return value
+
+
+def _add_declared_resource_refs(arguments: Mapping[str, object], refs: set[object]) -> None:
+    raw_ref = arguments.get("resource_ref")
+    if isinstance(raw_ref, dict):
+        kind = raw_ref.get("kind")
+        if kind in {"attachment", "panel"} and isinstance(raw_ref.get("id"), str):
+            refs.add(ImageResourceRef(kind, raw_ref["id"]))
+        elif (
+            kind in {"ocr", "measurement", "chart_figure", "chart_render"}
+            and isinstance(raw_ref.get("run_id"), str)
+            and isinstance(raw_ref.get("call_id"), str)
+        ):
+            refs.add(ToolResourceRef(kind, raw_ref["run_id"], raw_ref["call_id"]))
+    figure_ref = arguments.get("figure_ref")
+    if isinstance(figure_ref, dict) and isinstance(figure_ref.get("run_id"), str) and isinstance(
+        figure_ref.get("call_id"), str
+    ):
+        refs.add(ToolResourceRef("chart_figure", figure_ref["run_id"], figure_ref["call_id"]))
+    measurement_refs = arguments.get("measurement_refs")
+    if isinstance(measurement_refs, (tuple, list)):
+        for value in measurement_refs:
+            if isinstance(value, dict) and isinstance(value.get("run_id"), str) and isinstance(
+                value.get("call_id"), str
+            ):
+                refs.add(ToolResourceRef("measurement", value["run_id"], value["call_id"]))
+    source_kind, source_id = arguments.get("source_kind"), arguments.get("source_id")
+    if source_kind in {"attachment", "panel"} and isinstance(source_id, str):
+        refs.add(ImageResourceRef(source_kind, source_id))
+    attachment_id = arguments.get("attachment_id")
+    if isinstance(attachment_id, str):
+        refs.add(ImageResourceRef("attachment", attachment_id))
+
+
+def _recent_optional_resources(resources: tuple, current: RunState, prior: tuple[RunState, ...]) -> tuple:
+    states = (*prior, current)
+    ordinal_by_run = {item.run.run_id: item.run.ordinal for item in states}
+    sequence_by_call = {
+        fact.payload.call_id: fact.tool_sequence
+        for item in states for fact in item.tool_facts
+        if isinstance(fact.payload, ToolCallFact)
+    }
+    attachment_ordinals: dict[str, int] = {}
+    for item in states:
+        for attachment_id in _run_input_attachment_ids(item):
+            attachment_ordinals[attachment_id] = max(
+                attachment_ordinals.get(attachment_id, 0), item.run.ordinal
+            )
+
+    def rank(resource):
+        ref, content = resource.ref, resource.content
+        if isinstance(ref, ToolResourceRef):
+            ordinal = ordinal_by_run.get(ref.run_id, 0)
+            sequence = sequence_by_call.get(ref.call_id, 0)
+            identity = (ref.run_id, ref.call_id, "")
+        elif isinstance(content, PanelContent):
+            ordinal = ordinal_by_run.get(content.run_id, 0)
+            sequence = 0
+            identity = (ref.id, "", "")
+        elif isinstance(ref, ImageResourceRef):
+            ordinal = attachment_ordinals.get(ref.id, 0)
+            sequence = 0
+            identity = (ref.id, "", "")
+        else:
+            ordinal, sequence = 0, 0
+            identity = ("", "", "")
+        return (-ordinal, -sequence, ref.kind, *identity)
+
+    return tuple(sorted(resources, key=rank))
 
 
 def _include_resource_reference(

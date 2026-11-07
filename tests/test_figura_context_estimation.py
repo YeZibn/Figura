@@ -8,6 +8,22 @@ import tiktoken
 from figura.providers.config import ProviderSettings
 from figura.providers.models import ProviderId, ProviderToolCall, FinishReason
 from figura.providers import token_estimation as tokens
+from figura.agent.context_accounting import (
+    RequestContextProjection,
+    account_request_context,
+)
+from figura.providers.models import (
+    FunctionTool,
+    ImageBlock,
+    InstructionBlock,
+    InstructionRole,
+    MessageRole,
+    ProviderContinuation,
+    ProviderMessage,
+    ProviderOptions,
+    ProviderRequest,
+    TextBlock,
+)
 from figura.runtime.codecs.provider_requests import encode_provider_request, decode_provider_request
 from figura.runtime.errors import RunError
 from figura.runtime.store import FiguraRunStore
@@ -89,6 +105,156 @@ def test_complete_input_projection_and_images_are_counted_without_wire_bytes(enc
     assert estimate.context_window_tokens == 1  # No admission constraint.
     assert json.dumps(payload) == original
     assert tokens.estimate_input({**payload, "timeout": 1, "model": "another", "max_completion_tokens": 999}, 1, encoding) == estimate
+
+
+def _accounting_request(*, continuation=True):
+    image = ImageBlock("image/png", b"private-image-bytes")
+    resources = [{"ref": {"kind": "attachment", "id": "private-attachment-id"}}]
+    return ProviderRequest(
+        provider_id=ProviderId.QWEN,
+        model_id="qwen3.8-flash",
+        instructions=(
+            InstructionBlock(InstructionRole.SYSTEM, "stable policy private-marker"),
+            InstructionBlock(InstructionRole.SYSTEM, "tool and runtime rules"),
+            InstructionBlock(InstructionRole.SYSTEM, '{"summary":"old context"}'),
+            InstructionBlock(
+                InstructionRole.SYSTEM,
+                "运行资源目录\n" + json.dumps({"run_id": "private-run", "resources": resources}),
+            ),
+        ),
+        messages=(
+            ProviderMessage(MessageRole.USER, "private historical user input"),
+            ProviderMessage(
+                MessageRole.ASSISTANT,
+                "private historical assistant response",
+                tool_calls=(ProviderToolCall("private-call", "inspect", '{"value":1}'),),
+                continuation=(
+                    ProviderContinuation(ProviderId.QWEN, 1, "private-continuation")
+                    if continuation else None
+                ),
+            ),
+            ProviderMessage(MessageRole.TOOL, "private tool result", tool_call_id="private-call"),
+            ProviderMessage(
+                MessageRole.USER,
+                (TextBlock("private current input"), image),
+            ),
+        ),
+        options=ProviderOptions(max_completion_tokens=512),
+        tools=(FunctionTool("inspect", {"type": "object", "properties": {"value": {"type": "integer"}}}, "private tool schema"),),
+    )
+
+
+def test_request_context_accounting_separates_history_current_tools_and_images(encoding):
+    request = _accounting_request()
+    projection = RequestContextProjection(
+        history_message_indices=(0, 1, 2),
+        current_input_message_index=3,
+        summary_instruction_index=2,
+        execution_instruction_index=3,
+        resource_entries=({"ref": {"kind": "attachment", "id": "private-attachment-id"}},),
+    )
+    estimate = tokens.ContextEstimate(80, 100, "o200k_base-v1")
+
+    accounting = account_request_context(request, projection, estimate)
+
+    assert accounting.full_input_tokens == 80
+    assert accounting.history_input_tokens is not None and accounting.history_input_tokens > 0
+    assert accounting.raw_history_tokens is not None and accounting.raw_history_tokens > 0
+    assert accounting.current_input_tokens is not None
+    assert accounting.current_input_tokens >= tokens.IMAGE_TOKENS
+    assert accounting.history_input_tokens < tokens.IMAGE_TOKENS
+    assert accounting.summary_tokens is not None
+    assert accounting.policy_tools_state_tokens is not None
+    assert accounting.resource_directory_tokens is not None
+    assert accounting.selected_image_count == 1
+    assert accounting.image_tokens == tokens.IMAGE_TOKENS
+    assert accounting.context_capacity_tokens == 100
+    assert accounting.pressure_reason == "directory_reducible"
+
+    without_continuation = account_request_context(
+        _accounting_request(continuation=False), projection, estimate
+    )
+    assert accounting.history_input_tokens > without_continuation.history_input_tokens
+    without_native_schema = account_request_context(
+        replace(request, tools=()), projection, estimate
+    )
+    assert accounting.policy_tools_state_tokens > without_native_schema.policy_tools_state_tokens
+    assert accounting.safe_diagnostic() == {
+        "full_input_tokens": 80,
+        "history_input_tokens": accounting.history_input_tokens,
+        "current_input_tokens": accounting.current_input_tokens,
+        "summary_tokens": accounting.summary_tokens,
+        "raw_history_tokens": accounting.raw_history_tokens,
+        "resource_directory_tokens": accounting.resource_directory_tokens,
+        "policy_tools_state_tokens": accounting.policy_tools_state_tokens,
+        "selected_image_count": 1,
+        "image_tokens": tokens.IMAGE_TOKENS,
+        "context_capacity_tokens": 100,
+        "estimator_version": "o200k_base-v1",
+        "pressure_reason": "directory_reducible",
+    }
+    diagnostic = json.dumps(accounting.safe_diagnostic())
+    assert all(secret not in diagnostic for secret in (
+        "private-marker", "private historical", "private current", "private-call",
+        "private tool schema", "private-attachment-id", "private-continuation",
+    ))
+
+
+def test_full_window_pressure_does_not_depend_on_history_projection_size(encoding):
+    request = _accounting_request()
+    projection = RequestContextProjection(
+        history_message_indices=(),
+        current_input_message_index=3,
+        summary_instruction_index=None,
+        execution_instruction_index=3,
+        resource_entries=(),
+    )
+
+    accounting = account_request_context(
+        request,
+        projection,
+        tokens.ContextEstimate(80, 100, "o200k_base-v1"),
+    )
+
+    assert accounting.full_input_tokens == 80
+    assert accounting.history_input_tokens is not None
+    assert accounting.history_input_tokens < 80
+    assert accounting.pressure_reason == "protected_content"
+
+
+@pytest.mark.parametrize("capacity", [None, 0])
+def test_request_context_accounting_marks_capacity_unknown(capacity, encoding):
+    request = _accounting_request()
+    projection = RequestContextProjection((0, 1, 2), 3, 2, 3, ())
+
+    accounting = account_request_context(
+        request, projection, tokens.ContextEstimate(80, capacity, "o200k_base-v1")
+    )
+
+    assert accounting.full_input_tokens == 80
+    assert accounting.context_capacity_tokens == capacity
+    assert accounting.history_input_tokens is not None
+    assert accounting.pressure_reason == "estimate_unavailable"
+
+
+def test_request_context_accounting_keeps_full_estimate_when_local_encoding_unavailable(monkeypatch):
+    import figura.agent.context_accounting as context_accounting
+
+    monkeypatch.setattr(context_accounting, "cached_encoding", lambda: None)
+    request = _accounting_request()
+    projection = RequestContextProjection((0, 1, 2), 3, 2, 3, ())
+
+    accounting = context_accounting.account_request_context(
+        request, projection, tokens.ContextEstimate(80, 100, "o200k_base-v1")
+    )
+
+    assert accounting.full_input_tokens == 80
+    assert accounting.history_input_tokens is None
+    assert accounting.current_input_tokens is None
+    assert accounting.resource_directory_tokens is None
+    assert accounting.selected_image_count == 1
+    assert accounting.image_tokens == tokens.IMAGE_TOKENS
+    assert accounting.pressure_reason == "estimate_unavailable"
 
 
 def test_prepare_estimation_is_independent_of_fingerprint_and_usage(encoding, monkeypatch):

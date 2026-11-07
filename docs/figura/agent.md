@@ -1,10 +1,10 @@
 # Agent：Run 决策与编排
 
-> 更新日期：2026-10-22。[返回总览](../figura-implementation-overview.md)。本篇说明 Agent 编排及其调用期派生运行态；Provider 与 Tool 的完整字段分别见[Provider](provider.md)和[Tool](tools.md)，附件和 Panel 持久模型见[Sources](sources.md)，Run 执行事实与摘要检查点见[Run Runtime](runtime.md)，规范历史和来源检索见[Session Memory](memory.md)，网页调用和公开投影见[Web 边界](web.md)。
+> 更新日期：2026-11-05。[返回总览](../figura-implementation-overview.md)。本篇说明 Agent 编排及其调用期派生运行态；Provider 与 Tool 的完整字段分别见[Provider](provider.md)和[Tool](tools.md)，附件和 Panel 持久模型见[Sources](sources.md)，Run 执行事实与摘要检查点见[Run Runtime](runtime.md)，规范历史和来源检索见[Session Memory](memory.md)，网页调用和公开投影见[Web 边界](web.md)。
 
 ## 1. 职责与边界
 
-`AgentExecutor` 按当前 `RunState.checkpoint.next_action` 推进模型、工具和终结动作。`AgentRequestBuilder` 从 Run 事实重建规范 Session 历史、当前 Run 已提交前缀和 Agent 的完整 `RunExecutionState` 资源目录。每个普通 Provider 请求都先构造独立历史用户输入区，按 Run ordinal 保留每个此前 Run 的完整文本、有序附件 ID 和输入来源引用；当前 Run 输入仍以原生用户消息出现。若 Runtime 有 `SessionContextCheckpoint`，实际 Provider 请求会以摘要替代覆盖范围内的旧 Assistant/工具过程，同时保留覆盖游标之后的原文、历史输入区和当前输入。摘要覆盖可以进入最近一个已完成 Run，也可以进入当前 Run 已提交的完整交互前缀；后者只允许到压缩操作冻结的记录与工具序号，并在同一 Run 的后续请求中继续应用。摘要只替代过程，不移除用户输入；未提交记录、未完成工具批次和未解决动作留在原始上下文。完整目录仍保留授权前缀内的附件、Panel、OCR、测量、ChartFigure 与 ChartRender 六类资源，prompt 只投影相关定位信息，完整资源仍可由类型化引用按需读取。容量已配置且实际请求估算达到约 80% 阈值时，Agent 才尝试压缩。运行事实、图像资源与工具过程分别经历史或图片读取工具显式取回，不会重新执行历史工具。Runtime 持有摘要检查点与压缩操作状态，`RunExecutionState` 不保存摘要或删减完整资源目录。
+`AgentExecutor` 按当前 `RunState.checkpoint.next_action` 推进模型、工具和终结动作。`AgentRequestBuilder` 从 Run 事实重建规范 Session 历史、当前 Run 已提交前缀和 Agent 的完整 `RunExecutionState` 资源目录。当前 Run 用户输入始终作为原生 user message 完整发送；此前 Run 的输入按输入来源引用逐条投影，只有 input-aware v3 检查点覆盖且 `source_refs` 包含该输入的精确 `MessageSourceRef` 时，才可由摘要承接而省略正文。未被覆盖的旧输入仍原样随历史请求发送；旧 v1/v2 检查点先保留全部旧输入，并在首次需要省略时做一次同覆盖游标的 reconciliation。摘要还可覆盖旧 Assistant/工具过程、最近一个已完成 Run 或当前 Run 已提交的完整交互前缀；后者止于压缩操作冻结的记录与工具序号。未提交记录、未完成工具批次、未解决动作和受保护视觉批次留在原始上下文。完整目录仍保留授权前缀内的附件、Panel、OCR、测量、ChartFigure 与 ChartRender 六类资源；Prompt 目录可按软预算只列部分完整条目，服务端授权目录及类型化读取仍保持完整。Runtime 持有摘要检查点与压缩操作状态，`RunExecutionState` 不保存摘要或删减完整资源目录。
 
 Agent 每次组装三层或四层有序 SYSTEM 指令：稳定规则、当前工具目录、可选的来源关联摘要、最终的资源/执行状态索引。图片读取由 `RunExecutionImageReader` 统一执行：核对目标 Session 和资源引用，再由 Sources 解析授权附件、Panel 或已存 PNG；OCR/测量标注图由工具执行阶段保存，读取时不重绘，ChartFigure 本身要求显式调用渲染工具。当前 Run 最新已提交工具批次中的成功 `load_image` 原图、OCR/测量标注图和 `render_chart_figure` PNG，分别与其 JSON 结果及 hint 一起放入对应的 native TOOL 消息；历史图像也只有显式调用读取工具后，才会作为该读取调用的 TOOL 消息媒体返回。图片不通过普通 user 消息另行附加。Provider continuation 由请求边界按源响应重放，不属于 Memory 消息或 SYSTEM 正文。Agent 以流式 Provider 事件驱动同步 ReAct：普通回答文本增量作为临时 `assistant_delta` 发给 Gateway，推理和工具参数片段不公开；Provider 返回完整且通过校验的终止响应后才提交模型事实，压缩摘要的增量不发给网页。Web Gateway 通过有界 `RunDispatcher` 异步调用 `execute_slice(session_id, run_id)`，HTTP handler 不直接请求模型。Agent 没有独立的持久模型。
 
@@ -38,7 +38,7 @@ flowchart LR
 
 1. **取得所有权并读取动作**：每个 execute_slice 在一个外部动作结束并提交稳定 checkpoint 后释放 Runtime RunExecutionOwnership；每步重读 RunState.stop_request，接受停止后在步骤边界 interrupted，已开始动作仍提交真实结果；只按 checkpoint 的 `action_kind` 推进 model、provider_retry、provider_attempt、tool_execution、tool_attempt 或 final。终态 Run 原样返回；无法取得 Run 锁时读取当前状态。
 2. **读取规范历史**：到达 model action 后，Agent 经 RunCoordinator/Store 在一致快照中读取同 Session、较小 ordinal 的 RunState。Runtime 验证 ordinal 连续、先前 Run 已终结和历史完整性；合法异常尾部再由 Memory 转成有来源引用的 outcome。
-3. **投影、按需检索并组装请求**：Memory 从持久 Run 事实构建规范历史；每个普通请求先独立附上所有先前 Run 的完整用户输入、附件 ID 和 message source ref，不受摘要覆盖游标影响。当前 Run 输入继续作为原生用户消息。已有 Runtime 摘要检查点用摘要替代覆盖范围内的 Assistant/工具过程，并从精确覆盖游标之后保留原始交互。Provider 先准备完整请求并估算；仅当有效容量已配置且比例达到约 80% 时，Agent 按 `floor(C/10)` 计算 raw tail 与 rolling summary 两个独立过程目标，再在“先前合格历史 + 当前 Run 已提交完整交互”的单一时间序列中从新到旧保留原始后缀。原始历史过程前添加带 Run ID、序号和原始输入引用的定位消息；定位消息计入历史过程预算，不重复计算另行发送的完整输入正文。活动 Run 的当前输入始终原样保留，作为 native user message；只有早于保留后缀的已提交完整交互可进入摘要。压缩操作冻结目标 Run 的记录与工具序号，摘要恢复不得扩大该范围。助手工具调用批次和全部已提交结果不可拆分；最新交互即使超过预算也保持完整。未完成工具批次、未提交记录和未解决 Provider 动作不会被摘要覆盖。若 Run 在已有前缀摘要后失败或中断，已有检查点继续有效，后续请求显示 Runtime 当前终态并保留未覆盖过程。两个 10% 数值分别描述历史过程选择和摘要参考长度，不是整条请求的占用目标或硬上限；完整请求估算还包括历史输入、活动输入、指令、工具、资源和其他 Provider 内容。容量未知或估算不可用时不新触发摘要。摘要请求在 dispatch 前完成准备，并检查估算输入加最大 completion tokens 未超出该操作冻结的容量，否则不发摘要并回退。摘要 Markdown 每次写入冻结容量及 `floor(C/10)` 近似目标；目标是软性参考，不要求填满或截断有效 JSON。成功后重建并重新估算普通请求。摘要按 message/tool result 来源引用校验后由 Runtime 检查点保存。无可压缩交互时沿用旧 checkpoint（若无则使用完整历史）；摘要失败时当前请求走安全回退且不覆盖旧检查点。运行时资源目录仍由 `RunExecutionStateService` 完整重建，提示层仅投影相关引用和状态；需要旧消息、结果或图片时由模型显式调用只读工具，读取不会重跑旧操作。摘要、历史事实与资源元数据均作为不可信数据；continuation 只按源响应关联。
+3. **投影、按需检索并组装请求**：Memory 从持久 Run 事实构建规范历史；当前 Run 输入始终作为唯一完整原生 user message。先前 Run 输入以 `MessageSourceRef` 单独投影，只有 input-aware v3 检查点覆盖且 `source_refs` 含该输入的精确引用时才由摘要承接；未覆盖输入继续保留原文。旧 v1/v2 检查点首次需要省略旧输入时，先执行一次同覆盖游标的 reconciliation，成功前不省略任何旧输入。已有检查点替代覆盖范围内的 Assistant/工具过程，并从精确覆盖游标之后保留原始交互。Provider 先准备完整请求并估算；容量有效且完整请求达到约 80% 时，Agent 按 `P/G/A/R/U/S` 分配 raw-history、摘要和目录软目标，再在“先前合格历史 + 当前 Run 已提交完整交互”的单一时间序列中从新到旧保留原始后缀。定位消息、未覆盖输入和实际保留过程共同计入历史统计；定位消息不重复计算旧输入正文。活动 Run 的当前输入始终原样保留；只有早于保留后缀的已提交完整交互可进入摘要。压缩操作冻结目标 Run 的记录与工具序号，摘要恢复不得扩大该范围。助手工具调用批次和全部已提交结果不可拆分；最新交互即使超过预算也保持完整。未完成工具批次、未提交记录和未解决 Provider 动作不会被摘要覆盖。若 Run 在已有前缀摘要后失败或中断，已有检查点继续有效，后续请求显示 Runtime 当前终态并保留未覆盖过程。raw-history 和摘要的 `floor(C/10)` 是初始偏好值，不是整条请求占用目标或硬上限；完整请求估算还包括当前输入、指令、工具、资源和其他 Provider 内容。容量未知或估算不可用时不新触发摘要。摘要请求在 dispatch 前完成准备，并检查估算输入加最大 completion tokens 未超出该操作冻结的容量，否则不发摘要并回退。摘要 Markdown 写入冻结容量及软目标，不要求填满或截断有效 JSON。成功后重建并重新估算普通请求。摘要按 message/tool result 来源引用校验后由 Runtime 检查点保存。无可压缩交互时沿用旧 checkpoint（若无则使用完整历史）；摘要失败时当前请求走安全回退且不覆盖旧检查点。运行时资源目录仍由 `RunExecutionStateService` 完整重建，Prompt 目录按 mandatory/optional 分层和软预算投影；省略条目不影响完整目录检索、精确读取与媒体授权。摘要、历史事实与资源元数据均作为不可信数据；continuation 只按源响应关联。
 4. **模型动作**：组装请求后 Agent 创建 Provider client，调用 `prepare` 完成全量请求校验及 Provider 专属 payload 准备，成功后才在锁内复查 Run/checkpoint、由 Runtime claim attempt，再 `dispatch` 同一份 prepared payload。流事件更新 attempt 阶段和活动时间；普通文本增量只作临时 Gateway 事件，工具调用、推理和摘要增量不公开，也不作为执行事实。只有完整流通过终止事件与响应校验后，Runtime 才原子提交响应、续接、工具调用和下一 checkpoint。已知 prepare 失败由既有 `terminal_message` 保存白名单中文原因，terminal code 为 `execution_failed`，不创建 attempt、不发送网络请求；未识别异常使用通用失败文案。准备阶段的对象不持久化，client 最终关闭。流式失败由共享重试策略依据失败类别处理；未知结果不会重发同一 attempt，满足恢复条件时才可能创建新的替代 attempt。
 5. **工具动作**：模型提出的工具调用按原顺序交给 DurableToolExecutor；它通过 ToolRuntime 执行并向 Runtime 追加尝试和结果事实。`assemble_chart_figure` 接受完整 Figure 输入，委托 Charts 校验，再以新鲜同 Session RunExecutionState 核对所有测量引用；任一引用未知、失败、未提交或跨 Session 时整体失败。`render_chart_figure` 只接受已接受的同 Session Figure 引用，通过 Charts 生成 PNG 并委托 Sources 按本次 Run/call 身份保存；通用 ToolResultFact 仅保存摘要。完整批次成功提交后，Agent 可在紧接的 Provider 请求中附加 PNG 图像；既有运行事实以外不再建独立 Figure 或渲染表。未知工具在 owner 释放后依据分类逐调用恢复；安全读/本地幂等写最多两次自动 replay，无可信核对 adapter 时安全失败。恢复一步后回到统一循环检查停止，不直接跑完整批次。
 6. **终结**：只有非空文本的 `stop` 响应成为最终答案；无效响应或确定性失败进入失败终态。正常 Run 不设累计 Provider、工具、token 或时间配额；每个网络操作最多 4 attempts，未知工具每逻辑调用最多 3 attempts。
@@ -49,11 +49,41 @@ flowchart LR
 
 ### 上下文压缩与请求投影
 
-上下文估算只用于决定是否生成摘要，不是 Run 预算或请求硬上限。Provider 按实际准备请求估算输入；只有选中 Provider/model 配置了有效 `context_window_tokens`、估算可用且占比达到约 80% 时，Agent 才考虑额外摘要调用。容量为 `C` 时，历史 raw tail 与 rolling summary 目标分别为 `floor(C/10)`；例如 200,000 容量得到 20,000 与 20,000。raw tail 只计 Assistant/工具过程及每个 Run 的输入定位消息，不重复计算另行发送的历史输入正文；历史输入区会完整携带每个先前 Run 的原文与附件 ID。摘要 Markdown 指令每次带入冻结容量及摘要目标，目标表示完整摘要 JSON 的近似长度，是软提示，不是输出 token cap。两个数值仅描述历史选择和摘要长度参考，不宣称完整请求（含 instructions、tools、历史输入、当前 Run 输入、图像和资源）只占 20%。容量未知或估算不可用时不新触发压缩；已有有效 checkpoint 仍可用于后续请求。当前阈值与配置字段由[Provider](provider.md#本地上下文估算)定义。
+上下文统计只用于解释请求占用和选择压缩，不是 Run 预算或普通请求硬上限。阈值只看 Provider `prepare` 对实际输入的完整估算 `full_input_tokens`：容量有效且 `full_input_tokens / C >= 0.8` 时才尝试压缩；`history_input_tokens` 单独说明历史在完整请求中的估算，不替代阈值分母。容量未知或完整估算不可用时不新触发压缩。`ContextEstimate` 的三字段持久格式不变，分项仅在当前请求准备期间计算。
+
+容量为 `C` 时，先取完整请求软目标 `P=floor(0.8*C)` 和历史 raw/summary 的初始目标 `G=floor(C/10)`。再计算 `A=max(0, P-estimate(B+M))`：`B` 包含稳定规则、当前输入、native tools/schema、异常状态、受保护完整交互及其必要图片；`M` 是必须列出的资源条目。若 `R` 是已受保护的 raw 历史，则可选 raw 目标 `U=min(max(0,G-R),floor(A/2))`，有效 raw 目标为 `R+U`；摘要目标 `S=min(G,floor(A/2))`，剩余空间用于可选资源目录。保护交互仅扣一次；各分项分别估算可能有少量重复，不能把它们相加当成 Provider 的完整估算。目标都是软值，mandatory 条目或单个完整交互可使请求超出目标。
+
+流程是先收缩可选资源目录，仍达到阈值且有新增覆盖时至多生成一次摘要，再做最终目录投影和完整请求重估。没有历史可覆盖、摘要目标为零、估算缺失或 mandatory 内容过大时，不截断原文、图片、工具批次或 opaque ref，也不循环生成无进展摘要。目录按 mandatory、近期 optional、可检索 discoverable 三层选择；条目只整条放入或省略。Prompt 明确提醒未列出不代表资源不存在，历史搜索、精确读取和媒体授权仍使用完整目录。具体阈值与 tokenizer 字段由[Provider](provider.md#本地上下文估算)定义。
+
+目录 mandatory 集合由当前输入附件、最新待回看的完整视觉批次、未压缩工具调用中明确声明的类型化参数及资源直接 provenance 构成，只扩展一层确定关系。摘要 `source_refs` 是原始消息/工具结果定位，不自动把关联的旧附件、Panel 或工具资源提升为 mandatory；这些旧资源可继续在完整授权目录中检索。其余条目按 Run ordinal、工具序号和类型引用稳定排序后作为 optional；同一 ref 只列一次。缺少容量或分项估算时沿用既有 checkpoint 引用筛选/完整目录行为，不按估计 top-k。图像和大工具结果不被目录筛选删除，省略条目仍可由完整授权目录中的 `search_history`、`read_history` 或媒体读取工具定位。
+
+#### 调用期统计模型（非持久化）
+
+`AgentRequestBuilder.build_with_projection` 同时返回实际 `ProviderRequest` 和当前请求的所有权投影。`RequestContextAccounting` 按此投影对实际 prepared estimate 作分项说明；分别序列化的分项有重叠，不要求求和等于完整估算。它不进入 SQLite、Provider request fingerprint、Gateway 或 UI；内部诊断只记录计数、版本和安全原因码。
+
+| 完整字段路径 | 类型 | 默认 | 含义与约束 | 写入 → 读取/持久化 |
+|---|---|---|---|---|
+| `RequestContextProjection.history_message_indices` | `tuple[int, ...]` | 必传 | 实际 Provider `messages` 中归属历史的序号，包括已保留过程和未覆盖旧输入 | AgentRequestBuilder → 调用期 accounting；不持久化 |
+| `RequestContextProjection.current_input_message_index` | `int` | 必传 | 唯一当前 Run 原生用户输入的消息序号 | AgentRequestBuilder → 调用期 accounting；不持久化 |
+| `RequestContextProjection.summary_instruction_index` | `int \| None` | 必传 | 当前摘要指令序号；无 checkpoint 时为 `None` | AgentRequestBuilder → 调用期 accounting；不持久化 |
+| `RequestContextProjection.execution_instruction_index` | `int` | 必传 | 含运行状态与资源目录的动态指令序号 | AgentRequestBuilder → 调用期 accounting；不持久化 |
+| `RequestContextProjection.resource_entries` | `tuple[Mapping[str, object], ...]` | 必传 | 当前 Prompt 实际采用的资源目录条目，用于目录占用归属；不含图片字节，不写诊断正文或日志 | AgentRequestBuilder → 调用期 accounting；不持久化 |
+| `RequestContextAccounting.full_input_tokens` | `int \| None` | 必传 | Provider prepared payload 的完整输入估算；唯一 80% 触发分子 | Provider `ContextEstimate` → Agent；计数级 debug 诊断 |
+| `RequestContextAccounting.history_input_tokens` | `int \| None` | 必传 | 历史摘要、未覆盖旧输入、保留过程/定位与历史图像的独立估算 | Agent 投影 → 调用期；不持久化 |
+| `RequestContextAccounting.current_input_tokens` | `int \| None` | 必传 | 当前 Run 原生用户输入及其附件身份/图像估算 | Agent 投影 → 调用期预算；不持久化 |
+| `RequestContextAccounting.summary_tokens` | `int \| None` | 必传 | 当前摘要指令的独立估算，属于 history 子项 | Agent 投影 → 调用期预算；不持久化 |
+| `RequestContextAccounting.raw_history_tokens` | `int \| None` | 必传 | 当前未压缩历史消息的独立估算，含实际在历史消息中的图片；不是额外总量 | Agent 投影 → 调用期预算；不持久化 |
+| `RequestContextAccounting.resource_directory_tokens` | `int \| None` | 必传 | 当前 Prompt 实际目录条目的估算 | Agent 投影 → 调用期目录预算；不持久化 |
+| `RequestContextAccounting.policy_tools_state_tokens` | `int \| None` | 必传 | 稳定/工具规则、native tool schema、动态非目录状态和协议结构开销估算 | Provider request 投影 → 调用期预算；不持久化 |
+| `RequestContextAccounting.selected_image_count` | `int` | 必传 | 实际请求中的图片数，是 full/history 的解释项 | Provider request → 调用期统计；不持久化 |
+| `RequestContextAccounting.image_tokens` | `int` | 必传 | 每张图片按 1,024 tokens 估算，是 full/history 的解释项，不重复求和 | Provider tokenizer 规则 → 调用期统计；不持久化 |
+| `RequestContextAccounting.context_capacity_tokens` | `int \| None` | 必传 | 本次选定 Provider/model 的容量；非正或缺失时不可触发新压缩 | Provider profile → 调用期统计；持久估算快照仍由 `ContextEstimate` 拥有 |
+| `RequestContextAccounting.estimator_version` | `str \| None` | 必传 | 本次完整估算的规则版本；分项编码不可用时保持未知 | Provider estimator → 调用期统计；持久版本仍由 `ContextEstimate` 拥有 |
+| `RequestContextAccounting.pressure_reason` | `str` | 必传 | 安全原因码：`below_trigger`、`history_reducible`、`directory_reducible`、`protected_content`、`no_new_coverage` 或 `estimate_unavailable` | Agent → 内部诊断；不含用户正文 |
 
 摘要请求仍走同一 Provider streaming、attempt 与重试协调流程，但不向 Gateway 发布文本增量。DeepSeek 摘要调用固定使用 `thinking_mode=true`、`reasoning_effort="medium"`；其他 Provider 使用其默认请求选项。解析后的 options 与请求描述一起冻结在 `ProviderRequestRecord` 中，恢复时复用原绑定，不重新读取可能变化的 Provider 配置。摘要结果只在完整响应通过 JSON、字段和来源引用校验后更新 Runtime 检查点。
 
-`select_compaction_coverage` 从连续的 completed 历史 Run 与当前 Run 的已提交完整交互生成单一时间序列，按 token 估算保留近期原始后缀；因此可以将最近已完成 Run 或活动 Run 的较早交互纳入摘要。活动 Run 只在 `checkpoint.next_action` 为 `MODEL` 或 `PROVIDER_RETRY` 且不存在已启动 Provider attempt 时参与选择；覆盖止于压缩操作冻结的已提交序号，同一 Run 的后续请求继续应用现有检查点，当前输入独立保留。工具调用批次及全部已提交结果作为整体处理；最新单个交互即使超过 raw tail 目标也不拆分。无法跨过的异常 Run 尾部始终保留在 raw projection。摘要请求使用当前选定 Provider/model，禁止工具调用，只接受符合 v2 JSON 合同且每条非空摘要都引用授权 `MessageSourceRef` 或 `ToolResultSourceRef` 的文本结果。活动来源 Run 以 `running` 状态传给摘要模型，不能因覆盖了早期过程而误标整个 Run 已完成；终态变化则从 Runtime 当前事实更新请求投影。v2 将当前目标、约束、决定、事实、完成／进行中／待办／阻塞、未决问题、资源和未接受提议放进独立字段；待办只记录用户明确要求或接受的未完成工作。提示词写入本次冻结容量及其 10% 近似长度目标，作为软参考指导组织摘要；可以偏离目标，不要求填满，也不截断有效 JSON。每次 dispatch 前，Agent 以已准备摘要请求的输入估算加最大 completion tokens 对照操作冻结容量；不满足时不发送摘要请求，保留旧 checkpoint 并走安全回退。Run outcomes 与来源引用一并写入 Runtime 的 [`SessionContextCheckpoint`](runtime.md#sessioncontextcheckpoint)；压缩操作冻结容量、两项预算、精确覆盖坐标与请求 descriptor，由 [`ContextCompactionOperation`](runtime.md#contextcompactionoperation) 恢复。普通请求在压缩后仍会重新准备和估算，不迭代删减或强制达到某一整体占用比例。
+`select_compaction_coverage` 从连续的 completed 历史 Run 与当前 Run 的已提交完整交互生成单一时间序列，按冻结 raw 软目标保留近期原始后缀；已覆盖旧输入可单独形成 input-only reconciliation 单元。活动 Run 只在 `checkpoint.next_action` 为 `MODEL` 或 `PROVIDER_RETRY` 且不存在已启动 Provider attempt 时参与选择；覆盖止于压缩操作冻结的已提交序号，同一 Run 的后续请求继续应用现有检查点，当前输入独立保留。工具调用批次及全部已提交结果作为整体处理；最新单个交互即使超过 raw 目标也不拆分。无法跨过的异常 Run 尾部始终保留在 raw projection。新摘要请求禁止工具调用，只接受 input-aware v3 合同；字段形状沿用当前目标、约束、决定、事实、完成／进行中／待办／阻塞、未决问题、资源和未接受提议，并要求非空项引用授权 `MessageSourceRef` 或 `ToolResultSourceRef`。模型不需要知道内部摘要版本。活动来源 Run 以 `running` 状态传给摘要模型，不能因覆盖了早期过程而误标整个 Run 已完成；终态变化则从 Runtime 当前事实更新请求投影。待办只记录用户明确要求或接受的未完成工作。摘要指令写入本次冻结容量及不超过 `floor(C/10)` 的近似长度目标；这是软参考，不截断有效 JSON。每次 dispatch 前，Agent 以已准备摘要请求的输入估算加最大 completion tokens 对照操作冻结容量；不满足时不发送摘要请求，保留旧 checkpoint 并走安全回退。Run outcomes 与来源引用一并写入 Runtime 的 [`SessionContextCheckpoint`](runtime.md#sessioncontextcheckpoint)；新 selection plan v2 冻结容量、raw/summary/directory 软目标、保护/mandatory 计数和精确覆盖坐标以供恢复。旧 plan v1 继续按原预算和 Prompt 重建。普通请求在收缩目录或压缩后仍会重新准备和估算，不迭代删减或强制达到某一整体占用比例。
 
 #### 压缩选择值（调用期）
 
@@ -62,17 +92,21 @@ flowchart LR
 | 完整字段路径 | 类型 | 默认 | 含义与约束 | 写入 → 读取/持久化 |
 |---|---|---|---|---|
 | `ContextHistoryBudgets.context_capacity_tokens` | `int` | 必传 | 当前选中 Provider 的有效正整数容量 `C` | Provider profile → Agent 计算；不持久化 |
-| `ContextHistoryBudgets.raw_history_tokens` | `int` | 必传 | `floor(C / 10)`；选择近期原始历史交互后缀 | Agent 计算 → coverage selector；冻结副本写入 Runtime operation |
-| `ContextHistoryBudgets.summary_tokens` | `int` | 必传 | `floor(C / 10)`；作为摘要完整 JSON 的近似长度参考，渲染进压缩 Markdown；软目标，不是最大长度 | Agent 计算 → Runtime operation plan 与摘要请求指令 |
+| `ContextHistoryBudgets.raw_history_tokens` | `int` | 必传 | 保护 raw 后的有效原始历史目标 `R+U`；v2 可低于、等于或高于旧固定分配，完整交互仍受保护 | Agent 计算 → coverage selector；冻结副本写入 Runtime operation |
+| `ContextHistoryBudgets.summary_tokens` | `int` | 必传 | `S=min(G,floor(A/2))`；作为摘要完整 JSON 的近似长度参考，渲染进压缩 Markdown；软目标，不是最大长度 | Agent 计算 → Runtime operation plan 与摘要请求指令 |
+| `ContextHistoryBudgets.protected_raw_tokens` | `int` | `0` | 预算中已预留的异常/视觉等完整 raw 历史 `R`，不会再次扣减 | Agent 统计 → Runtime plan；不持久化到 ContextEstimate |
+| `ContextHistoryBudgets.mandatory_directory_tokens` | `int` | `0` | 当前输入、摘要引用和必要资源关系要求保留的完整目录条目 `M` | Agent 资源选择器 → Runtime plan；仅冻结计数 |
+| `ContextHistoryBudgets.directory_tokens` | `int \| None` | `None` | mandatory 与可选剩余空间之和；无可信分项统计时为未知 | Agent 预算 → request builder；新 plan 冻结 |
+| `ContextHistoryBudgets.accounting_version` | `int` | `1` | `1` 为旧固定目标，`2` 为基于 full/history 分项的动态软预算 | Agent → selection plan；恢复时校验 |
 | `CompactionSelection.selected_run_states` | `tuple[RunState, ...]` | 必传 | 按序包含本次新增摘要覆盖到的历史 Run；末尾可为活动 Run，且只读取冻结已提交前缀内的完整交互 | Agent selector → summary request builder；不持久化 |
 | `CompactionSelection.covered_run_id` | `str` | 必传 | 本次覆盖截止 Run 的 opaque ID | Agent selector → ContextCompactionOperation；Runtime 持久化 |
 | `CompactionSelection.covered_run_ordinal` | `int` | 必传 | 截止 Run 在 Session 内的顺序 | Agent selector → ContextCompactionOperation；Runtime 持久化 |
 | `CompactionSelection.covered_record_sequence` | `int` | 必传 | 截止 Run 中最后一条被覆盖的记录序号，必须位于完整交互边界 | Agent selector → ContextCompactionOperation；Runtime 校验并持久化 |
 | `CompactionSelection.covered_tool_sequence` | `int` | 必传 | 截止边界之前已覆盖的最后一个工具事实序号，不可截断工具批次 | Agent selector → ContextCompactionOperation；Runtime 校验并持久化 |
 
-既有 checkpoint 保持原 JSON 和来源引用，可继续进入普通请求；不会在读取时做强制迁移。下一次压缩请求只把旧摘要内容、来源引用和新增历史提供给模型，不暴露内部存储版本；模型按来源把仍有效内容整理为完整 v2 结构，随后写入版本 2 checkpoint。摘要操作的请求绑定也使用 v2 身份；数据库表不变。格式和引用校验不能证明摘要语义正确，关键事实仍可通过来源引用和历史工具读取原文核对。
+既有 checkpoint 保持原 JSON 和来源引用，不在读取时强制迁移。旧 v1/v2 checkpoint 不授权省略任何旧用户输入；首次应用新策略时，Agent 以新的 reconciliation operation 把该 checkpoint 覆盖范围内的原始输入和来源交给 v3 摘要模型，覆盖游标保持不变。成功后，只有 v3 `source_refs` 明确含有输入引用的旧输入才可省略；摘要准备失败、输出无效或来源校验失败时保留旧 checkpoint 和所有原文。新摘要在 Runtime 写入版本 3 checkpoint，Prompt 不暴露存储版本。摘要请求 fingerprint 冻结其实际来源和内容；legacy checkpoint 无 compaction operation ID 时以完整 auxiliary request 身份绑定。数据库表不变。格式和引用校验不能证明摘要语义正确，关键事实仍可通过来源引用和历史工具读取原文核对。
 
-摘要成功后，请求投影只移除覆盖游标之前、已由摘要表示的交互；若覆盖截止点位于某 Run 中间，同一 Run 截止点之后的交互仍作为原文保留，再接续更新的历史与当前 Run。摘要失败、输出无效、引用未授权或四次物理 attempt 耗尽时，当前请求按完整规范历史重建；已有 checkpoint 不被覆盖。Provider retry 会复用绑定中的 `full`、`checkpoint` 或 `fallback` 投影及对应 checkpoint revision，不在重试中另做决定。`RunExecutionState` 始终包含完整授权资源目录，它不是压缩存储；prompt 的资源索引只列出近期、摘要引用或当前上下文相关的定位信息。摘要本身及工具取回的历史内容均是不可信数据。
+摘要成功后，请求投影移除覆盖游标前已被摘要表示的过程，以及由 v3 摘要来源覆盖的旧用户输入；当前 Run 输入仍原样保留。若覆盖截止点位于某 Run 中间，同一 Run 截止点之后的过程仍作为原文保留。摘要失败、输出无效、引用未授权或四次物理 attempt 耗尽时，当前请求保留所有未被有效 v3 覆盖的旧输入与规范过程；已有 checkpoint 不被覆盖。冻结普通请求的 Provider retry 重用原 manifest 中的策略版本、目录预算、排序及 fingerprint；旧请求继续走旧 manifest 的重建规则。`RunExecutionState` 始终包含完整授权资源目录，它不是压缩存储；Prompt 的 mandatory/optional 目录投影不改变完整查找和读取授权。摘要本身及工具取回的历史内容均是不可信数据。
 
 历史按需读取由[Session Memory](memory.md#搜索读取与历史图像边界)定义来源引用、授权前缀和检索边界，由[Tools](tools.md#9-session-历史读取工具)定义模型可调用的参数与结果。模型可先用 `search_history` 获取短摘录和引用，再用 `read_history` 读取原始消息、工具结果或资源元数据；`read_resource_image` 将获准图片附在该次读取调用对应的 native TOOL 消息中。图片读取不会因摘要/资源索引出现就自动发生。
 
@@ -108,11 +142,38 @@ Prompt 资源目录是从完整 `RunExecutionState.resources` 派生的请求期
 
 四份基础规则分别由 `agent.md` 管目标与职责，`evidence.md` 管来源、候选观察、缺失值和坐标，`workflow.md` 管按需读取、完整新 Figure 与结束路径，`response.md` 管实际交付及完成阶段；`image_feedback.md` 集中定义原图、OCR 标注图、测量标注图和生成图的观察规则与邻近 Cue。工具的详细字段解释留在原生参数 Schema，SYSTEM 工具目录只列名称与说明。描述性新标题/轴名可依数据拟定，不得伪称原图标签或补造单位。
 
-摘要请求仅加载独立的 [`compaction.md`](../../src/figura/agent/prompting/assets/compaction.md)，带一个来源 JSON 文本消息，无工具、无图像；普通请求不加载其 JSON-only 输出规则。资产加载失败在摘要准备边界映射为既有 `invalid_summary_input` fallback，不 dispatch 空指令请求，也不覆盖旧检查点。摘要响应被拒绝时，Runtime 以不含正文的校验类别写入 `failure_code`，涵盖响应合同、JSON、字段/条目形状及来源引用校验。摘要实际指令和 `context-compaction-v2` registry identity 参与 `prompt_digest`；摘要 request binding 记录合同版本 2。资产或合同身份变化后，已绑定请求仍进行严格核验，不匹配则 `summary_binding_mismatch` 回退。
+摘要请求仅加载对应版本的独立资产：legacy selection plan v1 使用原 `compaction.md` / v2 合同以保持冻结请求字节；新 input-aware v3 使用 `compaction-v3.md` / `context-compaction-v3` 身份，带一个来源 JSON 文本消息，无工具、无图像。普通请求不加载摘要的 JSON-only 输出规则。资产加载失败在摘要准备边界映射为既有 `invalid_summary_input` fallback，不 dispatch 空指令请求，也不覆盖旧检查点。摘要响应被拒绝时，Runtime 以不含正文的校验类别写入 `failure_code`，涵盖响应合同、JSON、字段/条目形状及来源引用校验。摘要实际指令参与 `prompt_digest`；operation plan 冻结合同版本。资产或合同身份变化后，已绑定请求仍严格核验，不匹配则 `summary_binding_mismatch` 回退。
+
+#### 当前 Run 的重复观察提醒
+
+该能力是 Agent 的调用期投影，不扩展 Runtime 持久模型。`AgentRequestBuilder` 从当前 Run 已提交事实调用 `project_repeated_observations`，并把结果传给普通请求的动态运行状态 SYSTEM 层；上下文压缩请求使用独立指令，不附加提醒。
+
+匹配只使用当前 Run 中成功且已提交的 `extract_text`、`measure_chart` 逻辑调用。动作键要求工具名、Registry 版本和完整规范化参数相同；对象键顺序及 JSON 空白不影响比较，数组顺序和值都参与，不推断几何等价或近似匹配，也不合并不同来源 ID。结果按完整结构化 JSON 比较，包含状态、可用性、空结果、警告、置信度、覆盖、证据和校准字段；执行 envelope 与独立附件身份不参与比较。失败、未解决调用、其他工具、其他 Run 不计入，同一逻辑调用的恢复 attempt 也不额外计数。
+
+每个动作只投影与其最新成功观察相同的结果组。该组至少有两次调用时，生成一个提醒，包含匹配次数及最近两个结果引用；中间可有其他动作，最新观察改变时不会沿用旧组提醒。提醒按组内最新结果序号确定顺序。它从当前 Run 的已提交事实重建，不依赖摘要覆盖或保留的原始消息尾部；摘要请求不加入提醒，Provider 传输重试仍使用已绑定的原请求。
+
+`RepeatedObservationNotice` 是模块内的冻结调用期模型。`repeated_observations` 以按最新结果序号排序的 JSON 数组序列化，每个元素恰有 `tool_name`、`matching_call_count` 和 `recent_result_refs`；`latest_result_sequence` 只用于确定性排序，不发送给模型，也不持久化。下表列出内部模型的完整字段。
+
+| 完整字段路径 | 类型 | 构造默认 | 含义、约束与流转 |
+|---|---|---|---|
+| `RepeatedObservationNotice.tool_name` | `str` | 必传 | 仅为 `extract_text` 或 `measure_chart`；由匹配调用的 `ToolCallFact.tool_name` 派生，权威事实由 [Runtime](runtime.md#4-完整模型字段) 持有；序列化到普通请求运行状态 JSON。 |
+| `RepeatedObservationNotice.matching_call_count` | `int` | 必传，且至少为 2 | 同一动作键和最新观察结果组内成功逻辑调用的总数；由当前 Run 已提交工具事实重算，不将同一调用的多个恢复 attempt 重复计数；仅作为提醒元数据发送。 |
+| `RepeatedObservationNotice.recent_result_refs` | `tuple[ToolResultSourceRef, ToolResultSourceRef]` | 必传，长度恰为 2 | 组内最近两个匹配结果的引用，按工具调用序号排列；只定位来源，不复制结果内容。引用字段由 [Memory](memory.md#historysourceref) 定义；序列化后随普通请求发送，引用指向的结果仍是不可信来源数据。 |
+| `RepeatedObservationNotice.latest_result_sequence` | `int` | 必传 | 组内最新匹配调用的工具序号，仅用于多个提醒的稳定排序；不进入 `to_prompt_value`，不持久化，不对 Provider 暴露。 |
+
+提醒只表达“相同动作曾得到相同结构化观察”，不证明观察正确、任务完成或后续调用没有价值。它不会修改工具结果、追加用户消息、缓存或拦截工具调用，也不建立新预算。模型仍负责决定是否改变范围或方法、继续检查，或带限制交付。主规格：[Agent ReAct](../../openspec/figura/openspec/specs/agent-react-execution/spec.md)。归档变更：[add-repeated-observation-guidance](../../openspec/figura/openspec/changes/archive/2026-11-05-add-repeated-observation-guidance/specs/agent-react-execution/spec.md)。实现：[repeated_observations.py](../../src/figura/agent/repeated_observations.py)、[request.py](../../src/figura/agent/request.py)、[prompting/execution.py](../../src/figura/agent/prompting/execution.py)。
+
+#### 周期性任务回看提醒
+
+普通模型请求在当前 Run 已提交的 `MODEL_RESPONSE` 数量达到 20 的正整数倍时，在既有动态运行状态 SYSTEM 信息中加入 `task_reflection`。投影仅包含 `completed_rounds` 与 `interval_rounds`（固定为 20）；一个已提交模型响应只计一轮，即使响应包含多个工具调用。未提交响应、工具执行、Provider attempt/重试、上下文压缩请求及其他 Run 的响应均不计入。计数从当前 Run 事实按需重算，不增加持久计数器或 Run 总预算。
+
+该提醒通过已有普通请求组装与请求身份校验流转；它不是额外的模型请求。上下文压缩继续使用独立指令，不包含 `task_reflection`；重启后根据 Run 事实重新投影，而 Provider 对已绑定请求的传输重试沿用原请求。提示词要求模型回看原始需求、证据、未满足项、近期进展和下一步的预期价值，然后自行决定继续、纠正或在说明限制的情况下交付。提醒不强制结束、不判定正确或完成，也不要求另写核查报告。
+
+本能力及其未同步的规格增量见活动 change [add-periodic-task-reflection-guidance](../../openspec/figura/openspec/changes/add-periodic-task-reflection-guidance/proposal.md)；实现见 [task_reflection.py](../../src/figura/agent/task_reflection.py)、[request.py](../../src/figura/agent/request.py)、[prompting/execution.py](../../src/figura/agent/prompting/execution.py) 与 [workflow.md](../../src/figura/agent/prompting/assets/workflow.md)。
 
 ### 图像回传观察引导
 
-当前工作树新增 [image_feedback.md](../../src/figura/agent/prompting/assets/image_feedback.md)，其中 Common/Rules 加入第一 SYSTEM 层；Cue 只在图片旁生成，模板参与既有 prompt_digest。原有四份规则相对顺序保持不变，摘要请求只加载 compaction.md。资产使用固定的 Common、Original、OCR、Measurement、Rendered 章节，后四类各包含非空 Rules/Cue；缺失、重复或空章节抛出 PromptAssetError。
+当前工作树新增 [image_feedback.md](../../src/figura/agent/prompting/assets/image_feedback.md)，其中 Common/Rules 加入第一 SYSTEM 层；Cue 只在图片旁生成，模板参与既有 prompt_digest。原有四份规则相对顺序保持不变，摘要请求按冻结版本加载 `compaction.md` 或 `compaction-v3.md`。资产使用固定的 Common、Original、OCR、Measurement、Rendered 章节，后四类各包含非空 Rules/Cue；缺失、重复或空章节抛出 PromptAssetError。
 
 完整工具批次提交后，图像通过原有授权和结果一致性校验，再在每个实际 ImageBlock 前加入一个 TextBlock：JSON 身份数据及一至两句系统观察提醒。提醒是调用期投影，不写入 Run facts，不产生检查状态或额外 Provider 请求。没有实际图片的 JSON 工具结果不产生局部提醒。
 
@@ -145,7 +206,7 @@ Prompt 资源目录是从完整 `RunExecutionState.resources` 派生的请求期
 | [request.py](../../src/figura/agent/request.py) | 协调 Memory、Runtime checkpoint、完整资源目录、Registry、提示层、观察图像与源响应续接，组装 ProviderRequest |
 | [executor.py](../../src/figura/agent/executor.py) | 估算阈值判断、摘要请求与检查点复用；管理 prepare → checkpoint 复查 → attempt claim → dispatch/commit |
 | [context_compaction.py](../../src/figura/agent/context_compaction.py) | 选择可压缩 Run 并验证摘要 JSON 与来源引用 |
-| [prompting/loader.py](../../src/figura/agent/prompting/loader.py) 与 [assets](../../src/figura/agent/prompting/assets/) | 按固定顺序载入四份基础中文规则与 `image_feedback.md` 图像观察政策；摘要请求独立载入 `compaction.md`。固定章节或资产缺失、重复、不可读或为空时抛出 `PromptAssetError` |
+| [prompting/loader.py](../../src/figura/agent/prompting/loader.py) 与 [assets](../../src/figura/agent/prompting/assets/) | 按固定顺序载入四份基础中文规则与 `image_feedback.md` 图像观察政策；摘要请求按冻结摘要版本独立载入 `compaction.md` 或 `compaction-v3.md`。固定章节或资产缺失、重复、不可读或为空时抛出 `PromptAssetError` |
 | [prompting/tools.py](../../src/figura/agent/prompting/tools.py) | 从当前 ToolRegistry 生成工具名称/描述目录 |
 | [prompting/execution.py](../../src/figura/agent/prompting/execution.py) | 生成可选摘要指令与请求相关的资源/异常状态 JSON 索引 |
 | [prompting/observations.py](../../src/figura/agent/prompting/observations.py) | 选择当前 Run 上一完整工具批次的图像观察并构造 Provider 消息 |

@@ -579,14 +579,20 @@ def test_historical_image_rejects_non_image_refs_before_handler(reference):
     assert calls == []
 
 
-def test_complete_v7_figure_remains_readable_and_projectable_with_v8_registry(tmp_path):
+def test_compacted_long_session_can_search_and_modify_omitted_figure(tmp_path):
     import json
     from figura.tools.implementations.assemble_chart_figure import assemble_chart_figure_definition
     from tests.test_figura_prompting import _figure
 
     store, coordinator, history, image_reader, execution = _app(tmp_path)
     session = coordinator.create_session()
-    source = _create_run(coordinator, session.session_id, "figure-source", "制作完整图")
+    attachments = make_attachment_service(store)
+    source = _create_run(
+        coordinator,
+        session.session_id,
+        "figure-source",
+        "初始约定金额单位为元，先绘制销售图。",
+    )
     figure = _figure().to_dict()
     definition = assemble_chart_figure_definition(execution.for_run)
     old_registry = ToolRegistry("figura-web-v7", (definition,))
@@ -596,7 +602,82 @@ def test_complete_v7_figure_remains_readable_and_projectable_with_v8_registry(tm
     ), registry_version=old_registry.version)
     make_durable_tool_executor(store, old_registry).execute_pending(session.session_id, source.run_id)
     completed = _complete_text(coordinator, session.session_id, source.run_id)
-    target = _create_run(coordinator, session.session_id, "figure-target", "修改历史图")
+    correction_text = "后续更正：金额单位为万元，D004-074 销售额改为 417.3。"
+    correction = _create_run(
+        coordinator, session.session_id, "figure-correction", correction_text
+    )
+    _complete_text(coordinator, session.session_id, correction.run_id)
+    image = attachments.upload(session.session_id, "sales.png", _image_bytes())
+    target = _create_run(
+        coordinator,
+        session.session_id,
+        "figure-target",
+        "按照更正后的单位复核图表，并修订历史 Figure。",
+        (image.attachment_id,),
+    )
+
+    from figura.tools.implementations.measure_chart import MEASURE_CHART_PARAMETERS_SCHEMA
+    from figura.tools.measurements.contracts import MEASUREMENT_RESULT_SCHEMA
+    from tests.figura_fixtures import measurement_result
+
+    def measure(_context, arguments):
+        return ToolOutput(measurement_result(
+            arguments["chart_type"],
+            source_kind=arguments["source_kind"],
+            source_id=arguments["source_id"],
+        ))
+
+    measure_definition = ToolDefinition(
+        name="measure_chart",
+        description="Record a scoped chart observation.",
+        parameters_schema=MEASURE_CHART_PARAMETERS_SCHEMA,
+        result_schema=MEASUREMENT_RESULT_SCHEMA,
+        replay_effect=ReplayEffect.REPLAY_SAFE,
+        handler=measure,
+    )
+    registry = ToolRegistry("figura-web-v9", (definition, measure_definition))
+    for index, chart_type in enumerate(("bar", "line"), start=1):
+        call = ProviderToolCall(
+            f"measurement-call-{index}",
+            "measure_chart",
+            json.dumps({
+                "source_kind": "attachment",
+                "source_id": image.attachment_id,
+                "chart_type": chart_type,
+            }),
+        )
+        _commit_response(
+            coordinator,
+            session.session_id,
+            target.run_id,
+            ProviderResponse(
+                ProviderId.QWEN,
+                MODEL_IDS[ProviderId.QWEN],
+                f"进行第 {index} 次测量。",
+                (call,),
+                FinishReason.TOOL_CALLS,
+            ),
+            registry_version=registry.version,
+        )
+        make_durable_tool_executor(store, registry).execute_pending(
+            session.session_id, target.run_id
+        )
+    from figura.runtime.models import ToolFactKind
+    from figura.runtime.records import ToolResultFact
+
+    target_state = coordinator.read_run_state(session.session_id, target.run_id)
+    prior_states = coordinator.read_prior_run_states(session.session_id, target.run_id)
+    full_catalog = execution.build(target_state, prior_states)
+    measurement_results = [
+        fact.payload for fact in target_state.tool_facts
+        if fact.fact_kind is ToolFactKind.TOOL_RESULT
+        and isinstance(fact.payload, ToolResultFact)
+        and fact.payload.tool_name == "measure_chart"
+    ]
+    assert len(measurement_results) == 2, measurement_results
+    assert any(resource.ref.kind == "measurement" for resource in full_catalog.resources), (
+        [resource.ref for resource in full_catalog.resources], measurement_results
+    )
     ref = {"kind": "chart_figure", "run_id": source.run_id, "call_id": "figure-call"}
     full = history.read(session.session_id, target.run_id, ref)
     assert full["content"]["figure"] == figure
@@ -617,13 +698,137 @@ def test_complete_v7_figure_remains_readable_and_projectable_with_v8_registry(tm
     raw = history.read(session.session_id, target.run_id, tool_ref)
     assert raw["status"] == "committed"
     assert history.read(session.session_id, target.run_id, tool_ref, selector={"field_path": "/result"})["content"] == raw["content"]["result"]
-    target_state = coordinator.read_run_state(session.session_id, target.run_id)
     request = AgentRequestBuilder(execution, image_reader).build(
-        target_state, ToolRegistry("figura-web-v9", (definition,)),
+        target_state, registry,
         coordinator.read_prior_run_states(session.session_id, target.run_id),
     )
     assert any(message.tool_call_id == "figure-call" for message in request.messages)
     assert store.read_run_state(session.session_id, source.run_id) == completed
+
+    # Once the Figure's source Run is covered, the soft prompt directory may
+    # omit it. Search and exact reads must still resolve against the complete
+    # server-side catalogue, so the Agent can reuse it for a later revision.
+    from figura.shared.source_refs import MessageSourceRef
+
+    source_state = coordinator.read_run_state(session.session_id, source.run_id)
+    checkpoint = SessionContextCheckpoint(
+        session_id=session.session_id,
+        revision=1,
+        covered_run_id=source.run_id,
+        covered_run_ordinal=source.ordinal,
+        covered_record_sequence=source_state.checkpoint.last_committed_record_sequence,
+        covered_tool_sequence=source_state.checkpoint.last_committed_tool_sequence,
+        summary_contract_version=3,
+        summary={"items": [], "run_outcomes": []},
+        source_refs=(MessageSourceRef(source.run_id, source.input_record_id),),
+    )
+    metric_builder = AgentRequestBuilder(execution, image_reader)
+    compact_request, compact_projection = metric_builder.build_with_projection(
+        target_state,
+        registry,
+        coordinator.read_prior_run_states(session.session_id, target.run_id),
+        context_checkpoint=checkpoint,
+        directory_budget_tokens=0,
+    )
+    compact_text = json.dumps(
+        [message.content for message in compact_request.messages], ensure_ascii=False
+    )
+    assert correction_text in compact_text
+    assert "初始约定金额单位为元" not in compact_text
+    assert any(
+        message.role.value == "user"
+        and "按照更正后的单位复核图表" in str(message.content)
+        for message in compact_request.messages
+    )
+    inventory_instruction = next(
+        item.content for item in compact_request.instructions
+        if "运行资源目录" in item.content
+    )
+    inventory = json.loads(inventory_instruction.split("\n", 1)[1])
+    projected_refs = {json.dumps(item["ref"], sort_keys=True) for item in inventory["resources"]}
+    figure_ref_json = json.dumps(ref, sort_keys=True)
+    assert figure_ref_json not in projected_refs
+    assert any(
+        item["ref"] == {"kind": "attachment", "id": image.attachment_id}
+        for item in inventory["resources"]
+    )
+    assert not any(item["ref"].get("kind") == "measurement" for item in inventory["resources"])
+    assert all(message.tool_call_id != "figure-call" for message in compact_request.messages)
+    old_input = history.read(
+        session.session_id,
+        target.run_id,
+        {"kind": "message", "run_id": source.run_id, "record_id": source.input_record_id},
+    )
+    assert old_input["content"]["content"] == "初始约定金额单位为元，先绘制销售图。"
+
+    from figura.agent.context_accounting import account_request_context
+
+    full_request, full_projection = metric_builder.build_with_projection(
+        target_state,
+        registry,
+        coordinator.read_prior_run_states(session.session_id, target.run_id),
+    )
+    metric_client = ProviderFactory.from_env(
+        {
+            "FIGURA_QWEN_API_KEY": "qwen-secret",
+            "FIGURA_QWEN_BASE_URL": "https://qwen.example.test/v1",
+            "FIGURA_QWEN_CONTEXT_WINDOW_TOKENS": "100000",
+        },
+        transport_factory=lambda _profile: None,
+    ).create(ProviderId.QWEN, MODEL_IDS[ProviderId.QWEN])
+    full_accounting = account_request_context(
+        full_request, full_projection,
+        metric_client.prepare(full_request).context_estimate,
+    )
+    compact_accounting = account_request_context(
+        compact_request, compact_projection,
+        metric_client.prepare(compact_request).context_estimate,
+    )
+    assert full_accounting.resource_directory_tokens is not None
+    assert full_accounting.resource_directory_tokens > 0
+    assert compact_accounting.resource_directory_tokens is not None
+    assert full_accounting.resource_directory_tokens > compact_accounting.resource_directory_tokens
+    if full_accounting.full_input_tokens is not None:
+        assert compact_accounting.full_input_tokens is not None
+        assert full_accounting.full_input_tokens > compact_accounting.full_input_tokens
+        assert full_accounting.history_input_tokens is not None
+        assert compact_accounting.history_input_tokens is not None
+        assert full_accounting.history_input_tokens > compact_accounting.history_input_tokens
+
+    found = history.search(
+        session.session_id,
+        target.run_id,
+        "Revenue",
+        source_kind="chart_figure",
+    )
+    assert found["matches"][0]["reference"] == ref
+    recovered = history.read(session.session_id, target.run_id, ref)
+    assert recovered["content"]["figure"] == figure
+
+    revised_figure = {**recovered["content"]["figure"], "title": "修订后的历史图"}
+    _commit_response(
+        coordinator,
+        session.session_id,
+        target.run_id,
+        ProviderResponse(
+            ProviderId.QWEN,
+            MODEL_IDS[ProviderId.QWEN],
+            "基于历史 Figure 创建修订版。",
+            (ProviderToolCall("revised-figure-call", definition.name, json.dumps(revised_figure)),),
+            FinishReason.TOOL_CALLS,
+        ),
+        registry_version=registry.version,
+    )
+    make_durable_tool_executor(store, registry).execute_pending(
+        session.session_id, target.run_id
+    )
+    _complete_text(coordinator, session.session_id, target.run_id, "历史 Figure 已修订。")
+    revised_ref = {
+        "kind": "chart_figure",
+        "run_id": target.run_id,
+        "call_id": "revised-figure-call",
+    }
+    assert history.read(session.session_id, target.run_id, revised_ref)["content"]["figure"]["title"] == "修订后的历史图"
 
 
 def test_history_string_slice_and_cursor_require_original_filters(tmp_path):

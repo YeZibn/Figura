@@ -1,0 +1,33 @@
+{
+  "batch_id": "feedback-20261106-104452",
+  "parent_batch": "20261102-正式首测-01",
+  "prompts": {
+    "B08": "Online 的百分比标签被中心圆遮挡，容易误读。请在保留原有数据、切片顺序、标题、来源和内半径比例 0.5 的前提下修复，重新交付可查看的 PNG。仅解释问题不算修复。若当前工具能力无法满足，请如实说明，不能声称已修复。",
+    "C02": "你第一轮声称四个季度均为 East > South > North，这个结论可能有误。请根据已保存数据逐季度核对并纠正，明确哪些季度的系列排序不同；同时保留第三轮已经确认的数据及其他要求，不需要重新绘图。",
+    "C03": "你第一轮声称三个系列逐季度递增，请根据已保存数据核对是否成立，明确实际下降区间；保留当前 Q5、注释及其他数据，不需要重新绘图。"
+  },
+  "acceptance": {
+    "B08": [
+      "实际交付新成功 render 对应 PNG",
+      "Online 百分比完整可读，其他关键标签无遮挡",
+      "单环图，inner_radius_ratio=0.5；顺序 Online/Store/Partner/Other；值45/30/15/10；标题渠道贡献及来源不变",
+      "回答与实际产物一致；承认无法修复不计修复成功"
+    ],
+    "C02": [
+      "明确纠正第一轮全季度排序说法",
+      "Q3 South19>East17>North15；Q1/Q2/Q4为East>South>North",
+      "采用第三轮 East/Q2=31，不能回退到20或28",
+      "不产生与当前数据冲突的新陈述，不修改已有数据"
+    ],
+    "C03": [
+      "明确否定三个系列逐季度递增",
+      "East Q2=21到Q3=18下降；含Q5的当前East为15/21/18/27/35",
+      "South=12/17/20/23/29，North=10/14/16/19/24；保留Q5和注释",
+      "不产生新错误，不修改已有数据"
+    ]
+  },
+  "max_feedback_turns_per_task": 1,
+  "per_turn_timeout_seconds": 600,
+  "scope": "current source snapshot; continuation after all original turns; original 27/30 unchanged",
+  "review": "current assistant checks structured evidence and actual PNG; no independent Judge invocation"
+}

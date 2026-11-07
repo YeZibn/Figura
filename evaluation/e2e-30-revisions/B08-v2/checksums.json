@@ -1,0 +1,9 @@
+{
+  "README.md": "12fff672e8e934686c917a64debc302efd5ac24ff1e795988f7782656b656e10",
+  "agent-input/conversation.json": "b473b6c629f1159e7794807c75ef40aa9fd6729aa0993fb24deb5c172e98f2f7",
+  "agent-input/conversation.md": "c2aeebd4875da56f9c0f8e865fcfce75678d0c152df8060affb81bdebabe2206",
+  "agent-input/dataset.json": "006eccd26aaff5cb1fedbb2c322a4613a3be2629786478ab1965a2608c3f5ab2",
+  "judge-only/answer-key.json": "0140152ae40707daadb889ad72614e9560ee1f0ca65d7ff10eb37674c851c728",
+  "judge-only/reference-turn-01.json": "b7c0391a320519041358e524718425eb335bb819019e822ca11095ac59f4d33a",
+  "task.json": "70afed003783454d796de4ac83c8e81d584d9ff7ef3ae948c71dc64b505ee72f"
+}

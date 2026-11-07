@@ -34,7 +34,7 @@ Execution SHALL NOT impose cumulative Run model-step, tool-call, token, retry, e
 - **THEN** it can release ownership at that stable checkpoint and later resume the same Run without duplicate dispatch
 
 ### Requirement: Provider history is reconstructed from complete committed interactions
-For each model action, Figura SHALL build the conversation from all earlier terminal Runs in the same Session, ordered by Run ordinal, followed by the current Run's immutable input, committed model responses, and committed tool results. Each Run input SHALL appear once as a user message containing its persisted text and ordered attachment references as text identities; it SHALL NOT automatically include image blocks. The request SHALL include the target Run's factual resource index in its running-resource SYSTEM instruction block. The index SHALL identify the resources selected for the request's authorized locator projection, including eligible Attachments, Panels, OCR, measurements, Figures and renders with kind-appropriate summaries; other authorized resources SHALL remain discoverable through history search and full server-side lookup. The index SHALL identify resources by their complete typed references. It SHALL NOT duplicate complete OCR, measurement, Figure, or render result payloads already present in committed tool messages. Historical render entries SHALL remain textual; Figura SHALL NOT automatically resend image bytes from an earlier Run or earlier tool batch. Each closed model/tool interaction SHALL be represented by one assistant message whose calls preserve provider order, followed by one tool message for every corresponding result with the matching opaque call ID. A validated incomplete trailing batch from an earlier failed or interrupted Run SHALL be represented entirely by source-linked abnormal outcome data in the running-resource SYSTEM instruction block, preserving its intent and committed observations instead of sending dangling native calls. A final-answer fact that references a response SHALL NOT add a duplicate message. The next ordinary model action following a fully committed visual tool batch SHALL include every ordered attachment of each successful result inside that call's single native tool-result message, after its complete structured observation. Image identity and a type-specific hint SHALL be adjacent to that image. Selection SHALL follow committed attachment descriptions, not a central list of image-producing tool names. Different calls reading the same source SHALL each retain their own image occurrence; cross-call source deduplication SHALL NOT remove an image from its logical result. Failed results SHALL have no image. Older results SHALL retain data and attachment descriptions with an explicit not-loaded projection and SHALL NOT resend image bytes unless a new explicit image-read call returns them. No plain user image feedback message SHALL be appended. The resource index and image selection SHALL use the same authorized Run prefix as the committed conversation. Completed tool-call/result pairs recorded under an earlier registry version SHALL be projected as inert conversation history and SHALL NOT be executed again; unresolved work in the current Run, incomplete completed history, or corrupt facts SHALL fail closed; legal terminal incomplete tails SHALL follow the abnormal outcome projection. Provider-private continuation SHALL be attached only to the exact originating assistant response retained in role history, including a prior Run when the selected Provider and format are compatible. Continuation from a converted incomplete batch SHALL NOT be placed in outcome context or fabricated for it. Figura SHALL NOT send a partial tool batch, invent a missing result, include an unresolved tool attempt as a result, or expose continuation data in public projections or ordinary diagnostics.
+For each model action, Figura SHALL build the conversation from all earlier terminal Runs in the same Session, ordered by Run ordinal, followed by the current Run's immutable input, committed model responses, and committed tool results. Without input-aware coverage, each input SHALL appear once with persisted text and ordered attachment identities without automatically including images. With input-aware coverage, covered prior inputs and process SHALL be represented by the source-linked summary; uncovered prior inputs SHALL remain raw. Current input SHALL remain a complete native user message even when current process is summarized. Legacy process-only checkpoints SHALL NOT by themselves authorize omission of prior inputs. The request SHALL include the target Run's factual resource index in its running-resource SYSTEM instruction block. The index SHALL identify the resources selected for the request's authorized locator projection, including eligible Attachments, Panels, OCR, measurements, Figures and renders with kind-appropriate summaries; other authorized resources SHALL remain discoverable through history search and full server-side lookup. The index SHALL identify resources by their complete typed references. It SHALL NOT duplicate complete OCR, measurement, Figure, or render result payloads already present in committed tool messages. Historical render entries SHALL remain textual; Figura SHALL NOT automatically resend image bytes from an earlier Run or earlier tool batch. Each retained raw closed model/tool interaction SHALL be represented by one assistant message whose calls preserve provider order, followed by one tool message for every corresponding result with the matching opaque call ID. A validated incomplete trailing batch from an earlier failed or interrupted Run SHALL be represented entirely by source-linked abnormal outcome data in the running-resource SYSTEM instruction block, preserving its intent and committed observations instead of sending dangling native calls. A final-answer fact that references a response SHALL NOT add a duplicate message. The next ordinary model action following a fully committed visual tool batch SHALL include every ordered attachment of each successful result inside that call's single native tool-result message, after its complete structured observation. Image identity and a type-specific hint SHALL be adjacent to that image. Selection SHALL follow committed attachment descriptions, not a central list of image-producing tool names. Different calls reading the same source SHALL each retain their own image occurrence; cross-call source deduplication SHALL NOT remove an image from its logical result. Failed results SHALL have no image. Older results retained in raw history SHALL retain data and attachment descriptions with an explicit not-loaded projection and SHALL NOT resend image bytes unless a new explicit image-read call returns them. No plain user image feedback message SHALL be appended. The resource index and image selection SHALL use the same authorized Run prefix as the committed conversation. Completed tool-call/result pairs recorded under an earlier registry version SHALL be projected as inert conversation history and SHALL NOT be executed again; unresolved work in the current Run, incomplete completed history, or corrupt facts SHALL fail closed; legal terminal incomplete tails SHALL follow the abnormal outcome projection. Provider-private continuation SHALL be attached only to the exact originating assistant response retained in role history, including a prior Run when the selected Provider and format are compatible. Continuation from a converted incomplete batch SHALL NOT be placed in outcome context or fabricated for it. Figura SHALL NOT send a partial tool batch, invent a missing result, include an unresolved tool attempt as a result, or expose continuation data in public projections or ordinary diagnostics.
 
 #### Scenario: Build the first model request with multiple attachments
 - **WHEN** the checkpoint points to the initial model action and the current Run references multiple images
@@ -42,10 +42,10 @@ For each model action, Figura SHALL build the conversation from all earlier term
 
 #### Scenario: Include earlier Session Runs and their resources
 - **WHEN** the checkpoint points to a model action and the Session has earlier terminal Runs with referenced attachments and committed tool resources
-- **THEN** the request contains all earlier closed Run messages and source-linked abnormal contexts in ascending Run ordinal, preserves their text and attachment IDs, indexes each eligible resource once by its typed reference, and does not attach historical image bytes
+- **THEN** the request represents covered history by its source-linked summary and uncovered closed history in ascending Run ordinal, preserves raw input attachment identities and abnormal contexts, indexes selected resources once by exact typed reference and does not attach historical image bytes
 
 #### Scenario: Keep full results in chronological tool history
-- **WHEN** a committed OCR, measurement, Figure assembly, or render interaction is included in Session history
+- **WHEN** a committed OCR, measurement, Figure assembly, or render interaction is retained in raw Session history
 - **THEN** its complete committed tool result appears in its original tool message and the textual resource index contains only a concise reference and summary, without a duplicate full result payload
 
 #### Scenario: Rebuild a completed tool round with explicitly loaded images
@@ -66,7 +66,7 @@ For each model action, Figura SHALL build the conversation from all earlier term
 
 #### Scenario: Preserve completed prior-version calls as inert history
 - **WHEN** an earlier Run or a completed interaction in the current Run contains a fully paired assistant tool call and result recorded under a prior registry version
-- **THEN** Figura projects that interaction in its original order as conversation history and does not invoke its handler
+- **THEN** Figura retains the interaction in original order when raw or represents it through authorized summary coverage, and never invokes its historical handler
 
 #### Scenario: Fail closed on a prior-version unresolved tool call
 - **WHEN** a tool call from a prior registry version is unresolved in the current Run, or belongs to an incomplete completed historical Run
@@ -87,6 +87,10 @@ For each model action, Figura SHALL build the conversation from all earlier term
 #### Scenario: Keep shared images associated with each caller
 - **WHEN** two successful calls in one batch load the same authorized resource
 - **THEN** each result retains its own image and hint under its own call ID even when storage reuses the same bytes
+
+#### Scenario: Compact active process and retain current input
+- **WHEN** a summary covers earlier complete interactions of the current Run
+- **THEN** Figura sends their source-linked summary, recent complete raw interactions and the full current user input exactly once
 
 ### Requirement: Referenced images are resolved and bounded before provider-attempt claim
 Before claiming a durable Provider attempt, Figura SHALL resolve selected committed attachments from the full authorized resource catalog and verify image bytes against their descriptors. Attachment/Panel reads SHALL use their owning source services; OCR/measurement and render feedback SHALL read already saved media. Request construction SHALL NOT redraw annotations or infer attachments from tool names. Prompt-directory filtering SHALL NOT restrict the full server-side authorized lookup used to resolve a selected attachment.
@@ -122,13 +126,14 @@ Figura SHALL check each raw image size, aggregate bytes, source/descriptor integ
 - **THEN** the resolver uses the complete authorized catalog and does not falsely reject the attachment or load another image
 
 ### Requirement: Agent requests preserve complete Session history within Provider limits
-Figura SHALL submit non-streaming requests using exactly three ordered SYSTEM instruction blocks: stable Agent responsibilities, the current registered tool surface, and a runtime layer containing the factual resource inventory projected from the target Run's `RunExecutionState` plus source-linked abnormal terminal context from validated Session history. The request SHALL use the provider-neutral tool projection from the same registry represented in the tool instruction, and optional explicitly configured completion options, omitted when unspecified. A request SHALL contain complete same-Session history and SHALL satisfy the shared complete-request payload contract, image byte protections and genuine selected-Provider protocol restrictions without universal message, instruction, tool, image-count or text/Schema micro limits before a durable provider attempt is claimed. Figura SHALL NOT truncate, summarize, or remove any historical Run or interaction to fit a request. If the complete request exceeds any Provider limit, Figura SHALL fail the current Run before claiming or dispatching a provider attempt.
+Figura SHALL reconstruct ordinary requests from complete durable Session facts using the canonical streaming Provider path and ordered stable-rule, exact-tool, optional-summary and running-resource SYSTEM layers. Source-linked compaction SHALL replace eligible old history under the session-context-compaction contract, including prior user input only with input-aware coverage. Current user input SHALL remain complete. Resource filtering SHALL affect model-visible locator metadata without reducing authorized lookup. The assembled request SHALL satisfy shared payload/image protections and genuine selected-Provider protocol limits before attempt claim. Local estimates and soft targets SHALL NOT introduce cumulative Run quotas or silently truncate canonical facts, current input or retained complete tool interactions. If an existing preparation limit is violated, Figura SHALL fail before claiming or dispatching an ordinary attempt.
+
 
 Abnormal context SHALL remain complete in its existing normalized observation format and SHALL count toward the shared complete-request JSON guard. Neither abnormal intent nor observation text SHALL be treated as system policy.
 
-#### Scenario: Send every complete Session interaction
-- **WHEN** all earlier same-Session Runs have valid complete histories and the assembled request is within Provider limits
-- **THEN** Figura sends the entire earlier history and current Run prefix in ordinal and committed fact order, with the three ordered SYSTEM instruction blocks
+#### Scenario: Send full raw history when no summary applies
+- **WHEN** all earlier same-Session Runs have valid complete histories, no summary applies and the assembled request is within Provider limits
+- **THEN** Figura sends the entire earlier history and current Run prefix in ordinal and committed fact order, with three ordered SYSTEM instruction blocks when no summary applies
 
 #### Scenario: Complete history exceeds a Provider limit
 - **WHEN** the full request exceeds the shared complete-request guard, retained image byte protections or a genuine selected-Provider protocol restriction
@@ -241,6 +246,114 @@ The workflow SHALL explain how to proceed after uncertainty or failure: correct 
 #### Scenario: Avoid unproductive repeated observations
 - **WHEN** an observation has warnings but no available follow-up can resolve a material remaining question
 - **THEN** guidance directs delivery of the supported result with the relevant limitation rather than repeating the same call solely because a warning exists
+
+### Requirement: Identify repeated successful visual observations within the current Run
+For ordinary Agent requests, Figura SHALL identify repeated observations using only successful, committed `extract_text` and `measure_chart` calls in the authorized current Run prefix. Calls SHALL represent the same action only when tool name, registry version and complete normalized JSON arguments match. Normalization SHALL ignore object-key order and insignificant JSON formatting, preserve array order and values, and SHALL NOT infer geometric equivalence, approximate matches, or equivalence between different source IDs. Observations SHALL match only when their complete normalized structured results match, excluding the execution envelope and image attachment identities. Result status, availability, empty observations, warnings, confidence, coverage, evidence and calibration fields SHALL remain part of comparison when present.
+
+For each action, Figura SHALL compare its latest eligible result with earlier eligible results for that action. If at least two results match that latest observation, it SHALL produce one grouped reminder with the matching successful-call count and references to the latest two matching committed results. Intervening actions SHALL NOT prevent matching. A different latest observation SHALL NOT inherit a reminder for an older observation that it does not match. Failed or unresolved calls, other tools and earlier Runs SHALL NOT contribute; replay attempts of one logical call SHALL count as one call.
+
+#### Scenario: Second identical observation produces one reminder
+- **WHEN** two distinct successful calls in the current Run use the same eligible tool, registry version and arguments and return identical structured results with different annotated-image attachments
+- **THEN** the next ordinary model request includes one reminder counting two matching calls and referencing both results
+
+#### Scenario: Interleaved actions and larger repeated groups
+- **WHEN** three matching successful observations of one action are separated by history reads or other actions
+- **THEN** the request includes one reminder for that action with count three and references to the latest two matching results
+
+#### Scenario: Meaningful differences do not match
+- **WHEN** source identity, scope, chart family, registry version, array order or any structured observation value differs
+- **THEN** those calls do not count as identical action-observation pairs, and a latest changed observation has no reminder unless it independently matches another earlier result of its action
+
+#### Scenario: Preserve partial and empty observations
+- **WHEN** successful eligible calls repeatedly return the same partial, unsupported, unavailable or empty structured observation
+- **THEN** the repeated observation is eligible for a reminder without being represented as a failed call or a confirmed business fact
+
+#### Scenario: Exclude retries and unrelated history
+- **WHEN** an attempt is replayed for the same logical call, a call fails or remains unresolved, another tool repeats, or a matching result exists only in an earlier Run
+- **THEN** it does not increase the current Run's matching successful-call count
+
+### Requirement: Repeated observation reminders preserve model autonomy and factual boundaries
+Figura SHALL place grouped repetition reminders in the dynamic running-state SYSTEM instruction of the next ordinary model request after the tool batch is resolved. Each reminder SHALL state the observed repetition, matching count and latest two source references, and guide the model to consider changing scope or method or delivering supported results with limitations when further observation has no effective path. Reminders SHALL NOT assert correctness, goal completion, impossibility of future improvement or mandatory stopping. They SHALL NOT include full observations, raw tool parameters, images or source text in their repetition metadata. Referenced source values SHALL remain untrusted data.
+
+Figura SHALL preserve original tool results and attachments, SHALL NOT add a user message for the reminder, and SHALL NOT suppress calls, reuse cached results, automatically retry tools, restrict tool permissions or introduce cumulative Run quotas as a consequence of repetition. Multiple reminders SHALL use deterministic ordering and one entry per eligible action, rather than append-only warning history.
+
+#### Scenario: Model can choose a third identical call
+- **WHEN** the model receives a repetition reminder and requests another otherwise valid identical call
+- **THEN** the existing execution path executes and records that new logical call normally
+
+#### Scenario: Batch-local repetition is observed after completion
+- **WHEN** repeated eligible calls are present in one accepted tool batch
+- **THEN** Figura resolves the batch normally and includes reminders in the following ordinary model request without intercepting a pending call
+
+#### Scenario: Reminders remain separate from observations
+- **WHEN** a reminder is rendered into a request
+- **THEN** tool result bodies and attachments remain unchanged and no synthetic user input or tool result is created
+
+### Requirement: Repetition reminders are reproducible from durable facts
+Figura SHALL derive reminders from the same authorized committed current Run prefix used to prepare the ordinary model request, independent of summary coverage or retained raw-message tails. It SHALL NOT require a new durable repetition counter, special measurement decision state, database migration or public API field. Restarting execution with the same prefix SHALL produce the same reminder content and ordering. Existing frozen Provider request bindings SHALL remain authoritative for retries; a retry SHALL reproduce the bound request rather than recompute a different reminder from a later prefix or changed prompt assets. Summary requests SHALL NOT receive repetition reminders.
+
+#### Scenario: Restart and compaction preserve reminders
+- **WHEN** an executor restarts or raw interactions are covered by a context summary while the underlying committed current Run prefix is unchanged
+- **THEN** the next newly prepared ordinary request derives the same repetition metadata and source references
+
+#### Scenario: Retry preserves bound reminder content
+- **WHEN** a logical Provider request containing repetition reminders undergoes a transport retry
+- **THEN** the retry reproduces its frozen request contract including reminder content and existing fingerprint checks
+
+#### Scenario: Summary request remains dedicated to compaction
+- **WHEN** Figura prepares a context-compaction request for a Run with repeated observations
+- **THEN** it uses the existing summary contract without adding the ordinary repetition reminder block
+
+### Requirement: Agent periodically rechecks task direction
+For an ordinary model request, Figura SHALL count committed ordinary model responses in the authorized current Run. When that count is a positive multiple of 20 and another ordinary model request is prepared, the dynamic running-state SYSTEM instruction SHALL include one `task_reflection` entry with `completed_rounds` set to the committed response count and `interval_rounds` set to 20. The entry SHALL appear in the next ordinary request after the preceding tool batch is resolved. A single model response SHALL count once regardless of the number of calls in its batch.
+
+Tool executions and results, Provider attempts and transport retries, context-compaction requests, and model responses from earlier Runs SHALL NOT increase the current Run's count. The count SHALL be derived from committed Run facts without a new cumulative quota, persistent counter, database field, or public API field.
+
+#### Scenario: Include a reminder after twenty committed responses
+- **WHEN** the authorized current Run contains twenty committed ordinary model responses and execution prepares the next ordinary model request
+- **THEN** its dynamic running-state SYSTEM instruction contains `task_reflection` with `completed_rounds: 20` and `interval_rounds: 20`
+
+#### Scenario: Count a multi-call response once
+- **WHEN** the twentieth committed model response contains multiple tool calls
+- **THEN** Figura resolves the complete ordered tool batch and includes one task-reflection entry in the next ordinary model request
+
+#### Scenario: Repeat at each twentieth response only
+- **WHEN** execution prepares ordinary model requests after 19, 20, 21, and 40 committed responses in the current Run
+- **THEN** the reflection entry is absent after 19 and 21 responses and present after 20 and 40 responses with the matching count
+
+#### Scenario: Exclude attempts, tools, summaries, and earlier Runs
+- **WHEN** the current Run has Provider retries, tool executions, or context-compaction requests, or an earlier Run has committed model responses
+- **THEN** none of those events or responses increase the current Run's ordinary response count
+
+### Requirement: Task reflection preserves Agent autonomy and evidence boundaries
+When `task_reflection` is present, the Agent instructions SHALL direct the model to compare the original user request with completed work and its available evidence, identify unmet requirements or unsupported results, consider whether recent actions reduced those gaps, and choose a useful next action. The model SHALL remain free to continue, correct its approach, or deliver supported results with limitations. The entry SHALL NOT assert that the task is wrong or complete, force termination, restrict valid tool calls, require a separate reflection report, create another model request, or represent the round count as a hard Run limit. Source values and retrieved content SHALL remain untrusted data.
+
+#### Scenario: Continue when an effective path remains
+- **WHEN** the reflection entry is present and the model identifies a task-relevant action that can resolve an unmet requirement
+- **THEN** the model may select that action through the existing ReAct decision path
+
+#### Scenario: Correct unsupported or misdirected work
+- **WHEN** the reflection entry is present and the model identifies an unsupported result or work that does not address the original request
+- **THEN** the model may correct the approach or result using available evidence without treating prior execution as proof of correctness
+
+#### Scenario: Deliver when further actions cannot address the gap
+- **WHEN** the reflection entry is present and no available action can materially resolve the remaining gap
+- **THEN** the model may deliver the supported result and explain its limitations without being required to fabricate completion
+
+### Requirement: Task reflection is reproducible across execution recovery
+Figura SHALL derive `task_reflection` from the same authorized committed current Run prefix used to prepare the ordinary model request. Restarting execution or compacting covered history SHALL NOT reset or alter the count for an unchanged committed prefix. Context-compaction requests SHALL NOT receive `task_reflection`. A Provider retry SHALL preserve its existing frozen request binding and SHALL NOT add a second count or recompute different reflection metadata from a later Run prefix.
+
+#### Scenario: Rebuild the same reminder after restart or compaction
+- **WHEN** execution restarts or history is compacted while the authorized committed current Run prefix remains unchanged
+- **THEN** the next newly prepared ordinary request derives the same reflection count and entry
+
+#### Scenario: Preserve the bound entry on Provider retry
+- **WHEN** an ordinary Provider request containing `task_reflection` is retried after a transport failure
+- **THEN** Figura reproduces the bound request and its reflection entry subject to existing request identity checks
+
+#### Scenario: Keep the summary request dedicated
+- **WHEN** Figura prepares a context-compaction request while the current Run has reached a reflection interval
+- **THEN** the summary request follows its existing contract without a `task_reflection` entry
 
 ### Requirement: ReAct decisions accept only supported model outcomes
 Figura SHALL continue a Run only for a valid `tool_calls` response with one or more valid calls, or complete it only for a `stop` response with non-whitespace assistant text and no tool calls. A response with an unsupported finish reason, an empty final answer, or an invalid combination of finish reason and calls SHALL fail the Run with a bounded invalid-response outcome. A known tool failure SHALL be provided as a tool observation and SHALL NOT, by itself, cause the Agent to repeat that call.

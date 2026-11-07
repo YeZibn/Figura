@@ -6,12 +6,15 @@ import json
 import pytest
 
 from figura.shared.resource_refs import ImageResourceRef, ToolResourceRef
+from figura.shared.source_refs import ToolResultSourceRef
 from figura.agent.execution_resources import (AttachmentContent, ChartFigureContent, ChartFigureResult, ChartRenderContent, ExecutionResource, MeasurementContent, OcrContent, PanelContent, RunExecutionState)
 from figura.agent.prompting.execution import build_execution_instruction
+from figura.agent.repeated_observations import RepeatedObservationNotice
 from figura.agent.prompting.loader import build_static_instruction
 from figura.agent.prompting.tools import build_tool_instruction
 from figura.charts.chartfigure import chart_figure_digest, parse_chart_figure
 from figura.providers import InstructionRole
+from figura.runtime.errors import RunError, RunErrorCode
 from figura.tools import ReplayEffect, ToolDefinition, ToolOutcome, ToolRegistry
 from figura.tools.contracts import ToolExecutionError
 from tests.figura_fixtures import bar_chart_figure, measurement_result
@@ -299,6 +302,70 @@ def test_execution_instruction_handles_empty_catalog_and_escapes_resource_text()
     assert payload["resources"][0]["filename"] == filename
     assert filename not in instruction.content
     assert "\\n" in instruction.content
+
+
+def test_execution_instruction_projects_repetition_metadata_without_observation_payload() -> None:
+    notice = RepeatedObservationNotice(
+        "measure_chart",
+        3,
+        (
+            ToolResultSourceRef("run-current", "call-2"),
+            ToolResultSourceRef("run-current", "call-3"),
+        ),
+        12,
+    )
+
+    instruction = build_execution_instruction(
+        RunExecutionState("run-current", ()),
+        repeated_observations=(notice,),
+    )
+    payload = _payload(instruction)
+
+    assert payload["repeated_observations"] == [{
+        "tool_name": "measure_chart",
+        "matching_call_count": 3,
+        "recent_result_refs": [
+            {"kind": "tool_result", "run_id": "run-current", "call_id": "call-2"},
+            {"kind": "tool_result", "run_id": "run-current", "call_id": "call-3"},
+        ],
+    }]
+    assert "latest_result_sequence" not in instruction.content
+    assert "observation_scope" not in instruction.content
+    assert "source_id" not in instruction.content
+
+
+def test_execution_instruction_projects_periodic_task_reflection_metadata() -> None:
+    instruction = build_execution_instruction(
+        RunExecutionState("run-current", ()),
+        task_reflection={"completed_rounds": 20, "interval_rounds": 20},
+    )
+
+    assert instruction.role is InstructionRole.SYSTEM
+    assert _payload(instruction) == {
+        "run_id": "run-current",
+        "resources": [],
+        "task_reflection": {"completed_rounds": 20, "interval_rounds": 20},
+    }
+    assert "重复观察提醒" not in instruction.content
+
+
+def test_execution_instruction_rejects_invalid_task_reflection_metadata() -> None:
+    with pytest.raises(RunError) as error:
+        build_execution_instruction(
+            RunExecutionState("run-current", ()),
+            task_reflection={"completed_rounds": 19, "interval_rounds": 20},
+        )
+
+    assert error.value.code is RunErrorCode.INTEGRITY_ERROR
+
+
+def test_static_workflow_guides_task_reflection_without_a_hard_stop() -> None:
+    instruction = build_static_instruction()
+
+    assert "当运行状态包含 `task_reflection`" in instruction.content
+    assert "对照用户原始需求" in instruction.content
+    assert "不要求因轮数而停止" in instruction.content
+    assert "另写核查报告" in instruction.content
 
 
 def test_compaction_asset_loads_independently_from_ordinary_instructions() -> None:

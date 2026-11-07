@@ -1,0 +1,37 @@
+[
+  {
+    "call_id": "call_00_hZddKuy0qWunS0Q6o83e3282",
+    "tool_name": "read_resource_image",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_5euDhPDJsmqTlLx6K6bT2578",
+    "tool_name": "assemble_chart_figure",
+    "outcome": "failed",
+    "error": {
+      "code": "coordinate_type_mismatch",
+      "field_path": "/charts/0/chart_spec/coordinate_system/kind",
+      "message": "coordinate_system.kind 与图表类型不匹配。",
+      "retryable": false
+    }
+  },
+  {
+    "call_id": "call_00_TNWNvLtRsrGYUe6rLfXz5720",
+    "tool_name": "assemble_chart_figure",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_ET_sEjOL2e5iUNTmPuWKJOW3747",
+    "tool_name": "render_chart_figure",
+    "outcome": "succeeded",
+    "error": null
+  },
+  {
+    "call_id": "call_00_vYTShPE8pan8UjPPWYCj0408",
+    "tool_name": "read_resource_image",
+    "outcome": "succeeded",
+    "error": null
+  }
+]

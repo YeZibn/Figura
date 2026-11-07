@@ -14,6 +14,7 @@ from PIL import Image
 
 from figura.agent.request import AgentRequestBuilder, _continuations_by_response
 from figura.agent.execution_state import RunExecutionStateService
+from figura.agent.context_compaction import CompactionSelection
 from figura.memory import AssistantMessage, MemoryToolCall
 from figura.shared.json_schema import canonical_json_dumps
 from figura.sources.chart_renders import FiguraChartRenderService
@@ -34,11 +35,12 @@ from figura.providers.errors import ProviderInputError
 from figura.runtime.coordinator import RunCoordinator
 from figura.runtime.errors import RunError, RunErrorCode
 from figura.runtime.models import RunCreateRequest
-from figura.runtime.records import RunInput, SessionContextCheckpoint
+from figura.runtime.records import RunInput, SessionContextCheckpoint, ToolCallFact
 from figura.runtime.store import FiguraRunStore
 from figura.runtime.tool_execution import DurableToolExecutor
 from figura.tools import ReplayEffect, ToolDefinition, ToolFailure, ToolRegistry
 from figura.tools.implementations.image import image_tool_definitions
+from figura.tools.implementations.extract_text import EXTRACT_TEXT_RESULT_SCHEMA
 
 
 def _registry(*, version: str = "registry-v1") -> ToolRegistry:
@@ -65,6 +67,46 @@ def _registry(*, version: str = "registry-v1") -> ToolRegistry:
                     "required": ["value"],
                     "additionalProperties": False,
                 },
+                replay_effect=ReplayEffect.REPLAY_SAFE,
+                handler=handler,
+            ),
+        ),
+    )
+
+
+def _repeating_ocr_registry() -> ToolRegistry:
+    def handler(_context, arguments):
+        return ToolOutput({
+            "source_kind": arguments["source_kind"],
+            "source_id": arguments["source_id"],
+            "image_size": {"width": 2, "height": 2},
+            "coordinate_system": "attachment_px",
+            "available": True,
+            "truncated": False,
+            "snippets": [{
+                "snippet_id": "snippet-1",
+                "text": "18.6",
+                "bbox_px": [0, 0, 1, 1],
+                "confidence": 0.9,
+            }],
+        })
+
+    return ToolRegistry(
+        "repeating-ocr-v1",
+        (
+            ToolDefinition(
+                name="extract_text",
+                description="从图像提取 OCR 文本。",
+                parameters_schema={
+                    "type": "object",
+                    "properties": {
+                        "source_kind": {"type": "string", "enum": ["attachment", "panel"]},
+                        "source_id": {"type": "string", "minLength": 1},
+                    },
+                    "required": ["source_kind", "source_id"],
+                    "additionalProperties": False,
+                },
+                result_schema=EXTRACT_TEXT_RESULT_SCHEMA,
                 replay_effect=ReplayEffect.REPLAY_SAFE,
                 handler=handler,
             ),
@@ -322,6 +364,230 @@ def test_initial_request_lists_images_without_resolving_or_sending_bytes(tmp_pat
     filenames = [item["filename"] for item in resources]
     assert "image-0.png" in filenames and "image-1.png" in filenames
     assert all(not isinstance(block, ImageBlock) for message in request.messages for block in (message.content if isinstance(message.content, tuple) else ()))
+
+
+def test_repeated_ocr_observation_is_prompted_and_third_call_still_executes(tmp_path) -> None:
+    store, coordinator, session, run, attachments = _app_with_attachments(
+        tmp_path, (_image_bytes("red"),)
+    )
+    registry = _repeating_ocr_registry()
+    source_id = attachments.list(session.session_id)[0].attachment_id
+    arguments = {"source_kind": "attachment", "source_id": source_id}
+
+    first_state = _commit_tool_calls(store, coordinator, session, run, registry, [
+        ProviderToolCall("ocr-1", "extract_text", json.dumps(arguments)),
+    ])
+    state = _commit_tool_calls(store, coordinator, session, run, registry, [
+        ProviderToolCall("ocr-2", "extract_text", json.dumps(arguments)),
+    ])
+
+    builder = _builder(store, coordinator, attachments)
+    request = builder.build(state, registry)
+    payload = json.loads(request.instructions[-1].content.split("\n", 1)[1])
+    assert payload["repeated_observations"] == [{
+        "tool_name": "extract_text",
+        "matching_call_count": 2,
+        "recent_result_refs": [
+            {"kind": "tool_result", "run_id": run.run_id, "call_id": "ocr-1"},
+            {"kind": "tool_result", "run_id": run.run_id, "call_id": "ocr-2"},
+        ],
+    }]
+    assert sum(message.role is MessageRole.USER for message in request.messages) == 1
+    assert [
+        json.loads(message.content)["result"]["snippets"][0]["text"]
+        for message in request.messages
+        if message.role is MessageRole.TOOL
+    ] == ["18.6", "18.6"]
+
+    checkpoint = SessionContextCheckpoint(
+        session_id=session.session_id,
+        revision=1,
+        covered_run_id=run.run_id,
+        covered_run_ordinal=run.ordinal,
+        covered_record_sequence=first_state.checkpoint.last_committed_record_sequence,
+        covered_tool_sequence=first_state.checkpoint.last_committed_tool_sequence,
+        summary_contract_version=2,
+        summary={"trust": "untrusted_history", "facts": []},
+    )
+    compacted_request = builder.build(state, registry, context_checkpoint=checkpoint)
+    compacted_payload = json.loads(compacted_request.instructions[-1].content.split("\n", 1)[1])
+    assert compacted_payload["repeated_observations"] == payload["repeated_observations"]
+    reopened_store = FiguraRunStore(store.data_root)
+    reopened_factory = ProviderFactory.from_env(
+        {
+            "FIGURA_QWEN_API_KEY": "qwen-secret",
+            "FIGURA_QWEN_BASE_URL": "https://qwen.example.test/v1",
+        },
+        transport_factory=lambda _profile: None,
+    )
+    reopened_coordinator = RunCoordinator(reopened_store, reopened_factory)
+    reopened_attachments = make_attachment_service(reopened_store)
+    reopened_state = reopened_coordinator.read_run_state(session.session_id, run.run_id)
+    reopened_request = _builder(
+        reopened_store, reopened_coordinator, reopened_attachments
+    ).build(reopened_state, registry)
+    assert request == reopened_request
+
+    summary_request, _summary_refs = _builder(store, coordinator, attachments).build_summary_request(
+        state,
+        (state,),
+        None,
+        coverage=CompactionSelection(
+            (state,),
+            state.run.run_id,
+            state.run.ordinal,
+            state.checkpoint.last_committed_record_sequence,
+            state.checkpoint.last_committed_tool_sequence,
+        ),
+        context_capacity_tokens=1000,
+        summary_budget_tokens=100,
+    )
+    assert "repeated_observations" not in "".join(
+        instruction.content for instruction in summary_request.instructions
+    )
+
+    third_state = _commit_tool_calls(store, coordinator, session, run, registry, [
+        ProviderToolCall("ocr-3", "extract_text", json.dumps(arguments)),
+    ])
+    committed_calls = [
+        fact.payload.call_id
+        for fact in third_state.tool_facts
+        if isinstance(fact.payload, ToolCallFact)
+    ]
+    assert committed_calls == ["ocr-1", "ocr-2", "ocr-3"]
+
+
+def test_periodic_task_reflection_counts_responses_and_survives_rebuilds(tmp_path) -> None:
+    store, coordinator, session, run = _app(tmp_path)
+    registry = _registry()
+    builder = _builder(store, coordinator)
+    checkpoints = {}
+
+    for round_number in range(1, 41):
+        calls = [ProviderToolCall(
+            f"reflection-{round_number}-1",
+            "inspect",
+            '{"value":1}',
+        )]
+        if round_number == 20:
+            calls.append(ProviderToolCall(
+                "reflection-20-2",
+                "inspect",
+                '{"value":1}',
+            ))
+        state = _commit_tool_calls(
+            store, coordinator, session, run, registry, calls
+        )
+        if round_number in {19, 20, 21, 40}:
+            checkpoints[round_number] = state
+
+    requests = {
+        round_number: builder.build(state, registry)
+        for round_number, state in checkpoints.items()
+    }
+    payloads = {
+        round_number: json.loads(request.instructions[-1].content.split("\n", 1)[1])
+        for round_number, request in requests.items()
+    }
+
+    assert "task_reflection" not in payloads[19]
+    assert payloads[20]["task_reflection"] == {
+        "completed_rounds": 20,
+        "interval_rounds": 20,
+    }
+    assert "task_reflection" not in payloads[21]
+    assert payloads[40]["task_reflection"] == {
+        "completed_rounds": 40,
+        "interval_rounds": 20,
+    }
+    assert requests[19].asset_contract["prompt_digest"] != requests[20].asset_contract["prompt_digest"]
+
+    state_20 = checkpoints[20]
+    compacted_checkpoint = SessionContextCheckpoint(
+        session_id=session.session_id,
+        revision=1,
+        covered_run_id=run.run_id,
+        covered_run_ordinal=run.ordinal,
+        covered_record_sequence=state_20.checkpoint.last_committed_record_sequence,
+        covered_tool_sequence=state_20.checkpoint.last_committed_tool_sequence,
+        summary_contract_version=2,
+        summary={"facts": []},
+    )
+    compacted_request = builder.build(
+        state_20,
+        registry,
+        context_checkpoint=compacted_checkpoint,
+    )
+    compacted_payload = json.loads(
+        compacted_request.instructions[-1].content.split("\n", 1)[1]
+    )
+    assert compacted_payload["task_reflection"] == payloads[20]["task_reflection"]
+
+    summary_request, _summary_refs = builder.build_summary_request(
+        state_20,
+        (state_20,),
+        None,
+        coverage=CompactionSelection(
+            (state_20,),
+            state_20.run.run_id,
+            state_20.run.ordinal,
+            state_20.checkpoint.last_committed_record_sequence,
+            state_20.checkpoint.last_committed_tool_sequence,
+        ),
+        context_capacity_tokens=1000,
+        summary_budget_tokens=100,
+    )
+    assert "task_reflection" not in "".join(
+        instruction.content for instruction in summary_request.instructions
+    )
+
+    reopened_store = FiguraRunStore(store.data_root)
+    reopened_factory = ProviderFactory.from_env(
+        {
+            "FIGURA_QWEN_API_KEY": "qwen-secret",
+            "FIGURA_QWEN_BASE_URL": "https://qwen.example.test/v1",
+        },
+        transport_factory=lambda _profile: None,
+    )
+    reopened_coordinator = RunCoordinator(reopened_store, reopened_factory)
+    reopened_state = reopened_coordinator.read_run_state(
+        session.session_id, run.run_id
+    )
+    reopened_request = _builder(
+        reopened_store, reopened_coordinator
+    ).build(reopened_state, registry)
+    assert reopened_request == requests[40]
+
+
+def test_periodic_task_reflection_ignores_responses_from_earlier_runs(tmp_path) -> None:
+    store, coordinator, session, prior_run = _app(tmp_path)
+    prior_state = _commit_text_response(
+        coordinator,
+        session.session_id,
+        prior_run.run_id,
+        content="上一轮已完成。",
+    )
+    coordinator.complete_run(
+        session.session_id,
+        prior_run.run_id,
+        prior_state.checkpoint.revision,
+    )
+    current_run = coordinator.create_run(RunCreateRequest(
+        session_id=session.session_id,
+        text="当前任务。",
+        provider_id=ProviderId.QWEN.value,
+        model_id=MODEL_IDS[ProviderId.QWEN],
+        idempotency_key="task-reflection-current-run",
+    ))
+
+    request = _builder(store, coordinator).build(
+        coordinator.read_run_state(session.session_id, current_run.run_id),
+        _registry(),
+        coordinator.read_prior_run_states(session.session_id, current_run.run_id),
+    )
+    payload = json.loads(request.instructions[-1].content.split("\n", 1)[1])
+
+    assert "task_reflection" not in payload
 
 
 def test_request_does_not_resend_original_images_after_an_unrelated_tool_round(tmp_path) -> None:

@@ -1,0 +1,104 @@
+{
+  "turn": 1,
+  "run_id": "0b04bde288c548a9a354a363d8244165",
+  "session_id": "75db48802bcb4c7394da4230193bfc46",
+  "status": "completed",
+  "terminal_code": null,
+  "wall_seconds": 14.307,
+  "timed_out": false,
+  "final_answer": "final-answer.txt",
+  "final_answer_committed": true,
+  "figures": [
+    {
+      "call_id": "call_00_65eii2QS7va6IzBaHghN1399",
+      "run_id": "0b04bde288c548a9a354a363d8244165",
+      "file": "figure-01.json",
+      "result": {
+        "charts": [
+          {
+            "chart_id": "channel_donut",
+            "chart_type": "pie",
+            "title": "渠道贡献"
+          }
+        ],
+        "figure_digest": "b127e49420ee708faf59675b2a9f279bbc82d1c6b1abb3d63bd22b445ae7c07d",
+        "figure_ref": {
+          "call_id": "call_00_65eii2QS7va6IzBaHghN1399",
+          "run_id": "0b04bde288c548a9a354a363d8244165"
+        },
+        "title": "渠道贡献"
+      },
+      "digest_verified": true
+    },
+    {
+      "call_id": "call_00_vfm47LYzDNILNvO2pBzY8958",
+      "run_id": "0b04bde288c548a9a354a363d8244165",
+      "file": "figure-02.json",
+      "result": {
+        "charts": [
+          {
+            "chart_id": "channel_donut",
+            "chart_type": "pie",
+            "title": "渠道贡献"
+          }
+        ],
+        "figure_digest": "3552ca83a9bc58babd38f596a96abe83f816801a90eeb2933631867cee5e4a2b",
+        "figure_ref": {
+          "call_id": "call_00_vfm47LYzDNILNvO2pBzY8958",
+          "run_id": "0b04bde288c548a9a354a363d8244165"
+        },
+        "title": ""
+      },
+      "digest_verified": true
+    }
+  ],
+  "renders": [
+    {
+      "call_id": "call_00_ET_xw0DRbGbMjlnCEEvcX222547",
+      "run_id": "0b04bde288c548a9a354a363d8244165",
+      "file": "render-01.png",
+      "result": {
+        "byte_count": 25741,
+        "figure_digest": "b127e49420ee708faf59675b2a9f279bbc82d1c6b1abb3d63bd22b445ae7c07d",
+        "figure_ref": {
+          "call_id": "call_00_65eii2QS7va6IzBaHghN1399",
+          "run_id": "0b04bde288c548a9a354a363d8244165"
+        },
+        "height": 522,
+        "image_sha256": "e7e25d4111812e884f4ed84298e120b702905c2abb9d2bb79dd51460324c4f3b",
+        "media_type": "image/png",
+        "width": 640
+      },
+      "png_sha256_verified": true
+    },
+    {
+      "call_id": "call_00_ET_H2798EnGsWvpEyyZtCEL8589",
+      "run_id": "0b04bde288c548a9a354a363d8244165",
+      "file": "render-02.png",
+      "result": {
+        "byte_count": 22874,
+        "figure_digest": "3552ca83a9bc58babd38f596a96abe83f816801a90eeb2933631867cee5e4a2b",
+        "figure_ref": {
+          "call_id": "call_00_vfm47LYzDNILNvO2pBzY8958",
+          "run_id": "0b04bde288c548a9a354a363d8244165"
+        },
+        "height": 480,
+        "image_sha256": "6e237cb41e4c1ac870084b02444609d7b8514c7ae0178f9a7fe55379729166bb",
+        "media_type": "image/png",
+        "width": 640
+      },
+      "png_sha256_verified": true
+    }
+  ],
+  "provider_attempt_count": 6,
+  "internal_retry_count": 0,
+  "usage": {
+    "prompt_tokens": 88704,
+    "completion_tokens": 1825,
+    "total_tokens": 90529
+  },
+  "usage_complete": true,
+  "usage_missing_attempt_refs": [],
+  "compaction_operations": [],
+  "delivery_selection": "judge must select from actual final answer and all committed candidates; no automatic best-of selection"
+}

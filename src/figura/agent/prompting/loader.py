@@ -66,23 +66,30 @@ def load_image_feedback() -> tuple[str, dict[str, str]]:
 
 
 def build_compaction_instruction(
-    *, context_capacity_tokens: int, summary_budget_tokens: int
+    *,
+    context_capacity_tokens: int,
+    summary_budget_tokens: int,
+    summary_contract_version: int = 2,
 ) -> InstructionBlock:
     """Load the summary task with the operation's frozen approximate length target."""
     if (
         type(context_capacity_tokens) is not int
         or context_capacity_tokens <= 0
         or type(summary_budget_tokens) is not int
-        or summary_budget_tokens != context_capacity_tokens // 10
+        or summary_budget_tokens <= 0
+        or summary_budget_tokens > context_capacity_tokens // 10
+        or type(summary_contract_version) is not int
+        or summary_contract_version not in {2, 3}
     ):
         raise PromptAssetError("compaction prompt requires a valid frozen summary budget")
-    content = _load_asset("compaction.md")
+    asset_name = "compaction.md" if summary_contract_version == 2 else "compaction-v3.md"
+    content = _load_asset(asset_name)
     values = {
         "{{context_capacity_tokens}}": str(context_capacity_tokens),
         "{{summary_budget_tokens}}": str(summary_budget_tokens),
     }
     for placeholder, value in values.items():
         if content.count(placeholder) != 1:
-            raise PromptAssetError("compaction.md has an invalid budget placeholder contract")
+            raise PromptAssetError(f"{asset_name} has an invalid budget placeholder contract")
         content = content.replace(placeholder, value)
     return InstructionBlock(InstructionRole.SYSTEM, content)

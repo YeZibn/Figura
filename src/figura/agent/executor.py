@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from dataclasses import replace
 import time
 import uuid
+import logging
 from datetime import datetime, timezone
 from threading import Event, Thread
 from types import MappingProxyType
@@ -31,6 +32,8 @@ from figura.runtime.records import (
 from .context_compaction import (
     SummaryValidationError,
     calculate_context_history_budgets,
+    estimate_protected_raw_history_tokens,
+    legacy_input_reconciliation_selection,
     select_compaction_coverage,
     selection_for_coverage,
     validate_summary_response,
@@ -39,7 +42,11 @@ from figura.runtime.tool_execution import DurableToolExecutor
 from figura.runtime.run_lock import PerRunExecutionLock, RunExecutionOwnership, RunExecutionLockUnavailable
 
 from .request import AgentRequestBuilder
+from .context_accounting import account_request_context
 from figura.tools.contracts import ToolOutcomeUnknown
+
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class AgentExecutor:
@@ -215,6 +222,7 @@ class AgentExecutor:
             return state
         logical_request = None
         pending_compaction = None
+        request_context_projection = None
         try:
             prior_run_states = self._coordinator.read_prior_run_states(session_id, run_id)
             retrying = state.checkpoint.next_action.action_kind is ActionKind.PROVIDER_RETRY
@@ -227,9 +235,17 @@ class AgentExecutor:
                 if logical_request is None or logical_request.purpose != "agent_turn":
                     return self._fail_run(state)
                 context_checkpoint = self._checkpoint_for_request(logical_request, session_id)
-                request = self._requests.build(
+                stored_policy_version = logical_request.asset_manifest.get(
+                    "context_policy_version", 1
+                )
+                stored_directory_budget = logical_request.asset_manifest.get(
+                    "directory_budget_tokens"
+                )
+                request, request_context_projection = self._requests.build_with_projection(
                     state, self._tools.registry, prior_run_states,
                     context_checkpoint=context_checkpoint,
+                    directory_budget_tokens=stored_directory_budget,
+                    context_policy_version=stored_policy_version,
                 )
                 request = replace(request, options=ProviderOptions(
                     max_completion_tokens=logical_request.options["max_completion_tokens"],
@@ -247,9 +263,10 @@ class AgentExecutor:
                     state.checkpoint.last_committed_record_sequence,
                     state.checkpoint.last_committed_tool_sequence,
                 )
-                request = self._requests.build(
+                request, request_context_projection = self._requests.build_with_projection(
                     state, self._tools.registry, prior_run_states,
                     context_checkpoint=context_checkpoint,
+                    context_policy_version=2,
                 )
                 context_projection = "checkpoint" if context_checkpoint is not None else "full"
                 context_checkpoint_revision = context_checkpoint.revision if context_checkpoint else None
@@ -280,29 +297,143 @@ class AgentExecutor:
                     prepared = client.prepare(request)
                     estimate = prepared.context_estimate
                     should_resume_compaction = pending_compaction is not None and pending_compaction.status == "preparing"
-                    if should_resume_compaction or (
-                        estimate is not None and estimate.context_window_tokens is not None
-                        and estimate.input_tokens / estimate.context_window_tokens >= 0.8
-                    ):
+                    accounting = account_request_context(
+                        request, request_context_projection, estimate
+                    )
+                    _log_context_accounting(accounting)
+                    directory_budget_tokens = None
+                    mandatory_directory_tokens = None
+                    protected_raw_tokens = None
+                    triggered = _context_pressure_reached(estimate)
+                    if triggered and not should_resume_compaction:
+                        mandatory_directory_tokens = self._requests.mandatory_directory_tokens(
+                            state, prior_run_states, context_checkpoint
+                        )
+                        protected_raw_tokens = estimate_protected_raw_history_tokens(
+                            prior_run_states, state, context_checkpoint
+                        )
+                        if (
+                            mandatory_directory_tokens is not None
+                            and protected_raw_tokens is not None
+                        ):
+                            budgets = calculate_context_history_budgets(
+                                estimate.context_window_tokens,
+                                accounting=accounting,
+                                mandatory_directory_tokens=mandatory_directory_tokens,
+                                protected_raw_tokens=protected_raw_tokens,
+                            )
+                            if budgets is not None and budgets.directory_tokens is not None:
+                                directory_budget_tokens = budgets.directory_tokens
+                                request, request_context_projection = self._requests.build_with_projection(
+                                    state,
+                                    self._tools.registry,
+                                    prior_run_states,
+                                    context_checkpoint=context_checkpoint,
+                                    directory_budget_tokens=directory_budget_tokens,
+                                    context_policy_version=2,
+                                )
+                                prepared = client.prepare(request)
+                                estimate = prepared.context_estimate
+                                accounting = account_request_context(
+                                    request, request_context_projection, estimate
+                                )
+                                _log_context_accounting(accounting)
+                                triggered = _context_pressure_reached(estimate)
+
+                    if should_resume_compaction or triggered:
+                        if mandatory_directory_tokens is None:
+                            mandatory_directory_tokens = self._requests.mandatory_directory_tokens(
+                                state, prior_run_states, context_checkpoint
+                            )
+                        if protected_raw_tokens is None:
+                            protected_raw_tokens = estimate_protected_raw_history_tokens(
+                                prior_run_states, state, context_checkpoint
+                            )
                         (
                             context_checkpoint,
                             context_projection,
                             context_compaction_operation_id,
                         ) = self._compact_context_if_possible(
                             client, state, prior_run_states, context_checkpoint,
-                            context_capacity_tokens=(estimate.context_window_tokens if estimate else None),
-                            existing_operation=pending_compaction if should_resume_compaction else None,
+                            context_capacity_tokens=(
+                                estimate.context_window_tokens if estimate is not None else None
+                            ),
+                            accounting=accounting,
+                            mandatory_directory_tokens=mandatory_directory_tokens,
+                            protected_raw_tokens=protected_raw_tokens,
+                            existing_operation=pending_compaction,
                         )
                         context_checkpoint_revision = (
                             context_checkpoint.revision
                             if context_projection == "checkpoint" and context_checkpoint is not None
                             else None
                         )
-                        request = self._requests.build(
+                        if should_resume_compaction:
+                            operation = self._coordinator.read_context_compaction_operation(
+                                context_compaction_operation_id
+                            ) if context_compaction_operation_id else None
+                            frozen_directory_budget = (
+                                operation.selection_plan.get("directory_budget_tokens")
+                                if operation is not None
+                                and operation.selection_plan.get("selection_plan_version") == 2
+                                else None
+                            )
+                            directory_budget_tokens = frozen_directory_budget
+                        request, request_context_projection = self._requests.build_with_projection(
                             state, self._tools.registry, prior_run_states,
                             context_checkpoint=context_checkpoint if context_projection == "checkpoint" else None,
+                            directory_budget_tokens=directory_budget_tokens,
+                            context_policy_version=2,
                         )
                         prepared = client.prepare(request)
+                        estimate = prepared.context_estimate
+                        accounting = account_request_context(
+                            request, request_context_projection, estimate
+                        )
+                        _log_context_accounting(accounting)
+                        if (
+                            context_projection == "checkpoint"
+                            and context_checkpoint is not None
+                            and estimate is not None
+                            and estimate.context_window_tokens is not None
+                        ):
+                            final_mandatory = self._requests.mandatory_directory_tokens(
+                                state, prior_run_states, context_checkpoint
+                            )
+                            final_protected = estimate_protected_raw_history_tokens(
+                                prior_run_states, state, context_checkpoint
+                            )
+                            final_budgets = (
+                                calculate_context_history_budgets(
+                                    estimate.context_window_tokens,
+                                    accounting=accounting,
+                                    mandatory_directory_tokens=final_mandatory,
+                                    protected_raw_tokens=final_protected,
+                                )
+                                if final_mandatory is not None and final_protected is not None
+                                else None
+                            )
+                            final_directory_budget = (
+                                final_budgets.directory_tokens
+                                if final_budgets is not None
+                                else directory_budget_tokens
+                            )
+                            if final_directory_budget != directory_budget_tokens:
+                                directory_budget_tokens = final_directory_budget
+                                request, request_context_projection = self._requests.build_with_projection(
+                                    state,
+                                    self._tools.registry,
+                                    prior_run_states,
+                                    context_checkpoint=context_checkpoint,
+                                    directory_budget_tokens=directory_budget_tokens,
+                                    context_policy_version=2,
+                                )
+                                prepared = client.prepare(request)
+                                accounting = account_request_context(
+                                    request, request_context_projection,
+                                    prepared.context_estimate,
+                                )
+                                _log_context_accounting(accounting)
                     logical_request = _provider_request_record(
                         prepared, run_id=run_id,
                         base_record_sequence=state.checkpoint.last_committed_record_sequence,
@@ -496,34 +627,103 @@ class AgentExecutor:
         previous_checkpoint: SessionContextCheckpoint | None,
         *,
         context_capacity_tokens: int | None,
+        accounting=None,
+        mandatory_directory_tokens: int | None = None,
+        protected_raw_tokens: int | None = None,
         existing_operation=None,
     ) -> tuple[SessionContextCheckpoint | None, str, str | None]:
-        budgets = calculate_context_history_budgets(context_capacity_tokens)
         if existing_operation is None:
+            if accounting is not None and (
+                mandatory_directory_tokens is None or protected_raw_tokens is None
+            ):
+                return (
+                    previous_checkpoint,
+                    "checkpoint" if previous_checkpoint is not None else "full",
+                    previous_checkpoint.compaction_operation_id if previous_checkpoint else None,
+                )
+            budgets = calculate_context_history_budgets(
+                context_capacity_tokens,
+                accounting=accounting,
+                mandatory_directory_tokens=(mandatory_directory_tokens or 0),
+                protected_raw_tokens=(protected_raw_tokens or 0),
+            )
             if budgets is None:
                 return (
                     previous_checkpoint,
                     "checkpoint" if previous_checkpoint is not None else "full",
                     previous_checkpoint.compaction_operation_id if previous_checkpoint else None,
                 )
-            candidate = select_compaction_coverage(
-                prior_run_states,
-                previous_checkpoint,
-                budgets.raw_history_tokens,
-                active_run_state=state,
+            reconciliation = (
+                previous_checkpoint is not None
+                and previous_checkpoint.summary_contract_version < 3
+            )
+            candidate = (
+                legacy_input_reconciliation_selection(
+                    prior_run_states, state, previous_checkpoint
+                )
+                if reconciliation
+                else select_compaction_coverage(
+                    prior_run_states,
+                    previous_checkpoint,
+                    budgets.raw_history_tokens,
+                    active_run_state=state,
+                )
             )
             if candidate is None:
+                _log_context_accounting(
+                    accounting, pressure_reason="no_new_coverage"
+                )
                 return (
                     previous_checkpoint,
                     "checkpoint" if previous_checkpoint is not None else "full",
                     previous_checkpoint.compaction_operation_id if previous_checkpoint else None,
                 )
-            plan = {
-                "context_capacity_tokens": budgets.context_capacity_tokens,
-                "raw_history_budget_tokens": budgets.raw_history_tokens,
-                "summary_budget_tokens": budgets.summary_tokens,
-                "coverage_version": 1,
-            }
+            if budgets.summary_tokens <= 0:
+                _log_context_accounting(
+                    accounting, pressure_reason="protected_content"
+                )
+                return (
+                    previous_checkpoint,
+                    "checkpoint" if previous_checkpoint is not None else "full",
+                    previous_checkpoint.compaction_operation_id if previous_checkpoint else None,
+                )
+            if budgets.accounting_version == 2:
+                plan = {
+                    "selection_plan_version": 2,
+                    "context_capacity_tokens": budgets.context_capacity_tokens,
+                    "raw_history_budget_tokens": budgets.raw_history_tokens,
+                    "summary_budget_tokens": budgets.summary_tokens,
+                    "protected_raw_tokens": budgets.protected_raw_tokens,
+                    "mandatory_directory_tokens": budgets.mandatory_directory_tokens,
+                    "directory_budget_tokens": (
+                        budgets.directory_tokens
+                        if budgets.directory_tokens is not None
+                        else budgets.mandatory_directory_tokens
+                    ),
+                    "accounting_basis": {
+                        "policy_tools_state_tokens": getattr(
+                            accounting, "policy_tools_state_tokens", 0
+                        ),
+                        "current_input_tokens": getattr(
+                            accounting, "current_input_tokens", 0
+                        ),
+                    },
+                    "coverage_version": 2,
+                    "input_projection_version": 2,
+                    "directory_projection_version": 2,
+                    "accounting_version": 1,
+                    "summary_contract_version": 3,
+                    "reconciliation": reconciliation,
+                }
+            else:
+                # Compatibility path for operation creation without usable
+                # component accounting. Existing operation readers still know v1.
+                plan = {
+                    "context_capacity_tokens": budgets.context_capacity_tokens,
+                    "raw_history_budget_tokens": budgets.raw_history_tokens,
+                    "summary_budget_tokens": budgets.summary_tokens,
+                    "coverage_version": 1,
+                }
             operation = self._coordinator.get_or_create_context_compaction_operation(
                 session_id=state.run.session_id,
                 target_run_id=state.run.run_id,
@@ -572,6 +772,9 @@ class AgentExecutor:
             )
 
         if operation.status == "completed":
+            _log_context_accounting(
+                accounting, pressure_reason="no_new_coverage"
+            )
             checkpoint = self._coordinator.read_session_context_checkpoint(state.run.session_id)
             if (
                 checkpoint is None
@@ -581,6 +784,9 @@ class AgentExecutor:
                 raise RunError(RunErrorCode.INTEGRITY_ERROR)
             return checkpoint, "checkpoint", operation.operation_id
         if operation.status == "fallback":
+            _log_context_accounting(
+                accounting, pressure_reason="no_new_coverage"
+            )
             fallback_operation(operation.failure_code or "summary_fallback")
             return None, "fallback", operation.operation_id
         if operation.status != "preparing":
@@ -611,6 +817,8 @@ class AgentExecutor:
                 coverage=selection,
                 context_capacity_tokens=plan["context_capacity_tokens"],
                 summary_budget_tokens=plan["summary_budget_tokens"],
+                summary_contract_version=plan["summary_contract_version"],
+                reconcile_inputs_only=plan.get("reconciliation", False),
             )
             request_record = None
             if operation.provider_request_id is not None:
@@ -656,10 +864,27 @@ class AgentExecutor:
                     base_tool_sequence=state.checkpoint.last_committed_tool_sequence,
                     purpose="context_compaction",
                     compaction_operation_id=operation.operation_id,
-                    context_projection="checkpoint" if previous_checkpoint else "full",
-                    context_checkpoint_revision=previous_checkpoint.revision if previous_checkpoint else None,
+                    # Some legacy checkpoints predate compaction operation IDs.
+                    # The summary request fingerprint already freezes their
+                    # projected summary and sources, so bind them as a full
+                    # auxiliary request instead of creating an invalid partial
+                    # checkpoint binding with no operation identity.
+                    context_projection=(
+                        "checkpoint"
+                        if previous_checkpoint is not None
+                        and previous_checkpoint.compaction_operation_id is not None
+                        else "full"
+                    ),
+                    context_checkpoint_revision=(
+                        previous_checkpoint.revision
+                        if previous_checkpoint is not None
+                        and previous_checkpoint.compaction_operation_id is not None
+                        else None
+                    ),
                     context_checkpoint_operation_id=(
-                        previous_checkpoint.compaction_operation_id if previous_checkpoint else None
+                        previous_checkpoint.compaction_operation_id
+                        if previous_checkpoint is not None
+                        else None
                     ),
                 )
         except ProviderCallError as error:
@@ -885,7 +1110,7 @@ class AgentExecutor:
                 covered_run_ordinal=selection.covered_run_ordinal,
                 covered_record_sequence=selection.covered_record_sequence,
                 covered_tool_sequence=selection.covered_tool_sequence,
-                summary_contract_version=2,
+                summary_contract_version=plan["summary_contract_version"],
                 summary=summary,
                 source_refs=source_refs,
                 compaction_operation_id=operation.operation_id,
@@ -1123,34 +1348,115 @@ def _preparation_failure_message(error: ProviderCallError) -> str | None:
     return PREPARATION_MESSAGES.get(key)
 
 
-def _validated_compaction_plan(plan: Mapping[str, object] | None) -> dict[str, int] | None:
-    if not isinstance(plan, Mapping) or set(plan) != {
+def _validated_compaction_plan(plan: Mapping[str, object] | None) -> dict[str, object] | None:
+    if not isinstance(plan, Mapping):
+        return None
+    legacy_fields = {
         "context_capacity_tokens",
         "raw_history_budget_tokens",
         "summary_budget_tokens",
         "coverage_version",
-    }:
+    }
+    if set(plan) == legacy_fields:
+        capacity = plan.get("context_capacity_tokens")
+        raw_budget = plan.get("raw_history_budget_tokens")
+        summary_budget = plan.get("summary_budget_tokens")
+        version = plan.get("coverage_version")
+        if (
+            type(capacity) is not int or capacity <= 0
+            or raw_budget != capacity // 10
+            or summary_budget != capacity // 10
+            or type(raw_budget) is not int
+            or type(summary_budget) is not int
+            or type(version) is not int or version != 1
+        ):
+            return None
+        return {
+            "context_capacity_tokens": capacity,
+            "raw_history_budget_tokens": raw_budget,
+            "summary_budget_tokens": summary_budget,
+            "coverage_version": 1,
+            "summary_contract_version": 2,
+            "reconciliation": False,
+        }
+    expected_v2_fields = {
+        "selection_plan_version", "context_capacity_tokens",
+        "raw_history_budget_tokens", "summary_budget_tokens",
+        "protected_raw_tokens", "mandatory_directory_tokens",
+        "directory_budget_tokens", "accounting_basis", "coverage_version",
+        "input_projection_version", "directory_projection_version",
+        "accounting_version", "summary_contract_version", "reconciliation",
+    }
+    if set(plan) != expected_v2_fields:
         return None
     capacity = plan.get("context_capacity_tokens")
     raw_budget = plan.get("raw_history_budget_tokens")
     summary_budget = plan.get("summary_budget_tokens")
-    version = plan.get("coverage_version")
+    protected = plan.get("protected_raw_tokens")
+    mandatory_directory = plan.get("mandatory_directory_tokens")
+    directory_budget = plan.get("directory_budget_tokens")
+    basis = plan.get("accounting_basis")
     if (
-        type(capacity) is not int or capacity <= 0
-        or raw_budget != capacity // 10
-        or summary_budget != capacity // 10
-        or type(raw_budget) is not int
-        or type(summary_budget) is not int
-        or type(version) is not int
-        or version != 1
+        type(plan.get("selection_plan_version")) is not int
+        or plan["selection_plan_version"] != 2
+        or type(capacity) is not int or capacity <= 0
+        or type(raw_budget) is not int or raw_budget < 0
+        or type(summary_budget) is not int or summary_budget < 0
+        or summary_budget > capacity // 10
+        or type(protected) is not int or protected < 0 or protected > raw_budget
+        or type(mandatory_directory) is not int or mandatory_directory < 0
+        or type(directory_budget) is not int or directory_budget < mandatory_directory
+        or not isinstance(basis, Mapping)
+        or set(basis) != {"policy_tools_state_tokens", "current_input_tokens"}
+        or any(type(value) is not int or value < 0 for value in basis.values())
+        or plan.get("coverage_version") != 2
+        or plan.get("input_projection_version") != 2
+        or plan.get("directory_projection_version") != 2
+        or plan.get("accounting_version") != 1
+        or plan.get("summary_contract_version") != 3
+        or type(plan.get("reconciliation")) is not bool
     ):
         return None
     return {
+        "selection_plan_version": 2,
         "context_capacity_tokens": capacity,
         "raw_history_budget_tokens": raw_budget,
         "summary_budget_tokens": summary_budget,
-        "coverage_version": version,
+        "protected_raw_tokens": protected,
+        "mandatory_directory_tokens": mandatory_directory,
+        "directory_budget_tokens": directory_budget,
+        "accounting_basis": dict(basis),
+        "coverage_version": 2,
+        "input_projection_version": 2,
+        "directory_projection_version": 2,
+        "accounting_version": 1,
+        "summary_contract_version": 3,
+        "reconciliation": plan["reconciliation"],
     }
+
+
+def _context_pressure_reached(estimate) -> bool:
+    input_tokens = getattr(estimate, "input_tokens", None)
+    capacity = getattr(estimate, "context_window_tokens", None)
+    return (
+        type(input_tokens) is int
+        and type(capacity) is int
+        and capacity > 0
+        and input_tokens / capacity >= 0.8
+    )
+
+
+def _log_context_accounting(accounting, *, pressure_reason: str | None = None) -> None:
+    diagnostic = getattr(accounting, "safe_diagnostic", None)
+    if not callable(diagnostic):
+        return
+    try:
+        values = diagnostic()
+        if pressure_reason is not None:
+            values["pressure_reason"] = pressure_reason
+        _LOGGER.debug("Figura request context accounting: %s", encode_json(values))
+    except (PayloadError, TypeError, ValueError):
+        _LOGGER.debug("Figura request context accounting: unavailable")
 
 
 def _summary_request_fits_capacity(prepared, plan: Mapping[str, int]) -> bool:

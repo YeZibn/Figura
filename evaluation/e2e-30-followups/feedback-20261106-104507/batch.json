@@ -1,0 +1,34 @@
+{
+  "batch_id": "feedback-20261106-104507",
+  "status": "complete_assistant_reviewed",
+  "started_at": "2026-11-06T10:45:07.709664",
+  "git_revision": "7c1fbaf3c5d78a1d57088c84951b3857fe1f025b",
+  "dirty_diff_sha256": "a3f7b130939a4ded7863668c81a8e9b7bb97c915f7b20fe05078411912fb1cad",
+  "runtime_dir": ".figura/evaluation/feedback-20261106-104507/working",
+  "baseline_dir": ".figura/evaluation/feedback-20261106-104507/baseline",
+  "source_snapshot": ".figura/evaluation/feedback-20261106-104507/source",
+  "source_manifest_sha256": "ffeb67b7f21dea2d3eee0e483ffad12660ff68910d60b6129715049f87ec1d6b",
+  "original_database_sha256": "51de3a026d647f1b927bdcccab7d64a9f44b1484226b9223458969766e3dac93",
+  "parent_code": {
+    "commit": "a9d155e53a488544b450c42760abfcf4932e66be",
+    "dirty_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "source_sha256": "1b634c5030755654abe9fbdc2528fcdf1e2076769045b7172a06d1d4e3778541",
+    "prompt_sha256": "e4ef3e7494ff0fced5966714cff88ad683caae693d94f67b594e9a02393bfbe4",
+    "tool_registry_version": "figura-web-v11",
+    "dependency_versions": {
+      "matplotlib": "3.11.1",
+      "numpy": "2.4.4",
+      "requests": "2.33.1",
+      "jsonschema": "4.26.0"
+    }
+  },
+  "provider": "deepseek",
+  "model": "deepseek-flash",
+  "settings": {
+    "context_capacity": 200000,
+    "thinking_mode": true,
+    "reasoning_effort": "high",
+    "max_completion_tokens": null
+  },
+  "finished_at": "2026-11-06T10:46:22.864403"
+}

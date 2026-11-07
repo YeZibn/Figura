@@ -521,7 +521,8 @@ def main():
     # Fixed non-thinking experiment conditions avoid synthetic history continuations.
     profiles[provider] = replace(profiles[provider], thinking_mode=False, reasoning_effort="none"
                                 if provider is not ProviderId.MIMO else None,
-                                max_completion_tokens=8192, timeout_seconds=60)
+                                max_completion_tokens=8192, connect_timeout_seconds=60,
+                                write_timeout_seconds=60)
     if args.offline:
         profiles[provider] = replace(profiles[provider], api_key="offline-fixture",
                                     base_url="https://offline.example.test/v1", configuration_error=None)

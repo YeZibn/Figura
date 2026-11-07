@@ -40,6 +40,7 @@ from figura.runtime.run_lock import PerRunExecutionLock
 from figura.shared.json_schema import canonical_json_dumps
 from figura.tools import ReplayEffect, ToolDefinition, ToolFailure, ToolRegistry
 from figura.tools.implementations.image import image_tool_definitions
+from figura.tools.implementations.extract_text import EXTRACT_TEXT_RESULT_SCHEMA
 
 
 def _registry(
@@ -77,6 +78,43 @@ def _registry(
             ),
         ),
     )
+
+
+def _repeating_ocr_registry() -> ToolRegistry:
+    def handler(_context, arguments):
+        return ToolOutput({
+            "source_kind": arguments["source_kind"],
+            "source_id": arguments["source_id"],
+            "image_size": {"width": 2, "height": 2},
+            "coordinate_system": "attachment_px",
+            "available": True,
+            "truncated": False,
+            "snippets": [{
+                "snippet_id": "snippet-1",
+                "text": "18.6",
+                "bbox_px": [0, 0, 1, 1],
+                "confidence": 0.9,
+            }],
+        })
+
+    return ToolRegistry("repeating-ocr-v1", (
+        ToolDefinition(
+            name="extract_text",
+            description="从图像提取 OCR 文本。",
+            parameters_schema={
+                "type": "object",
+                "properties": {
+                    "source_kind": {"type": "string", "enum": ["attachment", "panel"]},
+                    "source_id": {"type": "string", "minLength": 1},
+                },
+                "required": ["source_kind", "source_id"],
+                "additionalProperties": False,
+            },
+            result_schema=EXTRACT_TEXT_RESULT_SCHEMA,
+            replay_effect=ReplayEffect.REPLAY_SAFE,
+            handler=handler,
+        ),
+    ))
 
 
 def _app(tmp_path):
@@ -733,6 +771,129 @@ def test_orphaned_started_request_is_retried_from_frozen_contract_after_restart(
     ]
     assert state.provider_attempts[1].retry_of_attempt_id == state.provider_attempts[0].attempt_id
     assert retry_factory.client.requests[0] == interrupted_factory.client.requests[0]
+
+
+def test_repeated_observation_reminder_is_preserved_by_provider_retry_after_restart(
+    tmp_path, monkeypatch
+) -> None:
+    import figura.runtime.persistence.providers as provider_persistence
+
+    monkeypatch.setattr(provider_persistence, "retry_deadline", lambda *_: "2000-01-01T00:00:00Z")
+    store, coordinator, session, run, attachments, _image_bytes, _image_path = _app_with_image(tmp_path)
+    registry = _repeating_ocr_registry()
+    source_id = attachments.list(session.session_id)[0].attachment_id
+    arguments = json.dumps({"source_kind": "attachment", "source_id": source_id})
+
+    for call_id in ("ocr-1", "ocr-2"):
+        _commit_tool_response(
+            coordinator,
+            session.session_id,
+            run.run_id,
+            registry,
+            _response(
+                content="检查图像文字。",
+                reason=FinishReason.TOOL_CALLS,
+                calls=(ProviderToolCall(call_id, "extract_text", arguments),),
+            ),
+        )
+        make_durable_tool_executor(store, registry).execute_pending(session.session_id, run.run_id)
+
+    interrupted_factory = _FakeFactory([_response()])
+    interrupted_factory.client.before_dispatch = lambda: (_ for _ in ()).throw(KeyboardInterrupt())
+    with pytest.raises(KeyboardInterrupt):
+        _agent(store, coordinator, registry, interrupted_factory).execute_slice(
+            session.session_id, run.run_id
+        )
+
+    frozen_request = interrupted_factory.client.requests[0]
+    assert "repeated_observations" in frozen_request.instructions[-1].content
+    orphaned = coordinator.read_run_state(session.session_id, run.run_id)
+    frozen_request_record = orphaned.provider_requests[-1]
+
+    reopened_store = FiguraRunStore(store.data_root)
+    reopened_factory = ProviderFactory.from_env(
+        {
+            "FIGURA_QWEN_API_KEY": "qwen-secret",
+            "FIGURA_QWEN_BASE_URL": "https://qwen.example.test/v1",
+        },
+        transport_factory=lambda _profile: None,
+    )
+    reopened_coordinator = RunCoordinator(reopened_store, reopened_factory)
+    retry_factory = _FakeFactory([_response(content="图中文字为 18.6。")])
+    state = _agent(reopened_store, reopened_coordinator, registry, retry_factory).execute(
+        session.session_id, run.run_id
+    )
+
+    assert state.run.status is RunStatus.COMPLETED
+    assert len(state.provider_requests) == 3
+    assert retry_factory.client.requests[0] == frozen_request
+    assert state.provider_requests[-1] == frozen_request_record
+
+
+def test_periodic_task_reflection_is_preserved_by_provider_retry_after_restart(
+    tmp_path, monkeypatch
+) -> None:
+    import figura.runtime.persistence.providers as provider_persistence
+
+    monkeypatch.setattr(provider_persistence, "retry_deadline", lambda *_: "2000-01-01T00:00:00Z")
+    store, coordinator, session, run = _app(tmp_path)
+    registry = _registry()
+    for round_number in range(1, 21):
+        calls = (ProviderToolCall(
+            f"reflection-{round_number}",
+            "inspect",
+            '{"value":1}',
+        ),)
+        _commit_tool_response(
+            coordinator,
+            session.session_id,
+            run.run_id,
+            registry,
+            _response(
+                content="按当前目标检查结果。",
+                reason=FinishReason.TOOL_CALLS,
+                calls=calls,
+            ),
+        )
+        make_durable_tool_executor(store, registry).execute_pending(
+            session.session_id, run.run_id
+        )
+
+    interrupted_factory = _FakeFactory([_response()])
+    interrupted_factory.client.before_dispatch = lambda: (_ for _ in ()).throw(KeyboardInterrupt())
+    with pytest.raises(KeyboardInterrupt):
+        _agent(store, coordinator, registry, interrupted_factory).execute_slice(
+            session.session_id, run.run_id
+        )
+
+    frozen_request = interrupted_factory.client.requests[0]
+    frozen_payload = json.loads(frozen_request.instructions[-1].content.split("\n", 1)[1])
+    assert frozen_payload["task_reflection"] == {
+        "completed_rounds": 20,
+        "interval_rounds": 20,
+    }
+    orphaned = coordinator.read_run_state(session.session_id, run.run_id)
+    frozen_request_record = orphaned.provider_requests[-1]
+    bound_request_count = len(orphaned.provider_requests)
+
+    reopened_store = FiguraRunStore(store.data_root)
+    reopened_factory = ProviderFactory.from_env(
+        {
+            "FIGURA_QWEN_API_KEY": "qwen-secret",
+            "FIGURA_QWEN_BASE_URL": "https://qwen.example.test/v1",
+        },
+        transport_factory=lambda _profile: None,
+    )
+    reopened_coordinator = RunCoordinator(reopened_store, reopened_factory)
+    retry_factory = _FakeFactory([_response(content="已完成图表分析。")])
+    state = _agent(reopened_store, reopened_coordinator, registry, retry_factory).execute(
+        session.session_id, run.run_id
+    )
+
+    assert state.run.status is RunStatus.COMPLETED
+    assert len(state.provider_requests) == bound_request_count
+    assert retry_factory.client.requests[0] == frozen_request
+    assert state.provider_requests[-1] == frozen_request_record
 
 
 def test_unexpected_provider_exception_uses_bounded_durable_retry(

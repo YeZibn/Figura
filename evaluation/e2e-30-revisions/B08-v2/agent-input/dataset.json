@@ -1,0 +1,16 @@
+{
+  "source": "Figura E2E-30 合成数据 v1",
+  "charts": [
+    {
+      "name": "渠道贡献",
+      "data": {
+        "items": {
+          "Online": 45,
+          "Store": 30,
+          "Partner": 15,
+          "Other": 10
+        }
+      }
+    }
+  ]
+}
